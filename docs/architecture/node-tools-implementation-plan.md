@@ -553,8 +553,8 @@ func connect(signal: Signal, callable: Callable, flags: int = 0) -> Error
 
 # 连接标志
 CONNECT_DEFERRED = 1    # 延迟调用
-CONNECT_ONE_SHOT = 2    # 一次性连接
-CONNECT_PERSIST = 4     # 持久连接
+CONNECT_PERSIST = 2     # 持久连接
+CONNECT_ONE_SHOT = 4    # 一次性连接
 ```
 
 ### 实现方案

@@ -1944,6 +1944,9 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 	if script_path.is_empty() and content.is_empty():
 		return {"error": "Must provide either script_path or content"}
 
+	if not content.is_empty():
+		content = _spaces_to_tabs(content)
+
 	if content.is_empty():
 		var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd"])
 		if not validation["valid"]:
@@ -2026,6 +2029,28 @@ func _strip_class_names(source: String) -> String:
 		else:
 			result.append(line)
 	return "\n".join(result)
+
+func _spaces_to_tabs(code: String) -> String:
+	var lines: PackedStringArray = code.split("\n")
+	var result_lines: PackedStringArray = []
+	for line in lines:
+		if line.is_empty():
+			result_lines.append(line)
+			continue
+		var leading_spaces: int = 0
+		for c in line:
+			if c == " ":
+				leading_spaces += 1
+			else:
+				break
+		if leading_spaces == 0:
+			result_lines.append(line)
+			continue
+		var tab_count: int = leading_spaces / 4
+		var remaining_spaces: int = leading_spaces % 4
+		var new_line: String = "\t".repeat(tab_count) + " ".repeat(remaining_spaces) + line.substr(leading_spaces)
+		result_lines.append(new_line)
+	return "\n".join(result_lines)
 
 # ============================================================================
 # search_in_files - 在项目文件中搜索内容

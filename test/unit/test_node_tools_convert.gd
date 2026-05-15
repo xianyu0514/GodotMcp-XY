@@ -98,3 +98,56 @@ func test_convert_value_for_property_float_from_int():
 	var result: Variant = _node_tools._convert_value_for_property(node, "process_priority", 5)
 	assert_eq(result, 5, "Should convert int to appropriate type")
 	node.free()
+
+func test_parse_key_value_string_vector3():
+	var result: Dictionary = _node_tools._parse_key_value_string("{x:1,y:2,z:3}")
+	assert_eq(result.get("x"), "1", "x parsed")
+	assert_eq(result.get("y"), "2", "y parsed")
+	assert_eq(result.get("z"), "3", "z parsed")
+
+func test_parse_key_value_string_not_braces():
+	var result: Dictionary = _node_tools._parse_key_value_string("1,2,3")
+	assert_eq(result.is_empty(), true, "Non-brace string returns empty dict")
+
+func test_convert_value_for_property_vector3_from_key_value_string():
+	var node: Node3D = Node3D.new()
+	var result: Variant = _node_tools._convert_value_for_property(node, "position", "{x:1,y:2,z:3}")
+	assert_eq(result, Vector3(1, 2, 3), "Should convert {x:y:z:} string to Vector3")
+	node.free()
+
+func test_convert_value_for_property_vector2_from_key_value_string():
+	var node: Node2D = Node2D.new()
+	var result: Variant = _node_tools._convert_value_for_property(node, "position", "{x:5,y:10}")
+	assert_eq(result, Vector2(5, 10), "Should convert {x:y:} string to Vector2")
+	node.free()
+
+func test_convert_value_for_property_nodepath():
+	var node: Node3D = Node3D.new()
+	node.set_script(GDScript.new())
+	var result: Variant = _node_tools._convert_value_for_property(node, "name", "../Camera3D")
+	assert_eq(result, NodePath("../Camera3D"), "Should convert string to NodePath for TYPE_NODE_PATH")
+	node.free()
+
+func test_convert_value_for_property_vector3_csv_string():
+	var node: Node3D = Node3D.new()
+	var result: Variant = _node_tools._convert_value_for_property(node, "position", "1,2,3")
+	assert_eq(result, Vector3(1, 2, 3), "Should convert CSV string to Vector3")
+	node.free()
+
+func test_append_child_path():
+	var result: String = _node_tools._append_child_path("/root/Main", "Child")
+	assert_eq(result, "/root/Main/Child", "Should append child name to parent path")
+
+func test_append_child_path_root():
+	var result: String = _node_tools._append_child_path("/root", "Main")
+	assert_eq(result, "/root/Main", "Should append to root")
+
+func test_parse_key_value_string_with_spaces():
+	var result: Dictionary = _node_tools._parse_key_value_string("{x: 1, y: 2, z: 3}")
+	assert_eq(result.get("x"), "1", "x with spaces")
+	assert_eq(result.get("y"), "2", "y with spaces")
+
+func test_parse_key_value_string_negative():
+	var result: Dictionary = _node_tools._parse_key_value_string("{x:-5,y:10}")
+	assert_eq(result.get("x"), "-5", "negative parsed")
+	assert_eq(result.get("y"), "10", "positive parsed")

@@ -573,7 +573,7 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 			undo_redo.add_undo_method(created_parent, "remove_child", created_node)
 			result_operations.append({
 				"type": "create",
-				"node_path": _make_friendly_path(created_node, scene_root),
+				"node_path": _append_child_path(_make_friendly_path(created_parent, scene_root), prepared["node_name"]),
 				"node_type": prepared["node_type"]
 			})
 		else:
@@ -971,6 +971,9 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 			if value is Dictionary:
 				return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
 			if value is String:
+				var parsed: Dictionary = _parse_key_value_string(value)
+				if not parsed.is_empty():
+					return Vector2(float(parsed.get("x", 0.0)), float(parsed.get("y", 0.0)))
 				var parts: PackedStringArray = _strip_constructor_prefix(value).replace("(", "").replace(")", "").replace(" ", "").split(",")
 				if parts.size() >= 2:
 					return Vector2(float(parts[0]), float(parts[1]))
@@ -985,6 +988,9 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 			if value is Dictionary:
 				return Vector3(float(value.get("x", 0.0)), float(value.get("y", 0.0)), float(value.get("z", 0.0)))
 			if value is String:
+				var parsed: Dictionary = _parse_key_value_string(value)
+				if not parsed.is_empty():
+					return Vector3(float(parsed.get("x", 0.0)), float(parsed.get("y", 0.0)), float(parsed.get("z", 0.0)))
 				var parts: PackedStringArray = _strip_constructor_prefix(value).replace("(", "").replace(")", "").replace(" ", "").split(",")
 				if parts.size() >= 3:
 					return Vector3(float(parts[0]), float(parts[1]), float(parts[2]))
@@ -1029,8 +1035,31 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 					var origin: Dictionary = value["origin"]
 					t.origin = Vector2(float(origin.get("x", 0.0)), float(origin.get("y", 0.0)))
 				return t
+		TYPE_NODE_PATH:
+			if value is String:
+				return NodePath(value)
+		TYPE_OBJECT:
+			if value is String:
+				if value.begins_with("res://"):
+					var loaded_resource: Resource = load(value)
+					if loaded_resource:
+						return loaded_resource
+				if ClassDB.class_exists(value) and ClassDB.is_parent_class(value, "Resource"):
+					return ClassDB.instantiate(value)
 	
 	return value
+
+func _parse_key_value_string(value: String) -> Dictionary:
+	if not (value.begins_with("{") and value.ends_with("}")):
+		return {}
+	var inner: String = value.substr(1, value.length() - 2).replace(" ", "")
+	var result: Dictionary = {}
+	var entries: PackedStringArray = inner.split(",")
+	for entry in entries:
+		var kv: PackedStringArray = entry.split(":")
+		if kv.size() == 2:
+			result[kv[0]] = kv[1]
+	return result
 
 static func _strip_constructor_prefix(value: String) -> String:
 	var trimmed: String = value.strip_edges()
@@ -1519,8 +1548,15 @@ func _tool_add_resource(params: Dictionary) -> Dictionary:
 	if not resource_node:
 		return {"error": "Failed to instantiate resource type: " + resource_type}
 
-	if not resource_name.is_empty():
-		resource_node.name = resource_name
+	var final_name: String = resource_name
+	if final_name.is_empty():
+		final_name = resource_type
+	if target_node.has_node(final_name):
+		var suffix: int = 2
+		while target_node.has_node(final_name + str(suffix)):
+			suffix += 1
+		final_name = final_name + str(suffix)
+	resource_node.name = final_name
 
 	target_node.add_child(resource_node)
 
@@ -1706,13 +1742,16 @@ func _tool_connect_signal(params: Dictionary) -> Dictionary:
 
 	editor_interface.mark_scene_as_unsaved()
 
-	return {
+	var result: Dictionary = {
 		"status": "success",
 		"emitter": emitter_path,
 		"signal": signal_name,
 		"receiver": receiver_path,
 		"method": receiver_method
 	}
+	if flags & CONNECT_PERSIST:
+		result["warning"] = "PERSIST flag is set. If the receiver script also connects this signal in _ready(), it will fire twice at runtime."
+	return result
 
 func _register_disconnect_signal(server_core: RefCounted) -> void:
 	server_core.register_tool(

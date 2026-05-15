@@ -3184,10 +3184,42 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 		return {"success": false, "error": "Editor interface not available", "output": []}
 
 	var normalized_code: String = _normalize_indentation(code)
+	normalized_code = _spaces_to_tabs(normalized_code)
 
 	var script: GDScript = GDScript.new()
-	var wrapped_code: String = "extends RefCounted\n\nvar _output: Array = []\nvar edited_scene: Node = null\n\nfunc _custom_print(msg) -> void:\n\t_output.append(str(msg))\n\nfunc execute() -> Array:\n"
+	var class_level_lines: PackedStringArray = []
+	var body_lines: PackedStringArray = []
+	var in_block: bool = false
+	var block_indent: int = -1
 	for line in normalized_code.split("\n"):
+		var stripped: String = line.strip_edges()
+		if stripped.is_empty():
+			if in_block:
+				class_level_lines.append(line)
+			else:
+				body_lines.append(line)
+			continue
+		var indent: int = _count_indent(line)
+		if in_block:
+			if indent > block_indent or (indent == block_indent and (stripped.begins_with("@") or stripped.begins_with("pass"))):
+				class_level_lines.append(line)
+				continue
+			else:
+				in_block = false
+		if stripped.begins_with("func ") or stripped.begins_with("class ") or stripped.begins_with("enum "):
+			in_block = true
+			block_indent = indent
+			class_level_lines.append(line)
+		else:
+			body_lines.append(line)
+
+	var wrapped_code: String = "extends RefCounted\n\nvar _output: Array = []\nvar edited_scene: Node = null\n\nfunc _custom_print(msg) -> void:\n\t_output.append(str(msg))\n\nfunc get_tree() -> SceneTree:\n\tif edited_scene:\n\t\treturn edited_scene.get_tree()\n\treturn Engine.get_main_loop() as SceneTree\n\nfunc get_node(path) -> Node:\n\tif edited_scene:\n\t\treturn edited_scene.get_node_or_null(path)\n\treturn null\n\n"
+	if not class_level_lines.is_empty():
+		for line in class_level_lines:
+			wrapped_code += line + "\n"
+		wrapped_code += "\n"
+	wrapped_code += "func execute() -> Array:\n"
+	for line in body_lines:
 		wrapped_code += "\t" + line + "\n"
 	wrapped_code += "\n\treturn _output\n"
 
@@ -3195,7 +3227,7 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 
 	var reload_ok: Error = script.reload()
 	if reload_ok != OK:
-		return {"success": false, "error": "Script compilation failed. Check syntax. Note: use tab indentation for code blocks inside if/for/while.", "output": []}
+		return {"success": false, "error": "Script compilation failed. Check syntax.", "output": []}
 
 	var instance: RefCounted = script.new()
 	if not instance:
@@ -3227,6 +3259,17 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 		"success": true,
 		"output": output
 	}
+
+func _count_indent(line: String) -> int:
+	var count: int = 0
+	for c in line:
+		if c == "\t":
+			count += 4
+		elif c == " ":
+			count += 1
+		else:
+			break
+	return count
 
 func _normalize_indentation(code: String) -> String:
 	var lines: PackedStringArray = code.split("\n")
@@ -3265,6 +3308,28 @@ func _normalize_indentation(code: String) -> String:
 			else:
 				new_line += c
 				removed = min_indent
+		result_lines.append(new_line)
+	return "\n".join(result_lines)
+
+func _spaces_to_tabs(code: String) -> String:
+	var lines: PackedStringArray = code.split("\n")
+	var result_lines: PackedStringArray = []
+	for line in lines:
+		if line.is_empty():
+			result_lines.append(line)
+			continue
+		var leading_spaces: int = 0
+		for c in line:
+			if c == " ":
+				leading_spaces += 1
+			else:
+				break
+		if leading_spaces == 0:
+			result_lines.append(line)
+			continue
+		var tab_count: int = leading_spaces / 4
+		var remaining_spaces: int = leading_spaces % 4
+		var new_line: String = "\t".repeat(tab_count) + " ".repeat(remaining_spaces) + line.substr(leading_spaces)
 		result_lines.append(new_line)
 	return "\n".join(result_lines)
 

@@ -1394,7 +1394,8 @@ func _tool_create_resource(params: Dictionary) -> Dictionary:
 	# 设置属性（如果有）
 	for prop_name in properties:
 		if prop_name in resource:
-			resource.set(prop_name, properties[prop_name])
+			var converted_val: Variant = _convert_value_for_resource(resource, prop_name, properties[prop_name])
+			resource.set(prop_name, converted_val)
 	
 	# 保存资源
 	var error: Error = ResourceSaver.save(resource, resource_path)
@@ -1407,6 +1408,80 @@ func _tool_create_resource(params: Dictionary) -> Dictionary:
 		"resource_path": resource_path,
 		"resource_type": resource_type
 	}
+
+func _convert_value_for_resource(resource: Resource, property_name: String, value: Variant) -> Variant:
+	if value == null:
+		return value
+	var property_type: int = TYPE_NIL
+	for prop in resource.get_property_list():
+		if prop["name"] == property_name:
+			property_type = prop["type"]
+			break
+	if property_type == TYPE_NIL:
+		return value
+	match property_type:
+		TYPE_VECTOR2:
+			if value is Dictionary:
+				return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+			if value is String:
+				var parsed: Dictionary = _parse_key_value_string(value)
+				if not parsed.is_empty():
+					return Vector2(float(parsed.get("x", 0.0)), float(parsed.get("y", 0.0)))
+				var parts: PackedStringArray = value.replace("Vector2", "").replace("(", "").replace(")", "").replace(" ", "").split(",")
+				if parts.size() >= 2:
+					return Vector2(float(parts[0]), float(parts[1]))
+		TYPE_VECTOR3:
+			if value is Dictionary:
+				return Vector3(float(value.get("x", 0.0)), float(value.get("y", 0.0)), float(value.get("z", 0.0)))
+			if value is String:
+				var parsed: Dictionary = _parse_key_value_string(value)
+				if not parsed.is_empty():
+					return Vector3(float(parsed.get("x", 0.0)), float(parsed.get("y", 0.0)), float(parsed.get("z", 0.0)))
+				var parts: PackedStringArray = value.replace("Vector3", "").replace("(", "").replace(")", "").replace(" ", "").split(",")
+				if parts.size() >= 3:
+					return Vector3(float(parts[0]), float(parts[1]), float(parts[2]))
+		TYPE_COLOR:
+			if value is Dictionary:
+				return Color(float(value.get("r", 0.0)), float(value.get("g", 0.0)), float(value.get("b", 0.0)), float(value.get("a", 1.0)))
+			if value is String:
+				if value.begins_with("#") or value.begins_with("Color"):
+					return Color(value)
+		TYPE_BOOL:
+			if value is String:
+				return value.to_lower() == "true"
+			if value is int or value is float:
+				return value != 0
+		TYPE_INT:
+			if value is String:
+				return int(value)
+			if value is float:
+				return int(value)
+		TYPE_FLOAT:
+			if value is String:
+				return float(value)
+			if value is int:
+				return float(value)
+		TYPE_OBJECT:
+			if value is String:
+				if value.begins_with("res://"):
+					var loaded_res: Resource = load(value)
+					if loaded_res:
+						return loaded_res
+				if ClassDB.class_exists(value) and ClassDB.is_parent_class(value, "Resource"):
+					return ClassDB.instantiate(value)
+	return value
+
+func _parse_key_value_string(value: String) -> Dictionary:
+	if not (value.begins_with("{") and value.ends_with("}")):
+		return {}
+	var inner: String = value.substr(1, value.length() - 2).replace(" ", "")
+	var result: Dictionary = {}
+	var entries: PackedStringArray = inner.split(",")
+	for entry in entries:
+		var kv: PackedStringArray = entry.split(":")
+		if kv.size() == 2:
+			result[kv[0]] = kv[1]
+	return result
 
 # ============================================================================
 # get_project_structure - 获取项目目录结构

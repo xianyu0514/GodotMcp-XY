@@ -175,6 +175,8 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 - `Vector3` / `Vector3i`：传入 `{"x": 1, "y": 2, "z": 3}` 或字符串 `"(1, 2, 3)"`
 - `Color`：传入 `{"r": 1, "g": 0, "b": 0, "a": 1}` 或 `"#ff0000"`
 - `bool`：传入 `true`/`false` 或字符串 `"true"`/`"false"`
+- `NodePath`：传入字符串路径（如 `"../PickupPoint"`），自动转换为 `NodePath`
+- `Resource`：传入 `"res://path/to/resource.tres"` 自动 `load()` 加载，或传入类名（如 `"BoxShape3D"`）自动实例化
 - 字符串值会自动尝试 `JSON.parse_string()` 解析
 
 ---
@@ -366,6 +368,8 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 - 使用 `ClassDB.instantiate()` 创建节点实例
 - 仅支持 `Node` 派生类型的实例化
 - 自动设置 `owner` 为当前场景根节点
+- 未提供 `resource_name` 时，使用 `resource_type` 作为名称
+- 同级名称冲突时自动添加数字后缀（如 `CollisionShape3D2`）
 
 **常见资源类型**：
 | 类型 | 用途 |
@@ -439,8 +443,8 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 |-----|------|------|
 | 0 | `CONNECT_DEFAULT` | 默认连接 |
 | 1 | `CONNECT_DEFERRED` | 延迟调用（帧末尾） |
-| 2 | `CONNECT_ONE_SHOT` | 一次性连接（触发后自动断开） |
-| 4 | `CONNECT_PERSIST` | 持久连接（保存到场景） |
+| 2 | `CONNECT_PERSIST` | 持久连接（保存到场景） |
+| 4 | `CONNECT_ONE_SHOT` | 一次性连接（触发后自动断开） |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
@@ -450,6 +454,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 | `signal` | string | 信号名称 |
 | `receiver` | string | 接收节点路径 |
 | `method` | string | 接收方法名 |
+| `warning` | string | 仅当使用 PERSIST 标志时出现，提示重复连接风险 |
 
 **注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`
 
@@ -457,6 +462,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 - 验证信号存在于发射节点
 - 检查信号是否已连接（避免重复连接）
 - 连接失败时返回错误码
+- 使用 `CONNECT_PERSIST` 标志时返回警告：如果脚本中也连接了同一信号，运行时将触发两次
 
 ---
 
@@ -786,6 +792,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 - 支持文件路径和直接内容两种验证模式
 - 使用 `GDScript.new() + reload()` 进行原生语法验证
 - `script_path` 和 `content` 至少提供一个
+- `content` 参数中的空格缩进会自动转换为制表符（4空格=1tab）
 
 ---
 
@@ -1319,7 +1326,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 
 ### 44. execute_editor_script
 
-在编辑器上下文中执行完整的 GDScript 脚本。与 `execute_script` 不同，此工具支持多行语句、循环、条件判断等。
+在编辑器上下文中执行完整的 GDScript 脚本。支持多行语句、循环、条件判断、函数定义、类定义等。
 
 **参数**：
 | 参数 | 类型 | 必需 | 描述 |
@@ -1336,9 +1343,14 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 **注解**：`readOnlyHint=false`, `destructiveHint=true`, `idempotentHint=false`, `openWorldHint=true`
 
 **特性**：
-- 支持多行脚本、循环、条件判断
-- 自动捕获 `print()` 输出
+- 支持多行脚本、循环、条件判断、match语句
+- 支持 `func` 定义（自动提升到类级别，支持递归）
+- 支持 `class` 和 `enum` 定义（自动提升到类级别）
+- 提供 `get_tree()` 代理方法（通过 `edited_scene.get_tree()` 访问场景树）
+- 提供 `get_node(path)` 代理方法（通过 `edited_scene.get_node_or_null(path)` 访问节点）
 - 可访问 `edited_scene`（当前编辑的场景根节点）
+- 自动捕获输出：使用 `_custom_print(msg)` 输出结果
+- 代码中的空格缩进会自动转换为制表符（4空格=1tab），无需手动使用 tab
 - 脚本编译失败会返回明确的错误信息
 
 **示例**：
@@ -1346,7 +1358,16 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 {
   "name": "execute_editor_script",
   "arguments": {
-    "code": "var scene = edited_scene\nif scene:\n    _custom_print(scene.name)\n    _custom_print(str(scene.get_child_count()) + ' children')\nelse:\n    _custom_print('No scene open')"
+    "code": "func fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n_custom_print('fib(10)=' + str(fibonacci(10)))"
+  }
+}
+```
+
+```json
+{
+  "name": "execute_editor_script",
+  "arguments": {
+    "code": "var root = get_tree().root\n_custom_print('children=' + str(root.get_child_count()))"
   }
 }
 ```
@@ -1866,7 +1887,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 |------|------|------|------|
 | `resource_path` | string | 是 | 资源保存路径（如 `res://resources/my_curve.tres`） |
 | `resource_type` | string | 是 | 资源类型（如 `Curve`、`Gradient`、`StyleBoxFlat`、`Animation`） |
-| `properties` | Dictionary | 否 | 要设置的属性键值对 |
+| `properties` | Dictionary | 否 | 要设置的属性键值对（支持类型转换，见下方说明） |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
@@ -1876,6 +1897,14 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 | `resource_type` | string | 资源类型 |
 
 **注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`
+
+**properties 类型转换**：
+- `Vector2`：传入 `{"x": 1, "y": 2}` 或字符串 `"1,2"` 或 `"{x:1,y:2}"`
+- `Vector3`：传入 `{"x": 1, "y": 2, "z": 3}` 或字符串 `"1,2,3"` 或 `"{x:1,y:2,z:3}"` 或 `"Vector3(1, 2, 3)"`
+- `Color`：传入 `{"r": 1, "g": 0, "b": 0, "a": 1}` 或 `"#ff0000"`
+- `bool`：传入 `true`/`false` 或字符串 `"true"`/`"false"`
+- `int`/`float`：传入数字或字符串 `"0.5"`
+- `Resource`：传入 `"res://path/to/resource.tres"` 自动加载，或传入类名自动实例化
 
 ---
 
@@ -1938,13 +1967,13 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 
 ### 72. batch_scene_node_edits
 
-在一个 UndoRedo 动作中批量执行创建/删除场景节点编辑，使完整的结构变更可一步撤销。
+在一个 UndoRedo 动作中批量执行创建/删除/重命名/移动场景节点编辑，使完整的结构变更可一步撤销。
 
 **参数**：
 | 参数 | 类型 | 必需 | 描述 |
 |------|------|------|------|
 | `label` | string | 否 | UndoRedo 动作标签 |
-| `operations` | array | 是 | 有序的创建/删除操作列表，每项需指定 `type`（`create`/`delete`/`move`）及相关参数 |
+| `operations` | array | 是 | 有序操作列表，每项需指定 `type`（`create`/`delete`/`rename`/`move`）及相关参数。`create` 操作需提供 `parent_path`、`node_type`、`node_name` |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
@@ -1952,7 +1981,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 | `status` | string | `"success"` |
 | `label` | string | UndoRedo 标签 |
 | `operation_count` | int | 操作数量 |
-| `operations` | array | 每项操作的结果 |
+| `operations` | array | 每项操作的结果（含 `node_path` 完整路径） |
 
 **注解**：`readOnlyHint=false`, `destructiveHint=true`, `idempotentHint=false`, `openWorldHint=false`
 
