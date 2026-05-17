@@ -140,8 +140,10 @@ func _init_transport() -> bool:
 			_log_error("Unknown transport type: " + str(_transport_type))
 			return false
 	
-	# 连接信号（确保线程安全）
-	_transport.message_received.connect(_on_transport_message_received)
+	# 连接信号（使用 lambda 启动协程，支持异步工具执行）
+	_transport.message_received.connect(func(message: Dictionary, context: Variant):
+		_on_transport_message_received(message, context)
+	)
 	_transport.server_error.connect(_on_transport_error)
 	_transport.server_started.connect(_on_transport_started)
 	_transport.server_stopped.connect(_on_transport_stopped)
@@ -149,7 +151,7 @@ func _init_transport() -> bool:
 	_log_info("Transport layer initialized: " + str(_transport_type))
 	return true
 
-## 处理来自传输层的消息（线程安全：此函数在主线程执行）
+## 处理来自传输层的消息（异步协程，支持工具 await）
 ## @param message: Dictionary - JSON-RPC 消息
 ## @param context: Variant - 传输上下文（stdio: null, HTTP: StreamPeerTCP）
 func _on_transport_message_received(message: Dictionary, context: Variant) -> void:
@@ -173,7 +175,7 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	
 	if message.has("method"):
 		# 这是一个请求或通知
-		response = _handle_request(message)
+		response = await _handle_request(message)
 	else:
 		# 这是一个响应（通常不需要处理）
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
@@ -282,13 +284,13 @@ func _handle_request(message: Dictionary) -> Dictionary:
 			return _handle_tools_list(message)
 		
 		MCPTypes.METHOD_TOOLS_CALL:
-			return _handle_tool_call(message)
+			return await _handle_tool_call(message)
 		
 		MCPTypes.METHOD_RESOURCES_LIST:
 			return _handle_resources_list(message)
 		
 		MCPTypes.METHOD_RESOURCES_READ:
-			return _handle_resource_read(message)
+			return await _handle_resource_read(message)
 		
 		MCPTypes.METHOD_RESOURCES_SUBSCRIBE:
 			return _handle_resource_subscribe(message)
@@ -416,12 +418,12 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var error: String = ""
 	
 	if tool.callable.is_valid():
-		# 使用Callable调用工具
+		# 使用Callable调用工具（await 支持异步工具执行）
 		var status: Error = OK
 		
 		# 捕获执行错误
 		if status == OK:
-			result = tool.callable.call(arguments)
+			result = await tool.callable.call(arguments)
 		else:
 			error = "Tool execution failed with error: " + str(status)
 	
@@ -500,7 +502,7 @@ func _handle_resource_read(message: Dictionary) -> Dictionary:
 	var content: Dictionary = {}
 	
 	if resource.load_callable.is_valid():
-		content = resource.load_callable.call(params)
+		content = await resource.load_callable.call(params)
 	
 	var result: Dictionary = {}
 	

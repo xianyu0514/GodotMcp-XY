@@ -1,4 +1,14 @@
 # AGENTS.md - Godot MCP Project Guidelines
+## PowerShell 7.6.1 Path
+- **Install path**: C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.1.0_x64__8wekyb3d8bbwe\pwsh.exe
+- Before using, verify the path exists:
+  - If it exists, use it
+  - If not found, fall back to system default
+- Always prefer PowerShell 7.6.1 for file writes
+## Code Language Policy
+- **No Chinese characters allowed in any code files**
+- All text in code files must be in English
+- Chinese is only allowed in this file and README.zh.md and docs
 
 ## Build & Run Commands
 - **Run Godot Project**: Open project.godot in Godot Editor

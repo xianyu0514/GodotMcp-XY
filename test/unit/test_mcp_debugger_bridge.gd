@@ -77,3 +77,72 @@ func test_stack_frame_var_decodes_variable_payload():
 	assert_eq(variables[0].scope, "local", "Should decode variable scope")
 	assert_eq(variables[0].type, "float", "Should decode variable type")
 	assert_eq(variables[0].value, 12.5, "Should preserve variable value")
+
+func test_probe_ready_initially_false():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	assert_false(_bridge.is_probe_ready(0), "Probe should not be ready before probe_ready message")
+	assert_false(_bridge.is_probe_ready(-1), "No session should have probe ready initially")
+
+func test_probe_ready_after_capture():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	assert_true(_bridge.is_probe_ready(0), "Probe should be ready after probe_ready message on session 0")
+	assert_false(_bridge.is_probe_ready(1), "Other session should not be affected")
+
+func test_probe_ready_any_session():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	assert_true(_bridge.is_probe_ready(-1), "Any session check should be true when at least one session is ready")
+
+func test_reset_probe_ready_specific_session():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 1)
+	_bridge.reset_probe_ready(0)
+	assert_false(_bridge.is_probe_ready(0), "Session 0 should be reset")
+	assert_true(_bridge.is_probe_ready(1), "Session 1 should remain ready")
+
+func test_reset_probe_ready_all_sessions():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 1)
+	_bridge.reset_probe_ready(-1)
+	assert_false(_bridge.is_probe_ready(0), "Session 0 should be reset")
+	assert_false(_bridge.is_probe_ready(1), "Session 1 should be reset")
+	assert_false(_bridge.is_probe_ready(-1), "No session should be ready after full reset")
+
+func test_setup_session_resets_probe_ready():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	_bridge._setup_session(0)
+	assert_false(_bridge.is_probe_ready(0), "Probe ready should be reset on session setup")
+
+func test_wait_for_probe_ready_returns_immediately_when_ready():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	_bridge._capture("mcp:probe_ready", [{"status": "ok"}], 0)
+	var result: bool = await _bridge.wait_for_probe_ready(0, 100)
+	assert_true(result, "Should return true immediately when probe is already ready")
+
+func test_wait_for_probe_ready_times_out_when_not_ready():
+	if _headless_skip:
+		pending("EditorDebuggerPlugin not available in headless/CLI mode")
+		return
+	var start_ms: int = Time.get_ticks_msec()
+	var result: bool = await _bridge.wait_for_probe_ready(0, 200)
+	var elapsed: int = Time.get_ticks_msec() - start_ms
+	assert_false(result, "Should return false when probe never becomes ready")
+	assert_true(elapsed >= 150, "Should have waited near timeout (elapsed=%d)" % elapsed)

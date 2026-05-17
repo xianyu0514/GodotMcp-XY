@@ -778,6 +778,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 | `warnings` | Array[Dictionary] | 警告列表 |
 | `error_count` | int | 错误数量 |
 | `warning_count` | int | 警告数量 |
+| `autoload_aware` | boolean | 是否通过Autoload/全局类感知验证通过（仅当首次验证失败但注入Autoload声明后重试通过时为true） |
 
 **错误/警告条目结构**：
 | 字段 | 类型 | 描述 |
@@ -1236,7 +1237,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 **参数**：
 | 参数 | 类型 | 必需 | 描述 |
 |------|------|------|------|
-| `source` | string | 否 | 日志源：`mcp`（MCP 服务器日志，默认）、`runtime`（`user://logs/godot.log`）或 `editor_panel`（Godot 编辑器输出面板，含 print/push_error/push_warning/编译报错） |
+| `source` | string | 否 | 日志源：`mcp`（MCP 服务器日志，默认）、`runtime`（`user://logs/godot.log`）或 `editor_panel`（Godot 编辑器输出面板+Script Errors面板，含 print/push_error/push_warning/编译报错/运行时脚本错误） |
 | `type` | Array[string] | 否 | 按类型过滤（如 `["Error", "Warning"]`）。对 MCP 和 editor_panel 源有效。空数组返回所有 |
 | `count` | int | 否 | 返回的最大日志条数（默认 `100`） |
 | `offset` | int | 否 | 跳过的日志条数（默认 `0`） |
@@ -1256,6 +1257,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 | `index` | int | 日志索引 |
 | `type` | string | 日志类型：`Error`、`Warning`、`Info`、`Debug` |
 | `message` | string | 日志内容 |
+| `panel` | string | 来源面板：`output`（Output面板）或 `script_errors`（Script Errors面板），仅editor_panel源 |
 
 **注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`
 
@@ -2398,7 +2400,7 @@ Godot MCP Native 实现了 **154 个工具**，分为 6 大类（含核心和补
 
 ### 91. get_debug_output
 
-读取编辑器 bridge 捕获的分类运行时调试器输出。
+读取编辑器 bridge 捕获的分类运行时调试器输出。现在 `stderr` 类别包含运行时脚本错误（通过 EngineDebugger error 消息桥接）。
 
 **参数**：
 | 参数 | 类型 | 必需 | 描述 |

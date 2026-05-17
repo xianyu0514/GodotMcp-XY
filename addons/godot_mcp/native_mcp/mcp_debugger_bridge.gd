@@ -10,7 +10,9 @@ var _capture_prefixes: Array[String] = [
 	"stack_frame_vars",
 	"stack_frame_var",
 	"output",
-	"error"
+	"error",
+	"script_error",
+	"gdscript"
 ]
 var _captured_messages: Array[Dictionary] = []
 var _max_messages: int = 500
@@ -28,11 +30,13 @@ var _scope_variables_references: Dictionary = {}
 var _evaluation_variables_references: Dictionary = {}
 var _pending_stack_vars_frame: int = 0
 var _message_sequence: int = 0
+var _probe_ready_session_ids: Dictionary = {}
 
 func get_message_sequence() -> int:
 	return _message_sequence
 
 func _setup_session(session_id: int) -> void:
+	_probe_ready_session_ids.erase(session_id)
 	call_deferred("_refresh_script_debugger_connections")
 
 func _has_capture(capture: String) -> bool:
@@ -40,12 +44,77 @@ func _has_capture(capture: String) -> bool:
 
 func _capture(message: String, data: Array, session_id: int) -> bool:
 	_append_captured_message(session_id, message, data)
+	if message == "mcp:probe_ready":
+		_probe_ready_session_ids[session_id] = true
+	# Bridge "error" messages to output events (handles GDScript runtime errors from EngineDebugger)
+	if data.size() > 0 and (message == "error" or message.begins_with("error:") or message.begins_with("error ")):
+		var error_msg: String = str(data[0]) if data.size() > 0 else ""
+		var error_file: String = str(data[1]) if data.size() > 1 else ""
+		var error_line: int = int(data[2]) if data.size() > 2 else 0
+		var error_func: String = str(data[3]) if data.size() > 3 else ""
+		_append_output_event({
+			"category": "stderr",
+			"message": error_msg,
+			"file": error_file,
+			"line": error_line,
+			"function": error_func,
+			"type": 1
+		})
+	# Bridge "script_error" / "gdscript" messages to output events (handles GDScript runtime errors)
+	elif data.size() > 0 and (message == "script_error" or message.begins_with("script_error:") or message == "gdscript" or message.begins_with("gdscript:")):
+		var error_msg: String = str(data[0]) if data.size() > 0 else ""
+		var error_file: String = str(data[1]) if data.size() > 1 else ""
+		var error_line: int = int(data[2]) if data.size() > 2 else 0
+		var error_func: String = str(data[3]) if data.size() > 3 else ""
+		_append_output_event({
+			"category": "stderr",
+			"message": error_msg,
+			"file": error_file,
+			"line": error_line,
+			"function": error_func,
+			"type": 1
+		})
+	# Bridge "output" messages to output events (handles print/printerr from EngineDebugger)
+	elif message == "output" and data.size() >= 2:
+		var output_message: String = str(data[0])
+		var output_type: int = int(data[1])
+		_append_output_event({
+			"category": _map_output_category(output_type),
+			"message": output_message,
+			"type": output_type
+		})
 	return true
 
 func add_capture_prefix(prefix: String) -> void:
 	if prefix.is_empty() or _capture_prefixes.has(prefix):
 		return
 	_capture_prefixes.append(prefix)
+
+func is_probe_ready(session_id: int = -1) -> bool:
+	if session_id >= 0:
+		return _probe_ready_session_ids.has(session_id)
+	return _probe_ready_session_ids.size() > 0
+
+func wait_for_probe_ready(session_id: int = -1, timeout_ms: int = 2000) -> bool:
+	if is_probe_ready(session_id):
+		return true
+	var deadline_ms: int = Time.get_ticks_msec() + timeout_ms
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	while Time.get_ticks_msec() < deadline_ms:
+		if tree:
+			await tree.process_frame
+		else:
+			OS.delay_msec(16)
+		get_captured_messages(1, 0, "desc")
+		if is_probe_ready(session_id):
+			return true
+	return is_probe_ready(session_id)
+
+func reset_probe_ready(session_id: int = -1) -> void:
+	if session_id >= 0:
+		_probe_ready_session_ids.erase(session_id)
+	else:
+		_probe_ready_session_ids.clear()
 
 func get_sessions_info() -> Array[Dictionary]:
 	_refresh_script_debugger_connections()
@@ -275,6 +344,11 @@ func request_runtime_message(message: String, data: Array = [], response_message
 				"captured": captured
 			}
 		OS.delay_msec(10)
+		if DisplayServer.has_method("process_events"):
+			DisplayServer.process_events()
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
+		if tree:
+			await tree.process_frame
 
 	return {
 		"error": "Timed out waiting for runtime response: " + message,
@@ -354,7 +428,16 @@ func _on_breaked(reallydid: bool, can_debug: bool, reason: String, has_stackdump
 		"reason": reason,
 		"has_stackdump": has_stackdump
 	})
-
+	# Bridge script error break reasons to output events so get_debug_output can capture them
+	if reallydid and has_stackdump:
+		_append_output_event({
+			"category": "stderr",
+			"message": reason,
+			"file": "",
+			"line": 0,
+			"function": "",
+			"type": 1
+		})
 func _on_output(message: String, type: int) -> void:
 	_append_output_event({
 		"category": _map_output_category(type),

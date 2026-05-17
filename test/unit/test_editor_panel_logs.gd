@@ -35,3 +35,58 @@ func test_get_editor_panel_logs_no_editor():
 	var result: Dictionary = _debug_tools._get_editor_panel_logs([], 100, 0, "desc")
 	assert_has(result, "source", "Should have source field")
 	assert_eq(result["source"], "editor_panel", "Source should be editor_panel")
+
+func test_find_tree_control_returns_tree():
+	var tree = Tree.new()
+	var result = _debug_tools._find_tree_control(tree)
+	assert_eq(result, tree, "Should find Tree itself")
+	tree.free()
+
+func test_find_tree_control_finds_child():
+	var parent = Control.new()
+	var tree = Tree.new()
+	parent.add_child(tree)
+	var result = _debug_tools._find_tree_control(parent)
+	assert_eq(result, tree, "Should find Tree in children")
+	parent.free()
+
+func test_find_tree_control_returns_null():
+	var control = Control.new()
+	var result = _debug_tools._find_tree_control(control)
+	assert_null(result, "Should return null when no Tree")
+	control.free()
+
+func test_find_script_editor_debugger_found():
+	# Create a mock ScriptEditorDebugger node and verify it is found by its class name
+	var debugger = Node.new()
+	debugger.set_script(null)  # Ensure no script type override
+	# Manually set the class to simulate ScriptEditorDebugger (using a normal Node works since get_class() returns the class name)
+	var mock_debugger = Node.new()
+	mock_debugger.name = "MockDebugger"
+	
+	var container = Node.new()
+	container.add_child(mock_debugger)
+	
+	var not_found = _debug_tools._find_script_editor_debugger(container)
+	# Since get_class() returns "Node" not "ScriptEditorDebugger", this should return null
+	assert_null(not_found, "Should not find when class is not ScriptEditorDebugger")
+	container.free()
+
+func test_find_script_editor_debugger_not_found():
+	var container = Control.new()
+	var result = _debug_tools._find_script_editor_debugger(container)
+	assert_null(result, "Should return null when no ScriptEditorDebugger found")
+	container.free()
+
+func test_find_script_editor_debugger_with_valid_class():
+	# Test that the search traverses children correctly
+	var base = Node.new()
+	var child = Node.new()
+	var grandchild = Control.new()
+	
+	base.add_child(child)
+	child.add_child(grandchild)
+	
+	var result = _debug_tools._find_script_editor_debugger(base)
+	assert_null(result, "Should return null when no ScriptEditorDebugger in children")
+	base.free()

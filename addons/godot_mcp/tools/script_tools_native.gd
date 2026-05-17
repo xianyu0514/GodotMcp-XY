@@ -421,11 +421,51 @@ func _tool_find_script_symbol_references(params: Dictionary) -> Dictionary:
 			if references.size() >= max_results:
 				break
 
+	# Annotate references with Autoload singleton name when a referenced script is an Autoload
+	var autoload_path_map: Dictionary = _build_autoload_path_map()
+	for ref in references:
+		if ref is Dictionary:
+			var ref_file: String = str(ref.get("file_path", ref.get("script_path", "")))
+			if autoload_path_map.has(ref_file):
+				ref["autoload_name"] = autoload_path_map[ref_file]
+
 	return {
 		"symbol_name": symbol_name,
 		"references": references,
 		"count": references.size()
 	}
+
+func _build_autoload_path_map() -> Dictionary:
+	# Build a mapping from script path to Autoload singleton name
+	# Format: {"res://path/to/script.gd": "AutoloadName"}
+	var result: Dictionary = {}
+	var property_list: Array = ProjectSettings.get_property_list()
+	for prop in property_list:
+		var prop_name: String = str(prop.get("name", ""))
+		if not prop_name.begins_with("autoload/"):
+			continue
+		var autoload_name: String = prop_name.trim_prefix("autoload/")
+		if autoload_name.is_empty():
+			continue
+		var autoload_value: String = str(ProjectSettings.get_setting(prop_name, ""))
+		# Strip leading "*" which marks global singleton autoloads
+		if autoload_value.begins_with("*"):
+			autoload_value = autoload_value.substr(1)
+		if autoload_value.begins_with("res://"):
+			result[autoload_value] = autoload_name
+	# Fallback: try direct get_setting for dynamically registered autoloads
+	if result.is_empty():
+		for i in range(256):
+			var key: String = "autoload/" + str(i)
+			if ProjectSettings.has_setting(key):
+				var val: String = str(ProjectSettings.get_setting(key, ""))
+				if val.begins_with("*"):
+					val = val.substr(1)
+				if val.begins_with("res://"):
+					result[val] = key.trim_prefix("autoload/")
+			else:
+				break
+	return result
 
 # ============================================================================
 # rename_script_symbol - 重命名脚本符号
@@ -517,7 +557,7 @@ func _tool_rename_script_symbol(params: Dictionary) -> Dictionary:
 		return {"error": "Invalid path: " + path_validation["error"]}
 	search_path = path_validation["sanitized"]
 
-	var include_extensions: Array = _normalize_reference_extensions(params.get("include_extensions", [".gd", ".cs"]))
+	var include_extensions: Array = _normalize_reference_extensions(params.get("include_extensions", [".gd", ".cs", ".tscn"]))
 	if include_extensions.is_empty():
 		return {"error": "include_extensions must contain at least one supported file extension"}
 
@@ -1969,28 +2009,43 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 
 	var errors: Array = []
 	var warnings: Array = []
+	var autoload_aware: bool = false
 
 	if reload_err != OK:
-		var error_msg: String = test_script.get_meta("_error_text", "") if test_script.has_meta("_error_text") else ""
-		if error_msg.is_empty():
-			var err_lines: PackedStringArray = content.split("\n")
-			for i in range(err_lines.size()):
-				var line: String = err_lines[i].strip_edges()
-				if line.is_empty():
-					continue
-				if _is_syntax_error_line(line):
-					errors.append({
-						"line": i + 1,
-						"column": 0,
-						"message": "Syntax error near: " + line
-					})
-					break
-			if errors.is_empty():
-				errors.append({
+		var autoload_decls: String = _build_autoload_declarations()
+		if not autoload_decls.is_empty():
+			var retry_content: String = _insert_autoload_decls_after_extends(validation_content, autoload_decls)
+			var retry_script: GDScript = GDScript.new()
+			retry_script.source_code = retry_content
+			var retry_err: Error = retry_script.reload()
+			if retry_err == OK:
+				autoload_aware = true
+				warnings.append({
 					"line": 0,
 					"column": 0,
-					"message": "Script has syntax errors"
+					"message": "Script validates successfully with Autoload/global class awareness. Original validation failed due to unresolved Autoload or global class names."
 				})
+		if not autoload_aware:
+			var error_msg: String = test_script.get_meta("_error_text", "") if test_script.has_meta("_error_text") else ""
+			if error_msg.is_empty():
+				var err_lines: PackedStringArray = content.split("\n")
+				for i in range(err_lines.size()):
+					var line: String = err_lines[i].strip_edges()
+					if line.is_empty():
+						continue
+					if _is_syntax_error_line(line):
+						errors.append({
+							"line": i + 1,
+							"column": 0,
+							"message": "Syntax error near: " + line
+						})
+						break
+				if errors.is_empty():
+					errors.append({
+						"line": 0,
+						"column": 0,
+						"message": "Script has syntax errors"
+					})
 
 	if check_warnings and reload_err == OK:
 		var source_lines: PackedStringArray = content.split("\n")
@@ -2008,7 +2063,8 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 		"errors": errors,
 		"warnings": warnings,
 		"error_count": errors.size(),
-		"warning_count": warnings.size()
+		"warning_count": warnings.size(),
+		"autoload_aware": autoload_aware
 	}
 
 func _is_syntax_error_line(line: String) -> bool:
@@ -2029,6 +2085,51 @@ func _strip_class_names(source: String) -> String:
 		else:
 			result.append(line)
 	return "\n".join(result)
+
+func _build_autoload_declarations() -> String:
+	var decls: PackedStringArray = []
+	# First pass: read autoloads from ProjectSettings property list (persisted settings)
+	for property_info in ProjectSettings.get_property_list():
+		var property_name: String = str(property_info.get("name", ""))
+		if not property_name.begins_with("autoload/"):
+			continue
+		var autoload_name: String = property_name.trim_prefix("autoload/")
+		decls.append("var %s" % autoload_name)
+	# Fallback: if no autoloads found via property list, try direct get_setting for known patterns
+	# This covers autoloads registered dynamically via set_setting() without save()
+	if decls.is_empty():
+		for i in range(256):
+			var key: String = "autoload/" + str(i)
+			if ProjectSettings.has_setting(key):
+				var autoload_val: String = str(ProjectSettings.get_setting(key, ""))
+				if not autoload_val.is_empty():
+					decls.append("var %s" % key.trim_prefix("autoload/"))
+			else:
+				break
+	var global_classes: PackedStringArray = ProjectSettings.get_global_class_list()
+	for class_name_str in global_classes:
+		if not class_name_str.is_empty():
+			decls.append("var %s" % class_name_str)
+	return "\n".join(decls)
+
+func _insert_autoload_decls_after_extends(content: String, autoload_decls: String) -> String:
+	var lines: PackedStringArray = content.split("\n")
+	var insert_index: int = 0
+	for i in range(lines.size()):
+		var stripped: String = lines[i].strip_edges()
+		if stripped.begins_with("extends ") or stripped.begins_with("class_name "):
+			insert_index = i + 1
+			if stripped.begins_with("class_name "):
+				continue
+			break
+	var result_lines: PackedStringArray = []
+	for i in range(lines.size()):
+		if i == insert_index:
+			result_lines.append(autoload_decls)
+		result_lines.append(lines[i])
+	if insert_index >= lines.size():
+		result_lines.append(autoload_decls)
+	return "\n".join(result_lines)
 
 func _spaces_to_tabs(code: String) -> String:
 	var lines: PackedStringArray = code.split("\n")

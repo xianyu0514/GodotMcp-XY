@@ -147,7 +147,7 @@ func test_disabled_tool_call_returns_error():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.set_tool_enabled("test_tool", false)
 	var msg: Dictionary = {"id": 2, "method": "tools/call", "params": {"name": "test_tool", "arguments": {}}}
-	var response: Dictionary = _core._handle_tool_call(msg)
+	var response: Dictionary = await _core._handle_tool_call(msg)
 	assert_true(response.get("result", {}).get("isError", false), "Calling disabled tool should return isError")
 
 func test_tool_enabled_default_core():
@@ -199,3 +199,28 @@ func test_is_running_initially():
 
 func test_protocol_version_constant():
 	assert_eq(MCPTypes.PROTOCOL_VERSION, "2025-11-25", "Protocol version should be 2025-11-25")
+
+func test_sync_tool_call_with_await():
+	_core.register_tool("sync_tool", "A sync tool", {"type": "object"}, func(args): return {"status": "ok"})
+	var msg: Dictionary = {"id": 10, "method": "tools/call", "params": {"name": "sync_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_false(response.get("result", {}).get("isError", true), "Sync tool via await should succeed")
+	assert_eq(response.get("result", {}).get("content", [])[0].get("text"), '{"status":"ok"}', "Sync tool result should be preserved")
+
+func test_async_tool_call_with_await():
+	var tool_called: bool = false
+	_core.register_tool("async_tool", "An async tool", {"type": "object"}, func(args):
+		tool_called = true
+		await get_tree().process_frame
+		return {"status": "async_ok"}
+	)
+	var msg: Dictionary = {"id": 11, "method": "tools/call", "params": {"name": "async_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_true(tool_called, "Async tool should have been called")
+	assert_false(response.get("result", {}).get("isError", true), "Async tool via await should succeed")
+
+func test_handle_request_awaits_tool_call():
+	_core.register_tool("test_req_tool", "Test", {"type": "object"}, func(args): return {"value": 42})
+	var msg: Dictionary = {"id": 12, "method": "tools/call", "params": {"name": "test_req_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_request(msg)
+	assert_false(response.get("result", {}).get("isError", true), "handle_request should await tool_call successfully")

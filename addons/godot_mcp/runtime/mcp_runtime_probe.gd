@@ -1,4 +1,3 @@
-class_name MCPRuntimeProbe
 extends Node
 
 const CAPTURE_PREFIX: StringName = &"mcp"

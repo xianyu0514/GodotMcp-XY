@@ -1214,6 +1214,9 @@ func _tool_get_editor_screenshot(params: Dictionary) -> Dictionary:
 	if not viewport:
 		return {"error": "Failed to get editor viewport"}
 
+	# Force a render flush so the viewport shows the current scene, not stale content
+	RenderingServer.force_draw()
+
 	var texture: ViewportTexture = viewport.get_texture()
 	if not texture:
 		return {"error": "Failed to get viewport texture"}

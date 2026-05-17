@@ -20,6 +20,10 @@ config/features=PackedStringArray("4.6", "GL Compatibility")
 run/flush_stdout_on_print=true
 config/icon="res://icon.svg"
 
+[autoload]
+
+MCPRuntimeProbe="*res://addons/godot_mcp/runtime/mcp_runtime_probe.gd"
+
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")

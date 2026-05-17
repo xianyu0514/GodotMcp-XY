@@ -107,11 +107,32 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	
 	var node: Node = ClassDB.instantiate(node_type)
 	node.name = node_name
-	parent.add_child(node)
 	
 	var scene_root: Node = _get_user_scene_root()
-	if scene_root:
-		node.owner = scene_root
+	
+	# Traverse parent chain to find correct owner for nested/instanced scenes.
+	# If parent is inside an instanced sub-scene, use parent.owner instead of scene_root.
+	var correct_owner: Node = scene_root
+	if scene_root and parent != scene_root:
+		var current: Node = parent
+		while current and current != scene_root:
+			if current.owner and current.owner != scene_root and current.owner != current:
+				correct_owner = current.owner
+				break
+			current = current.get_parent()
+	
+	# Wrap in EditorUndoRedoManager so the editor properly tracks the change
+	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+	if undo_redo:
+		undo_redo.create_action("Create Node: " + node_name)
+		undo_redo.add_do_method(parent, "add_child", node)
+		undo_redo.add_do_method(node, "set_owner", correct_owner)
+		undo_redo.add_undo_method(parent, "remove_child", node)
+		undo_redo.commit_action()
+	else:
+		parent.add_child(node)
+		if correct_owner:
+			node.owner = correct_owner
 	
 	editor_interface.mark_scene_as_unsaved()
 	
@@ -250,6 +271,11 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 			actual_value = parsed
 	var converted_value: Variant = _convert_value_for_property(target_node, property_name, actual_value)
 	
+	# Validate res:// resource paths before setting
+	if actual_value is String and (actual_value as String).begins_with("res://"):
+		if not ResourceLoader.exists(actual_value):
+			return {"error": "Resource path does not exist: " + actual_value}
+	
 	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
 	if undo_redo:
 		undo_redo.create_action("Update Property: " + property_name)
@@ -340,6 +366,11 @@ func _tool_batch_update_node_properties(params: Dictionary) -> Dictionary:
 			if parsed != null:
 				actual_value = parsed
 		var converted_value: Variant = _convert_value_for_property(target_node, property_name, actual_value)
+		
+		# Validate res:// resource paths before setting
+		if actual_value is String and (actual_value as String).begins_with("res://"):
+			if not ResourceLoader.exists(actual_value):
+				return {"error": "Resource path does not exist: " + actual_value + " for property " + property_name + " on node " + node_path}
 		prepared_changes.append({
 			"node": target_node,
 			"node_path": node_path,
@@ -1095,6 +1126,17 @@ static func _serialize_value(value: Variant) -> Variant:
 			for key in value:
 				result[str(key)] = _serialize_value(value[key])
 			return result
+		TYPE_OBJECT:
+			var resource := value as Resource
+			if resource:
+				return {
+					"type": "Resource",
+					"resource_type": resource.get_class(),
+					"resource_path": resource.resource_path,
+					"resource_name": resource.resource_name,
+					"resource_local_to_scene": resource.resource_local_to_scene
+				}
+			return str(value)
 		_:
 			return str(value)
 
@@ -1502,6 +1544,10 @@ func _register_add_resource(server_core: RefCounted) -> void:
 				"resource_name": {
 					"type": "string",
 					"description": "Name for the new resource node. If empty, uses the type as name."
+				},
+				"properties": {
+					"type": "object",
+					"description": "Optional property values to set on the new node after creation (e.g. {\"shape\": \"RectangleShape2D\"})"
 				}
 			},
 			"required": ["node_path", "resource_type"]
@@ -1563,6 +1609,15 @@ func _tool_add_resource(params: Dictionary) -> Dictionary:
 	var scene_root: Node = _get_user_scene_root()
 	if scene_root:
 		resource_node.owner = scene_root
+	
+	# Apply optional property values after creation
+	var properties: Dictionary = params.get("properties", {})
+	if properties is Dictionary and not properties.is_empty():
+		for prop_name in properties:
+			var prop_value: Variant = properties[prop_name]
+			if prop_name in resource_node:
+				var converted: Variant = _convert_value_for_property(resource_node, prop_name, prop_value)
+				resource_node.set(prop_name, converted)
 
 	editor_interface.mark_scene_as_unsaved()
 

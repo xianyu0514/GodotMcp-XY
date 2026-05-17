@@ -1273,16 +1273,15 @@ func _serialize_runtime_signal(value: Variant) -> Dictionary:
 func _register_install_runtime_probe(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"install_runtime_probe",
-		"Add the MCP runtime probe node to the current scene so the running game can answer debugger messages.",
+		"Register the MCP runtime probe as an Autoload singleton so the running game can answer debugger messages. Survives scene changes.",
 		{
 			"type": "object",
 			"properties": {
-				"node_name": {"type": "string", "default": "MCPRuntimeProbe"},
-				"persistent": {"type": "boolean", "default": true, "description": "Set owner so the probe is saved with the scene."}
+				"node_name": {"type": "string", "default": "MCPRuntimeProbe"}
 			}
 		},
 		Callable(self, "_tool_install_runtime_probe"),
-		{"type": "object", "properties": {"status": {"type": "string"}, "node_path": {"type": "string"}, "persistent": {"type": "boolean"}}},
+		{"type": "object", "properties": {"status": {"type": "string"}, "node_path": {"type": "string"}, "autoload": {"type": "boolean"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
 		"supplementary", "Debug-Advanced"
 	)
@@ -1291,27 +1290,24 @@ func _tool_install_runtime_probe(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	var scene_root: Node = _get_user_scene_root()
-	if not scene_root:
-		return {"error": "No scene is currently open"}
+	
 	var node_name: String = params.get("node_name", "MCPRuntimeProbe")
 	if node_name.is_empty():
 		return {"error": "node_name cannot be empty"}
-	var existing: Node = scene_root.get_node_or_null(NodePath(node_name))
-	if existing:
-		return {"status": "already_installed", "node_path": _to_runtime_friendly_path(existing, scene_root), "persistent": existing.owner != null}
-	var script: Script = load("res://addons/godot_mcp/runtime/mcp_runtime_probe.gd")
-	if not script:
-		return {"error": "Failed to load runtime probe script"}
-	var probe: Node = Node.new()
-	probe.name = node_name
-	probe.set_script(script)
-	scene_root.add_child(probe)
-	var persistent: bool = params.get("persistent", true)
-	if persistent:
-		probe.owner = scene_root
-	editor_interface.mark_scene_as_unsaved()
-	return {"status": "success", "node_path": _to_runtime_friendly_path(probe, scene_root), "persistent": persistent}
+	
+	# Register the probe as an Autoload singleton via ProjectSettings.
+	# Using the "*" prefix marks it as a global singleton that survives
+	# scene changes and is never written into .tscn files.
+	var autoload_key: String = "autoload/" + node_name
+	var autoload_path: String = "*res://addons/godot_mcp/runtime/mcp_runtime_probe.gd"
+	
+	if ProjectSettings.has_setting(autoload_key):
+		return {"status": "already_installed", "node_path": node_name}
+	
+	ProjectSettings.set_setting(autoload_key, autoload_path)
+	ProjectSettings.save()
+	
+	return {"status": "success", "node_path": node_name, "autoload": true}
 
 func _register_remove_runtime_probe(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1330,21 +1326,15 @@ func _register_remove_runtime_probe(server_core: RefCounted) -> void:
 	)
 
 func _tool_remove_runtime_probe(params: Dictionary) -> Dictionary:
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return {"error": "Editor interface not available"}
-	var scene_root: Node = _get_user_scene_root()
-	if not scene_root:
-		return {"error": "No scene is currently open"}
 	var node_name: String = params.get("node_name", "MCPRuntimeProbe")
-	var existing: Node = scene_root.get_node_or_null(NodePath(node_name))
-	if not existing:
+	var autoload_key: String = "autoload/" + node_name
+	
+	if not ProjectSettings.has_setting(autoload_key):
 		return {"status": "not_installed", "removed_node": ""}
-	var removed_path: String = _to_runtime_friendly_path(existing, scene_root)
-	scene_root.remove_child(existing)
-	existing.queue_free()
-	editor_interface.mark_scene_as_unsaved()
-	return {"status": "success", "removed_node": removed_path}
+	
+	ProjectSettings.clear(autoload_key)
+	ProjectSettings.save()
+	return {"status": "success", "removed_node": node_name}
 
 func _register_request_debug_break(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1617,7 +1607,7 @@ func _register_get_runtime_info(server_core: RefCounted) -> void:
 	)
 
 func _tool_get_runtime_info(params: Dictionary) -> Dictionary:
-	var result: Dictionary = _request_runtime_probe("get_runtime_info", [], ["mcp:runtime_info"], params)
+	var result: Dictionary = await _request_runtime_probe_poll("get_runtime_info", [], ["mcp:runtime_info"], params)
 	if result.get("status", "") == "pending":
 		var bridge: RefCounted = _get_debugger_bridge()
 		if bridge:
@@ -1625,12 +1615,14 @@ func _tool_get_runtime_info(params: Dictionary) -> Dictionary:
 			if latest_runtime_info is Dictionary:
 				var stale_runtime: Dictionary = latest_runtime_info.duplicate(true)
 				stale_runtime["status"] = "stale"
+				stale_runtime["stale"] = true
 				stale_runtime["refresh_result"] = result.get("refresh_result", {})
 				return stale_runtime
 			var probe_ready: Variant = bridge.get_latest_message_payload("mcp:probe_ready")
 			if probe_ready is Dictionary:
 				var fallback: Dictionary = probe_ready.duplicate(true)
 				fallback["status"] = "stale"
+				fallback["stale"] = true
 				fallback["refresh_result"] = result.get("refresh_result", {})
 				return fallback
 	return result
@@ -1647,7 +1639,7 @@ func _register_get_runtime_performance_snapshot(server_core: RefCounted) -> void
 	)
 
 func _tool_get_runtime_performance_snapshot(params: Dictionary) -> Dictionary:
-	var result: Dictionary = _request_runtime_probe("get_performance_snapshot", [], ["mcp:performance_snapshot"], params)
+	var result: Dictionary = await _request_runtime_probe_poll("get_performance_snapshot", [], ["mcp:performance_snapshot"], params)
 	if result.get("status", "") == "pending":
 		var bridge: RefCounted = _get_debugger_bridge()
 		if bridge:
@@ -1692,7 +1684,7 @@ func _register_get_runtime_memory_trend(server_core: RefCounted) -> void:
 func _tool_get_runtime_memory_trend(params: Dictionary) -> Dictionary:
 	var sample_count: int = max(int(params.get("sample_count", 5)), 1)
 	var sample_interval_ms: int = max(int(params.get("sample_interval_ms", 100)), 0)
-	var result: Dictionary = _request_runtime_probe(
+	var result: Dictionary = await _request_runtime_probe_poll(
 		"get_memory_trend",
 		[sample_count, sample_interval_ms],
 		["mcp:memory_trend"],
@@ -1727,7 +1719,7 @@ func _register_get_runtime_scene_tree(server_core: RefCounted) -> void:
 	)
 
 func _tool_get_runtime_scene_tree(params: Dictionary) -> Dictionary:
-	return _request_runtime_probe("get_scene_tree", [params.get("max_depth", 6)], ["mcp:scene_tree"], params)
+	return await _request_runtime_probe_poll("get_scene_tree", [params.get("max_depth", 6)], ["mcp:scene_tree"], params)
 
 func _register_inspect_runtime_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1752,7 +1744,7 @@ func _tool_inspect_runtime_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("inspect_node", [node_path], ["mcp:node"], params, {"path": node_path})
+	return await _request_runtime_probe_poll("inspect_node", [node_path], ["mcp:node"], params, {"path": node_path})
 
 func _register_create_runtime_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1785,7 +1777,7 @@ func _tool_create_runtime_node(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: node_type"}
 	if node_name.is_empty():
 		return {"error": "Missing required parameter: node_name"}
-	return _request_runtime_probe("create_node", [parent_path, node_type, node_name], ["mcp:runtime_node_created"], params, {"node_path": parent_path.path_join(node_name)})
+	return await _request_runtime_probe_poll("create_node", [parent_path, node_type, node_name], ["mcp:runtime_node_created"], params, {"node_path": parent_path.path_join(node_name)})
 
 func _register_delete_runtime_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1810,7 +1802,7 @@ func _tool_delete_runtime_node(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("delete_node", [node_path], ["mcp:runtime_node_deleted"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("delete_node", [node_path], ["mcp:runtime_node_deleted"], params, {"node_path": node_path})
 
 func _register_update_runtime_node_property(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1838,7 +1830,7 @@ func _tool_update_runtime_node_property(params: Dictionary) -> Dictionary:
 	var property_name: String = params.get("property_name", "")
 	if node_path.is_empty() or property_name.is_empty() or not params.has("property_value"):
 		return {"error": "node_path, property_name, and property_value are required"}
-	return _request_runtime_probe("set_node_property", [node_path, property_name, params.get("property_value")], ["mcp:node_property_updated"], params, {"node_path": node_path, "property_name": property_name})
+	return await _request_runtime_probe_poll("set_node_property", [node_path, property_name, params.get("property_value")], ["mcp:node_property_updated"], params, {"node_path": node_path, "property_name": property_name})
 
 func _register_call_runtime_node_method(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1866,7 +1858,7 @@ func _tool_call_runtime_node_method(params: Dictionary) -> Dictionary:
 	var method_name: String = params.get("method_name", "")
 	if node_path.is_empty() or method_name.is_empty():
 		return {"error": "node_path and method_name are required"}
-	return _request_runtime_probe("call_node_method", [node_path, method_name, params.get("arguments", [])], ["mcp:node_method_result"], params, {"node_path": node_path, "method_name": method_name})
+	return await _request_runtime_probe_poll("call_node_method", [node_path, method_name, params.get("arguments", [])], ["mcp:node_method_result"], params, {"node_path": node_path, "method_name": method_name})
 
 func _register_evaluate_runtime_expression(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1893,7 +1885,7 @@ func _tool_evaluate_runtime_expression(params: Dictionary) -> Dictionary:
 	if expression.is_empty():
 		return {"error": "Missing required parameter: expression"}
 	var payload: Array = [expression, params.get("node_path", "")]
-	return _request_runtime_probe("evaluate_expression", payload, ["mcp:expression_result"], params, {"expression": expression})
+	return await _request_runtime_probe_poll("evaluate_expression", payload, ["mcp:expression_result"], params, {"expression": expression})
 
 func _register_simulate_runtime_input_event(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1921,7 +1913,7 @@ func _tool_simulate_runtime_input_event(params: Dictionary) -> Dictionary:
 	var event_payload: Variant = params.get("event", null)
 	if not (event_payload is Dictionary):
 		return {"error": "Missing required parameter: event"}
-	return _request_runtime_probe("simulate_input_event", [event_payload], ["mcp:input_event_simulated"], params)
+	return await _request_runtime_probe_poll("simulate_input_event", [event_payload], ["mcp:input_event_simulated"], params)
 
 func _register_simulate_runtime_input_action(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1950,7 +1942,7 @@ func _tool_simulate_runtime_input_action(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: action_name"}
 	var pressed: bool = bool(params.get("pressed", true))
 	var strength: float = float(params.get("strength", 1.0 if pressed else 0.0))
-	return _request_runtime_probe("simulate_input_action", [action_name, pressed, strength], ["mcp:input_action_simulated"], params, {"action_name": action_name})
+	return await _request_runtime_probe_poll("simulate_input_action", [action_name, pressed, strength], ["mcp:input_action_simulated"], params, {"action_name": action_name})
 
 func _register_list_runtime_input_actions(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1972,7 +1964,7 @@ func _register_list_runtime_input_actions(server_core: RefCounted) -> void:
 
 func _tool_list_runtime_input_actions(params: Dictionary) -> Dictionary:
 	var action_name: String = params.get("action_name", "")
-	return _request_runtime_probe("list_input_actions", [action_name], ["mcp:input_actions"], params, {"filter": action_name})
+	return await _request_runtime_probe_poll("list_input_actions", [action_name], ["mcp:input_actions"], params, {"filter": action_name})
 
 func _register_upsert_runtime_input_action(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2003,7 +1995,7 @@ func _tool_upsert_runtime_input_action(params: Dictionary) -> Dictionary:
 	var deadzone: float = float(params.get("deadzone", 0.5))
 	var erase_existing: bool = bool(params.get("erase_existing", false))
 	var events: Array = params.get("events", [])
-	return _request_runtime_probe("upsert_input_action", [action_name, deadzone, erase_existing, events], ["mcp:input_action_updated"], params, {"action_name": action_name})
+	return await _request_runtime_probe_poll("upsert_input_action", [action_name, deadzone, erase_existing, events], ["mcp:input_action_updated"], params, {"action_name": action_name})
 
 func _register_remove_runtime_input_action(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2028,7 +2020,7 @@ func _tool_remove_runtime_input_action(params: Dictionary) -> Dictionary:
 	var action_name: String = params.get("action_name", "")
 	if action_name.is_empty():
 		return {"error": "Missing required parameter: action_name"}
-	return _request_runtime_probe("remove_input_action", [action_name], ["mcp:input_action_removed"], params, {"action_name": action_name})
+	return await _request_runtime_probe_poll("remove_input_action", [action_name], ["mcp:input_action_removed"], params, {"action_name": action_name})
 
 func _register_list_runtime_animations(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2053,7 +2045,7 @@ func _tool_list_runtime_animations(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("list_animations", [node_path], ["mcp:animation_list"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("list_animations", [node_path], ["mcp:animation_list"], params, {"node_path": node_path})
 
 func _register_play_runtime_animation(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2083,7 +2075,7 @@ func _tool_play_runtime_animation(params: Dictionary) -> Dictionary:
 	var animation_name: String = params.get("animation_name", "")
 	if node_path.is_empty() or animation_name.is_empty():
 		return {"error": "node_path and animation_name are required"}
-	return _request_runtime_probe("play_animation", [node_path, animation_name, float(params.get("custom_blend", -1.0)), float(params.get("custom_speed", 1.0)), bool(params.get("from_end", false))], ["mcp:animation_started"], params, {"node_path": node_path, "current_animation": animation_name})
+	return await _request_runtime_probe_poll("play_animation", [node_path, animation_name, float(params.get("custom_blend", -1.0)), float(params.get("custom_speed", 1.0)), bool(params.get("from_end", false))], ["mcp:animation_started"], params, {"node_path": node_path, "current_animation": animation_name})
 
 func _register_stop_runtime_animation(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2109,7 +2101,7 @@ func _tool_stop_runtime_animation(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("stop_animation", [node_path, bool(params.get("keep_state", false))], ["mcp:animation_stopped"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("stop_animation", [node_path, bool(params.get("keep_state", false))], ["mcp:animation_stopped"], params, {"node_path": node_path})
 
 func _register_get_runtime_animation_state(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2134,7 +2126,7 @@ func _tool_get_runtime_animation_state(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("get_animation_state", [node_path], ["mcp:animation_state"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("get_animation_state", [node_path], ["mcp:animation_state"], params, {"node_path": node_path})
 
 func _register_get_runtime_animation_tree_state(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2159,7 +2151,7 @@ func _tool_get_runtime_animation_tree_state(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("get_animation_tree_state", [node_path], ["mcp:animation_tree_state"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("get_animation_tree_state", [node_path], ["mcp:animation_tree_state"], params, {"node_path": node_path})
 
 func _register_set_runtime_animation_tree_active(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2187,7 +2179,7 @@ func _tool_set_runtime_animation_tree_active(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: node_path"}
 	if not params.has("active"):
 		return {"error": "Missing required parameter: active"}
-	return _request_runtime_probe("set_animation_tree_active", [node_path, bool(params.get("active"))], ["mcp:animation_tree_active_updated"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("set_animation_tree_active", [node_path, bool(params.get("active"))], ["mcp:animation_tree_active_updated"], params, {"node_path": node_path})
 
 func _register_travel_runtime_animation_tree(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2214,7 +2206,7 @@ func _tool_travel_runtime_animation_tree(params: Dictionary) -> Dictionary:
 	var state_name: String = params.get("state_name", "")
 	if node_path.is_empty() or state_name.is_empty():
 		return {"error": "node_path and state_name are required"}
-	return _request_runtime_probe("travel_animation_tree", [node_path, state_name], ["mcp:animation_tree_travelled"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("travel_animation_tree", [node_path, state_name], ["mcp:animation_tree_travelled"], params, {"node_path": node_path})
 
 func _register_get_runtime_material_state(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2241,7 +2233,7 @@ func _tool_get_runtime_material_state(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("get_material_state", [node_path, str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:material_state"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("get_material_state", [node_path, str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:material_state"], params, {"node_path": node_path})
 
 func _register_get_runtime_theme_item(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2271,7 +2263,7 @@ func _tool_get_runtime_theme_item(params: Dictionary) -> Dictionary:
 	var item_name: String = params.get("item_name", "")
 	if node_path.is_empty() or item_type.is_empty() or item_name.is_empty():
 		return {"error": "node_path, item_type, and item_name are required"}
-	return _request_runtime_probe("get_theme_item", [node_path, item_type, item_name, str(params.get("theme_type", ""))], ["mcp:theme_item"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
+	return await _request_runtime_probe_poll("get_theme_item", [node_path, item_type, item_name, str(params.get("theme_type", ""))], ["mcp:theme_item"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
 
 func _register_set_runtime_theme_override(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2302,7 +2294,7 @@ func _tool_set_runtime_theme_override(params: Dictionary) -> Dictionary:
 	var item_name: String = params.get("item_name", "")
 	if node_path.is_empty() or item_type.is_empty() or item_name.is_empty() or not params.has("value"):
 		return {"error": "node_path, item_type, item_name, and value are required"}
-	return _request_runtime_probe("set_theme_override", [node_path, item_type, item_name, params.get("value"), str(params.get("theme_type", ""))], ["mcp:theme_override_updated"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
+	return await _request_runtime_probe_poll("set_theme_override", [node_path, item_type, item_name, params.get("value"), str(params.get("theme_type", ""))], ["mcp:theme_override_updated"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
 
 func _register_clear_runtime_theme_override(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2332,7 +2324,7 @@ func _tool_clear_runtime_theme_override(params: Dictionary) -> Dictionary:
 	var item_name: String = params.get("item_name", "")
 	if node_path.is_empty() or item_type.is_empty() or item_name.is_empty():
 		return {"error": "node_path, item_type, and item_name are required"}
-	return _request_runtime_probe("clear_theme_override", [node_path, item_type, item_name, str(params.get("theme_type", ""))], ["mcp:theme_override_cleared"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
+	return await _request_runtime_probe_poll("clear_theme_override", [node_path, item_type, item_name, str(params.get("theme_type", ""))], ["mcp:theme_override_cleared"], params, {"node_path": node_path, "item_type": item_type, "item_name": item_name})
 
 func _register_get_runtime_shader_parameters(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2359,7 +2351,7 @@ func _tool_get_runtime_shader_parameters(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("get_shader_parameters", [node_path, str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:shader_parameters"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("get_shader_parameters", [node_path, str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:shader_parameters"], params, {"node_path": node_path})
 
 func _register_set_runtime_shader_parameter(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2389,7 +2381,7 @@ func _tool_set_runtime_shader_parameter(params: Dictionary) -> Dictionary:
 	var parameter_name: String = params.get("parameter_name", "")
 	if node_path.is_empty() or parameter_name.is_empty() or not params.has("value"):
 		return {"error": "node_path, parameter_name, and value are required"}
-	return _request_runtime_probe("set_shader_parameter", [node_path, parameter_name, params.get("value"), str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:shader_parameter_updated"], params, {"node_path": node_path, "parameter_name": parameter_name})
+	return await _request_runtime_probe_poll("set_shader_parameter", [node_path, parameter_name, params.get("value"), str(params.get("material_target", "auto")), int(params.get("surface_index", 0))], ["mcp:shader_parameter_updated"], params, {"node_path": node_path, "parameter_name": parameter_name})
 
 func _register_list_runtime_tilemap_layers(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2414,7 +2406,7 @@ func _tool_list_runtime_tilemap_layers(params: Dictionary) -> Dictionary:
 	var node_path: String = params.get("node_path", "")
 	if node_path.is_empty():
 		return {"error": "Missing required parameter: node_path"}
-	return _request_runtime_probe("list_tilemap_layers", [node_path], ["mcp:tilemap_layers"], params, {"node_path": node_path})
+	return await _request_runtime_probe_poll("list_tilemap_layers", [node_path], ["mcp:tilemap_layers"], params, {"node_path": node_path})
 
 func _register_get_runtime_tilemap_cell(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2444,7 +2436,7 @@ func _tool_get_runtime_tilemap_cell(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: node_path"}
 	if not params.has("coords"):
 		return {"error": "Missing required parameter: coords"}
-	return _request_runtime_probe("get_tilemap_cell", [node_path, int(params.get("layer", 0)), params.get("coords", {}), bool(params.get("use_proxies", false))], ["mcp:tilemap_cell"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
+	return await _request_runtime_probe_poll("get_tilemap_cell", [node_path, int(params.get("layer", 0)), params.get("coords", {}), bool(params.get("use_proxies", false))], ["mcp:tilemap_cell"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
 
 func _register_set_runtime_tilemap_cell(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2484,7 +2476,7 @@ func _tool_set_runtime_tilemap_cell(params: Dictionary) -> Dictionary:
 		updates["atlas_coords"] = params.get("atlas_coords")
 	if params.has("alternative_tile"):
 		updates["alternative_tile"] = int(params.get("alternative_tile"))
-	return _request_runtime_probe("set_tilemap_cell", [node_path, int(params.get("layer", 0)), params.get("coords", {}), updates], ["mcp:tilemap_cell_updated"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
+	return await _request_runtime_probe_poll("set_tilemap_cell", [node_path, int(params.get("layer", 0)), params.get("coords", {}), updates], ["mcp:tilemap_cell_updated"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
 
 func _register_list_runtime_audio_buses(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2504,7 +2496,7 @@ func _register_list_runtime_audio_buses(server_core: RefCounted) -> void:
 	)
 
 func _tool_list_runtime_audio_buses(params: Dictionary) -> Dictionary:
-	return _request_runtime_probe("list_audio_buses", [], ["mcp:audio_buses"], params)
+	return await _request_runtime_probe_poll("list_audio_buses", [], ["mcp:audio_buses"], params)
 
 func _register_get_runtime_audio_bus(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2529,7 +2521,7 @@ func _tool_get_runtime_audio_bus(params: Dictionary) -> Dictionary:
 	var bus_name: String = params.get("bus_name", "")
 	if bus_name.is_empty():
 		return {"error": "Missing required parameter: bus_name"}
-	return _request_runtime_probe("get_audio_bus", [bus_name], ["mcp:audio_bus"], params, {"name": bus_name})
+	return await _request_runtime_probe_poll("get_audio_bus", [bus_name], ["mcp:audio_bus"], params, {"name": bus_name})
 
 func _register_update_runtime_audio_bus(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2561,7 +2553,7 @@ func _tool_update_runtime_audio_bus(params: Dictionary) -> Dictionary:
 		updates["volume_db"] = float(params.get("volume_db"))
 	if params.has("mute"):
 		updates["mute"] = bool(params.get("mute"))
-	return _request_runtime_probe("update_audio_bus", [bus_name, updates], ["mcp:audio_bus_updated"], params, {"name": bus_name})
+	return await _request_runtime_probe_poll("update_audio_bus", [bus_name, updates], ["mcp:audio_bus_updated"], params, {"name": bus_name})
 
 func _register_get_runtime_screenshot(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2602,7 +2594,7 @@ func _tool_get_runtime_screenshot(params: Dictionary) -> Dictionary:
 	var match_fields: Dictionary = {"save_path": save_path}
 	if not viewport_path.is_empty():
 		match_fields["viewport_path"] = viewport_path
-	return _request_runtime_probe("get_runtime_screenshot", [save_path, format, viewport_path], ["mcp:runtime_screenshot"], params, match_fields)
+	return await _request_runtime_probe_poll("get_runtime_screenshot", [save_path, format, viewport_path], ["mcp:runtime_screenshot"], params, match_fields)
 
 func _register_await_runtime_condition(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2629,23 +2621,46 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 	var expression: String = params.get("expression", "")
 	if expression.is_empty():
 		return {"error": "Missing required parameter: expression"}
-	var result: Dictionary = _tool_evaluate_runtime_expression(params)
-	if result.has("error"):
-		return result
-	if result.get("status", "") == "pending":
-		return {
-			"status": "pending",
-			"condition_met": false,
-			"last_value": null,
-			"refresh_result": result.get("refresh_result", {})
-		}
-	var last_value: Variant = result.get("value", null)
-	var condition_met: bool = _is_truthy_runtime_value(last_value)
+	
+	var timeout_ms: int = maxi(int(params.get("timeout_ms", 10000)), 100)
+	var poll_interval_ms: int = maxi(int(params.get("poll_interval_ms", 500)), 50)
+	var deadline_ms: int = Time.get_ticks_msec() + timeout_ms
+	var attempts: int = 0
+	
+	while Time.get_ticks_msec() < deadline_ms:
+		attempts += 1
+		var result: Dictionary = await _tool_evaluate_runtime_expression(params)
+		if result.has("error"):
+			return result
+		if result.get("status", "") == "success":
+			var last_value: Variant = result.get("value", null)
+			var condition_met: bool = _is_truthy_runtime_value(last_value)
+			return {
+				"status": "success" if condition_met else "failed",
+				"condition_met": condition_met,
+				"last_value": last_value,
+				"refresh_result": result.get("refresh_result", {}),
+				"attempts": attempts,
+				"elapsed_ms": timeout_ms - (deadline_ms - Time.get_ticks_msec())
+			}
+		# If still pending or failed, wait before retrying
+		if Time.get_ticks_msec() + poll_interval_ms < deadline_ms:
+			var tree: SceneTree = Engine.get_main_loop() as SceneTree
+			if tree:
+				await tree.process_frame
+			else:
+				OS.delay_msec(poll_interval_ms)
+	
+	# Timeout reached
+	var last_result: Dictionary = await _tool_evaluate_runtime_expression(params)
+	var last_value: Variant = last_result.get("value", null) if not last_result.has("error") else null
 	return {
-		"status": "success" if condition_met else "failed",
-		"condition_met": condition_met,
+		"status": "failed",
+		"condition_met": false,
 		"last_value": last_value,
-		"refresh_result": result.get("refresh_result", {})
+		"error": "Timeout waiting for runtime condition: " + expression,
+		"attempts": attempts,
+		"elapsed_ms": timeout_ms
 	}
 
 func _register_assert_runtime_condition(server_core: RefCounted) -> void:
@@ -2671,7 +2686,7 @@ func _register_assert_runtime_condition(server_core: RefCounted) -> void:
 	)
 
 func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
-	var wait_result: Dictionary = _tool_await_runtime_condition(params)
+	var wait_result: Dictionary = await _tool_await_runtime_condition(params)
 	if wait_result.has("error"):
 		return wait_result
 	if wait_result.get("status", "") == "pending":
@@ -2699,7 +2714,7 @@ func _request_runtime_probe(command: String, payload: Array, response_messages: 
 	if not bridge:
 		return {"error": "Debugger bridge is not available"}
 	var session_id: int = int(params.get("session_id", -1))
-	var timeout_ms: int = maxi(int(params.get("timeout_ms", 1500)), 1)
+	var timeout_ms: int = maxi(int(params.get("timeout_ms", 3000)), 1)
 	var request_key: String = _make_runtime_probe_request_key(command, payload, session_id, response_messages, match_fields)
 	var now_ms: int = Time.get_ticks_msec()
 	var pending_entry: Dictionary = _pending_runtime_probe_requests.get(request_key, {})
@@ -2778,6 +2793,36 @@ func _extract_pending_runtime_probe_response(bridge: RefCounted, pending_entry: 
 		if runtime_payload != null:
 			return {"status": "success", "value": runtime_payload}
 	return {}
+
+func _request_runtime_probe_poll(
+	command: String, payload: Array, response_messages: Array,
+	params: Dictionary, match_fields: Dictionary = {}
+) -> Dictionary:
+	# Wait for the runtime probe to signal readiness before sending requests.
+	# This avoids the race where a request arrives before the probe has
+	# registered its EngineDebugger message capture in the game process.
+	var bridge: RefCounted = _get_debugger_bridge()
+	if bridge and bridge.has_method("wait_for_probe_ready"):
+		var probe_session_id: int = int(params.get("session_id", -1))
+		var probe_timeout: int = 2000
+		await bridge.wait_for_probe_ready(probe_session_id, probe_timeout)
+	# Wraps _request_runtime_probe with a poll loop that retries when pending.
+	# Uses await get_tree().process_frame to let the editor main loop advance
+	# so EngineDebugger IPC messages are dispatched to _capture().
+	var result: Dictionary = _request_runtime_probe(command, payload, response_messages, params, match_fields)
+	if result.get("status") == "pending":
+		var timeout_ms: int = maxi(int(params.get("timeout_ms", 3000)), 100)
+		var deadline_ms: int = Time.get_ticks_msec() + timeout_ms
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
+		while Time.get_ticks_msec() < deadline_ms:
+			if tree:
+				await tree.process_frame
+			else:
+				OS.delay_msec(16)
+			result = _request_runtime_probe(command, payload, response_messages, params, match_fields)
+			if result.get("status") != "pending":
+				break
+	return result
 
 func _is_truthy_runtime_value(value: Variant) -> bool:
 	match typeof(value):
@@ -2959,6 +3004,18 @@ func _tool_execute_script(params: Dictionary) -> Dictionary:
 	
 	if code.is_empty():
 		return {"error": "Missing required parameter: code"}
+	
+	# Auto-detect multi-line code and delegate to execute_editor_script path.
+	# Capture the last output item as "result" so the response format is
+	# consistent with the single-line Expression path.
+	if "\n" in code:
+		var editor_result: Dictionary = _tool_execute_editor_script(params)
+		if editor_result.has("output") and editor_result.get("output", []).size() > 0:
+			var output: Array = editor_result["output"]
+			editor_result["result"] = str(output[output.size() - 1])
+		elif editor_result.get("status") == "success":
+			editor_result["result"] = ""
+		return editor_result
 	
 	var expression: Expression = Expression.new()
 
@@ -3433,6 +3490,25 @@ func _find_rich_text_label(node: Node) -> RichTextLabel:
 			return result
 	return null
 
+func _find_tree_control(node: Node) -> Tree:
+	if node is Tree:
+		return node as Tree
+	for child in node.get_children():
+		var result: Tree = _find_tree_control(child)
+		if result:
+			return result
+	return null
+
+func _find_script_editor_debugger(base: Node) -> Node:
+	var pending: Array[Node] = [base]
+	while not pending.is_empty():
+		var node: Node = pending.pop_back()
+		if node.get_class() == 'ScriptEditorDebugger':
+			return node
+		for child in node.get_children():
+			pending.append(child)
+	return null
+
 func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
@@ -3440,48 +3516,81 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 	var base_control: Control = editor_interface.get_base_control()
 	if not base_control:
 		return {"error": "Could not get base control", "source": "editor_panel"}
-	var log_panel: Node = base_control.find_child("*Output*", true, false)
-	if not log_panel:
-		return {"error": "Output panel not found", "source": "editor_panel"}
-	var rich_text: RichTextLabel = _find_rich_text_label(log_panel)
-	if not rich_text:
-		return {"error": "RichTextLabel not found in output panel", "source": "editor_panel"}
-	var raw_text: String = rich_text.get_parsed_text() if rich_text.has_method("get_parsed_text") else rich_text.get_text()
-	if raw_text.is_empty():
-		return {"logs": [], "count": 0, "total_available": 0, "source": "editor_panel"}
-	var lines: PackedStringArray = raw_text.split("\n")
 	var parsed_lines: Array[Dictionary] = []
-	for i in lines.size():
-		var line: String = lines[i].strip_edges()
-		if line.is_empty():
-			continue
-		var log_type: String = _infer_log_type_from_line(line)
-		parsed_lines.append({
-			"index": i,
-			"message": line,
-			"type": log_type
-		})
+	var output_panel: Node = base_control.find_child('*Output*', true, false)
+	if output_panel:
+		var rich_text: RichTextLabel = _find_rich_text_label(output_panel)
+		if rich_text:
+			var raw_text: String = rich_text.get_parsed_text() if rich_text.has_method('get_parsed_text') else rich_text.get_text()
+			if not raw_text.is_empty():
+				var text_lines: PackedStringArray = raw_text.split('\n')
+				for j in text_lines.size():
+					var text_line: String = text_lines[j].strip_edges()
+					if text_line.is_empty(): continue
+					parsed_lines.append({'index': parsed_lines.size(), 'message': text_line, 'type': _infer_log_type_from_line(text_line), 'panel': 'output'})
+	var errors_panel: Node = base_control.find_child('*Errors*', true, false)
+	if not errors_panel:
+		errors_panel = base_control.find_child('*Error*', true, false)
+	if not errors_panel:
+		var script_debugger: Node = _find_script_editor_debugger(base_control)
+		if script_debugger:
+			errors_panel = script_debugger
+	if errors_panel:
+		var error_tree: Tree = _find_tree_control(errors_panel)
+		if error_tree:
+			var root_item: TreeItem = error_tree.get_root()
+			if root_item:
+				var item: TreeItem = root_item.get_first_child()
+				while item:
+					var error_text: String = ''
+					for col in range(error_tree.get_columns()):
+						var col_text: String = item.get_text(col)
+						if not col_text.is_empty():
+							if not error_text.is_empty(): error_text += ' | '
+							error_text += col_text
+					if not error_text.is_empty():
+						parsed_lines.append({'index': parsed_lines.size(), 'message': error_text, 'type': 'Error', 'panel': 'script_errors'})
+					item = item.get_next()
+	# Fallback: try reading the editor log file directly when UI panels have no data
+	if parsed_lines.is_empty():
+		var editor_log_path: String = ""
+		if OS.has_feature("windows"):
+			var appdata: String = OS.get_environment("APPDATA")
+			if not appdata.is_empty():
+				editor_log_path = appdata.path_join("Godot").path_join("editor_log-4.6.stable.txt")
+		elif OS.has_feature("linux"):
+			var home: String = OS.get_environment("HOME")
+			if not home.is_empty():
+				editor_log_path = home.path_join(".local").path_join("share").path_join("godot").path_join("editor_log-4.6.stable.txt")
+		elif OS.has_feature("macos"):
+			var home: String = OS.get_environment("HOME")
+			if not home.is_empty():
+				editor_log_path = home.path_join("Library").path_join("Application Support").path_join("Godot").path_join("editor_log-4.6.stable.txt")
+		if not editor_log_path.is_empty() and FileAccess.file_exists(editor_log_path):
+			var file: FileAccess = FileAccess.open(editor_log_path, FileAccess.READ)
+			if file:
+				while not file.eof_reached():
+					var log_line: String = file.get_line().strip_edges()
+					if log_line.is_empty():
+						continue
+					parsed_lines.append({
+						'index': parsed_lines.size(),
+						'message': log_line,
+						'type': _infer_log_type_from_line(log_line),
+						'panel': 'editor_log_file'
+					})
 	if not types.is_empty():
 		var filtered: Array[Dictionary] = []
 		for entry in parsed_lines:
-			if types.has(entry["type"]):
-				filtered.append(entry)
+			if types.has(entry['type']): filtered.append(entry)
 		parsed_lines = filtered
 	var total_available: int = parsed_lines.size()
-	if order == "desc":
-		parsed_lines.reverse()
+	if order == 'desc': parsed_lines.reverse()
 	var start: int = mini(offset, parsed_lines.size())
 	var end: int = mini(start + count, parsed_lines.size())
 	var result_lines: Array[Dictionary] = []
-	for i in range(start, end):
-		result_lines.append(parsed_lines[i])
-	return {
-		"logs": result_lines,
-		"count": result_lines.size(),
-		"total_available": total_available,
-		"source": "editor_panel"
-	}
-
+	for i in range(start, end): result_lines.append(parsed_lines[i])
+	return {"logs": result_lines, "count": result_lines.size(), "total_available": total_available, "source": "editor_panel"}
 func _infer_log_type_from_line(line: String) -> String:
 	if line.begins_with("ERROR:") or line.begins_with("SCRIPT ERROR:") or line.begins_with("PARSE ERROR:") or line.begins_with("ERROR at") or line.find("error") == 0:
 		return "Error"

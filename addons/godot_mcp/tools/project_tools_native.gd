@@ -1469,6 +1469,18 @@ func _convert_value_for_resource(resource: Resource, property_name: String, valu
 						return loaded_res
 				if ClassDB.class_exists(value) and ClassDB.is_parent_class(value, "Resource"):
 					return ClassDB.instantiate(value)
+		TYPE_ARRAY:
+			if value is Array:
+				var result: Array = []
+				for item in value:
+					result.append(_convert_value_for_resource(resource, property_name, item))
+				return result
+		TYPE_DICTIONARY:
+			if value is Dictionary:
+				var result: Dictionary = {}
+				for key in value:
+					result[key] = _convert_value_for_resource(resource, property_name, value[key])
+				return result
 	return value
 
 func _parse_key_value_string(value: String) -> Dictionary:
@@ -2369,7 +2381,17 @@ func _tool_detect_broken_scripts(params: Dictionary) -> Dictionary:
 		else:
 			var has_errors: bool = int(diagnostics.get("error_count", 0)) > 0
 			var has_warnings: bool = int(diagnostics.get("warning_count", 0)) > 0
-			if has_errors or has_warnings:
+			var is_autoload_aware: bool = bool(diagnostics.get("autoload_aware", false))
+			if is_autoload_aware and not has_errors:
+				if has_warnings or include_warnings:
+					issues.append({
+						"script_path": script_path,
+						"severity": "warning",
+						"errors": diagnostics.get("errors", []),
+						"warnings": diagnostics.get("warnings", [])
+					})
+					warning_count += 1
+			elif has_errors or has_warnings:
 				issues.append({
 					"script_path": script_path,
 					"severity": "error" if has_errors else "warning",
@@ -2512,26 +2534,42 @@ func _analyze_script_diagnostics(script_path: String, include_warnings: bool) ->
 
 	var errors: Array = []
 	var warnings: Array = []
+	var autoload_aware: bool = false
 
 	if reload_error != OK:
-		var source_lines: PackedStringArray = content.split("\n")
-		for i in range(source_lines.size()):
-			var line: String = source_lines[i].strip_edges()
-			if line.is_empty():
-				continue
-			if _is_likely_script_error_line(line):
+		var autoload_decls: String = _build_autoload_declarations()
+		if not autoload_decls.is_empty():
+			var retry_content: String = autoload_decls + "\n" + validation_content
+			var retry_script: GDScript = GDScript.new()
+			retry_script.source_code = retry_content
+			var retry_err: Error = retry_script.reload()
+			if retry_err == OK:
+				autoload_aware = true
+				if include_warnings:
+					warnings.append({
+						"line": 0,
+						"column": 0,
+						"message": "Script validates successfully with Autoload/global class awareness"
+					})
+		if not autoload_aware:
+			var source_lines: PackedStringArray = content.split("\n")
+			for i in range(source_lines.size()):
+				var line: String = source_lines[i].strip_edges()
+				if line.is_empty():
+					continue
+				if _is_likely_script_error_line(line):
+					errors.append({
+						"line": i + 1,
+						"column": 0,
+						"message": "Syntax error near: " + line
+					})
+					break
+			if errors.is_empty():
 				errors.append({
-					"line": i + 1,
+					"line": 0,
 					"column": 0,
-					"message": "Syntax error near: " + line
+					"message": "Script has syntax errors"
 				})
-				break
-		if errors.is_empty():
-			errors.append({
-				"line": 0,
-				"column": 0,
-				"message": "Script has syntax errors"
-			})
 
 	if include_warnings and reload_error == OK:
 		var source_lines_for_warning: PackedStringArray = content.split("\n")
@@ -2549,7 +2587,8 @@ func _analyze_script_diagnostics(script_path: String, include_warnings: bool) ->
 		"errors": errors,
 		"warnings": warnings,
 		"error_count": errors.size(),
-		"warning_count": warnings.size()
+		"warning_count": warnings.size(),
+		"autoload_aware": autoload_aware
 	}
 
 func _strip_class_names(source: String) -> String:
@@ -2562,6 +2601,20 @@ func _strip_class_names(source: String) -> String:
 		else:
 			result.append(line)
 	return "\n".join(result)
+
+func _build_autoload_declarations() -> String:
+	var decls: PackedStringArray = []
+	for property_info in ProjectSettings.get_property_list():
+		var property_name: String = str(property_info.get("name", ""))
+		if not property_name.begins_with("autoload/"):
+			continue
+		var autoload_name: String = property_name.trim_prefix("autoload/")
+		decls.append("var %s" % autoload_name)
+	var global_classes: PackedStringArray = ProjectSettings.get_global_class_list()
+	for class_name_str in global_classes:
+		if not class_name_str.is_empty():
+			decls.append("var %s" % class_name_str)
+	return "\n".join(decls)
 
 func _is_likely_script_error_line(line: String) -> bool:
 	var line_lower: String = line.to_lower()
