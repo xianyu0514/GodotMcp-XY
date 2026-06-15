@@ -64,7 +64,7 @@ To run **multiple instances in parallel** (several projects, or isolated test
 instances), override the port per launch with command-line flags — the command
 line takes precedence over the persisted config:
 ```bash
-godot --editor --path /path/to/projectA -- --mcp-server --mcp-port=19080
+godot --editor --path /path/to/projectA -- --mcp-server --mcp-port=9080
 godot --editor --path /path/to/projectB -- --mcp-server --mcp-port=19081
 ```
 
@@ -88,7 +88,7 @@ npm install mcp-remote
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://localhost:19080/mcp"
+        "http://localhost:9080/mcp"
       ]
     }
   }
@@ -163,7 +163,7 @@ With authentication:
 
 [mcp_servers.godot-mcp]
 type = "streamableHttp"
-url = "http://localhost:19080/mcp"
+url = "http://localhost:9080/mcp"
 ```
 
 ## 💬 Example Prompts

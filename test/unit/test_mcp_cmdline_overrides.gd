@@ -71,9 +71,9 @@ func test_parse_invalid_transport_ignored():
 
 func test_parse_multiple_overrides():
 	var r: Dictionary = _plugin_script.parse_mcp_overrides(
-		PackedStringArray(["--mcp-port=19080", "--mcp-transport=stdio"])
+		PackedStringArray(["--mcp-port=9080", "--mcp-transport=stdio"])
 	)
-	assert_eq(r["http_port"], 19080, "port override should be parsed")
+	assert_eq(r["http_port"], 9080, "port override should be parsed")
 	assert_eq(r["transport_mode"], "stdio", "transport override should be parsed")
 
 

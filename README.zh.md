@@ -60,7 +60,7 @@ godot --editor --path /path/to/project -- --mcp-server
 
 若要**并行运行多个实例**（多个项目，或隔离的测试实例），可通过命令行参数按实例覆盖端口——命令行参数优先级高于配置文件：
 ```bash
-godot --editor --path /path/to/projectA -- --mcp-server --mcp-port=19080
+godot --editor --path /path/to/projectA -- --mcp-server --mcp-port=9080
 godot --editor --path /path/to/projectB -- --mcp-server --mcp-port=19081
 ```
 
@@ -84,7 +84,7 @@ npm install mcp-remote
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://localhost:19080/mcp"
+        "http://localhost:9080/mcp"
       ]
     }
   }
@@ -161,7 +161,7 @@ npm install mcp-remote
 
 [mcp_servers.godot-mcp]
 type = "streamableHttp"
-url = "http://localhost:19080/mcp"
+url = "http://localhost:9080/mcp"
 ```
 
 ## 💬 示例提示
