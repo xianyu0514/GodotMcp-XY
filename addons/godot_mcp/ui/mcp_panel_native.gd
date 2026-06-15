@@ -44,7 +44,7 @@ var _group_widgets: Dictionary = {}
 var _language_option: OptionButton = null
 
 var _log_buffer: Array[String] = []
-var _max_log_lines: int = 100
+var _max_log_lines: int = 50
 var _log_flush_index: int = 0
 var _log_debounce_timer: Timer = null
 var _log_file_path: String = "user://mcp_server.log"
@@ -52,6 +52,7 @@ var _log_file_flush_count: int = 50
 var _log_pending_write: Array[String] = []
 var _log_file_initialized: bool = false
 var _max_log_file_size: int = 5242880
+var _log_ui_max_chars: int = 500  # UI 显示单条最大字符数，超出截断
 
 var _translation_manager: MCPTranslationManager = null
 var _settings_manager: MCPSettingsManager = null
@@ -904,9 +905,24 @@ func _flush_log_buffer() -> void:
 		return
 	if _log_flush_index >= _log_buffer.size():
 		return
+	var prev_index: int = _log_flush_index
 	_log_flush_index = _log_buffer.size()
-	var start_index: int = maxi(0, _log_buffer.size() - _max_log_lines)
-	_log_text_edit.text = "\n".join(_log_buffer.slice(start_index))
+	# 增量追加：只添加新增的行，不全量替换
+	for i in range(prev_index, _log_buffer.size()):
+		var line: String = _log_buffer[i]
+		if line.length() > _log_ui_max_chars:
+			line = line.left(_log_ui_max_chars) + "... [truncated]"
+		_log_text_edit.text += line + "\n"
+	# 裁剪超出上限的旧行（按行数）
+	var total_lines: int = _log_text_edit.get_line_count()
+	if total_lines > _max_log_lines:
+		_log_text_edit.select_all()
+		var full_text: String = _log_text_edit.text
+		# 找到第 (total_lines - _max_log_lines) 行的位置，删除前面的内容
+		var lines: PackedStringArray = full_text.split("\n")
+		var keep_start: int = lines.size() - _max_log_lines
+		if keep_start > 0:
+			_log_text_edit.text = "\n".join(lines.slice(keep_start))
 	_log_text_edit.scroll_vertical = _log_text_edit.get_line_count()
 
 func refresh() -> void:
