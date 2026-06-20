@@ -50,6 +50,37 @@ class FakeRuntimePlugin:
 	func get_debugger_bridge() -> RefCounted:
 		return bridge
 
+class FakeStackBridge:
+	extends RefCounted
+
+	var frame_count: int = 0
+	var variable_count: int = 0
+
+	func _init(frames: int, variables: int) -> void:
+		frame_count = frames
+		variable_count = variables
+
+	func request_stack_dump(_session_id: int = -1) -> Dictionary:
+		return {"status": "requested"}
+
+	func get_latest_stack_dump() -> Array:
+		var frames: Array = []
+		for i in range(frame_count):
+			frames.append({"index": i, "function": "f%d" % i})
+		return frames
+
+	func request_stack_frame_vars(_frame: int, _session_id: int = -1) -> Dictionary:
+		return {"status": "requested"}
+
+	func get_latest_stack_variables(_frame: int) -> Array:
+		var variables: Array = []
+		for i in range(variable_count):
+			variables.append({"name": "v%d" % i, "scope": "local", "value": i})
+		return variables
+
+	func get_scope_variables_reference(_frame: int, _scope_name: String) -> int:
+		return 1
+
 var _runtime_bridge: RefCounted = null
 
 func before_each() -> void:
@@ -167,6 +198,44 @@ func test_get_debug_stack_variables_rejects_negative_frame():
 	var result: Dictionary = debug_tools._tool_get_debug_stack_variables({"frame": -1})
 	assert_has(result, "error", "Should return error for invalid frame")
 	assert_true(str(result.error).contains("bridge") or str(result.error).contains("available"), "Error should mention debugger state")
+
+func test_get_debug_stack_frames_truncates_to_limit():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_runtime_bridge = FakeStackBridge.new(10, 0)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	var result: Dictionary = debug_tools._tool_get_debug_stack_frames({"limit": 3})
+	assert_eq(result.get("count"), 3, "Returned frame count is capped at the limit")
+	assert_eq(result.get("total_count"), 10, "total_count reports the full number of frames")
+	assert_true(result.get("truncated"), "truncated flag is set when frames exceed the limit")
+
+func test_get_debug_stack_frames_not_truncated_under_limit():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_runtime_bridge = FakeStackBridge.new(2, 0)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	var result: Dictionary = debug_tools._tool_get_debug_stack_frames({"limit": 1000})
+	assert_eq(result.get("count"), 2, "All frames returned when under the limit")
+	assert_eq(result.get("total_count"), 2, "total_count matches the returned count")
+	assert_false(result.get("truncated"), "truncated flag is false when no frames are dropped")
+
+func test_get_debug_stack_variables_truncates_to_limit():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_runtime_bridge = FakeStackBridge.new(0, 25)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	var result: Dictionary = debug_tools._tool_get_debug_stack_variables({"frame": 0, "limit": 10})
+	assert_eq(result.get("count"), 10, "Returned variable count is capped at the limit")
+	assert_eq(result.get("total_count"), 25, "total_count reports the full number of variables")
+	assert_true(result.get("truncated"), "truncated flag is set when variables exceed the limit")
+
+func test_get_debug_scopes_not_truncated_by_variable_limit():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_runtime_bridge = FakeStackBridge.new(0, 1500)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	# Scopes summarize all variables; the default variable limit must not silently
+	# drop entries and corrupt the per-scope named_variables count.
+	var result: Dictionary = debug_tools._tool_get_debug_scopes({"frame": 0})
+	var scopes: Array = result.get("scopes", [])
+	assert_eq(scopes.size(), 1, "All variables share one scope")
+	assert_eq(scopes[0].get("named_variables"), 1500, "Scope count reflects the full variable set, not the truncated subset")
 
 func test_runtime_probe_polling_reuses_pending_request():
 	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()

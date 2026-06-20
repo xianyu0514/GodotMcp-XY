@@ -1541,12 +1541,15 @@ Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补
 |------|------|------|------|
 | `refresh` | boolean | 否 | 是否先请求刷新栈帧；默认 `true` |
 | `session_id` | int | 否 | 目标调试会话，默认 `-1` 表示全部活动会话 |
+| `limit` | int | 否 | 返回的最大栈帧数，默认 `1000` |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
 |------|------|------|
-| `frames` | Array[Dictionary] | 栈帧列表，包含 `frame`、`file`、`function`、`line` |
-| `count` | int | 栈帧数量 |
+| `frames` | Array[Dictionary] | 栈帧列表（截断后），包含 `frame`、`file`、`function`、`line` |
+| `count` | int | 返回的栈帧数量 |
+| `total_count` | int | 截断前的栈帧总数 |
+| `truncated` | boolean | 是否因超过 `limit` 而被截断 |
 | `refresh_result` | Dictionary | 刷新请求结果 |
 
 ---
@@ -1561,13 +1564,16 @@ Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补
 | `frame` | int | 否 | 栈帧索引，默认 `0` |
 | `refresh` | boolean | 否 | 是否先请求刷新变量；默认 `true` |
 | `session_id` | int | 否 | 目标调试会话，默认 `-1` 表示全部活动会话 |
+| `limit` | int | 否 | 返回的最大变量数，默认 `1000` |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
 |------|------|------|
 | `frame` | int | 栈帧索引 |
-| `variables` | Array[Dictionary] | 变量列表，包含 `name`、`scope`、`type`、`value` 和 `raw` |
-| `count` | int | 变量数量 |
+| `variables` | Array[Dictionary] | 变量列表（截断后），包含 `name`、`scope`、`type`、`value` 和 `raw` |
+| `count` | int | 返回的变量数量 |
+| `total_count` | int | 截断前的变量总数 |
+| `truncated` | boolean | 是否因超过 `limit` 而被截断 |
 | `refresh_result` | Dictionary | 刷新请求结果 |
 
 ---
