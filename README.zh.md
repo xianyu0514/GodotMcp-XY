@@ -368,6 +368,8 @@ url = "http://localhost:9080/mcp"
 - `audit-project-health` - 运行项目健康审计
 - `find-resource-usages` - 反向依赖查询：哪些资源引用了目标资源
 - `list-unused-resources` - 列出无人引用的孤立资源
+- `scan-migration-compatibility` - 扫描 .gd/.cs 中 Godot 4.7 破坏性变更的 API 使用
+- `apply-migration-fixes` - 应用机械安全的 4.7 迁移改写（默认 dry-run 预览）
 
 ## 🔒 安全建议
 

@@ -347,6 +347,8 @@ Implement a day/night cycle system with dynamic lighting
 - `audit-project-health` - Run a project health audit
 - `find-resource-usages` - Reverse dependency lookup: which resources reference a target
 - `list-unused-resources` - List resources that no other resource references
+- `scan-migration-compatibility` - Scan .gd/.cs for Godot 4.7 breaking-change API usage
+- `apply-migration-fixes` - Apply mechanically-safe 4.7 migration rewrites (dry-run by default)
 
 ## 🔒 Security Recommendations
 

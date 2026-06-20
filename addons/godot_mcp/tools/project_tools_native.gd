@@ -3659,7 +3659,7 @@ func _compile_migration_rules(rules: Array) -> Array:
 
 func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
 	var tool_name: String = "scan_migration_compatibility"
-	var description: String = "Scan project source (.gd/.cs) for usages of APIs changed by a target Godot release and report migration issues with file/line, severity, and fix guidance."
+	var description: String = "Scan project source (.gd/.cs) for usages of APIs changed by a target Godot release and report migration issues with file/line, severity, and fix guidance. The plugin's own source under res://addons/godot_mcp/ is excluded so its rule-definition strings are not self-reported."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -3713,6 +3713,22 @@ func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
 						  output_schema, annotations,
 						  "supplementary", "Project-Advanced")
 
+func _migration_plugin_root() -> String:
+	var script: Script = get_script()
+	if script == null:
+		return "res://addons/godot_mcp/"
+	var tools_dir: String = script.resource_path.get_base_dir()
+	return tools_dir.get_base_dir() + "/"
+
+func _migration_exclude_plugin_sources(files: Array[String]) -> Array[String]:
+	var plugin_root: String = _migration_plugin_root()
+	var kept: Array[String] = []
+	for path in files:
+		if path.begins_with(plugin_root):
+			continue
+		kept.append(path)
+	return kept
+
 func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
 	var target_version: String = str(params.get("target_version", "4.7")).strip_edges()
 	var rules: Array = _migration_rules(target_version)
@@ -3730,6 +3746,7 @@ func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
 
 	var files: Array[String] = []
 	_collect_resources(search_path, [".gd", ".cs"], files)
+	files = _migration_exclude_plugin_sources(files)
 	files.sort()
 
 	var active_rules: Array = []
@@ -3795,7 +3812,7 @@ func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
 
 func _register_apply_migration_fixes(server_core: RefCounted) -> void:
 	var tool_name: String = "apply_migration_fixes"
-	var description: String = "Apply the safe, mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry run that previews diffs without writing files."
+	var description: String = "Apply the safe, mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry run that previews diffs without writing files. The plugin's own source under res://addons/godot_mcp/ is excluded."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -3888,6 +3905,7 @@ func _tool_apply_migration_fixes(params: Dictionary) -> Dictionary:
 
 	var files: Array[String] = []
 	_collect_resources(search_path, [".gd", ".cs"], files)
+	files = _migration_exclude_plugin_sources(files)
 	files.sort()
 
 	var changes: Array = []

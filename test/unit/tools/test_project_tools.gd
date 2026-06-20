@@ -444,3 +444,10 @@ func test_apply_migration_fixes_respects_rule_id_filter():
 	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": true, "rule_ids": ["audio_spectrum_tap_back_pos_removed"]})
 	assert_has(result, "error", "Selecting only a non-auto-fixable rule should yield no applicable fixes")
 	_teardown_migration_fixture()
+
+func test_scan_migration_excludes_plugin_own_source():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": "res://addons/godot_mcp"})
+	assert_false(result.has("error"), "Scanning the plugin directory should not error")
+	assert_eq(int(result.get("scanned_files", -1)), 0, "Plugin's own source must be excluded so its rule strings are not self-flagged")
+	assert_eq(int(result.get("total_count", -1)), 0, "No migration issues should be reported from the plugin's own rule definitions")
