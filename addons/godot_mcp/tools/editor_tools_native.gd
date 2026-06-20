@@ -1539,7 +1539,7 @@ func _engine_version_string() -> String:
 	return str(Engine.get_version_info().get("string", ""))
 
 # ============================================================================
-# get_unsaved_changes - 列出编辑器中未保存的场景与脚本
+# get_unsaved_changes - List unsaved scenes and scripts in the editor
 # ============================================================================
 
 func _register_get_unsaved_changes(server_core: RefCounted) -> void:
@@ -1613,7 +1613,7 @@ func _tool_get_unsaved_changes(_params: Dictionary) -> Dictionary:
 	}
 
 # ============================================================================
-# save_all_scripts - 保存所有打开的脚本缓冲区
+# save_all_scripts - Save all open script buffers
 # ============================================================================
 
 func _register_save_all_scripts(server_core: RefCounted) -> void:
@@ -1667,7 +1667,7 @@ func _tool_save_all_scripts(_params: Dictionary) -> Dictionary:
 	return {"status": "success", "message": "Saved all open scripts."}
 
 # ============================================================================
-# reload_open_scripts - 从磁盘重新加载已打开的脚本缓冲区
+# reload_open_scripts - Reload open script buffers from disk
 # ============================================================================
 
 func _register_reload_open_scripts(server_core: RefCounted) -> void:
@@ -1721,7 +1721,7 @@ func _tool_reload_open_scripts(_params: Dictionary) -> Dictionary:
 	return {"status": "success", "message": "Reloaded open scripts from disk."}
 
 # ============================================================================
-# close_script_tab - 关闭脚本编辑器中的标签页
+# close_script_tab - Close a script tab in the script editor
 # ============================================================================
 
 func _register_close_script_tab(server_core: RefCounted) -> void:
@@ -1770,6 +1770,7 @@ func _tool_close_script_tab(params: Dictionary) -> Dictionary:
 		return {"error": "Script editor not available"}
 
 	var script_path: String = str(params.get("script_path", "")).strip_edges()
+	var script_resource: Script = null
 	if not script_path.is_empty():
 		var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
 		if not validation["valid"]:
@@ -1777,10 +1778,9 @@ func _tool_close_script_tab(params: Dictionary) -> Dictionary:
 		script_path = validation["sanitized"]
 		if not FileAccess.file_exists(script_path):
 			return {"error": "Script file not found: " + script_path}
-		var script_resource: Script = load(script_path)
+		script_resource = load(script_path)
 		if not script_resource:
 			return {"error": "Failed to load script: " + script_path}
-		editor_interface.edit_script(script_resource, 0, 0, false)
 
 	var method_name: String = _first_supported_method(script_editor, ["close_file"])
 	if method_name == "":
@@ -1790,11 +1790,19 @@ func _tool_close_script_tab(params: Dictionary) -> Dictionary:
 			"godot_version": _engine_version_string()
 		}
 
+	var closed_script: String = script_path
+	if script_resource:
+		editor_interface.edit_script(script_resource, 0, 0, false)
+	else:
+		var current_script: Script = script_editor.get_current_script()
+		if current_script:
+			closed_script = current_script.resource_path
+
 	script_editor.call(method_name)
-	return {"status": "success", "closed_script": script_path}
+	return {"status": "success", "closed_script": closed_script}
 
 # ============================================================================
-# get_import_status - 查询资源导入/扫描状态
+# get_import_status - Query resource import/scan status
 # ============================================================================
 
 func _register_get_import_status(server_core: RefCounted) -> void:
