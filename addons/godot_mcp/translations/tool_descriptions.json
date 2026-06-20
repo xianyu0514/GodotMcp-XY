@@ -25,6 +25,8 @@
   "scan_cyclic_resource_dependencies": "Scan for cyclic resource dependencies.",
   "detect_broken_scripts": "Detect broken scripts in the project.",
   "audit_project_health": "Audit project health and integrity.",
+  "find_resource_usages": "Find which resources reference a target resource (reverse dependency lookup).",
+  "list_unused_resources": "List resource files that no other resource references.",
   "create_scene": "Create a new Godot scene with a root node. The scene is saved to the specified path.",
   "save_scene": "Save the current scene to disk. If no path is provided, saves to the current scene's path.",
   "open_scene": "Open a scene file from the project. Closes the current scene if one is open.",

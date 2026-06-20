@@ -258,3 +258,92 @@ func test_single_and_batch_runs_share_one_concurrency_budget():
 	assert_has(single_result, "error", "A new single run is rejected once the shared budget is full")
 	project_tools._test_runner.flush()
 	project_tools._batch_test_runner.flush()
+
+# --- reverse resource tools: find_resource_usages / list_unused_resources ---
+
+const _REVERSE_RES_DIR: String = "res://.tmp_reverse_res_test"
+
+func _write_text_file(path: String, content: String) -> void:
+	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	assert_ne(file, null, "Should be able to open temp file for writing: " + path)
+	file.store_string(content)
+	file.close()
+
+func _setup_reverse_resource_fixture() -> void:
+	_teardown_reverse_resource_fixture()
+	var dir: DirAccess = DirAccess.open("res://")
+	dir.make_dir(".tmp_reverse_res_test")
+	# A leaf resource referenced by a scene.
+	_write_text_file(_REVERSE_RES_DIR + "/used.tres", "[gd_resource type=\"Resource\" format=3]\n\n[resource]\n")
+	# A leaf resource referenced by nobody.
+	_write_text_file(_REVERSE_RES_DIR + "/orphan.tres", "[gd_resource type=\"Resource\" format=3]\n\n[resource]\n")
+	# A scene that references used.tres via an ext_resource path.
+	var scene_text: String = "[gd_scene load_steps=2 format=3]\n\n" \
+		+ "[ext_resource type=\"Resource\" path=\"" + _REVERSE_RES_DIR + "/used.tres\" id=\"1\"]\n\n" \
+		+ "[node name=\"Root\" type=\"Node\"]\n"
+	_write_text_file(_REVERSE_RES_DIR + "/holder.tscn", scene_text)
+
+func _teardown_reverse_resource_fixture() -> void:
+	if not DirAccess.dir_exists_absolute(_REVERSE_RES_DIR):
+		return
+	var dir: DirAccess = DirAccess.open(_REVERSE_RES_DIR)
+	if dir:
+		dir.list_dir_begin()
+		var file_name: String = dir.get_next()
+		while not file_name.is_empty():
+			if file_name != "." and file_name != "..":
+				dir.remove(file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	DirAccess.remove_absolute(_REVERSE_RES_DIR)
+
+func test_find_resource_usages_rejects_missing_param():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_resource_usages({})
+	assert_has(result, "error", "Missing resource_path should return an error")
+
+func test_find_resource_usages_rejects_missing_file():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_resource_usages({"resource_path": "res://.tmp_reverse_res_test/does_not_exist.tres"})
+	assert_has(result, "error", "A missing target file should be rejected")
+
+func test_find_resource_usages_reports_owner_scene():
+	_setup_reverse_resource_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_resource_usages({
+		"resource_path": _REVERSE_RES_DIR + "/used.tres",
+		"search_path": _REVERSE_RES_DIR
+	})
+	assert_false(result.has("error"), "A valid reverse lookup should not error")
+	assert_eq(int(result.get("usage_count", 0)), 1, "used.tres should be referenced by exactly one resource")
+	var owners: Array = []
+	for usage in result.get("usages", []):
+		owners.append(str(usage.get("owner_path", "")))
+	assert_has(owners, _REVERSE_RES_DIR + "/holder.tscn", "holder.tscn should be reported as a referencing owner")
+	_teardown_reverse_resource_fixture()
+
+func test_find_resource_usages_reports_no_usages_for_orphan():
+	_setup_reverse_resource_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_resource_usages({
+		"resource_path": _REVERSE_RES_DIR + "/orphan.tres",
+		"search_path": _REVERSE_RES_DIR
+	})
+	assert_false(result.has("error"), "A valid reverse lookup should not error")
+	assert_eq(int(result.get("usage_count", 0)), 0, "orphan.tres should have no referencing resources")
+	_teardown_reverse_resource_fixture()
+
+func test_list_unused_resources_flags_orphan_and_skips_referenced():
+	_setup_reverse_resource_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_list_unused_resources({"search_path": _REVERSE_RES_DIR})
+	assert_false(result.has("error"), "A valid unused-resource scan should not error")
+	var unused: Array = result.get("unused_resources", [])
+	assert_has(unused, _REVERSE_RES_DIR + "/orphan.tres", "orphan.tres should be flagged as unused")
+	assert_false(unused.has(_REVERSE_RES_DIR + "/used.tres"), "used.tres is referenced and should not be flagged")
+	_teardown_reverse_resource_fixture()
+
+func test_list_unused_resources_rejects_invalid_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_list_unused_resources({"search_path": "C:\\Windows"})
+	assert_has(result, "error", "An unsafe directory path should be rejected")

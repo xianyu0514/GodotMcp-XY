@@ -73,5 +73,12 @@ func flush() -> void:
 	_jobs.clear()
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE:
-		flush()
+	if what != NOTIFICATION_PREDELETE:
+		return
+	# Inline the flush logic: calling a self method during PREDELETE can fail
+	# with "in base 'null instance'" once the script method table is torn down.
+	for key in _jobs.keys():
+		var job: _Job = _jobs[key]
+		if job != null and job.thread != null and job.thread.is_started():
+			job.thread.wait_to_finish()
+	_jobs.clear()

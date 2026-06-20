@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **157 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 4 | 8 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出） |
 | [Editor Tools](#editor-tools) | 4 | 12 | 16 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择） |
 | [Debug Tools](#debug-tools) | 3 | 68 | 71 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 23 | 26 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断） |
+| [Project Tools](#project-tools) | 3 | 25 | 28 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -3929,6 +3929,58 @@ Continue：恢复执行。
 | `broken_scripts` | array | 破损脚本详情 |
 | `missing_dependencies` | array | 缺失依赖详情 |
 | `cyclic_dependencies` | array | 循环依赖详情 |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 156. find_resource_usages
+
+反向依赖查询：查找项目中哪些资源引用了目标资源。按路径和 UID 两种方式匹配。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `resource_path` | string | 是 | 要查找用途的目标资源路径 |
+| `search_path` | string | 否 | 扫描引用方的目录，默认 `res://` |
+| `limit` | int | 否 | 最大返回引用方数量，默认 `1000` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `resource_path` | string | 目标资源路径 |
+| `search_path` | string | 搜索路径 |
+| `target_uid` | string | 目标资源的 UID（若有） |
+| `scanned_resources` | int | 扫描的资源数 |
+| `usage_count` | int | 引用方数量（等于 `total_count`） |
+| `total_count` | int | 截断前的引用方总数 |
+| `truncated` | boolean | 结果是否被截断 |
+| `usages` | array | 引用方详情（`owner_path`、`reference_count`、`references`） |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 157. list_unused_resources
+
+列出没有被任何其他资源引用的孤立资源。仅通过 `class_name` 引用的脚本不被跟踪；入口点（主场景、自动加载）始终视为已使用。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `search_path` | string | 否 | 扫描候选资源的目录，默认 `res://` |
+| `extensions` | array | 否 | 候选文件扩展名覆盖（如 `['.tres', '.png']`），默认资源类资产并排除脚本 |
+| `limit` | int | 否 | 最大返回孤立资源数量，默认 `1000` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `search_path` | string | 搜索路径 |
+| `scanned_resources` | int | 扫描的候选资源数 |
+| `unused_count` | int | 孤立资源数量（等于 `total_count`） |
+| `total_count` | int | 截断前的孤立资源总数 |
+| `truncated` | boolean | 结果是否被截断 |
+| `unused_resources` | array | 孤立资源路径列表 |
 
 **注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
 

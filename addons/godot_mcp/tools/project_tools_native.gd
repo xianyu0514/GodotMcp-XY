@@ -53,6 +53,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_scan_cyclic_resource_dependencies(server_core)
 	_register_detect_broken_scripts(server_core)
 	_register_audit_project_health(server_core)
+	_register_find_resource_usages(server_core)
+	_register_list_unused_resources(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -2695,6 +2697,263 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 		"cyclic_dependencies": cyclic_dependencies_result.get("issues", []),
 		"truncated": bool(broken_scripts_result.get("truncated", false)) or bool(missing_dependencies_result.get("truncated", false)) or bool(cyclic_dependencies_result.get("truncated", false))
 	}
+
+# ============================================================================
+# find_resource_usages - reverse dependency lookup: who references a resource
+# ============================================================================
+
+func _register_find_resource_usages(server_core: RefCounted) -> void:
+	var tool_name: String = "find_resource_usages"
+	var description: String = "Find which project resources reference a target resource (reverse dependency lookup)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"resource_path": {
+				"type": "string",
+				"description": "Target resource path to find usages of, e.g. 'res://art/player.png'."
+			},
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan for referencing resources. Default is res://.",
+				"default": "res://"
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of referencing resources to return. Default is 1000.",
+				"default": 1000
+			}
+		},
+		"required": ["resource_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"resource_path": {"type": "string"},
+			"search_path": {"type": "string"},
+			"target_uid": {"type": "string"},
+			"scanned_resources": {"type": "integer"},
+			"usage_count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"},
+			"usages": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_find_resource_usages"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_find_resource_usages(params: Dictionary) -> Dictionary:
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+
+	var validation: Dictionary = PathValidator.validate_path(resource_path)
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	resource_path = validation["sanitized"]
+
+	if not FileAccess.file_exists(resource_path):
+		return {"error": "File not found: " + resource_path}
+
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var search_validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not search_validation["valid"]:
+		return {"error": "Invalid path: " + search_validation["error"]}
+	search_path = search_validation["sanitized"]
+
+	var limit: int = int(params.get("limit", 1000))
+
+	var target_uid: String = ResourceUID.path_to_uid(resource_path)
+	if not target_uid.begins_with("uid://"):
+		target_uid = ""
+
+	var owner_extensions: Array[String] = [
+		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
+	]
+	var owners: Array[String] = []
+	_collect_resources(search_path, owner_extensions, owners)
+	owners.sort()
+
+	var usages: Array = []
+	for owner_path in owners:
+		if owner_path == resource_path:
+			continue
+		var references: Array = []
+		for dependency in _parse_resource_dependencies(owner_path):
+			var resolved_path: String = str(dependency.get("resolved_path", ""))
+			var fallback_path: String = str(dependency.get("fallback_path", ""))
+			var dependency_uid: String = str(dependency.get("uid", ""))
+			var matched_via: String = ""
+			if resolved_path == resource_path or fallback_path == resource_path:
+				matched_via = "path"
+			elif not target_uid.is_empty() and dependency_uid == target_uid:
+				matched_via = "uid"
+			if not matched_via.is_empty():
+				var reference: Dictionary = dependency.duplicate()
+				reference["matched_via"] = matched_via
+				references.append(reference)
+		if not references.is_empty():
+			usages.append({
+				"owner_path": owner_path,
+				"reference_count": references.size(),
+				"references": references
+			})
+
+	var bounded: Dictionary = PayloadUtils.truncate_list(usages, limit)
+	return {
+		"resource_path": resource_path,
+		"search_path": search_path,
+		"target_uid": target_uid,
+		"scanned_resources": owners.size(),
+		"usage_count": int(bounded["total_count"]),
+		"total_count": int(bounded["total_count"]),
+		"truncated": bool(bounded["truncated"]),
+		"usages": bounded["items"]
+	}
+
+# ============================================================================
+# list_unused_resources - list orphaned resources nothing references
+# ============================================================================
+
+func _register_list_unused_resources(server_core: RefCounted) -> void:
+	var tool_name: String = "list_unused_resources"
+	var description: String = "List resource files that no other resource references. Scripts referenced only via class_name are not tracked; entry points (main scene, autoloads) are always treated as used."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan for candidate resources. Default is res://.",
+				"default": "res://"
+			},
+			"extensions": {
+				"type": "array",
+				"description": "Optional override of candidate file extensions (e.g. ['.tres', '.png']). Defaults to asset resources and excludes scripts."
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of unused resources to return. Default is 1000.",
+				"default": 1000
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {"type": "string"},
+			"scanned_resources": {"type": "integer"},
+			"unused_count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"},
+			"unused_resources": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_list_unused_resources"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	search_path = validation["sanitized"]
+
+	var limit: int = int(params.get("limit", 1000))
+
+	var candidate_extensions: Array[String] = []
+	var override_extensions = params.get("extensions", null)
+	if override_extensions is Array and not (override_extensions as Array).is_empty():
+		for ext in override_extensions:
+			var ext_text: String = str(ext).strip_edges()
+			if not ext_text.is_empty():
+				if not ext_text.begins_with("."):
+					ext_text = "." + ext_text
+				candidate_extensions.append(ext_text)
+	else:
+		candidate_extensions = [
+			".tres", ".res", ".tscn", ".scn", ".material", ".gdshader",
+			".png", ".jpg", ".jpeg", ".webp", ".svg", ".bmp", ".tga",
+			".ogg", ".wav", ".mp3",
+			".ttf", ".otf",
+			".glb", ".gltf", ".obj", ".fbx"
+		]
+
+	var candidates: Array[String] = []
+	_collect_resources(search_path, candidate_extensions, candidates)
+	candidates.sort()
+
+	var owner_extensions: Array[String] = [
+		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
+	]
+	var owners: Array[String] = []
+	_collect_resources("res://", owner_extensions, owners)
+
+	var referenced: Dictionary = {}
+	for owner_path in owners:
+		for dependency in _parse_resource_dependencies(owner_path):
+			var resolved_path: String = str(dependency.get("resolved_path", ""))
+			var fallback_path: String = str(dependency.get("fallback_path", ""))
+			if not resolved_path.is_empty():
+				referenced[resolved_path] = true
+			if not fallback_path.is_empty():
+				referenced[fallback_path] = true
+
+	for root_path in _collect_project_resource_roots():
+		referenced[root_path] = true
+
+	var unused: Array = []
+	for candidate_path in candidates:
+		if not referenced.has(candidate_path):
+			unused.append(candidate_path)
+
+	var bounded: Dictionary = PayloadUtils.truncate_list(unused, limit)
+	return {
+		"search_path": search_path,
+		"scanned_resources": candidates.size(),
+		"unused_count": int(bounded["total_count"]),
+		"total_count": int(bounded["total_count"]),
+		"truncated": bool(bounded["truncated"]),
+		"unused_resources": bounded["items"]
+	}
+
+func _collect_project_resource_roots() -> Array:
+	var roots: Array = []
+	var main_scene: String = str(ProjectSettings.get_setting("application/run/main_scene", "")).strip_edges()
+	if not main_scene.is_empty():
+		roots.append(main_scene)
+	for property in ProjectSettings.get_property_list():
+		var property_name: String = str(property.get("name", ""))
+		if not property_name.begins_with("autoload/"):
+			continue
+		var value: String = str(ProjectSettings.get_setting(property_name, "")).strip_edges()
+		if value.begins_with("*"):
+			value = value.substr(1)
+		if value.begins_with("res://") and not roots.has(value):
+			roots.append(value)
+	return roots
 
 func _analyze_script_diagnostics(script_path: String, include_warnings: bool) -> Dictionary:
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)

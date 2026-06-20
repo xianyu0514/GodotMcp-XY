@@ -165,6 +165,8 @@ func _build_classifications() -> void:
 		{"name": "scan_cyclic_resource_dependencies", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "detect_broken_scripts", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "audit_project_health", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "find_resource_usages", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "list_unused_resources", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:
