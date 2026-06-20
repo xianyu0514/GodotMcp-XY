@@ -49,6 +49,11 @@ const MAX_REQUEST_QUEUE_SIZE: int = 256
 ## bound prevents a request from hanging forever if the server stalls or stops.
 const MAX_QUEUE_WAIT_SECONDS: float = 30.0
 
+## Read-only tools whose (potentially expensive) results are cached and served
+## directly on a repeat call until a mutating tool invalidates the cache. The
+## cache is keyed by tool name plus its arguments, so different args cache apart.
+const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure"]
+
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
@@ -479,6 +484,18 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		}
 		return MCPTypes.create_response(id, error_result)
 	
+	# Read-through cache: serve a cached result for expensive read-only scene
+	# queries instead of re-walking the scene tree. The cache is invalidated below
+	# whenever a mutating tool runs, so a cache hit always reflects the live tree.
+	var is_cacheable_read: bool = tool_name in CACHEABLE_READ_TOOLS
+	var cache_key: String = ""
+	if is_cacheable_read:
+		cache_key = tool_name + ":" + JSON.stringify(arguments)
+		var cached: Dictionary = get_cached_scene_structure(cache_key)
+		if not cached.is_empty():
+			_log_info("Serving cached result for: " + tool_name)
+			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
+	
 	# 发送开始信号
 	tool_execution_started.emit(tool_name, arguments)
 	
@@ -511,17 +528,17 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	var has_error: bool = result is Dictionary and result.has("error")
 
-	var response_result: Dictionary = {
-		"content": [{
-			"type": "text",
-			"text": JSON.stringify(result)
-		}],
-		"isError": has_error
-	}
+	# Keep the read cache coherent: store successful cacheable reads, and drop the
+	# whole scene-structure cache when a mutating tool runs (readOnlyHint == false)
+	# so subsequent reads never serve a stale tree.
+	if is_cacheable_read:
+		if not has_error and result is Dictionary:
+			set_cached_scene_structure(cache_key, result)
+	elif not bool(tool.annotations.get("readOnlyHint", false)):
+		_invalidate_scene_structure_cache()
 
-	if not has_error and tool.output_schema.size() > 0:
-		response_result["structuredContent"] = result
-	
+	var response_result: Dictionary = _format_tool_result(result, tool)
+
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
 	
 	_append_tool_log(tool_name, result, error)
@@ -531,6 +548,21 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	_log_info("Tool execution completed: " + tool_name)
 	
 	return response
+
+## Wrap a tool's raw result Dictionary into an MCP tool-call result payload.
+## Shared by live execution and cache hits so both produce identical responses.
+func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
+	var has_error: bool = result is Dictionary and result.has("error")
+	var response_result: Dictionary = {
+		"content": [{
+			"type": "text",
+			"text": JSON.stringify(result)
+		}],
+		"isError": has_error
+	}
+	if not has_error and tool.output_schema.size() > 0:
+		response_result["structuredContent"] = result
+	return response_result
 
 func _handle_resources_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
@@ -909,6 +941,15 @@ func clear_cache() -> void:
 	_scene_structure_cache.clear()
 	_cache_timestamp.clear()
 	_log_info("Cache cleared")
+
+## Drop all cached scene-structure results. Called after any mutating tool so the
+## next read recomputes from the live scene tree instead of serving stale data.
+func _invalidate_scene_structure_cache() -> void:
+	if _scene_structure_cache.is_empty():
+		return
+	_scene_structure_cache.clear()
+	_cache_timestamp.clear()
+	_log_debug("Scene structure cache invalidated")
 
 # ============================================================================
 # 配置方法

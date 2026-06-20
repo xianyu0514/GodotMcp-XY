@@ -315,3 +315,56 @@ func test_stop_clears_pending_queue():
 	_core._active = true
 	_core.stop()
 	assert_eq(_core.get_request_queue_depth(), 0, "stop() should clear the pending request queue")
+
+# ============================================================================
+# Scene structure read-through cache
+# ============================================================================
+
+func test_cacheable_read_served_from_cache_on_second_call():
+	# "get_scene_structure" is in CACHEABLE_READ_TOOLS, so the second identical
+	# call must be served from cache without re-executing the handler.
+	var calls: Array = [0]
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"scene_name": "Main", "call": calls[0]},
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_structure", "arguments": {}}}
+	var r1: Dictionary = await _core._handle_request(msg)
+	var r2: Dictionary = await _core._handle_request(msg)
+	assert_eq(calls[0], 1, "Handler should run once; the second call is served from cache")
+	assert_eq(JSON.stringify(r1), JSON.stringify(r2), "Cached response should match the first response")
+
+func test_mutating_tool_invalidates_read_cache():
+	var calls: Array = [0]
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"scene_name": "Main", "call": calls[0]},
+		{}, {"readOnlyHint": true})
+	_core.register_tool("create_node", "Mutate", {"type": "object"},
+		func(args): return {"status": "success"},
+		{}, {"readOnlyHint": false})
+	var read_msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_structure", "arguments": {}}}
+	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "create_node", "arguments": {}}}
+	await _core._handle_request(read_msg)        # populates cache (call 1)
+	await _core._handle_request(read_msg)         # cache hit (still call 1)
+	assert_eq(calls[0], 1, "Second read before mutation should be cached")
+	await _core._handle_request(mutate_msg)        # mutation invalidates cache
+	await _core._handle_request(read_msg)          # must recompute (call 2)
+	assert_eq(calls[0], 2, "Read after a mutating tool must recompute, not serve stale cache")
+
+func test_cacheable_read_keys_by_arguments():
+	var calls: Array = [0]
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"scene_name": "Main", "depth": args.get("max_depth", -1)},
+		{}, {"readOnlyHint": true})
+	var deep: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_structure", "arguments": {"max_depth": 2}}}
+	var shallow: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "get_scene_structure", "arguments": {"max_depth": 1}}}
+	await _core._handle_request(deep)
+	await _core._handle_request(shallow)
+	await _core._handle_request(deep)
+	await _core._handle_request(shallow)
+	assert_eq(calls[0], 2, "Different arguments cache separately; each variant computed once")
