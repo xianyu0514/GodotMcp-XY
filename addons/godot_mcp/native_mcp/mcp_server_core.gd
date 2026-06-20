@@ -37,6 +37,12 @@ signal log_message(level: String, message: String)
 const JSONRPC_VERSION: String = "2.0"
 const PROTOCOL_VERSION: String = "2025-11-25"
 
+## Maximum number of pending requests buffered in the serial request queue.
+## When multiple AI clients call concurrently, requests are queued and executed
+## one at a time so the editor is not overloaded. Requests beyond this bound are
+## rejected with a "server busy" error instead of growing memory without limit.
+const MAX_REQUEST_QUEUE_SIZE: int = 256
+
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
@@ -51,9 +57,12 @@ var _transport: McpTransportBase = null  # 传输层实例（使用基类类型�
 var _auth_manager: McpAuthManager = null  # 认证管理器（HTTP 模式使用）
 var _http_port: int = 9080  # HTTP 监听端口
 
-# 消息队列（使用类型化数组 - 根据godot-dev-guide）
-var _message_queue: Array[Dictionary] = []
-var _response_queue: Array[Dictionary] = []
+# Serial request queue. Each element is {"message": Dictionary, "context": Variant}.
+# When multiple AI clients call concurrently, requests are queued here and run one
+# at a time by _drain_request_queue(), so many coroutines never execute at once and
+# the editor stays responsive instead of spiking CPU/memory.
+var _request_queue: Array[Dictionary] = []
+var _is_processing_request: bool = false
 
 # 工具和资源注册表
 var _tools: Dictionary = {}  # String -> MCPTool
@@ -158,32 +167,58 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	# 验证消息格式
 	if not message.has("jsonrpc"):
 		_send_error(null, MCPTypes.ERROR_INVALID_REQUEST, 
-				   "Missing 'jsonrpc' field. Please ensure the message is a valid JSON-RPC 2.0 message.")
+				   "Missing 'jsonrpc' field. Please ensure the message is a valid JSON-RPC 2.0 message.", null, context)
 		return
 	
 	if message["jsonrpc"] != JSONRPC_VERSION:
 		_send_error(message.get("id"), MCPTypes.ERROR_INVALID_REQUEST, 
-				   "Invalid JSON-RPC version. Expected '2.0', got: " + str(message["jsonrpc"]))
+				   "Invalid JSON-RPC version. Expected '2.0', got: " + str(message["jsonrpc"]), null, context)
 		return
 	
 	# 记录收到的消息
 	message_received.emit(message)
 	_log_debug("Received message: " + JSON.stringify(message))
 	
-	# 处理请求
-	var response: Dictionary = {}
-	
-	if message.has("method"):
-		# 这是一个请求或通知
-		response = await _handle_request(message)
-	else:
-		# 这是一个响应（通常不需要处理）
+	# Only requests/notifications (carrying "method") are processed; ignore responses.
+	if not message.has("method"):
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
 		return
 	
-	# 发送响应（如果有）
-	if response:
-		_send_response(response, context)
+	# Backpressure: reject when the queue is full to avoid unbounded memory growth.
+	if _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE:
+		_log_warn("Request queue full (" + str(_request_queue.size()) + "), rejecting request")
+		_send_error(message.get("id"), MCPTypes.ERROR_INTERNAL_ERROR, 
+				   "Server busy: request queue is full. Please retry later.", null, context)
+		return
+	
+	# Enqueue and kick the serial processor (concurrent calls queue up and run in order).
+	_request_queue.append({"message": message, "context": context})
+	_drain_request_queue()
+
+## Process the request queue serially: run exactly one request at a time until empty.
+## All access happens on the main thread (transport marshals via call_deferred), so no
+## mutex is needed; _is_processing_request guarantees only one drain coroutine runs.
+func _drain_request_queue() -> void:
+	if _is_processing_request:
+		return
+	_is_processing_request = true
+	
+	while _active and not _request_queue.is_empty():
+		var item: Dictionary = _request_queue.pop_front()
+		var message: Dictionary = item.get("message", {})
+		var context: Variant = item.get("context", null)
+		
+		var response: Dictionary = await _handle_request(message)
+		
+		# Notifications produce an empty dict (falsy); only send real responses.
+		if response:
+			_send_response(response, context)
+	
+	_is_processing_request = false
+
+## Number of requests currently waiting in the queue (for tests and monitoring).
+func get_request_queue_depth() -> int:
+	return _request_queue.size()
 
 ## 处理传输层错误
 ## @param error: String - 错误描述
@@ -256,6 +291,11 @@ func stop() -> void:
 		_transport = null
 
 	_active = false
+
+	# Drop any queued-but-unprocessed requests (the drain loop exits on _active == false).
+	_request_queue.clear()
+	_is_processing_request = false
+
 	_log_info("MCP Server stopped")
 
 func is_running() -> bool:
@@ -777,9 +817,9 @@ func _send_response(response: Dictionary, context: Variant = null) -> void:
 	
 	response_sent.emit(response)
 
-func _send_error(id: Variant, code: int, message: String, data: Variant = null) -> void:
+func _send_error(id: Variant, code: int, message: String, data: Variant = null, context: Variant = null) -> void:
 	var error_response: Dictionary = MCPTypes.create_error_response(id, code, message, data)
-	_send_response(error_response)
+	_send_response(error_response, context)
 
 # ============================================================================
 # 速率限制（根据mcp-builder安全最佳实践）

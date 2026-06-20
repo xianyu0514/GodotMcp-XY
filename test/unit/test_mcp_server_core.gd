@@ -224,3 +224,64 @@ func test_handle_request_awaits_tool_call():
 	var msg: Dictionary = {"id": 12, "method": "tools/call", "params": {"name": "test_req_tool", "arguments": {}}}
 	var response: Dictionary = await _core._handle_request(msg)
 	assert_false(response.get("result", {}).get("isError", true), "handle_request should await tool_call successfully")
+
+# ============================================================================
+# Serial request queue
+# ============================================================================
+
+func test_request_queue_depth_initially_zero():
+	assert_eq(_core.get_request_queue_depth(), 0, "Queue should start empty")
+
+func test_queue_holds_requests_when_inactive():
+	# _active is false by default, so the drain loop should not consume requests.
+	_core.register_tool("queued_tool", "Test", {"type": "object"}, func(args): return {})
+	for i in range(3):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
+		_core._on_transport_message_received(msg, null)
+	assert_eq(_core.get_request_queue_depth(), 3, "Inactive server should hold all queued requests")
+
+func test_queue_backpressure_rejects_when_full():
+	_core.register_tool("queued_tool", "Test", {"type": "object"}, func(args): return {})
+	var max_size: int = _core.MAX_REQUEST_QUEUE_SIZE
+	for i in range(max_size):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
+		_core._on_transport_message_received(msg, null)
+	assert_eq(_core.get_request_queue_depth(), max_size, "Queue should accept up to MAX_REQUEST_QUEUE_SIZE")
+	# One more request must be rejected (not appended) once the queue is full.
+	var overflow: Dictionary = {"jsonrpc": "2.0", "id": 99999, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
+	_core._on_transport_message_received(overflow, null)
+	assert_eq(_core.get_request_queue_depth(), max_size, "Request beyond MAX should be rejected, not queued")
+
+func test_serial_queue_runs_requests_in_fifo_order():
+	# Each tool call awaits two frames; if execution were concurrent we'd see
+	# interleaving (start_1, start_2, ...). Serial execution must yield
+	# start_1, end_1, start_2, end_2.
+	_core._active = true
+	var order: Array = []
+	_core.register_tool("slow_tool", "Slow", {"type": "object"}, func(args):
+		var n: int = args.get("n", 0)
+		order.append("start_%d" % n)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		order.append("end_%d" % n)
+		return {"n": n}
+	)
+	var m1: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "slow_tool", "arguments": {"n": 1}}}
+	var m2: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "slow_tool", "arguments": {"n": 2}}}
+	_core._on_transport_message_received(m1, null)
+	_core._on_transport_message_received(m2, null)
+	for i in range(12):
+		await get_tree().process_frame
+	assert_eq(order, ["start_1", "end_1", "start_2", "end_2"], "Requests must run serially in FIFO order")
+	assert_eq(_core.get_request_queue_depth(), 0, "Queue should be drained after processing")
+
+func test_stop_clears_pending_queue():
+	_core.register_tool("queued_tool", "Test", {"type": "object"}, func(args): return {})
+	for i in range(3):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
+		_core._on_transport_message_received(msg, null)
+	assert_eq(_core.get_request_queue_depth(), 3, "Queue should hold requests before stop")
+	# Mark active so stop() proceeds through its cleanup path.
+	_core._active = true
+	_core.stop()
+	assert_eq(_core.get_request_queue_depth(), 0, "stop() should clear the pending request queue")
