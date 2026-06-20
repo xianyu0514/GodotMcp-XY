@@ -172,6 +172,8 @@ func _build_classifications() -> void:
 		{"name": "list_unused_resources", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "scan_migration_compatibility", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "apply_migration_fixes", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "find_deprecated_api_usage", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "detect_gdextension_addons", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:

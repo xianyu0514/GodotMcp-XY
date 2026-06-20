@@ -29,6 +29,8 @@
   "list_unused_resources": "List resource files that no other resource references.",
   "scan_migration_compatibility": "Scan project source for usages of APIs changed by a target Godot release (default 4.7) and report migration issues with file/line and severity.",
   "apply_migration_fixes": "Apply the safe mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry-run preview.",
+  "find_deprecated_api_usage": "Scan scripts for removed/deprecated Godot 4.x APIs and report file:line with the modern replacement; class/property rules are cross-checked against ClassDB.",
+  "detect_gdextension_addons": "Detect native GDExtension addons by scanning .gdextension files and report entry symbol, compatibility_minimum, per-platform library availability and any SConstruct build hints. Detection only.",
   "create_scene": "Create a new Godot scene with a root node. The scene is saved to the specified path.",
   "save_scene": "Save the current scene to disk. If no path is provided, saves to the current scene's path.",
   "open_scene": "Open a scene file from the project. Closes the current scene if one is open.",

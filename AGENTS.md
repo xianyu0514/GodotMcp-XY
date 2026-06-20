@@ -64,7 +64,7 @@ addons/godot_mcp/
 │   ├── scene_tools_native.gd   # 8 个工具 — 创建/保存/打开/关闭场景、结构查看、列表
 │   ├── editor_tools_native.gd  # 16 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器
 │   ├── debug_tools_native.gd   # 70 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制
-│   └── project_tools_native.gd # 30 个工具 — 项目信息/设置、资源、输入映射、自动加载、全局类、测试运行器、诊断、反向资源依赖、迁移检查
+│   └── project_tools_native.gd # 32 个工具 — 项目信息/设置、资源、输入映射、自动加载、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
 │   ├── mcp_tool_item.gd        # 单个工具开关 UI

@@ -13,13 +13,13 @@ A powerful Godot Engine plugin that integrates AI assistants (Claude, etc.) via 
 - **Full Project Access**: AI assistants can read and modify scripts, scenes, nodes, and resources
 - **Native Implementation**: No Node.js dependency required - runs entirely within Godot
 - **Real-time Editing**: Apply AI suggestions directly in the editor
-- **Comprehensive Tool Set** (162 tools — 30 core + 132 supplementary):
+- **Comprehensive Tool Set** (164 tools — 30 core + 134 supplementary):
   - **Node Tools** (9 core + 13 advanced): Create, modify, manage scene nodes, duplicate, move, rename, signal connections, anchor presets, group management, batch operations (update/read properties, connect signals), scene auditing
   - **Script Tools** (7 core + 9 advanced): Edit, analyze, create, attach, validate GDScript and C# files, batch read scripts, execute scripts, search in files, symbol indexing, definition & reference lookup
   - **Scene Tools** (4 core + 4 advanced): Manipulate scene structure, save scenes, list/open/close scene tabs, project scene listing
   - **Editor Tools** (4 core + 12 advanced): Control editor functionality, screenshot, signal inspection, filesystem reload, node/file selection, export management, property inspector
   - **Debug Tools** (3 core + 67 advanced): Logging, debugger sessions, breakpoints, stack/variable inspection, profilers, runtime probe, animation/audio/shader/tilemap runtime control, debug execution control, await_scene_ready
-  - **Project Tools** (3 core + 27 advanced): Access project settings, list resources, create resources, run tests, manage input mappings, inspect autoloads/global classes, resource diagnostics & health audit, reverse resource usage & unused-resource detection, migration compatibility scan & fixes
+  - **Project Tools** (3 core + 29 advanced): Access project settings, list resources, create resources, run tests, manage input mappings, inspect autoloads/global classes, resource diagnostics & health audit, reverse resource usage & unused-resource detection, migration compatibility scan & fixes, deprecated 4.x API scanning, GDExtension addon detection
 
 ## 📦 Installation
 
@@ -340,7 +340,7 @@ Implement a day/night cycle system with dynamic lighting
 - `update-runtime-audio-bus` - Update runtime audio bus
 - `get-runtime-screenshot` - Capture runtime viewport screenshot
 
-### Project (3 core + 27 advanced)
+### Project (3 core + 29 advanced)
 - `get-project-info` - Get project information
 - `get-project-settings` - Get project settings
 - `list-project-resources` - List project resources
@@ -371,6 +371,8 @@ Implement a day/night cycle system with dynamic lighting
 - `list-unused-resources` - List resources that no other resource references
 - `scan-migration-compatibility` - Scan .gd/.cs for Godot 4.7 breaking-change API usage
 - `apply-migration-fixes` - Apply mechanically-safe 4.7 migration rewrites (dry-run by default)
+- `find-deprecated-api-usage` - Scan scripts for removed/deprecated Godot 4.x APIs with modern replacements
+- `detect-gdextension-addons` - Detect native GDExtension addons and report their libraries/build hints
 
 ## 🔒 Security Recommendations
 

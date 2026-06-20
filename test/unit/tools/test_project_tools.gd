@@ -451,3 +451,92 @@ func test_scan_migration_excludes_plugin_own_source():
 	assert_false(result.has("error"), "Scanning the plugin directory should not error")
 	assert_eq(int(result.get("scanned_files", -1)), 0, "Plugin's own source must be excluded so its rule strings are not self-flagged")
 	assert_eq(int(result.get("total_count", -1)), 0, "No migration issues should be reported from the plugin's own rule definitions")
+
+const _HYGIENE_DIR: String = "res://.tmp_hygiene_test"
+
+func _setup_hygiene_fixture() -> void:
+	_teardown_hygiene_fixture()
+	var dir: DirAccess = DirAccess.open("res://")
+	dir.make_dir(".tmp_hygiene_test")
+	var legacy_script: String = "extends Reference\n\nfunc _ready():\n\tvar names = PoolStringArray()\n\tif names.empty():\n\t\tprint(\"empty\")\n\tvar scene = preload(\"x\").instance()\n\t# yield(get_tree(), \"idle_frame\") is a comment and must be ignored\n"
+	_write_text_file(_HYGIENE_DIR + "/legacy.gd", legacy_script)
+	var modern_script: String = "extends RefCounted\n\nfunc _ready():\n\tvar names = PackedStringArray()\n\tif names.is_empty():\n\t\tprint(\"empty\")\n"
+	_write_text_file(_HYGIENE_DIR + "/modern.gd", modern_script)
+	var gdext: String = "[configuration]\nentry_symbol = \"my_extension_init\"\ncompatibility_minimum = \"4.2\"\n\n[libraries]\nlinux.x86_64 = \"res://.tmp_hygiene_test/bin/libmy.so\"\nwindows.x86_64 = \"res://.tmp_hygiene_test/bin/my.dll\"\n"
+	_write_text_file(_HYGIENE_DIR + "/my.gdextension", gdext)
+
+func _teardown_hygiene_fixture() -> void:
+	if not DirAccess.dir_exists_absolute(_HYGIENE_DIR):
+		return
+	var dir: DirAccess = DirAccess.open(_HYGIENE_DIR)
+	if dir:
+		dir.list_dir_begin()
+		var file_name: String = dir.get_next()
+		while not file_name.is_empty():
+			if file_name != "." and file_name != "..":
+				dir.remove(file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	DirAccess.remove_absolute(_HYGIENE_DIR)
+
+func test_find_deprecated_api_usage_rejects_invalid_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": "C:\\Windows"})
+	assert_has(result, "error", "An unsafe directory path should be rejected")
+
+func test_find_deprecated_api_usage_flags_legacy_and_skips_modern():
+	_setup_hygiene_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": _HYGIENE_DIR, "languages": ["gd"]})
+	assert_false(result.has("error"), "A valid scan should not error")
+	var rule_ids: Array = []
+	var files_flagged: Array = []
+	for finding in result.get("findings", []):
+		rule_ids.append(str(finding.get("rule_id", "")))
+		files_flagged.append(str(finding.get("file", "")))
+	assert_has(rule_ids, "reference_class", "extends Reference should be flagged")
+	assert_has(rule_ids, "pooled_arrays", "PoolStringArray should be flagged")
+	assert_has(rule_ids, "empty_method", ".empty() should be flagged")
+	assert_has(rule_ids, "instance_method", ".instance() should be flagged")
+	assert_false(rule_ids.has("yield_keyword"), "yield() inside a comment line should be ignored")
+	assert_false(files_flagged.has(_HYGIENE_DIR + "/modern.gd"), "The modern script should produce no findings")
+	_teardown_hygiene_fixture()
+
+func test_find_deprecated_api_usage_enriches_with_classdb():
+	_setup_hygiene_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": _HYGIENE_DIR, "languages": ["gd"]})
+	var checked: bool = false
+	for finding in result.get("findings", []):
+		if str(finding.get("rule_id", "")) == "reference_class":
+			assert_eq(bool(finding.get("present_in_engine", true)), false, "Reference class should be gone from the current engine")
+			assert_eq(bool(finding.get("replacement_available", false)), true, "RefCounted replacement should exist in the engine")
+			checked = true
+	assert_true(checked, "The reference_class finding should be present and ClassDB-enriched")
+	_teardown_hygiene_fixture()
+
+func test_detect_gdextension_addons_rejects_invalid_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": "C:\\Windows"})
+	assert_has(result, "error", "An unsafe directory path should be rejected")
+
+func test_detect_gdextension_addons_reports_libraries_and_missing():
+	_setup_hygiene_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": _HYGIENE_DIR})
+	assert_false(result.has("error"), "A valid detection scan should not error")
+	assert_true(bool(result.get("has_native_extensions", false)), "The .gdextension fixture should be detected")
+	assert_eq(int(result.get("extension_count", 0)), 1, "Exactly one extension should be found")
+	var extension: Dictionary = result.get("extensions", [])[0]
+	assert_eq(str(extension.get("entry_symbol", "")), "my_extension_init", "entry_symbol should be parsed")
+	assert_eq(str(extension.get("compatibility_minimum", "")), "4.2", "compatibility_minimum should be parsed")
+	assert_eq(int(extension.get("library_count", 0)), 2, "Two library targets should be parsed")
+	assert_eq(int(extension.get("missing_library_count", 0)), 2, "Both library binaries are absent in the fixture")
+	assert_false(bool(extension.get("all_libraries_present", true)), "Missing binaries means not all libraries are present")
+	_teardown_hygiene_fixture()
+
+func test_detect_gdextension_addons_empty_when_none():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": _REVERSE_RES_DIR})
+	assert_false(result.has("error"), "Scanning a directory without extensions should not error")
+	assert_false(bool(result.get("has_native_extensions", true)), "No extensions should be reported for a plain directory")

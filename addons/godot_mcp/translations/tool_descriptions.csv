@@ -161,3 +161,5 @@ list_export_presets,,List export presets from export_presets.cfg.,列出 export_
 inspect_export_templates,,Inspect locally installed Godot export templates for the current editor version.,检查本地安装的适用于当前编辑器版本的 Godot 导出模板。
 validate_export_preset,,Validate an export preset against export_presets.cfg and local template availability.,根据 export_presets.cfg 和本地模板可用性验证导出预设。
 run_export,,Run a Godot CLI export for a configured preset.,为配置的预设运行 Godot CLI 导出。
+find_deprecated_api_usage,,Scan scripts for removed or deprecated Godot 4.x APIs and report file:line with the modern replacement (class rules cross-checked against ClassDB).,扫描脚本中已移除或弃用的 Godot 4.x API 并按 file:line 报告现代替代写法（类规则用 ClassDB 交叉验证）。
+detect_gdextension_addons,,Detect native GDExtension addons by scanning .gdextension files and report entry symbol compatibility_minimum and per-platform library availability. Detection only.,扫描 .gdextension 文件检测原生 GDExtension 插件并报告入口符号与各平台库是否就绪（仅检测不编译）。

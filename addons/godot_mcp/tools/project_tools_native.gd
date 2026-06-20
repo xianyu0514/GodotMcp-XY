@@ -57,6 +57,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_list_unused_resources(server_core)
 	_register_scan_migration_compatibility(server_core)
 	_register_apply_migration_fixes(server_core)
+	_register_find_deprecated_api_usage(server_core)
+	_register_detect_gdextension_addons(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -3970,4 +3972,283 @@ func _tool_apply_migration_fixes(params: Dictionary) -> Dictionary:
 		"total_count": int(bounded["total_count"]),
 		"truncated": bool(bounded["truncated"]),
 		"changes": bounded["items"]
+	}
+
+# ============================================================================
+# find_deprecated_api_usage - scan scripts for removed/deprecated Godot 4.x APIs
+# ============================================================================
+
+# Version-agnostic table of well-known removed/deprecated Godot 4.x symbols.
+# Each rule is matched against source lines with a RegEx; `engine_class` /
+# `replacement_class` (when present) are cross-checked against the running
+# engine's ClassDB so the report reflects the actual editor, not just a guess.
+func _deprecated_api_rules() -> Array:
+	return [
+		{"id": "pooled_arrays", "kind": "class", "status": "removed", "pattern": "\\bPool(String|Byte|Int|Real|Vector2|Vector3|Color)Array\\b", "replacement": "Packed*Array (e.g. PackedStringArray)", "engine_class": "PoolStringArray", "replacement_class": "PackedStringArray", "since": "4.0", "message": "Pool*Array types were renamed to Packed*Array in Godot 4.0."},
+		{"id": "reference_class", "kind": "class", "status": "removed", "pattern": "\\bextends\\s+Reference\\b", "replacement": "RefCounted", "engine_class": "Reference", "replacement_class": "RefCounted", "since": "4.0", "message": "Reference was renamed to RefCounted in Godot 4.0."},
+		{"id": "visual_server", "kind": "class", "status": "removed", "pattern": "\\bVisualServer\\b", "replacement": "RenderingServer", "engine_class": "VisualServer", "replacement_class": "RenderingServer", "since": "4.0", "message": "VisualServer was renamed to RenderingServer in Godot 4.0."},
+		{"id": "file_class", "kind": "class", "status": "removed", "pattern": "\\bextends\\s+File\\b|\\bFile\\.new\\(\\)", "replacement": "FileAccess", "engine_class": "File", "replacement_class": "FileAccess", "since": "4.0", "message": "The File class was replaced by FileAccess in Godot 4.0."},
+		{"id": "directory_class", "kind": "class", "status": "removed", "pattern": "\\bDirectory\\.new\\(\\)", "replacement": "DirAccess", "engine_class": "Directory", "replacement_class": "DirAccess", "since": "4.0", "message": "The Directory class was replaced by DirAccess in Godot 4.0."},
+		{"id": "yield_keyword", "kind": "keyword", "status": "removed", "pattern": "\\byield\\s*\\(", "replacement": "await", "since": "4.0", "message": "The yield() coroutine function was replaced by the await keyword in Godot 4.0."},
+		{"id": "export_old_syntax", "kind": "keyword", "status": "removed", "pattern": "(^|[^@\\w])export\\s*\\(", "replacement": "@export annotation", "since": "4.0", "message": "The export(...) hint syntax was replaced by the @export annotation in Godot 4.0."},
+		{"id": "onready_old_syntax", "kind": "keyword", "status": "removed", "pattern": "(^|[^@\\w])onready\\s+var\\b", "replacement": "@onready", "since": "4.0", "message": "The onready keyword was replaced by the @onready annotation in Godot 4.0."},
+		{"id": "setget_keyword", "kind": "keyword", "status": "removed", "pattern": "\\bsetget\\b", "replacement": "property setters/getters (set/get on var)", "since": "4.0", "message": "The setget keyword was removed in Godot 4.0; use inline set/get on the variable."},
+		{"id": "editor_hint_property", "kind": "property", "status": "removed", "pattern": "\\bEngine\\.editor_hint\\b", "replacement": "Engine.is_editor_hint()", "since": "4.0", "message": "Engine.editor_hint was replaced by Engine.is_editor_hint() in Godot 4.0."},
+		{"id": "empty_method", "kind": "method", "status": "removed", "pattern": "\\.empty\\(\\)", "replacement": ".is_empty()", "since": "4.0", "message": "Container .empty() was renamed to .is_empty() in Godot 4.0."},
+		{"id": "instance_method", "kind": "method", "status": "removed", "pattern": "\\.instance\\(\\)", "replacement": ".instantiate()", "since": "4.0", "message": "PackedScene.instance() was renamed to instantiate() in Godot 4.0."}
+	]
+
+func _register_find_deprecated_api_usage(server_core: RefCounted) -> void:
+	var tool_name: String = "find_deprecated_api_usage"
+	var description: String = "Scan project scripts for usage of removed/deprecated Godot 4.x APIs (e.g. Pool*Array, yield, setget, .empty(), .instance(), VisualServer) and report file:line with the modern replacement. Class/property rules are cross-checked against the running engine's ClassDB."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan. Default is res://.",
+				"default": "res://"
+			},
+			"languages": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Script extensions to scan (without dot). Default is ['gd', 'cs'].",
+				"default": ["gd", "cs"]
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of findings to return. Default is 1000.",
+				"default": 1000
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {"type": "string"},
+			"scanned_files": {"type": "integer"},
+			"rules_evaluated": {"type": "integer"},
+			"finding_count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"},
+			"findings": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_find_deprecated_api_usage"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_find_deprecated_api_usage(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var search_validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not search_validation["valid"]:
+		return {"error": "Invalid path: " + search_validation["error"]}
+	search_path = search_validation["sanitized"]
+
+	var languages: Array = params.get("languages", ["gd", "cs"])
+	var extensions: Array[String] = []
+	for language in languages:
+		var ext: String = str(language).strip_edges().to_lower()
+		if ext.is_empty():
+			continue
+		if not ext.begins_with("."):
+			ext = "." + ext
+		extensions.append(ext)
+	if extensions.is_empty():
+		extensions = [".gd", ".cs"]
+
+	var limit: int = int(params.get("limit", 1000))
+
+	var rules: Array = _deprecated_api_rules()
+	var compiled: Array = []
+	for rule in rules:
+		var regex: RegEx = RegEx.new()
+		if regex.compile(str(rule.get("pattern", ""))) != OK:
+			continue
+		var enriched: Dictionary = rule.duplicate()
+		var engine_class: String = str(rule.get("engine_class", ""))
+		if not engine_class.is_empty():
+			enriched["present_in_engine"] = ClassDB.class_exists(engine_class)
+		var replacement_class: String = str(rule.get("replacement_class", ""))
+		if not replacement_class.is_empty():
+			enriched["replacement_available"] = ClassDB.class_exists(replacement_class)
+		compiled.append({"rule": enriched, "regex": regex})
+
+	var files: Array[String] = []
+	_collect_resources(search_path, extensions, files)
+	files.sort()
+
+	var findings: Array = []
+	for file_path in files:
+		var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+		if not file:
+			continue
+		var line_number: int = 0
+		while not file.eof_reached():
+			var line: String = file.get_line()
+			line_number += 1
+			var stripped: String = line.strip_edges()
+			if stripped.begins_with("#") or stripped.begins_with("//"):
+				continue
+			for entry in compiled:
+				var regex: RegEx = entry["regex"]
+				var rule: Dictionary = entry["rule"]
+				for found in regex.search_all(line):
+					var finding: Dictionary = {
+						"file": file_path,
+						"line": line_number,
+						"column": found.get_start(),
+						"rule_id": rule.get("id", ""),
+						"kind": rule.get("kind", ""),
+						"status": rule.get("status", ""),
+						"symbol": found.get_string(),
+						"replacement": rule.get("replacement", ""),
+						"since": rule.get("since", ""),
+						"message": rule.get("message", "")
+					}
+					if rule.has("present_in_engine"):
+						finding["present_in_engine"] = rule["present_in_engine"]
+					if rule.has("replacement_available"):
+						finding["replacement_available"] = rule["replacement_available"]
+					findings.append(finding)
+		file.close()
+
+	var bounded: Dictionary = PayloadUtils.truncate_list(findings, limit)
+	return {
+		"search_path": search_path,
+		"scanned_files": files.size(),
+		"rules_evaluated": compiled.size(),
+		"finding_count": int(bounded["total_count"]),
+		"total_count": int(bounded["total_count"]),
+		"truncated": bool(bounded["truncated"]),
+		"findings": bounded["items"]
+	}
+
+# ============================================================================
+# detect_gdextension_addons - find native GDExtension addons (detect only)
+# ============================================================================
+
+func _register_detect_gdextension_addons(server_core: RefCounted) -> void:
+	var tool_name: String = "detect_gdextension_addons"
+	var description: String = "Detect native GDExtension addons by scanning for .gdextension files, report their entry symbol, compatibility_minimum and per-platform library paths (with a presence check for each .so/.dll/.dylib), and surface any SConstruct build files with suggested scons commands. Detection only; this tool never compiles anything."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan. Default is res://.",
+				"default": "res://"
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"search_path": {"type": "string"},
+			"has_native_extensions": {"type": "boolean"},
+			"extension_count": {"type": "integer"},
+			"extensions": {"type": "array"},
+			"sconstruct_files": {"type": "array", "items": {"type": "string"}},
+			"build_hint": {"type": "object"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_detect_gdextension_addons"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_detect_gdextension_addons(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var search_validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not search_validation["valid"]:
+		return {"error": "Invalid path: " + search_validation["error"]}
+	search_path = search_validation["sanitized"]
+
+	var extension_files: Array[String] = []
+	_collect_resources(search_path, [".gdextension"], extension_files)
+	extension_files.sort()
+
+	var sconstruct_files: Array[String] = []
+	_collect_resources(search_path, ["SConstruct"], sconstruct_files)
+	sconstruct_files.sort()
+
+	var extensions: Array = []
+	for extension_path in extension_files:
+		extensions.append(_describe_gdextension(extension_path))
+
+	var has_native: bool = not extensions.is_empty()
+	var build_hint: Dictionary = {
+		"detected_sconstruct": not sconstruct_files.is_empty(),
+		"note": "Detection only; this tool does not run any build. Compile manually with the godot-cpp toolchain.",
+		"commands": [
+			"scons platform=<platform> target=template_debug",
+			"scons platform=<platform> target=template_release"
+		],
+		"docs": "https://docs.godotengine.org/en/latest/engine_details/development/compiling/"
+	}
+
+	return {
+		"search_path": search_path,
+		"has_native_extensions": has_native,
+		"extension_count": extensions.size(),
+		"extensions": extensions,
+		"sconstruct_files": sconstruct_files,
+		"build_hint": build_hint
+	}
+
+func _describe_gdextension(extension_path: String) -> Dictionary:
+	var config: ConfigFile = ConfigFile.new()
+	if config.load(extension_path) != OK:
+		return {"path": extension_path, "error": "Failed to parse .gdextension file"}
+
+	var libraries: Array = []
+	var missing: int = 0
+	if config.has_section("libraries"):
+		var keys: PackedStringArray = config.get_section_keys("libraries")
+		for tag in keys:
+			var lib_path: String = str(config.get_value("libraries", tag, ""))
+			var resolved: String = lib_path
+			if resolved.begins_with("res://"):
+				resolved = ProjectSettings.globalize_path(resolved)
+			var exists: bool = FileAccess.file_exists(lib_path) or FileAccess.file_exists(resolved)
+			if not exists:
+				missing += 1
+			libraries.append({"target": tag, "path": lib_path, "exists": exists})
+
+	var dependencies: Array = []
+	if config.has_section("dependencies"):
+		for tag in config.get_section_keys("dependencies"):
+			dependencies.append({"target": tag, "path": str(config.get_value("dependencies", tag, ""))})
+
+	return {
+		"path": extension_path,
+		"entry_symbol": str(config.get_value("configuration", "entry_symbol", "")),
+		"compatibility_minimum": str(config.get_value("configuration", "compatibility_minimum", "")),
+		"reloadable": bool(config.get_value("configuration", "reloadable", false)),
+		"libraries": libraries,
+		"library_count": libraries.size(),
+		"missing_library_count": missing,
+		"all_libraries_present": libraries.size() > 0 and missing == 0,
+		"dependencies": dependencies
 	}

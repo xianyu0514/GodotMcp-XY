@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **162 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **164 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **162 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 4 | 8 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出） |
 | [Editor Tools](#editor-tools) | 4 | 12 | 16 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 27 | 30 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查） |
+| [Project Tools](#project-tools) | 3 | 29 | 32 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -4107,6 +4107,55 @@ Continue：恢复执行。
 
 ---
 
+### 163. find_deprecated_api_usage
+
+扫描项目脚本（`.gd`/`.cs`）中对已移除/弃用 Godot 4.x API 的使用（如 `Pool*Array`、`yield`、`setget`、`.empty()`、`.instance()`、`VisualServer`），按 `file:line` 报告并给出现代替代写法。类/属性类规则会用运行中引擎的 ClassDB 交叉验证（`present_in_engine`/`replacement_available`）。注释行被跳过。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `search_path` | string | 否 | 扫描目录，默认 `res://` |
+| `languages` | array | 否 | 扫描的脚本扩展名（不含点），默认 `['gd', 'cs']` |
+| `limit` | int | 否 | 最大返回发现数，默认 `1000` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `search_path` | string | 搜索路径 |
+| `scanned_files` | int | 扫描的文件数 |
+| `rules_evaluated` | int | 生效的规则数 |
+| `finding_count` | int | 发现数（等于 `total_count`） |
+| `total_count` | int | 截断前的发现总数 |
+| `truncated` | boolean | 结果是否被截断 |
+| `findings` | array | 发现明细（`file`、`line`、`column`、`rule_id`、`status`、`symbol`、`replacement`、`message`） |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 164. detect_gdextension_addons
+
+扫描 `.gdextension` 文件以检测原生 GDExtension 插件，报告其 `entry_symbol`、`compatibility_minimum` 与各平台库路径（逐个检查 `.so`/`.dll`/`.dylib` 是否就绪），并转出任何 `SConstruct` 构建文件及建议的 scons 命令。仅检测，不编译任何内容。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `search_path` | string | 否 | 扫描目录，默认 `res://` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `search_path` | string | 搜索路径 |
+| `has_native_extensions` | boolean | 是否检测到原生扩展 |
+| `extension_count` | int | 检测到的扩展数 |
+| `extensions` | array | 扩展明细（`path`、`entry_symbol`、`compatibility_minimum`、`libraries`、`all_libraries_present`） |
+| `sconstruct_files` | array | 检测到的 SConstruct 文件路径 |
+| `build_hint` | object | 构建提示（scons 命令、文档链接；仅提示不执行） |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -4206,7 +4255,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **162 个工具**（30 核心 + 132 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **164 个工具**（30 核心 + 134 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema
