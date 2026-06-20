@@ -643,3 +643,84 @@ func test_configure_render_output_sets_hdr_2d():
 		ProjectSettings.set_setting(key, original)
 	else:
 		assert_eq(change_status, "unsupported", "hdr_2d should be unsupported when the setting is absent")
+
+# --- create_drawable_texture / draw_on_texture (Godot 4.7) ---
+
+func test_create_drawable_texture_missing_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_drawable_texture({})
+	assert_has(result, "error", "Missing resource_path should return error")
+
+func test_create_drawable_texture_create_guarded():
+	var out_path: String = "res://.tmp_drawable.tres"
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_drawable_texture({
+		"resource_path": out_path,
+		"width": 32,
+		"height": 16,
+		"format": "rgba8",
+		"color": {"r": 0.0, "g": 0.0, "b": 0.0, "a": 1.0}
+	})
+	if ClassDB.class_exists("DrawableTexture2D"):
+		assert_eq(result.get("status", ""), "success", "DrawableTexture2D should be created on Godot 4.7")
+		assert_eq(int(result.get("format_value", -1)), 0, "rgba8 maps to format value 0")
+		assert_true(FileAccess.file_exists(out_path), "The texture file should exist on disk")
+		var loaded = load(out_path)
+		assert_eq(loaded.get_class() if loaded else "", "DrawableTexture2D", "The saved resource should be a DrawableTexture2D")
+		DirAccess.remove_absolute(out_path)
+	else:
+		assert_eq(result.get("status", ""), "unsupported", "DrawableTexture2D should be unsupported on older Godot")
+
+func test_create_drawable_texture_invalid_format_guarded():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_drawable_texture({
+		"resource_path": "res://.tmp_drawable_bad.tres",
+		"format": "bogus"
+	})
+	if ClassDB.class_exists("DrawableTexture2D"):
+		assert_has(result, "error", "An invalid format should be rejected on Godot 4.7")
+	else:
+		assert_eq(result.get("status", ""), "unsupported", "DrawableTexture2D should be unsupported on older Godot")
+
+func test_draw_on_texture_missing_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_draw_on_texture({})
+	assert_has(result, "error", "Missing resource_path should return error")
+
+func test_draw_on_texture_blit_guarded():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	if not ClassDB.class_exists("DrawableTexture2D"):
+		var unsupported: Dictionary = project_tools._tool_draw_on_texture({
+			"resource_path": "res://.tmp_missing_drawable.tres",
+			"operations": [{"source_path": "res://.tmp_src.tres"}]
+		})
+		assert_eq(unsupported.get("status", ""), "unsupported", "draw_on_texture should be unsupported on older Godot")
+		return
+
+	var tex_path: String = "res://.tmp_draw_target.tres"
+	var src_path: String = "res://.tmp_draw_source.tres"
+	var created: Dictionary = project_tools._tool_create_drawable_texture({
+		"resource_path": tex_path,
+		"width": 32,
+		"height": 32
+	})
+	assert_eq(created.get("status", ""), "success", "Setup: drawable texture should be created")
+
+	var img: Image = Image.create(8, 8, false, Image.FORMAT_RGBA8)
+	img.fill(Color(1, 1, 1, 1))
+	var src: ImageTexture = ImageTexture.create_from_image(img)
+	ResourceSaver.save(src, src_path)
+
+	var result: Dictionary = project_tools._tool_draw_on_texture({
+		"resource_path": tex_path,
+		"operations": [
+			{"source_path": src_path, "rect": {"x": 4, "y": 4, "w": 8, "h": 8}, "modulate": {"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}},
+			{"source_path": "res://does_not_exist_98765.tres"}
+		]
+	})
+	assert_eq(result.get("status", ""), "success", "draw_on_texture should succeed when at least one op applies")
+	assert_eq(int(result.get("applied_count", 0)), 1, "Exactly one valid blit should be applied")
+	assert_eq(int(result.get("skipped", []).size()), 1, "The missing source should be skipped")
+
+	DirAccess.remove_absolute(tex_path)
+	DirAccess.remove_absolute(src_path)

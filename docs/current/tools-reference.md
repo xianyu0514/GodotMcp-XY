@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **174 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **176 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **174 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 4 | 8 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出） |
 | [Editor Tools](#editor-tools) | 4 | 17 | 21 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择、缓冲区同步、导入状态） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 32 | 35 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置） |
+| [Project Tools](#project-tools) | 3 | 34 | 37 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -4407,6 +4407,69 @@ Continue：恢复执行。
 
 ---
 
+### 175. create_drawable_texture
+
+创建并保存一个 **Godot 4.7 `DrawableTexture2D`**（`.tres`/`.res`）——一种可在运行时绘制的 GPU 纹理。通过 `setup(width, height, format, fill_color, use_mipmaps)` 初始化。`DrawableTexture2D` 需要 Godot 4.7；旧版本返回 `status="unsupported"`（通过 `ClassDB.class_exists("DrawableTexture2D")` 守卫）。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `resource_path` | string | 是 | 保存路径（`.tres`/`.res`，如 `res://textures/canvas.tres`） |
+| `width` | integer | 否 | 纹理宽度（像素，默认 64） |
+| `height` | integer | 否 | 纹理高度（像素，默认 64） |
+| `format` | string | 否 | 像素格式：`rgba8`（默认）/`rgba8_srgb`/`rgbah`/`rgbaf` |
+| `color` | Color | 否 | 初始填充色 `{r,g,b,a}`（默认不透明黑） |
+| `use_mipmaps` | boolean | 否 | 是否分配 mipmap（默认 `false`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` 或 `"unsupported"`（旧版本 Godot） |
+| `resource_path` | string | 保存路径 |
+| `width` / `height` | integer | 纹理尺寸 |
+| `format` / `format_value` | string / integer | 格式名与对应枚举值 |
+| `use_mipmaps` | boolean | 是否分配 mipmap |
+| `godot_version` | string | 运行的 Godot 版本 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+**行为**：
+- `DrawableTexture2D` 不存在（Godot < 4.7）时返回 `status="unsupported"`，不写入文件
+- 无效的 `format` 在 4.7 上返回错误
+- 路径经 `PathValidator` 验证（须 `res://` 开头、`.tres`/`.res` 扩展名）
+
+---
+
+### 176. draw_on_texture
+
+在已有的 **Godot 4.7 `DrawableTexture2D`** 上绘制：将源纹理（`Texture2D`）通过 `blit_rect` 逐个绘制到目标矩形上。每个操作把一个源贴到目标矩形，并可附加 `modulate` 调制色。`DrawableTexture2D` 需要 Godot 4.7；旧版本返回 `status="unsupported"`。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `resource_path` | string | 是 | 已有 `DrawableTexture2D`（`.tres`/`.res`）路径 |
+| `operations` | array | 是 | 绘制操作数组，每项为 `{source_path, rect:{x,y,w,h}, modulate:{r,g,b,a}, mipmap}`；省略 `rect` 时按源自身尺寸贴到原点 |
+| `generate_mipmaps` | boolean | 否 | 绘制后调用 `generate_mipmaps()`（默认 `false`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` 或 `"unsupported"`（旧版本 Godot） |
+| `resource_path` | string | 目标纹理路径 |
+| `applied_count` | integer | 成功应用的绘制操作数 |
+| `skipped` | array | 被跳过的操作及原因（缺少/无效/不存在的源） |
+| `godot_version` | string | 运行的 Godot 版本 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+**行为**：
+- `DrawableTexture2D` 不存在（Godot < 4.7）时返回 `status="unsupported"`
+- 目标资源不是 `DrawableTexture2D` 时返回错误
+- 单个操作缺少 `source_path`、源不存在或不是 `Texture2D` 时被记入 `skipped` 并跳过
+- 所有操作都无法应用时返回错误；至少一项成功则保存并返回 `success`
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -4506,7 +4569,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **174 个工具**（30 核心 + 144 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **176 个工具**（30 核心 + 146 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema

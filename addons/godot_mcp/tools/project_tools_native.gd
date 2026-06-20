@@ -62,6 +62,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_create_gradient_texture(server_core)
 	_register_pack_pck(server_core)
 	_register_configure_render_output(server_core)
+	_register_create_drawable_texture(server_core)
+	_register_draw_on_texture(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -4578,5 +4580,229 @@ func _tool_configure_render_output(params: Dictionary) -> Dictionary:
 		"status": "success",
 		"persisted": persisted,
 		"changes": changes,
+		"godot_version": str(Engine.get_version_info().get("string", ""))
+	}
+
+# ============================================================================
+# create_drawable_texture / draw_on_texture - Godot 4.7 DrawableTexture2D
+# ============================================================================
+
+const _DRAWABLE_FORMATS: Dictionary = {
+	"rgba8": 0,
+	"rgba8_srgb": 1,
+	"rgbah": 2,
+	"rgbaf": 3
+}
+
+func _drawable_texture_supported() -> bool:
+	return ClassDB.class_exists("DrawableTexture2D")
+
+static func _to_rect2i(value: Variant, source: Object = null) -> Rect2i:
+	if value is Dictionary and (value.has("w") or value.has("width") or value.has("h") or value.has("height")):
+		var x: int = int(value.get("x", 0))
+		var y: int = int(value.get("y", 0))
+		var w: int = int(value.get("w", value.get("width", 0)))
+		var h: int = int(value.get("h", value.get("height", 0)))
+		return Rect2i(x, y, w, h)
+	if source != null and source.has_method("get_width"):
+		return Rect2i(0, 0, int(source.get_width()), int(source.get_height()))
+	return Rect2i()
+
+func _register_create_drawable_texture(server_core: RefCounted) -> void:
+	var tool_name: String = "create_drawable_texture"
+	var description: String = "Create and save a Godot 4.7 DrawableTexture2D (.tres), a GPU-backed texture you can draw onto at runtime. Initializes it via setup(width, height, format, fill_color, use_mipmaps). DrawableTexture2D requires Godot 4.7; returns status 'unsupported' on older versions."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"resource_path": {"type": "string", "description": "Path to save the texture (e.g. 'res://textures/canvas.tres')."},
+			"width": {"type": "integer", "description": "Texture width in pixels. Default 64.", "default": 64},
+			"height": {"type": "integer", "description": "Texture height in pixels. Default 64.", "default": 64},
+			"format": {"type": "string", "description": "Pixel format.", "enum": ["rgba8", "rgba8_srgb", "rgbah", "rgbaf"], "default": "rgba8"},
+			"color": {"type": "object", "description": "Initial fill color as {r, g, b, a}. Default opaque black."},
+			"use_mipmaps": {"type": "boolean", "description": "Whether to allocate mipmaps. Default false.", "default": false}
+		},
+		"required": ["resource_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"width": {"type": "integer"},
+			"height": {"type": "integer"},
+			"format": {"type": "string"},
+			"format_value": {"type": "integer"},
+			"use_mipmaps": {"type": "boolean"},
+			"godot_version": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_create_drawable_texture"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_create_drawable_texture(params: Dictionary) -> Dictionary:
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(resource_path, [".tres", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	resource_path = validation["sanitized"]
+
+	if not _drawable_texture_supported():
+		return {
+			"status": "unsupported",
+			"message": "DrawableTexture2D requires Godot 4.7 or newer",
+			"godot_version": str(Engine.get_version_info().get("string", ""))
+		}
+
+	var format_name: String = str(params.get("format", "rgba8")).strip_edges().to_lower()
+	if not _DRAWABLE_FORMATS.has(format_name):
+		return {"error": "Invalid format '%s'. Expected one of: rgba8, rgba8_srgb, rgbah, rgbaf." % format_name}
+	var format_value: int = int(_DRAWABLE_FORMATS[format_name])
+
+	var width: int = max(1, int(params.get("width", 64)))
+	var height: int = max(1, int(params.get("height", 64)))
+	var use_mipmaps: bool = bool(params.get("use_mipmaps", false))
+	var fill_color: Color = Color(0.0, 0.0, 0.0, 1.0)
+	if params.has("color"):
+		fill_color = _parse_color(params["color"])
+
+	var texture = ClassDB.instantiate("DrawableTexture2D")
+	if texture == null:
+		return {"error": "Failed to instantiate DrawableTexture2D"}
+	texture.setup(width, height, format_value, fill_color, use_mipmaps)
+
+	var error: Error = ResourceSaver.save(texture, resource_path)
+	if error != OK:
+		return {"error": "Failed to save texture: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"resource_path": resource_path,
+		"width": width,
+		"height": height,
+		"format": format_name,
+		"format_value": format_value,
+		"use_mipmaps": use_mipmaps,
+		"godot_version": str(Engine.get_version_info().get("string", ""))
+	}
+
+func _register_draw_on_texture(server_core: RefCounted) -> void:
+	var tool_name: String = "draw_on_texture"
+	var description: String = "Draw onto an existing Godot 4.7 DrawableTexture2D resource by blitting source textures onto target rectangles (DrawableTexture2D.blit_rect). Each operation maps a source Texture2D onto a target rect with an optional modulate color. DrawableTexture2D requires Godot 4.7; returns status 'unsupported' on older versions."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"resource_path": {"type": "string", "description": "Path to an existing DrawableTexture2D (.tres/.res)."},
+			"operations": {"type": "array", "description": "Blit operations. Each item is {source_path, rect:{x,y,w,h}, modulate:{r,g,b,a}, mipmap}. When rect is omitted the source is blitted at origin using its own size."},
+			"generate_mipmaps": {"type": "boolean", "description": "Call generate_mipmaps() after drawing. Default false.", "default": false}
+		},
+		"required": ["resource_path", "operations"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"applied_count": {"type": "integer"},
+			"skipped": {"type": "array"},
+			"godot_version": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_draw_on_texture"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_draw_on_texture(params: Dictionary) -> Dictionary:
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(resource_path, [".tres", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	resource_path = validation["sanitized"]
+
+	if not _drawable_texture_supported():
+		return {
+			"status": "unsupported",
+			"message": "DrawableTexture2D requires Godot 4.7 or newer",
+			"godot_version": str(Engine.get_version_info().get("string", ""))
+		}
+
+	if not ResourceLoader.exists(resource_path):
+		return {"error": "Resource not found: " + resource_path}
+	var texture = ResourceLoader.load(resource_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+	if texture == null or texture.get_class() != "DrawableTexture2D":
+		return {"error": "Resource is not a DrawableTexture2D: " + resource_path}
+
+	var operations: Array = params.get("operations", [])
+	if not (operations is Array) or operations.is_empty():
+		return {"error": "Parameter 'operations' must be a non-empty array"}
+
+	var applied: int = 0
+	var skipped: Array = []
+	for op in operations:
+		if not (op is Dictionary):
+			skipped.append({"op": op, "reason": "operation is not an object"})
+			continue
+		var source_path: String = str(op.get("source_path", ""))
+		if source_path.is_empty():
+			skipped.append({"op": op, "reason": "missing source_path"})
+			continue
+		if not ResourceLoader.exists(source_path):
+			skipped.append({"source_path": source_path, "reason": "source not found"})
+			continue
+		var source = ResourceLoader.load(source_path)
+		if source == null or not (source is Texture2D):
+			skipped.append({"source_path": source_path, "reason": "source is not a Texture2D"})
+			continue
+		var rect: Rect2i = _to_rect2i(op.get("rect", {}), source)
+		var modulate: Color = Color.WHITE
+		if op.has("modulate"):
+			modulate = _parse_color(op["modulate"])
+		var mipmap: int = int(op.get("mipmap", 0))
+		texture.blit_rect(rect, source, modulate, mipmap, null)
+		applied += 1
+
+	if applied == 0:
+		return {"error": "No draw operations applied", "skipped": skipped}
+
+	if bool(params.get("generate_mipmaps", false)):
+		texture.generate_mipmaps()
+
+	var error: Error = ResourceSaver.save(texture, resource_path)
+	if error != OK:
+		return {"error": "Failed to save texture: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"resource_path": resource_path,
+		"applied_count": applied,
+		"skipped": skipped,
 		"godot_version": str(Engine.get_version_info().get("string", ""))
 	}
