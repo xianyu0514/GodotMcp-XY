@@ -231,3 +231,23 @@ func test_validate_shader_unbalanced_braces():
 		if "Unbalanced" in str(issue.get("message", "")):
 			found = true
 	assert_true(found, "Unbalanced braces are reported with a structural issue")
+
+func test_validate_shader_ignores_commented_shader_type():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# A block comment that contains a `shader_type` line before the real one.
+	# Detection must ignore the commented declaration and use `spatial`.
+	var code: String = "/*\nshader_type canvas_item;\nlegacy header\n*/\nshader_type spatial;\nvoid fragment() {\n\tALBEDO = vec3(1.0);\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	assert_true(result.get("valid", false), "A valid shader with a commented-out shader_type is still valid")
+	assert_eq(result.get("shader_type", ""), "spatial", "The real (non-commented) shader_type is reported")
+	assert_eq(int(result.get("issue_count", -1)), 0, "No issues for a valid shader with comments")
+
+func test_validate_shader_ignores_commented_render_mode():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# A commented-out render_mode must not be reported among render_modes.
+	var code: String = "shader_type canvas_item;\n// render_mode blend_add;\nrender_mode unshaded;\nvoid fragment() {\n\tCOLOR = vec4(1.0);\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	assert_true(result.get("valid", false), "Shader with a commented render_mode is valid")
+	var modes: Array = result.get("render_modes", [])
+	assert_true(modes.has("unshaded"), "The real render_mode is parsed")
+	assert_false(modes.has("blend_add"), "The commented-out render_mode is ignored")

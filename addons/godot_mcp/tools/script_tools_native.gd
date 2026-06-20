@@ -2493,7 +2493,7 @@ func _search_file(
 		})
 
 # ============================================================================
-# validate_shader - 校验 Godot 着色器（.gdshader / Shader.code）
+# validate_shader - Validate Godot shaders (.gdshader file / Shader.code)
 # ============================================================================
 
 const _SHADER_TYPES: PackedStringArray = ["spatial", "canvas_item", "particles", "sky", "fog"]
@@ -2578,8 +2578,13 @@ func _tool_validate_shader(params: Dictionary) -> Dictionary:
 	var lines: PackedStringArray = content.split("\n")
 	var issues: Array = []
 
+	# Strip comments first (preserving line structure) so shader_type /
+	# render_mode detection and the sentinel injection ignore anything that
+	# appears inside // line or /* block */ comments.
+	var stripped_code: String = _strip_shader_comments(content)
+
 	# shader_type detection (declaration + value validity)
-	var type_info: Dictionary = _find_shader_type(content)
+	var type_info: Dictionary = _find_shader_type(stripped_code)
 	var shader_type_value: String = str(type_info.get("value", ""))
 	var shader_type_line: int = int(type_info.get("line", -1))
 	if shader_type_line < 0:
@@ -2588,7 +2593,6 @@ func _tool_validate_shader(params: Dictionary) -> Dictionary:
 		issues.append({"line": shader_type_line + 1, "severity": "error", "message": "Invalid shader_type '%s' (expected one of: spatial, canvas_item, particles, sky, fog)" % shader_type_value})
 
 	# bracket balance on comment-stripped source
-	var stripped_code: String = _strip_shader_comments(content)
 	for pair in [["{", "}"], ["(", ")"], ["[", "]"]]:
 		var opens: int = stripped_code.count(pair[0])
 		var closes: int = stripped_code.count(pair[1])
@@ -2624,7 +2628,7 @@ func _tool_validate_shader(params: Dictionary) -> Dictionary:
 				"type": int(u.get("type", 0)),
 				"hint_string": str(u.get("hint_string", ""))
 			})
-		render_modes = _parse_render_modes(content)
+		render_modes = _parse_render_modes(stripped_code)
 	elif issues.is_empty():
 		issues.append({"line": 0, "severity": "error", "message": "Shader failed to parse. The engine's detailed SHADER ERROR (with line number) is written to the Godot output log."})
 
@@ -2661,6 +2665,10 @@ func _parse_render_modes(code: String) -> Array:
 	return modes
 
 func _strip_shader_comments(code: String) -> String:
+	# Replace comment characters with spaces while preserving newlines, so the
+	# returned string has the same length/line layout as the input. This lets
+	# line-number-based detection (shader_type / render_mode) and the sentinel
+	# injection run on a comment-free view without shifting any line indices.
 	var result: String = ""
 	var i: int = 0
 	var n: int = code.length()
@@ -2668,13 +2676,20 @@ func _strip_shader_comments(code: String) -> String:
 		var c: String = code[i]
 		var nxt: String = code[i + 1] if i + 1 < n else ""
 		if c == "/" and nxt == "/":
+			# line comment: blank to end of line, keep the newline
 			while i < n and code[i] != "\n":
+				result += " "
 				i += 1
 		elif c == "/" and nxt == "*":
+			# block comment: blank every char but preserve newlines
+			result += "  "
 			i += 2
 			while i < n and not (code[i] == "*" and i + 1 < n and code[i + 1] == "/"):
+				result += ("\n" if code[i] == "\n" else " ")
 				i += 1
-			i += 2
+			if i < n:
+				result += "  "
+				i += 2
 		else:
 			result += c
 			i += 1
