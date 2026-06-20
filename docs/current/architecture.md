@@ -590,7 +590,7 @@ func validate_request(headers: Dictionary) -> bool:
 
 ```gdscript
 var _request_count: Dictionary = {}  # IP -> count
-var _rate_limit: int = 100  # 每分钟最大请求数
+var _rate_limit: int = 1000  # 每分钟最大请求数
 
 func _check_rate_limit(peer: StreamPeerTCP) -> bool:
     var ip: String = peer.get_connected_host()

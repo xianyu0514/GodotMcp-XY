@@ -327,6 +327,25 @@ func test_waiter_cap_rejects_when_too_many_waiting():
 	assert_eq(_core._admission_waiters.size(), _core.MAX_WAITING_REQUESTS, "At the waiter cap, a new request must be rejected, not added as a waiter")
 	assert_eq(_core.get_request_queue_depth(), max_size, "Rejected request must not be enqueued")
 
+func test_drain_yields_a_frame_between_requests():
+	# Two requests queued up front. The drain loop must yield a frame between them
+	# so the editor stays responsive under sustained load; we detect the yield by
+	# the process-frame counter advancing between the two tool executions.
+	_core._active = true
+	var frames: Array = []
+	_core.register_tool("frame_probe", "Probe", {"type": "object"},
+		func(args):
+			frames.append(Engine.get_process_frames())
+			return {})
+	for i in range(2):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "frame_probe", "arguments": {}}}
+		_core._request_queue.append({"message": msg, "context": null})
+	_core._drain_request_queue()
+	for i in range(8):
+		await get_tree().process_frame
+	assert_eq(frames.size(), 2, "Both queued requests should be processed")
+	assert_true(frames[1] > frames[0], "Drain loop should yield at least one frame between requests")
+
 func test_serial_queue_runs_requests_in_fifo_order():
 	# Each tool call awaits two frames; if execution were concurrent we'd see
 	# interleaving (start_1, start_2, ...). Serial execution must yield

@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS: Dictionary = {
 	"auto_start": false,
 	"log_level": 2,
 	"security_level": 1,
-	"rate_limit": 100,
+	"rate_limit": 1000,
 	"language": "en"
 }
 

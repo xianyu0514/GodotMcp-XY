@@ -301,9 +301,9 @@ func _create_settings_tab() -> VBoxContainer:
 
 	_rate_limit_spin = SpinBox.new()
 	_rate_limit_spin.min_value = 10
-	_rate_limit_spin.max_value = 1000
+	_rate_limit_spin.max_value = 2000
 	_rate_limit_spin.step = 10
-	_rate_limit_spin.value = 100
+	_rate_limit_spin.value = 1000
 	_rate_limit_spin.value_changed.connect(_on_rate_limit_changed)
 	rate_hbox.add_child(_rate_limit_spin)
 
@@ -435,7 +435,7 @@ func _update_ui_state() -> void:
 			_cors_origin_edit.text = _plugin.cors_origin if _plugin.get("cors_origin") != null else "*"
 
 		if _rate_limit_spin:
-			_rate_limit_spin.value = _plugin.rate_limit if _plugin.get("rate_limit") != null else 100
+			_rate_limit_spin.value = _plugin.rate_limit if _plugin.get("rate_limit") != null else 1000
 
 	if _transport_mode_option:
 		_transport_mode_option.disabled = is_running
@@ -793,7 +793,7 @@ func _save_settings() -> void:
 		"auto_start": _auto_start_check.button_pressed if _auto_start_check else false,
 		"log_level": _log_level_option.selected if _log_level_option else 2,
 		"security_level": _security_level_option.selected if _security_level_option else 1,
-		"rate_limit": int(_rate_limit_spin.value) if _rate_limit_spin else 100,
+		"rate_limit": int(_rate_limit_spin.value) if _rate_limit_spin else 1000,
 		"language": _translation_manager.get_locale() if _translation_manager else "en"
 	}
 	_settings_manager.save_settings(settings)
