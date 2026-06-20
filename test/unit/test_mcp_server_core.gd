@@ -247,10 +247,40 @@ func test_queue_backpressure_rejects_when_full():
 		var msg: Dictionary = {"jsonrpc": "2.0", "id": i, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
 		_core._on_transport_message_received(msg, null)
 	assert_eq(_core.get_request_queue_depth(), max_size, "Queue should accept up to MAX_REQUEST_QUEUE_SIZE")
-	# One more request must be rejected (not appended) once the queue is full.
+	# Server is inactive (_active == false), so no slot can ever free: the overflow
+	# request must be rejected rather than queued or hung waiting indefinitely.
 	var overflow: Dictionary = {"jsonrpc": "2.0", "id": 99999, "method": "tools/call", "params": {"name": "queued_tool", "arguments": {}}}
 	_core._on_transport_message_received(overflow, null)
-	assert_eq(_core.get_request_queue_depth(), max_size, "Request beyond MAX should be rejected, not queued")
+	assert_eq(_core.get_request_queue_depth(), max_size, "Request beyond MAX (server stopped) should be rejected, not queued")
+
+func test_await_queue_slot_true_when_space_available():
+	_core._active = true
+	var ok: bool = await _core._await_queue_slot()
+	assert_true(ok, "Should return true immediately when the queue has free space")
+
+func test_await_queue_slot_false_when_inactive_and_full():
+	_core._active = false
+	for i in range(_core.MAX_REQUEST_QUEUE_SIZE):
+		_core._request_queue.append({"message": {}, "context": null})
+	# A stopped server can never free a slot; it must give up instead of hanging.
+	var ok: bool = await _core._await_queue_slot()
+	assert_false(ok, "Should return false (no hang) when server is stopped and queue is full")
+
+func test_full_queue_waits_then_accepts_when_slot_frees():
+	_core._active = true
+	for i in range(_core.MAX_REQUEST_QUEUE_SIZE):
+		_core._request_queue.append({"message": {}, "context": null})
+	var result: Array = [null]
+	var waiter: Callable = func():
+		result[0] = await _core._await_queue_slot()
+	waiter.call()
+	await get_tree().process_frame
+	assert_eq(result[0], null, "Waiter should still be blocked while the queue is full")
+	# Free one slot; the waiter must resolve to true instead of being rejected.
+	_core._request_queue.pop_front()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(result[0], true, "Waiter should resolve to true once a slot frees up")
 
 func test_serial_queue_runs_requests_in_fifo_order():
 	# Each tool call awaits two frames; if execution were concurrent we'd see

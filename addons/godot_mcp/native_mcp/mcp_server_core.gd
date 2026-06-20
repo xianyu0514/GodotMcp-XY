@@ -43,6 +43,12 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## rejected with a "server busy" error instead of growing memory without limit.
 const MAX_REQUEST_QUEUE_SIZE: int = 256
 
+## Maximum time (in seconds) an incoming request waits for a free queue slot
+## before the server gives up and rejects it. When the queue is momentarily full,
+## concurrent AI clients wait their turn instead of failing immediately; the
+## bound prevents a request from hanging forever if the server stalls or stops.
+const MAX_QUEUE_WAIT_SECONDS: float = 30.0
+
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
@@ -184,16 +190,36 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
 		return
 	
-	# Backpressure: reject when the queue is full to avoid unbounded memory growth.
+	# Backpressure: when the queue is full, wait for a slot to free up instead of
+	# rejecting immediately, so concurrent AI clients queue and wait for their turn.
+	# Only reject if no slot opens within MAX_QUEUE_WAIT_SECONDS or the server stops,
+	# which keeps memory bounded without hanging the request forever.
 	if _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE:
-		_log_warn("Request queue full (" + str(_request_queue.size()) + "), rejecting request")
-		_send_error(message.get("id"), MCPTypes.ERROR_INTERNAL_ERROR, 
-				   "Server busy: request queue is full. Please retry later.", null, context)
-		return
+		var slot_free: bool = await _await_queue_slot()
+		if not slot_free:
+			_log_warn("Request queue full after waiting " + str(MAX_QUEUE_WAIT_SECONDS) + "s, rejecting request")
+			_send_error(message.get("id"), MCPTypes.ERROR_INTERNAL_ERROR, 
+					   "Server busy: request queue is full. Please retry later.", null, context)
+			return
 	
 	# Enqueue and kick the serial processor (concurrent calls queue up and run in order).
 	_request_queue.append({"message": message, "context": context})
 	_drain_request_queue()
+
+## Wait until the request queue has a free slot, the server stops, or the wait
+## bound elapses. Returns true if a slot is available to enqueue into, false if it
+## timed out or the server is no longer active (caller should then reject).
+func _await_queue_slot() -> bool:
+	var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
+	if main_loop == null:
+		# No frame loop to await on; fall back to an immediate capacity check.
+		return _active and _request_queue.size() < MAX_REQUEST_QUEUE_SIZE
+	var deadline_ms: float = Time.get_ticks_msec() + MAX_QUEUE_WAIT_SECONDS * 1000.0
+	while _active and _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE:
+		if Time.get_ticks_msec() >= deadline_ms:
+			return false
+		await main_loop.process_frame
+	return _active and _request_queue.size() < MAX_REQUEST_QUEUE_SIZE
 
 ## Process the request queue serially: run exactly one request at a time until empty.
 ## All access happens on the main thread (transport marshals via call_deferred), so no
