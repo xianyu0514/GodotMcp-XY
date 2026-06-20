@@ -11,9 +11,9 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_176_tools_registered():
+func test_all_177_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 176, "Should have exactly 176 tools registered")
+	assert_eq(all_tools.size(), 177, "Should have exactly 177 tools registered")
 
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
@@ -21,7 +21,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 146, "Should have 146 supplementary tools")
+	assert_eq(supp_tools.size(), 147, "Should have 147 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -223,6 +223,7 @@ func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("configure_render_output"), "configure_render_output should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("create_drawable_texture"), "create_drawable_texture should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("draw_on_texture"), "draw_on_texture should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("validate_shader"), "validate_shader should be supplementary")
 
 func test_get_core_max_count():
 	assert_eq(_classifier.get_core_max_count(), 30, "Core max count should be 30")

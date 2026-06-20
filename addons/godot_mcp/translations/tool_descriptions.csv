@@ -73,6 +73,7 @@ get_current_script,,Get the currently edited script in the Godot editor.,获取 
 open_script_at_line,,Open a script file at a specific line number in the Godot editor.,在 Godot 编辑器中的指定行号打开脚本文件。
 attach_script,,Attach a script to a node.,将脚本附加到节点。
 validate_script,,Validate a script file for syntax errors.,验证脚本文件的语法错误。
+validate_shader,,Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether it parses plus shader_type render_modes and uniforms and structural issues (missing/invalid shader_type unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+.,校验 Godot 着色器（.gdshader 文件或内联 Shader 代码）无需 GPU。报告能否解析及 shader_type、render_modes、uniforms 和带行号的结构性问题（缺失/非法 shader_type、花括号/圆括号/方括号不配平）。Godot 4.6+ 通用。
 search_in_files,,Search for text in project files.,在项目文件中搜索文本。
 get_editor_logs,,Get recent log messages from the editor or runtime. Supports filtering by source, type, and pagination.,获取编辑器或运行时的最近日志消息。支持按来源、类型和分页过滤。
 execute_script,,Execute a script in the editor context.,在编辑器上下文中执行脚本。

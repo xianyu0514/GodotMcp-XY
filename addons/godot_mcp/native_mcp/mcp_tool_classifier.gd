@@ -37,6 +37,7 @@ func _build_classifications() -> void:
 		{"name": "get_current_script", "category": "core", "group": "Script"},
 		{"name": "attach_script", "category": "core", "group": "Script"},
 		{"name": "validate_script", "category": "supplementary", "group": "Script-Advanced"},
+		{"name": "validate_shader", "category": "supplementary", "group": "Script-Advanced"},
 		{"name": "search_in_files", "category": "supplementary", "group": "Script-Advanced"},
 		{"name": "create_scene", "category": "core", "group": "Scene"},
 		{"name": "save_scene", "category": "core", "group": "Scene"},

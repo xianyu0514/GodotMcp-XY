@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **176 个工具**（30 核心 + 146 补充），分为 6 大类，供 AI 助手读取和修改项目。
+一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **177 个工具**（30 核心 + 147 补充），分为 6 大类，供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：yurineko73 | **版本**：1.0.7-pre1
@@ -60,7 +60,7 @@ addons/godot_mcp/
 │   └── mcp_runtime_probe.gd    # Autoload 单例，用于运行时检查（动画、音频、着色器、瓦片地图、输入）
 ├── tools/                      # 工具实现（每个分类一个文件）
 │   ├── node_tools_native.gd    # 22 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计
-│   ├── script_tools_native.gd  # 16 个工具 — 读取/写入/创建/附加/分析/验证/执行脚本、符号索引、搜索
+│   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、校验着色器、符号索引、搜索
 │   ├── scene_tools_native.gd   # 8 个工具 — 创建/保存/打开/关闭场景、结构查看、列表
 │   ├── editor_tools_native.gd  # 21 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态
 │   ├── debug_tools_native.gd   # 70 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制

@@ -47,6 +47,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_open_script_at_line(server_core)
 	_register_attach_script(server_core)
 	_register_validate_script(server_core)
+	_register_validate_shader(server_core)
 	_register_search_in_files(server_core)
 
 # ============================================================================
@@ -2490,3 +2491,191 @@ func _search_file(
 			"matches": file_matches,
 			"match_count": file_matches.size()
 		})
+
+# ============================================================================
+# validate_shader - 校验 Godot 着色器（.gdshader / Shader.code）
+# ============================================================================
+
+const _SHADER_TYPES: PackedStringArray = ["spatial", "canvas_item", "particles", "sky", "fog"]
+
+func _register_validate_shader(server_core: RefCounted) -> void:
+	var tool_name: String = "validate_shader"
+	var description: String = "Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether the shader parses, plus its shader_type, render_modes and uniforms, and structural issues (missing/invalid shader_type, unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+. Note: the engine writes its detailed SHADER ERROR diagnostics (with exact line) to the Godot output log; those cannot be retrieved through the script API, so this tool reports a reliable valid/invalid result plus structural hints."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"shader_path": {
+				"type": "string",
+				"description": "Path to the shader file to validate (e.g. 'res://shaders/water.gdshader'). Optional if 'content' is provided."
+			},
+			"content": {
+				"type": "string",
+				"description": "Optional shader source to validate directly (instead of reading from file)."
+			}
+		},
+		"required": []
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"valid": {"type": "boolean"},
+			"shader_type": {"type": "string"},
+			"render_modes": {"type": "array"},
+			"uniforms": {"type": "array"},
+			"issues": {"type": "array"},
+			"issue_count": {"type": "integer"},
+			"godot_version": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_validate_shader"),
+		output_schema, annotations,
+		"supplementary", "Script-Advanced")
+
+func _tool_validate_shader(params: Dictionary) -> Dictionary:
+	var shader_path: String = params.get("shader_path", "")
+	var content: String = params.get("content", "")
+
+	if shader_path.is_empty() and content.is_empty():
+		return {"error": "Must provide either shader_path or content"}
+
+	if content.is_empty():
+		var validation: Dictionary = PathValidator.validate_file_path(shader_path, [".gdshader"])
+		if not validation["valid"]:
+			return {"error": "Invalid path: " + validation["error"]}
+		shader_path = validation["sanitized"]
+		if not FileAccess.file_exists(shader_path):
+			return {"error": "Shader file not found: " + shader_path}
+		var file: FileAccess = FileAccess.open(shader_path, FileAccess.READ)
+		if not file:
+			return {"error": "Failed to open file: " + shader_path}
+		content = file.get_as_text()
+		file.close()
+
+	var godot_version: String = str(Engine.get_version_info().get("string", ""))
+
+	if content.strip_edges().is_empty():
+		return {
+			"valid": false,
+			"shader_type": "",
+			"render_modes": [],
+			"uniforms": [],
+			"issues": [{"line": 1, "severity": "error", "message": "Shader source is empty"}],
+			"issue_count": 1,
+			"godot_version": godot_version
+		}
+
+	var lines: PackedStringArray = content.split("\n")
+	var issues: Array = []
+
+	# shader_type detection (declaration + value validity)
+	var type_info: Dictionary = _find_shader_type(content)
+	var shader_type_value: String = str(type_info.get("value", ""))
+	var shader_type_line: int = int(type_info.get("line", -1))
+	if shader_type_line < 0:
+		issues.append({"line": 1, "severity": "error", "message": "Missing 'shader_type' declaration (expected one of: spatial, canvas_item, particles, sky, fog)"})
+	elif not _SHADER_TYPES.has(shader_type_value):
+		issues.append({"line": shader_type_line + 1, "severity": "error", "message": "Invalid shader_type '%s' (expected one of: spatial, canvas_item, particles, sky, fog)" % shader_type_value})
+
+	# bracket balance on comment-stripped source
+	var stripped_code: String = _strip_shader_comments(content)
+	for pair in [["{", "}"], ["(", ")"], ["[", "]"]]:
+		var opens: int = stripped_code.count(pair[0])
+		var closes: int = stripped_code.count(pair[1])
+		if opens != closes:
+			issues.append({"line": 0, "severity": "error", "message": "Unbalanced '%s%s': %d opening vs %d closing" % [pair[0], pair[1], opens, closes]})
+
+	# Authoritative parse check: inject a unique sentinel uniform after the
+	# shader_type line and see whether the parser surfaces it. This works
+	# identically on Godot 4.6 and 4.7 and needs no GPU.
+	var sentinel: String = "__mcp_validate_sentinel_uniform__"
+	var valid: bool = false
+	var render_modes: Array = []
+	var uniforms: Array = []
+	if shader_type_line >= 0:
+		var probe_lines: PackedStringArray = []
+		for i in range(lines.size()):
+			probe_lines.append(lines[i])
+			if i == shader_type_line:
+				probe_lines.append("uniform float %s;" % sentinel)
+		var probe_shader: Shader = Shader.new()
+		probe_shader.code = "\n".join(probe_lines)
+		for u in probe_shader.get_shader_uniform_list():
+			if str(u.get("name", "")) == sentinel:
+				valid = true
+				break
+
+	if valid:
+		var clean_shader: Shader = Shader.new()
+		clean_shader.code = content
+		for u in clean_shader.get_shader_uniform_list():
+			uniforms.append({
+				"name": str(u.get("name", "")),
+				"type": int(u.get("type", 0)),
+				"hint_string": str(u.get("hint_string", ""))
+			})
+		render_modes = _parse_render_modes(content)
+	elif issues.is_empty():
+		issues.append({"line": 0, "severity": "error", "message": "Shader failed to parse. The engine's detailed SHADER ERROR (with line number) is written to the Godot output log."})
+
+	return {
+		"valid": valid,
+		"shader_type": shader_type_value,
+		"render_modes": render_modes,
+		"uniforms": uniforms,
+		"issues": issues,
+		"issue_count": issues.size(),
+		"godot_version": godot_version
+	}
+
+func _find_shader_type(code: String) -> Dictionary:
+	var lines: PackedStringArray = code.split("\n")
+	var re: RegEx = RegEx.new()
+	re.compile("^\\s*shader_type\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*;")
+	for i in range(lines.size()):
+		var m: RegExMatch = re.search(lines[i])
+		if m:
+			return {"line": i, "value": m.get_string(1)}
+	return {"line": -1, "value": ""}
+
+func _parse_render_modes(code: String) -> Array:
+	var modes: Array = []
+	var re: RegEx = RegEx.new()
+	re.compile("render_mode\\s+([^;]+);")
+	var m: RegExMatch = re.search(code)
+	if m:
+		for part in m.get_string(1).split(","):
+			var p: String = part.strip_edges()
+			if not p.is_empty():
+				modes.append(p)
+	return modes
+
+func _strip_shader_comments(code: String) -> String:
+	var result: String = ""
+	var i: int = 0
+	var n: int = code.length()
+	while i < n:
+		var c: String = code[i]
+		var nxt: String = code[i + 1] if i + 1 < n else ""
+		if c == "/" and nxt == "/":
+			while i < n and code[i] != "\n":
+				i += 1
+		elif c == "/" and nxt == "*":
+			i += 2
+			while i < n and not (code[i] == "*" and i + 1 < n and code[i + 1] == "/"):
+				i += 1
+			i += 2
+		else:
+			result += c
+			i += 1
+	return result

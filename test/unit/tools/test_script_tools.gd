@@ -168,3 +168,66 @@ func test_batch_read_scripts_reports_per_entry_errors():
 	assert_eq(result.get("error_count"), 1, "The missing file is counted as an error")
 	var results: Array = result.get("results", [])
 	assert_true(results[1].has("error"), "The failed entry carries its own error message")
+
+func test_validate_shader_requires_input():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_validate_shader({})
+	assert_has(result, "error", "Missing both shader_path and content is rejected")
+
+func test_validate_shader_valid_with_uniforms():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var code: String = "shader_type canvas_item;\nrender_mode blend_mix, unshaded;\nuniform float amount : hint_range(0.0, 1.0);\nuniform vec4 tint : source_color;\nvoid fragment() {\n\tCOLOR = vec4(amount) * tint;\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	assert_true(result.get("valid", false), "A well-formed canvas_item shader is valid")
+	assert_eq(result.get("shader_type", ""), "canvas_item", "shader_type is parsed")
+	assert_eq(int(result.get("issue_count", -1)), 0, "Valid shader has no issues")
+	var uniforms: Array = result.get("uniforms", [])
+	assert_eq(uniforms.size(), 2, "Both declared uniforms are reported (sentinel excluded)")
+	var modes: Array = result.get("render_modes", [])
+	assert_true(modes.has("blend_mix") and modes.has("unshaded"), "render_modes are parsed")
+
+func test_validate_shader_valid_no_uniforms():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var code: String = "shader_type canvas_item;\nvoid fragment() {\n\tCOLOR = vec4(1.0);\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	assert_true(result.get("valid", false), "A valid shader with no uniforms is still detected as valid")
+	assert_eq(int(result.get("issue_count", -1)), 0, "Valid shader has no issues")
+
+func test_validate_shader_missing_shader_type():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var code: String = "void fragment() {\n\tCOLOR = vec4(1.0);\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	assert_false(result.get("valid", true), "Shader without shader_type is invalid")
+	var issues: Array = result.get("issues", [])
+	var found: bool = false
+	for issue in issues:
+		if "shader_type" in str(issue.get("message", "")):
+			found = true
+	assert_true(found, "Missing shader_type is reported as an issue")
+
+func test_validate_shader_syntax_error():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# Missing semicolon after the uniform declaration -> parser fails.
+	var code: String = "shader_type canvas_item;\nuniform float amount\nvoid fragment() {\n\tCOLOR = vec4(amount);\n}\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	# The engine surfaces the shader parse error; mark it handled so GUT does
+	# not treat the expected SHADER ERROR as an unexpected failure.
+	for e in get_errors():
+		e.handled = true
+	assert_false(result.get("valid", true), "Shader with a syntax error is invalid")
+	assert_true(int(result.get("issue_count", 0)) >= 1, "An issue is reported for the failed parse")
+
+func test_validate_shader_unbalanced_braces():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var code: String = "shader_type canvas_item;\nvoid fragment() {\n\tCOLOR = vec4(1.0);\n"
+	var result: Dictionary = tool._tool_validate_shader({"content": code})
+	# Mark the expected engine parse error as handled (see above).
+	for e in get_errors():
+		e.handled = true
+	assert_false(result.get("valid", true), "Shader with unbalanced braces is invalid")
+	var issues: Array = result.get("issues", [])
+	var found: bool = false
+	for issue in issues:
+		if "Unbalanced" in str(issue.get("message", "")):
+			found = true
+	assert_true(found, "Unbalanced braces are reported with a structural issue")

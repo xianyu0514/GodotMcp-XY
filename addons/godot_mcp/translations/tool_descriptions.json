@@ -75,6 +75,7 @@
   "open_script_at_line": "Open a script file at a specific line number in the Godot editor.",
   "attach_script": "Attach a script to a node.",
   "validate_script": "Validate a script file for syntax errors.",
+  "validate_shader": "Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether it parses plus shader_type render_modes and uniforms and structural issues (missing/invalid shader_type unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+.",
   "search_in_files": "Search for text in project files.",
   "get_editor_logs": "Get recent log messages from the editor or runtime. Supports filtering by source, type, and pagination.",
   "execute_script": "Execute a script in the editor context.",
