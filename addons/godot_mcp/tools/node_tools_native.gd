@@ -15,6 +15,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_update_node_property(server_core)
 	_register_batch_update_node_properties(server_core)
 	_register_batch_scene_node_edits(server_core)
+	_register_batch_get_node_properties(server_core)
+	_register_batch_connect_signals(server_core)
 	_register_get_node_properties(server_core)
 	_register_list_nodes(server_core)
 	_register_get_scene_tree(server_core)
@@ -835,6 +837,129 @@ func _tool_audit_scene_inheritance(params: Dictionary) -> Dictionary:
 		"instance_roots": instance_roots,
 		"nodes": nodes,
 		"issues": issues
+	}
+
+func _register_batch_get_node_properties(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"batch_get_node_properties",
+		"Read the properties of multiple nodes in a single call. Returns one result entry per requested node path, reducing round trips when inspecting several nodes.",
+		{
+			"type": "object",
+			"properties": {
+				"node_paths": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Paths of the nodes to read (e.g. ['/root/MainScene/Player', '/root/MainScene/Enemy'])."
+				}
+			},
+			"required": ["node_paths"]
+		},
+		Callable(self, "_tool_batch_get_node_properties"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"count": {"type": "integer"},
+				"error_count": {"type": "integer"},
+				"results": {"type": "array"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Node-Advanced"
+	)
+
+func _tool_batch_get_node_properties(params: Dictionary) -> Dictionary:
+	var node_paths: Array = params.get("node_paths", [])
+	if node_paths.is_empty():
+		return {"error": "Missing required parameter: node_paths"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+
+	var results: Array = []
+	var error_count: int = 0
+	for entry in node_paths:
+		var node_path: String = str(entry)
+		var single: Dictionary = _tool_get_node_properties({"node_path": node_path})
+		if single.has("error"):
+			results.append({"node_path": node_path, "error": single["error"]})
+			error_count += 1
+		else:
+			results.append(single)
+
+	return {
+		"status": "success",
+		"count": results.size(),
+		"error_count": error_count,
+		"results": results
+	}
+
+func _register_batch_connect_signals(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"batch_connect_signals",
+		"Connect multiple node signals in a single call. Returns one result entry per requested connection, reducing round trips when wiring several signals.",
+		{
+			"type": "object",
+			"properties": {
+				"connections": {
+					"type": "array",
+					"description": "Signal connections to create.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"emitter_path": {"type": "string"},
+							"signal_name": {"type": "string"},
+							"receiver_path": {"type": "string"},
+							"receiver_method": {"type": "string"},
+							"flags": {"type": "integer"}
+						},
+						"required": ["emitter_path", "signal_name", "receiver_path", "receiver_method"]
+					}
+				}
+			},
+			"required": ["connections"]
+		},
+		Callable(self, "_tool_batch_connect_signals"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"count": {"type": "integer"},
+				"error_count": {"type": "integer"},
+				"results": {"type": "array"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Node-Advanced"
+	)
+
+func _tool_batch_connect_signals(params: Dictionary) -> Dictionary:
+	var connections: Array = params.get("connections", [])
+	if connections.is_empty():
+		return {"error": "Missing required parameter: connections"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+
+	var results: Array = []
+	var error_count: int = 0
+	for entry in connections:
+		if not (entry is Dictionary):
+			results.append({"error": "Each connection entry must be an object"})
+			error_count += 1
+			continue
+		var single: Dictionary = _tool_connect_signal(entry)
+		if single.has("error"):
+			error_count += 1
+		results.append(single)
+
+	return {
+		"status": "success",
+		"count": results.size(),
+		"error_count": error_count,
+		"results": results
 	}
 
 func _register_get_node_properties(server_core: RefCounted) -> void:

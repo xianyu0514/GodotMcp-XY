@@ -40,6 +40,8 @@ delete_node,,Delete a node from the Godot scene tree. This operation is destruct
 update_node_property,,Update a property of a specific node. Supports common property types with automatic type conversion.,更新特定节点的属性。支持常见属性类型并自动进行类型转换。
 batch_update_node_properties,,Update multiple node properties inside one editor UndoRedo action. Useful for transaction-style scene edits that should undo in a single step.,在一个编辑器 UndoRedo 操作中更新多个节点属性。适用于需要在单步中撤销的事务式场景编辑。
 batch_scene_node_edits,,Apply multiple create/delete scene node edits inside one editor UndoRedo action so the full structure change undoes in a single step.,在单个编辑器 UndoRedo 操作中应用多个创建/删除场景节点编辑，使整个结构变更可在单步中撤销。
+batch_get_node_properties,,Read the properties of multiple nodes in a single call. Returns one result entry per requested node path, reducing round trips when inspecting several nodes.,在一次调用中读取多个节点的属性。每个请求的节点路径返回一个结果项，减少检查多个节点时的往返次数。
+batch_connect_signals,,Connect multiple node signals in a single call. Returns one result entry per requested connection, reducing round trips when wiring several signals.,在一次调用中连接多个节点信号。每个请求的连接返回一个结果项，减少连接多个信号时的往返次数。
 get_node_properties,,Get all properties of a specific node in the scene tree.,获取场景树中特定节点的所有属性。
 list_nodes,,List all nodes in the current scene or under a specific parent node.,列出当前场景或特定父节点下的所有节点。
 get_scene_tree,,Get the complete scene tree hierarchy starting from the scene root. Returns full tree structure with node types.,获取从场景根节点开始的完整场景树层级。返回包含节点类型的完整树结构。
@@ -61,6 +63,7 @@ find_script_symbol_definition,,Find definition locations for a script symbol acr
 find_script_symbol_references,,Find textual project references to a script symbol across GDScript, C#, and scene files.,在 GDScript、C# 和场景文件中查找脚本符号的文本引用。
 rename_script_symbol,,Rename a script symbol across project files using identifier-boundary text replacements. Supports dry-run previews before applying changes.,使用标识符边界文本替换在项目文件中重命名脚本符号。支持在应用更改前进行试运行预览。
 read_script,,Read the content of a GDScript file (.gd). Returns the complete script source code.,读取 GDScript 文件（.gd）的内容。返回完整的脚本源代码。
+batch_read_scripts,,Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts.,在一次调用中读取多个 GDScript（.gd）或 C#（.cs）脚本文件的内容。每个请求的路径返回一个结果项，减少读取多个脚本时的往返次数。
 create_script,,Create a new GDScript file with optional template. GDScript files are complete programs, not resource files.,创建新的 GDScript 文件，可选模板。GDScript 文件是完整程序，不是资源文件。
 modify_script,,Modify the content of an existing GDScript file. Can replace entire content or specific lines.,修改现有 GDScript 文件的内容。可以替换整个内容或特定行。
 analyze_script,,Analyze a GDScript file and report code quality issues.,分析 GDScript 文件并报告代码质量问题。

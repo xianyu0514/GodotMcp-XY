@@ -39,6 +39,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_find_script_symbol_references(server_core)
 	_register_rename_script_symbol(server_core)
 	_register_read_script(server_core)
+	_register_batch_read_scripts(server_core)
 	_register_create_script(server_core)
 	_register_modify_script(server_core)
 	_register_analyze_script(server_core)
@@ -1273,6 +1274,71 @@ func _tool_read_script(params: Dictionary) -> Dictionary:
 		"script_path": script_path,
 		"content": content,
 		"line_count": line_count
+	}
+
+# ============================================================================
+# batch_read_scripts - 批量读取脚本
+# ============================================================================
+
+func _register_batch_read_scripts(server_core: RefCounted) -> void:
+	var tool_name: String = "batch_read_scripts"
+	var description: String = "Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"script_paths": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Paths of the scripts to read (e.g. ['res://scripts/player.gd', 'res://scripts/enemy.gd'])."
+			}
+		},
+		"required": ["script_paths"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"count": {"type": "integer"},
+			"error_count": {"type": "integer"},
+			"results": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_batch_read_scripts"),
+						  output_schema, annotations,
+						  "supplementary", "Script-Advanced")
+
+func _tool_batch_read_scripts(params: Dictionary) -> Dictionary:
+	var script_paths: Array = params.get("script_paths", [])
+	if script_paths.is_empty():
+		return {"error": "Missing required parameter: script_paths"}
+
+	var results: Array = []
+	var error_count: int = 0
+	for entry in script_paths:
+		var script_path: String = str(entry)
+		var single: Dictionary = _tool_read_script({"script_path": script_path})
+		if single.has("error"):
+			results.append({"script_path": script_path, "error": single["error"]})
+			error_count += 1
+		else:
+			results.append(single)
+
+	return {
+		"status": "success",
+		"count": results.size(),
+		"error_count": error_count,
+		"results": results
 	}
 
 # ============================================================================

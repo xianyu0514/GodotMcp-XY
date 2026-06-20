@@ -13,12 +13,12 @@
 - **完整项目访问**：AI 助手可以读取和修改脚本、场景、节点和资源
 - **原生实现**：无需 Node.js 依赖——完全在 Godot 中运行
 - **实时编辑**：直接在编辑器中应用 AI 建议
-- **全面的工具集**（157 个工具——30 核心 + 127 补充）：
-  - **节点工具**（9 核心 + 11 高级）：创建、修改、管理场景节点，复制、移动、重命名，锚点预设，信号连接，组管理，批量操作，场景审计
-  - **脚本工具**（7 核心 + 8 高级）：编辑、分析、创建、附加、验证 GDScript 文件，执行脚本，文件搜索，符号索引，定义和引用查找
+- **全面的工具集**（160 个工具——30 核心 + 130 补充）：
+  - **节点工具**（9 核心 + 13 高级）：创建、修改、管理场景节点，复制、移动、重命名，锚点预设，信号连接，组管理，批量操作（更新/读取属性、连接信号），场景审计
+  - **脚本工具**（7 核心 + 9 高级）：编辑、分析、创建、附加、验证 GDScript 文件，批量读取脚本，执行脚本，文件搜索，符号索引，定义和引用查找
   - **场景工具**（4 核心 + 4 高级）：操作场景结构、保存场景、列出/打开/关闭场景标签页，项目场景列表
   - **编辑器工具**（4 核心 + 12 高级）：控制编辑器功能、截图、信号检查、文件系统重载，节点/文件选择，导出管理，属性检查器
-  - **调试工具**（3 核心 + 68 高级）：日志、调试会话、断点、栈帧/变量读取、性能分析器、运行时探针，动画/音频/着色器/瓦片地图运行时控制，调试执行控制
+  - **调试工具**（3 核心 + 67 高级）：日志、调试会话、断点、栈帧/变量读取、性能分析器、运行时探针，动画/音频/着色器/瓦片地图运行时控制，调试执行控制
   - **项目工具**（3 核心 + 25 高级）：访问项目设置、列出资源、创建资源，运行测试、管理输入映射、检查自动加载/全局类，资源诊断与健康审计，反向资源引用与孤立资源检测
 
 ## 📦 安装
@@ -210,11 +210,13 @@ url = "http://localhost:9080/mcp"
 - `set-node-groups` - 设置节点的组成员关系
 - `add-resource` - 向节点添加资源子节点（碰撞形状、网格等）
 
-### Node-Advanced (6)
+### Node-Advanced (8)
 - `get-node-groups` - 获取节点所属的组
 - `find-nodes-in-group` - 查找组中的所有节点
 - `batch-update-node-properties` - 在单个 UndoRedo 动作中批量更新节点属性
 - `batch-scene-node-edits` - 在单个 UndoRedo 动作中批量执行场景节点编辑
+- `batch-get-node-properties` - 在一次调用中读取多个节点的属性
+- `batch-connect-signals` - 在一次调用中连接多个节点信号
 - `audit-scene-node-persistence` - 审计节点 owner 和持久化状态
 - `audit-scene-inheritance` - 审计场景继承/实例化结构
 
@@ -227,8 +229,9 @@ url = "http://localhost:9080/mcp"
 - `attach-script` - 将已有脚本附加到节点
 - `execute-script` - 执行 GDScript 表达式
 
-### Script-Advanced (8)
+### Script-Advanced (9)
 - `analyze-script` - 分析脚本结构
+- `batch-read-scripts` - 在一次调用中读取多个脚本文件
 - `validate-script` - 验证 GDScript 语法
 - `search-in-files` - 搜索项目文件
 - `list-project-script-symbols` - 索引 GDScript 和 C# 文件的脚本符号
@@ -269,7 +272,7 @@ url = "http://localhost:9080/mcp"
 - `validate-export-preset` - 验证导出预设
 - `run-export` - 运行 Godot CLI 导出
 
-### Debug (3 核心 + 68 高级)
+### Debug (3 核心 + 67 高级)
 - `get-editor-logs` - 获取编辑器/运行时日志
 - `debug-print` - 打印调试信息
 - `clear-output` - 清除 MCP/编辑器输出缓冲

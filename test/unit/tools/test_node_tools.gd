@@ -267,3 +267,30 @@ func test_get_type_name_fallback():
 	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
 	var type_name: String = tool._get_type_name(9999)
 	assert_eq(type_name, "type_9999", "Unknown type should use type_N fallback")
+
+# --- batch_get_node_properties / batch_connect_signals ---
+
+func test_batch_get_node_properties_rejects_empty():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_batch_get_node_properties({})
+	assert_has(result, "error", "Missing node_paths is rejected")
+
+func test_batch_get_node_properties_requires_editor():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_batch_get_node_properties({"node_paths": ["/root/Main/Player"]})
+	assert_has(result, "error", "Without an editor interface the batch read reports an error")
+
+func test_batch_connect_signals_rejects_empty():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_batch_connect_signals({})
+	assert_has(result, "error", "Missing connections is rejected")
+
+func test_batch_connect_signals_requires_editor():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_batch_connect_signals({"connections": [{
+		"emitter_path": "/root/Main/Button",
+		"signal_name": "pressed",
+		"receiver_path": "/root/Main",
+		"receiver_method": "_on_pressed"
+	}]})
+	assert_has(result, "error", "Without an editor interface the batch connect reports an error")
