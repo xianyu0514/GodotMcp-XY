@@ -66,7 +66,7 @@ extends EditorPlugin
 			_native_server.set_security_level(value)
 		notify_property_list_changed()
 
-@export var rate_limit: int = 100:
+@export var rate_limit: int = 1000:
 	set(value):
 		rate_limit = value
 		if _native_server:

@@ -101,7 +101,7 @@ var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat
 # 配置
 var _log_level: int = MCPTypes.LogLevel.INFO
 var _security_level: int = MCPTypes.SecurityLevel.STRICT
-var _rate_limit: int = 100  # 每60秒最多100个请求
+var _rate_limit: int = 1000  # Max requests per 60s window before throttling
 
 # 速率限制跟踪
 var _request_count: Dictionary = {}  # String (client_id) -> int
@@ -265,6 +265,7 @@ func _drain_request_queue() -> void:
 		return
 	_is_processing_request = true
 	
+	var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
 	while _active and not _request_queue.is_empty():
 		var item: Dictionary = _request_queue.pop_front()
 		var message: Dictionary = item.get("message", {})
@@ -275,6 +276,12 @@ func _drain_request_queue() -> void:
 		# Notifications produce an empty dict (falsy); only send real responses.
 		if response:
 			_send_response(response, context)
+		
+		# Yield a frame before the next request so the editor can render and handle
+		# input between back-to-back tool calls, keeping it responsive under sustained
+		# load. Skip the yield when this was the last request (nothing left to drain).
+		if main_loop != null and not _request_queue.is_empty():
+			await main_loop.process_frame
 	
 	_is_processing_request = false
 

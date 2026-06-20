@@ -25,7 +25,7 @@ func test_load_settings_returns_defaults():
 	assert_eq(settings["transport_mode"], "http", "Default transport_mode should be 'http'")
 	assert_eq(settings["http_port"], 9080, "Default http_port should be 9080")
 	assert_eq(settings["log_level"], 2, "Default log_level should be 2")
-	assert_eq(settings["rate_limit"], 100, "Default rate_limit should be 100")
+	assert_eq(settings["rate_limit"], 1000, "Default rate_limit should be 1000")
 	assert_eq(settings["language"], "en", "Default language should be 'en'")
 
 func test_save_and_load_settings():
@@ -50,7 +50,7 @@ func test_load_settings_merges_with_defaults():
 	var loaded: Dictionary = _sm.load_settings()
 	assert_eq(loaded["http_port"], 8000, "Saved http_port should override default")
 	assert_eq(loaded["transport_mode"], "http", "Default transport_mode should remain")
-	assert_eq(loaded["rate_limit"], 100, "Default rate_limit should remain")
+	assert_eq(loaded["rate_limit"], 1000, "Default rate_limit should remain")
 
 func test_default_settings_not_modified_by_load():
 	var orig_defaults = _sm.DEFAULT_SETTINGS.duplicate(true)
