@@ -242,3 +242,19 @@ func test_run_project_tests_rejects_when_too_many_batches():
 	var result: Dictionary = project_tools._tool_run_project_tests({"search_path": "res://test/unit", "framework": "gut"})
 	assert_has(result, "error", "Starting another batch beyond the cap is rejected")
 	project_tools._batch_test_runner.flush()
+
+func test_single_and_batch_runs_share_one_concurrency_budget():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	# Saturate the shared budget with a mix of single and batch jobs so the total,
+	# not each runner independently, reaches MAX_CONCURRENT_TEST_JOBS.
+	project_tools._test_runner.start("res://test/unit/test_mcp_types.gd", Callable(self, "_fake_slow_result"))
+	project_tools._test_runner.start("res://test/unit/test_path_validator.gd", Callable(self, "_fake_slow_result"))
+	for i in range(project_tools.MAX_CONCURRENT_TEST_JOBS - 2):
+		project_tools._batch_test_runner.start("batch_" + str(i), Callable(self, "_fake_slow_result"))
+	assert_eq(project_tools._active_test_job_count(), project_tools.MAX_CONCURRENT_TEST_JOBS, "Single and batch jobs together saturate the shared cap")
+	var batch_result: Dictionary = project_tools._tool_run_project_tests({"search_path": "res://test/unit", "framework": "gut"})
+	assert_has(batch_result, "error", "A new batch is rejected once the shared budget is full")
+	var single_result: Dictionary = project_tools._tool_run_project_test({"test_path": _EXISTING_TEST_PATH})
+	assert_has(single_result, "error", "A new single run is rejected once the shared budget is full")
+	project_tools._test_runner.flush()
+	project_tools._batch_test_runner.flush()

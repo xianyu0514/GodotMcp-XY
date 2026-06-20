@@ -710,7 +710,7 @@ func _tool_run_project_test(params: Dictionary) -> Dictionary:
 			}
 		return polled["result"]
 
-	if _test_runner.active_count() >= MAX_CONCURRENT_TEST_JOBS:
+	if _active_test_job_count() >= MAX_CONCURRENT_TEST_JOBS:
 		return {"error": "Too many test runs in progress; poll the pending runs before starting another."}
 
 	_test_runner.start(test_path, Callable(self, "_execute_project_test_blocking").bind(test_path))
@@ -719,6 +719,12 @@ func _tool_run_project_test(params: Dictionary) -> Dictionary:
 		"test_path": test_path,
 		"message": "Test started on a background thread; call run_project_test again with the same test_path to poll for the result."
 	}
+
+# Single and batch test runs share one concurrency budget so the total number of
+# live test subprocesses stays bounded by MAX_CONCURRENT_TEST_JOBS across both
+# run_project_test and run_project_tests.
+func _active_test_job_count() -> int:
+	return _test_runner.active_count() + _batch_test_runner.active_count()
 
 # Blocking execution of a single test. Used by the background worker thread for
 # run_project_test and directly (synchronously) by the batch runner.
@@ -797,7 +803,7 @@ func _tool_run_project_tests(params: Dictionary) -> Dictionary:
 			}
 		return polled["result"]
 
-	if _batch_test_runner.active_count() >= MAX_CONCURRENT_TEST_JOBS:
+	if _active_test_job_count() >= MAX_CONCURRENT_TEST_JOBS:
 		return {"error": "Too many test batches in progress; poll the pending runs before starting another."}
 
 	var work_params: Dictionary = {
