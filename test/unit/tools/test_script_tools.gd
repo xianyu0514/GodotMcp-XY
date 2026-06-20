@@ -137,3 +137,34 @@ func test_attach_script_supports_csharp():
 	# 验证 .cs 路径能通过路径验证（这是 attach_script 之前的唯一阻塞）
 	var validation: Dictionary = PathValidator.validate_file_path("res://scripts/TestClass.cs", [".gd", ".cs"])
 	assert_true(validation["valid"], ".cs path should be accepted by path validation")
+
+func test_batch_read_scripts_rejects_empty():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_batch_read_scripts({})
+	assert_has(result, "error", "Missing script_paths is rejected")
+
+func test_batch_read_scripts_reads_multiple():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = [
+		"res://addons/godot_mcp/utils/payload_utils.gd",
+		"res://addons/godot_mcp/utils/path_validator.gd"
+	]
+	var result: Dictionary = tool._tool_batch_read_scripts({"script_paths": paths})
+	assert_eq(result.get("status"), "success", "Batch read succeeds")
+	assert_eq(result.get("count"), 2, "One result entry per requested path")
+	assert_eq(result.get("error_count"), 0, "All valid paths read without error")
+	var results: Array = result.get("results", [])
+	assert_true(results[0].has("content"), "Each entry carries the script content")
+	assert_true(results[0].has("line_count"), "Each entry carries the line count")
+
+func test_batch_read_scripts_reports_per_entry_errors():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = [
+		"res://addons/godot_mcp/utils/payload_utils.gd",
+		"res://does/not/exist.gd"
+	]
+	var result: Dictionary = tool._tool_batch_read_scripts({"script_paths": paths})
+	assert_eq(result.get("count"), 2, "Both requested paths produce an entry")
+	assert_eq(result.get("error_count"), 1, "The missing file is counted as an error")
+	var results: Array = result.get("results", [])
+	assert_true(results[1].has("error"), "The failed entry carries its own error message")

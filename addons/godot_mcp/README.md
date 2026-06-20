@@ -13,12 +13,12 @@ A powerful Godot Engine plugin that integrates AI assistants (Claude, etc.) via 
 - **Full Project Access**: AI assistants can read and modify scripts, scenes, nodes, and resources
 - **Native Implementation**: No Node.js dependency required - runs entirely within Godot
 - **Real-time Editing**: Apply AI suggestions directly in the editor
-- **Comprehensive Tool Set** (157 tools — 30 core + 127 supplementary):
-  - **Node Tools** (9 core + 11 advanced): Create, modify, manage scene nodes, duplicate, move, rename, signal connections, anchor presets, group management, batch operations, scene auditing
-  - **Script Tools** (7 core + 8 advanced): Edit, analyze, create, attach, validate GDScript and C# files, execute scripts, search in files, symbol indexing, definition & reference lookup
+- **Comprehensive Tool Set** (160 tools — 30 core + 130 supplementary):
+  - **Node Tools** (9 core + 13 advanced): Create, modify, manage scene nodes, duplicate, move, rename, signal connections, anchor presets, group management, batch operations (update/read properties, connect signals), scene auditing
+  - **Script Tools** (7 core + 9 advanced): Edit, analyze, create, attach, validate GDScript and C# files, batch read scripts, execute scripts, search in files, symbol indexing, definition & reference lookup
   - **Scene Tools** (4 core + 4 advanced): Manipulate scene structure, save scenes, list/open/close scene tabs, project scene listing
   - **Editor Tools** (4 core + 12 advanced): Control editor functionality, screenshot, signal inspection, filesystem reload, node/file selection, export management, property inspector
-  - **Debug Tools** (3 core + 68 advanced): Logging, debugger sessions, breakpoints, stack/variable inspection, profilers, runtime probe, animation/audio/shader/tilemap runtime control, debug execution control, await_scene_ready
+  - **Debug Tools** (3 core + 67 advanced): Logging, debugger sessions, breakpoints, stack/variable inspection, profilers, runtime probe, animation/audio/shader/tilemap runtime control, debug execution control, await_scene_ready
   - **Project Tools** (3 core + 25 advanced): Access project settings, list resources, create resources, run tests, manage input mappings, inspect autoloads/global classes, resource diagnostics & health audit, reverse resource usage & unused-resource detection
 
 ## 📦 Installation
@@ -190,11 +190,13 @@ Implement a day/night cycle system with dynamic lighting
 - `set-node-groups` - Set group memberships for a node
 - `add-resource` - Add a resource child node (collision shape, mesh, etc.)
 
-### Node-Advanced (6)
+### Node-Advanced (8)
 - `get-node-groups` - Get groups a node belongs to
 - `find-nodes-in-group` - Find all nodes in a specific group
 - `batch-update-node-properties` - Batch update multiple node properties in one UndoRedo action
 - `batch-scene-node-edits` - Apply batch scene node create/delete/move edits in one UndoRedo action
+- `batch-get-node-properties` - Read properties of multiple nodes in a single call
+- `batch-connect-signals` - Connect multiple node signals in a single call
 - `audit-scene-node-persistence` - Audit node owner and persistence state for the scene
 - `audit-scene-inheritance` - Audit inherited/instanced scene structure
 
@@ -207,8 +209,9 @@ Implement a day/night cycle system with dynamic lighting
 - `attach-script` - Attach an existing script to a node
 - `execute-script` - Execute GDScript expression
 
-### Script-Advanced (8)
+### Script-Advanced (9)
 - `analyze-script` - Analyze script structure
+- `batch-read-scripts` - Read multiple script files in a single call
 - `validate-script` - Validate GDScript syntax
 - `search-in-files` - Search project files
 - `list-project-script-symbols` - Index script symbols across GDScript and C# files
@@ -249,7 +252,7 @@ Implement a day/night cycle system with dynamic lighting
 - `validate-export-preset` - Validate an export preset
 - `run-export` - Run a Godot CLI export
 
-### Debug (3 core + 68 advanced)
+### Debug (3 core + 67 advanced)
 - `get-editor-logs` - Get editor/runtime logs
 - `debug-print` - Print debug info
 - `clear-output` - Clear MCP/editor output buffers
