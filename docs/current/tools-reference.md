@@ -216,12 +216,15 @@ Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补
 |------|------|------|------|
 | `parent_path` | string | 否 | 父节点路径。默认列出当前场景所有节点 |
 | `recursive` | boolean | 否 | 是否递归列出所有子节点（默认 `true`） |
+| `limit` | int | 否 | 返回节点数量上限（默认 `1000`）。超出部分被省略，`truncated` 置为 `true` |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
 |------|------|------|
-| `nodes` | Array[string] | 节点友好路径数组 |
-| `count` | int | 节点数量 |
+| `nodes` | Array[string] | 节点友好路径数组（最多 `limit` 个） |
+| `count` | int | 实际返回的节点数量 |
+| `total_count` | int | 截断前的节点总数 |
+| `truncated` | boolean | 是否因超过 `limit` 而截断 |
 
 **注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`
 
@@ -980,12 +983,15 @@ Godot MCP Native 实现了 **155 个工具**，分为 6 大类（含核心和补
 | 参数 | 类型 | 必需 | 描述 |
 |------|------|------|------|
 | `search_path` | string | 否 | 搜索子路径（如 `res://scenes/`）。默认 `res://` |
+| `limit` | int | 否 | 返回场景路径数量上限（默认 `1000`）。超出部分被省略，`truncated` 置为 `true` |
 
 **返回值**：
 | 字段 | 类型 | 描述 |
 |------|------|------|
-| `scenes` | Array[string] | 场景文件路径数组 |
-| `count` | int | 场景数量 |
+| `scenes` | Array[string] | 场景文件路径数组（最多 `limit` 个） |
+| `count` | int | 实际返回的场景数量 |
+| `total_count` | int | 截断前的场景总数 |
+| `truncated` | boolean | 是否因超过 `limit` 而截断 |
 
 **注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`
 

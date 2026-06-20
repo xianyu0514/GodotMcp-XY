@@ -912,6 +912,10 @@ func _register_list_nodes(server_core: RefCounted) -> void:
 				"recursive": {
 					"type": "boolean",
 					"description": "Whether to list nodes recursively. Default is true."
+				},
+				"limit": {
+					"type": "integer",
+					"description": "Maximum number of nodes to return. Default is 1000. Extra nodes are omitted and 'truncated' is set true."
 				}
 			}
 		},
@@ -920,7 +924,9 @@ func _register_list_nodes(server_core: RefCounted) -> void:
 			"type": "object",
 			"properties": {
 				"nodes": {"type": "array", "items": {"type": "string"}},
-				"count": {"type": "integer"}
+				"count": {"type": "integer"},
+				"total_count": {"type": "integer"},
+				"truncated": {"type": "boolean"}
 			}
 		},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
@@ -930,6 +936,9 @@ func _register_list_nodes(server_core: RefCounted) -> void:
 func _tool_list_nodes(params: Dictionary) -> Dictionary:
 	var parent_path: String = params.get("parent_path", "")
 	var recursive: bool = params.get("recursive", true)
+	var limit: int = int(params.get("limit", 1000))
+	if limit <= 0:
+		limit = 1000
 	
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
@@ -948,12 +957,17 @@ func _tool_list_nodes(params: Dictionary) -> Dictionary:
 		if not start_node:
 			return {"error": "Parent node not found: " + parent_path}
 	
-	var nodes_list: Array[String] = []
-	_collect_nodes(start_node, "", recursive, nodes_list, scene_root)
+	var collected: Array[String] = []
+	_collect_nodes(start_node, "", recursive, collected, scene_root)
+	
+	var page: Dictionary = PayloadUtils.truncate_list(collected, limit)
+	var nodes_list: Array = page["items"]
 	
 	return {
 		"nodes": nodes_list,
-		"count": nodes_list.size()
+		"count": nodes_list.size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"]
 	}
 
 func _register_get_scene_tree(server_core: RefCounted) -> void:

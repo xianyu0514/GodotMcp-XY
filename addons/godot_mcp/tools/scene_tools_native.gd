@@ -557,6 +557,10 @@ func _register_list_project_scenes(server_core: RefCounted) -> void:
 				"type": "string",
 				"description": "Optional subpath to search (e.g. 'res://scenes/'). Default is 'res://'.",
 				"default": "res://"
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of scene paths to return. Default is 1000. Extra paths are omitted and 'truncated' is set true."
 			}
 		}
 	}
@@ -569,7 +573,9 @@ func _register_list_project_scenes(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"}
 			},
-			"count": {"type": "integer"}
+			"count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"}
 		}
 	}
 	
@@ -602,16 +608,25 @@ func _tool_list_project_scenes(params: Dictionary) -> Dictionary:
 	# 转换为文件系统路�?
 	var fs_path: String = search_path
 	
+	var limit: int = int(params.get("limit", 1000))
+	if limit <= 0:
+		limit = 1000
+	
 	# 使用DirAccess递归查找所�?tscn文件
-	var scenes: Array[String] = []
-	_collect_scenes(fs_path, scenes)
+	var collected: Array[String] = []
+	_collect_scenes(fs_path, collected)
 	
 	# 排序
-	scenes.sort()
+	collected.sort()
+	
+	var page: Dictionary = PayloadUtils.truncate_list(collected, limit)
+	var scenes: Array = page["items"]
 	
 	return {
 		"scenes": scenes,
-		"count": scenes.size()
+		"count": scenes.size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"]
 	}
 
 # ============================================================================
