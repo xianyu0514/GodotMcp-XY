@@ -55,6 +55,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_audit_project_health(server_core)
 	_register_find_resource_usages(server_core)
 	_register_list_unused_resources(server_core)
+	_register_scan_migration_compatibility(server_core)
+	_register_apply_migration_fixes(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -3535,3 +3537,419 @@ func _compare_named_entries(left: Dictionary, right: Dictionary) -> bool:
 
 func _sort_project_input_actions(left: Dictionary, right: Dictionary) -> bool:
 	return str(left.get("action_name", "")) < str(right.get("action_name", ""))
+
+# ============================================================================
+# scan_migration_compatibility / apply_migration_fixes
+# Engine-version migration assistant. Scans project source for usages of APIs
+# changed by a target Godot release and (optionally) auto-applies the safe,
+# mechanical rewrites. Rules below are derived from the official
+# "Upgrading to Godot 4.7" migration guide.
+# ============================================================================
+
+func _migration_rules(target_version: String) -> Array:
+	if target_version != "4.7":
+		return []
+	return [
+		{
+			"id": "rtl_image_update_mask_rename",
+			"severity": "must_fix",
+			"category": "GUI",
+			"kind": "enum_rename",
+			"languages": ["gd", "cs"],
+			"behavior": false,
+			"pattern": "\\bUPDATE_WIDTH_IN_PERCENT\\b",
+			"replacement": "UPDATE_WIDTH_UNIT",
+			"auto_fixable": true,
+			"gh": "GH-112617",
+			"message": "RichTextLabel.ImageUpdateMask.UPDATE_WIDTH_IN_PERCENT was renamed to UPDATE_WIDTH_UNIT in Godot 4.7."
+		},
+		{
+			"id": "audio_spectrum_tap_back_pos_removed",
+			"severity": "must_fix",
+			"category": "Audio",
+			"kind": "removed",
+			"languages": ["gd", "cs"],
+			"behavior": false,
+			"pattern": "\\btap_back_pos\\b",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-114355",
+			"message": "AudioEffectSpectrumAnalyzer.tap_back_pos was removed in Godot 4.7."
+		},
+		{
+			"id": "editor_scene_import_flags_enum",
+			"severity": "must_fix",
+			"category": "Editor",
+			"kind": "enum_move",
+			"languages": ["cs"],
+			"behavior": false,
+			"pattern": "\\bIMPORT_(ANIMATION|DISCARD_MESHES_AND_MATERIALS|FAIL_ON_MISSING_DEPENDENCIES|FORCE_DISABLE_MESH_COMPRESSION|GENERATE_TANGENT_ARRAYS|SCENE|USE_NAMED_SKIN_BINDS)\\b",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-115788",
+			"message": "EditorSceneFormatImporter.IMPORT_* constants moved into the ImportFlags enum in Godot 4.7 (C# source-incompatible)."
+		},
+		{
+			"id": "rtl_add_image_unit_params",
+			"severity": "review",
+			"category": "GUI",
+			"kind": "signature_change",
+			"languages": ["gd", "cs"],
+			"behavior": false,
+			"pattern": "\\b(add_image|update_image)\\s*\\(",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-112617",
+			"message": "RichTextLabel.add_image/update_image: the width_in_percent/height_in_percent params changed from bool to RichTextLabel.ImageUnit (default false->0) in Godot 4.7. Review these call sites."
+		},
+		{
+			"id": "input_device_id_zero",
+			"severity": "review",
+			"category": "Input",
+			"kind": "behavior",
+			"languages": ["gd", "cs"],
+			"behavior": true,
+			"pattern": "\\.device\\s*==\\s*0\\b",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-116274",
+			"message": "Mouse/keyboard device IDs changed from 0 to InputEvent.DEVICE_ID_MOUSE/DEVICE_ID_KEYBOARD in Godot 4.7. Compare InputEvent.device against those constants instead of 0."
+		},
+		{
+			"id": "audio_stream_player_area_mask_default",
+			"severity": "review",
+			"category": "Audio",
+			"kind": "behavior",
+			"languages": ["gd", "cs"],
+			"behavior": true,
+			"pattern": "\\baudio_bus_override\\b",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-107679",
+			"message": "AudioStreamPlayer default area_mask changed from 1 to 0 in Godot 4.7. If you rely on audio_bus_override with the default mask, set area_mask to layer 1 explicitly."
+		},
+		{
+			"id": "canvasitem_line_antialiasing",
+			"severity": "review",
+			"category": "2D",
+			"kind": "behavior",
+			"languages": ["gd", "cs"],
+			"behavior": true,
+			"pattern": "\\bdraw_(line|polyline|multiline)\\b",
+			"replacement": "",
+			"auto_fixable": false,
+			"gh": "GH-105122",
+			"message": "CanvasItem no longer adds an antialiasing feather to lines in Godot 4.7; lines may appear thinner. Increase line width if you relied on the old behavior."
+		}
+	]
+
+func _migration_lang_for_path(path: String) -> String:
+	if path.ends_with(".cs"):
+		return "cs"
+	return "gd"
+
+func _compile_migration_rules(rules: Array) -> Array:
+	var compiled: Array = []
+	for rule in rules:
+		var re: RegEx = RegEx.new()
+		if re.compile(str(rule.get("pattern", ""))) != OK:
+			continue
+		compiled.append({"rule": rule, "re": re})
+	return compiled
+
+func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
+	var tool_name: String = "scan_migration_compatibility"
+	var description: String = "Scan project source (.gd/.cs) for usages of APIs changed by a target Godot release and report migration issues with file/line, severity, and fix guidance."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"target_version": {
+				"type": "string",
+				"description": "Target Godot version to check migration against. Only '4.7' is currently supported.",
+				"default": "4.7"
+			},
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan. Default is res://.",
+				"default": "res://"
+			},
+			"include_behavior": {
+				"type": "boolean",
+				"description": "Include behavioral/default-value changes (compile-clean but runtime behavior differs). Default true.",
+				"default": true
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of issues to return. Default is 1000.",
+				"default": 1000
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"target_version": {"type": "string"},
+			"search_path": {"type": "string"},
+			"scanned_files": {"type": "integer"},
+			"must_fix_count": {"type": "integer"},
+			"review_count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"},
+			"issues": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_scan_migration_compatibility"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
+	var target_version: String = str(params.get("target_version", "4.7")).strip_edges()
+	var rules: Array = _migration_rules(target_version)
+	if rules.is_empty():
+		return {"error": "Unsupported target_version: " + target_version + " (supported: 4.7)"}
+
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var search_validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not search_validation["valid"]:
+		return {"error": "Invalid path: " + search_validation["error"]}
+	search_path = search_validation["sanitized"]
+
+	var include_behavior: bool = bool(params.get("include_behavior", true))
+	var limit: int = int(params.get("limit", 1000))
+
+	var files: Array[String] = []
+	_collect_resources(search_path, [".gd", ".cs"], files)
+	files.sort()
+
+	var active_rules: Array = []
+	for rule in rules:
+		if bool(rule.get("behavior", false)) and not include_behavior:
+			continue
+		active_rules.append(rule)
+	var compiled: Array = _compile_migration_rules(active_rules)
+
+	var issues: Array = []
+	var must_fix_count: int = 0
+	var review_count: int = 0
+	for path in files:
+		var lang: String = _migration_lang_for_path(path)
+		var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+		if file == null:
+			continue
+		var line_no: int = 0
+		while not file.eof_reached():
+			line_no += 1
+			var line: String = file.get_line()
+			for entry in compiled:
+				var rule: Dictionary = entry["rule"]
+				if not (lang in rule["languages"]):
+					continue
+				var re: RegEx = entry["re"]
+				for match_obj in re.search_all(line):
+					var auto_fixable: bool = bool(rule.get("auto_fixable", false))
+					var issue: Dictionary = {
+						"file": path,
+						"line": line_no,
+						"column": match_obj.get_start() + 1,
+						"rule_id": str(rule.get("id", "")),
+						"severity": str(rule.get("severity", "review")),
+						"category": str(rule.get("category", "")),
+						"kind": str(rule.get("kind", "")),
+						"language": lang,
+						"matched_text": match_obj.get_string(),
+						"message": str(rule.get("message", "")),
+						"gh": str(rule.get("gh", "")),
+						"auto_fixable": auto_fixable
+					}
+					if auto_fixable:
+						issue["suggested_replacement"] = str(rule.get("replacement", ""))
+					if issue["severity"] == "must_fix":
+						must_fix_count += 1
+					else:
+						review_count += 1
+					issues.append(issue)
+		file.close()
+
+	var bounded: Dictionary = PayloadUtils.truncate_list(issues, limit)
+	return {
+		"target_version": target_version,
+		"search_path": search_path,
+		"scanned_files": files.size(),
+		"must_fix_count": must_fix_count,
+		"review_count": review_count,
+		"total_count": int(bounded["total_count"]),
+		"truncated": bool(bounded["truncated"]),
+		"issues": bounded["items"]
+	}
+
+func _register_apply_migration_fixes(server_core: RefCounted) -> void:
+	var tool_name: String = "apply_migration_fixes"
+	var description: String = "Apply the safe, mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry run that previews diffs without writing files."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"target_version": {
+				"type": "string",
+				"description": "Target Godot version. Only '4.7' is currently supported.",
+				"default": "4.7"
+			},
+			"search_path": {
+				"type": "string",
+				"description": "Directory to scan and rewrite. Default is res://.",
+				"default": "res://"
+			},
+			"rule_ids": {
+				"type": "array",
+				"description": "Optional list of rule ids to restrict the fixes to. Empty means all auto-fixable rules.",
+				"items": {"type": "string"}
+			},
+			"dry_run": {
+				"type": "boolean",
+				"description": "When true (default), preview changes without writing files.",
+				"default": true
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of changes to return. Default is 1000.",
+				"default": 1000
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"target_version": {"type": "string"},
+			"search_path": {"type": "string"},
+			"dry_run": {"type": "boolean"},
+			"scanned_files": {"type": "integer"},
+			"files_changed": {"type": "array"},
+			"change_count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"},
+			"changes": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_apply_migration_fixes"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_apply_migration_fixes(params: Dictionary) -> Dictionary:
+	var target_version: String = str(params.get("target_version", "4.7")).strip_edges()
+	var all_rules: Array = _migration_rules(target_version)
+	if all_rules.is_empty():
+		return {"error": "Unsupported target_version: " + target_version + " (supported: 4.7)"}
+
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var search_validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not search_validation["valid"]:
+		return {"error": "Invalid path: " + search_validation["error"]}
+	search_path = search_validation["sanitized"]
+
+	var dry_run: bool = bool(params.get("dry_run", true))
+	var limit: int = int(params.get("limit", 1000))
+
+	var rule_id_filter: Array = []
+	for rid in params.get("rule_ids", []):
+		rule_id_filter.append(str(rid))
+
+	var fix_rules: Array = []
+	for rule in all_rules:
+		if not bool(rule.get("auto_fixable", false)):
+			continue
+		if not rule_id_filter.is_empty() and not (str(rule.get("id", "")) in rule_id_filter):
+			continue
+		fix_rules.append(rule)
+	if fix_rules.is_empty():
+		return {"error": "No auto-fixable rules selected for target_version " + target_version}
+
+	var compiled: Array = _compile_migration_rules(fix_rules)
+
+	var files: Array[String] = []
+	_collect_resources(search_path, [".gd", ".cs"], files)
+	files.sort()
+
+	var changes: Array = []
+	var files_changed: Array = []
+	for path in files:
+		var lang: String = _migration_lang_for_path(path)
+		var applicable: Array = []
+		for entry in compiled:
+			if lang in entry["rule"]["languages"]:
+				applicable.append(entry)
+		if applicable.is_empty():
+			continue
+
+		var read_file: FileAccess = FileAccess.open(path, FileAccess.READ)
+		if read_file == null:
+			continue
+		var content: String = read_file.get_as_text()
+		read_file.close()
+
+		var lines: PackedStringArray = content.split("\n")
+		var file_changed: bool = false
+		for i in range(lines.size()):
+			var original_line: String = lines[i]
+			var new_line: String = original_line
+			for entry in applicable:
+				var rule: Dictionary = entry["rule"]
+				var re: RegEx = entry["re"]
+				if re.search(new_line) == null:
+					continue
+				var replaced: String = re.sub(new_line, str(rule.get("replacement", "")), true)
+				if replaced != new_line:
+					changes.append({
+						"file": path,
+						"line": i + 1,
+						"rule_id": str(rule.get("id", "")),
+						"gh": str(rule.get("gh", "")),
+						"before": new_line,
+						"after": replaced
+					})
+					new_line = replaced
+					file_changed = true
+			if new_line != original_line:
+				lines[i] = new_line
+
+		if file_changed:
+			files_changed.append(path)
+			if not dry_run:
+				var write_file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+				if write_file == null:
+					return {"error": "Failed to open file for writing: " + path}
+				write_file.store_string("\n".join(lines))
+				write_file.close()
+
+	var bounded: Dictionary = PayloadUtils.truncate_list(changes, limit)
+	return {
+		"target_version": target_version,
+		"search_path": search_path,
+		"dry_run": dry_run,
+		"scanned_files": files.size(),
+		"files_changed": files_changed,
+		"change_count": changes.size(),
+		"total_count": int(bounded["total_count"]),
+		"truncated": bool(bounded["truncated"]),
+		"changes": bounded["items"]
+	}
