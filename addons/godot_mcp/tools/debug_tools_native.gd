@@ -566,7 +566,11 @@ func _register_get_debug_scopes(server_core: RefCounted) -> void:
 	)
 
 func _tool_get_debug_scopes(params: Dictionary) -> Dictionary:
-	var variables_result: Dictionary = _tool_get_debug_stack_variables(params)
+	# Scopes only summarize variables into per-scope counts, so the full variable
+	# list must be grouped without truncation to keep named_variables accurate.
+	var variables_params: Dictionary = params.duplicate()
+	variables_params["limit"] = 0x7FFFFFFF
+	var variables_result: Dictionary = _tool_get_debug_stack_variables(variables_params)
 	if variables_result.has("error"):
 		return variables_result
 	var bridge: RefCounted = _get_debugger_bridge()

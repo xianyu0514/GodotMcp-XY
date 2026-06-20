@@ -78,6 +78,9 @@ class FakeStackBridge:
 			variables.append({"name": "v%d" % i, "scope": "local", "value": i})
 		return variables
 
+	func get_scope_variables_reference(_frame: int, _scope_name: String) -> int:
+		return 1
+
 var _runtime_bridge: RefCounted = null
 
 func before_each() -> void:
@@ -222,6 +225,17 @@ func test_get_debug_stack_variables_truncates_to_limit():
 	assert_eq(result.get("count"), 10, "Returned variable count is capped at the limit")
 	assert_eq(result.get("total_count"), 25, "total_count reports the full number of variables")
 	assert_true(result.get("truncated"), "truncated flag is set when variables exceed the limit")
+
+func test_get_debug_scopes_not_truncated_by_variable_limit():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_runtime_bridge = FakeStackBridge.new(0, 1500)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	# Scopes summarize all variables; the default variable limit must not silently
+	# drop entries and corrupt the per-scope named_variables count.
+	var result: Dictionary = debug_tools._tool_get_debug_scopes({"frame": 0})
+	var scopes: Array = result.get("scopes", [])
+	assert_eq(scopes.size(), 1, "All variables share one scope")
+	assert_eq(scopes[0].get("named_variables"), 1500, "Scope count reflects the full variable set, not the truncated subset")
 
 func test_runtime_probe_polling_reuses_pending_request():
 	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
