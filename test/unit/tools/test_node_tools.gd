@@ -294,3 +294,56 @@ func test_batch_connect_signals_requires_editor():
 		"receiver_method": "_on_pressed"
 	}]})
 	assert_has(result, "error", "Without an editor interface the batch connect reports an error")
+
+# --- set_control_offset_transform (Godot 4.7) ---
+
+func test_set_control_offset_transform_missing_node_path():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_set_control_offset_transform({})
+	assert_has(result, "error", "Missing node_path should return error")
+
+func test_set_control_offset_transform_requires_editor():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_set_control_offset_transform({"node_path": "/root/Main/Panel"})
+	assert_has(result, "error", "Without an editor interface the tool reports an error")
+
+func test_apply_offset_transform_helper():
+	var node_tools = load("res://addons/godot_mcp/tools/node_tools_native.gd")
+	var control := Control.new()
+	var result: Dictionary = node_tools._apply_offset_transform(control, {
+		"enabled": true,
+		"position": {"x": 10, "y": 20},
+		"rotation": 0.5,
+		"scale": {"x": 2, "y": 2}
+	})
+	# Godot 4.7 supports offset_transform_*; older versions report unsupported.
+	if node_tools._has_property(control, "offset_transform_position"):
+		assert_eq(result.get("status", ""), "success", "On Godot 4.7 the offset transform should apply")
+		assert_eq(control.get("offset_transform_position"), Vector2(10, 20), "Position should be set")
+		assert_almost_eq(float(control.get("offset_transform_rotation")), 0.5, 0.0001, "Rotation should be set")
+		assert_true("offset_transform_position" in result.get("applied", []), "applied should list position")
+	else:
+		assert_eq(result.get("status", ""), "unsupported", "On older Godot the tool reports unsupported")
+	control.free()
+
+# --- set_collision_one_way ---
+
+func test_set_collision_one_way_missing_node_path():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_set_collision_one_way({})
+	assert_has(result, "error", "Missing node_path should return error")
+
+func test_set_collision_one_way_requires_editor():
+	var tool = load("res://addons/godot_mcp/tools/node_tools_native.gd").new()
+	var result: Dictionary = tool._tool_set_collision_one_way({"node_path": "/root/Main/Shape"})
+	assert_has(result, "error", "Without an editor interface the tool reports an error")
+
+func test_apply_one_way_collision_helper_polygon():
+	var node_tools = load("res://addons/godot_mcp/tools/node_tools_native.gd")
+	var poly := CollisionPolygon2D.new()
+	var result: Dictionary = node_tools._apply_one_way_collision(poly, {"enabled": true, "margin": 2.5})
+	# CollisionPolygon2D.one_way_collision exists in 4.6+.
+	assert_eq(result.get("status", ""), "success", "CollisionPolygon2D should support one_way_collision")
+	assert_true(poly.get("one_way_collision"), "one_way_collision should be enabled")
+	assert_true("one_way_collision_margin" in result.get("applied", []), "margin should be applied")
+	poly.free()

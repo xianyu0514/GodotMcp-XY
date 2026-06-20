@@ -11,9 +11,9 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_169_tools_registered():
+func test_all_174_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 169, "Should have exactly 169 tools registered")
+	assert_eq(all_tools.size(), 174, "Should have exactly 174 tools registered")
 
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
@@ -21,7 +21,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 139, "Should have 139 supplementary tools")
+	assert_eq(supp_tools.size(), 144, "Should have 144 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -216,6 +216,11 @@ func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("audit_project_health"), "audit_project_health should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("find_resource_usages"), "find_resource_usages should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("list_unused_resources"), "list_unused_resources should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("set_control_offset_transform"), "set_control_offset_transform should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("set_collision_one_way"), "set_collision_one_way should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("create_gradient_texture"), "create_gradient_texture should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("pack_pck"), "pack_pck should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("configure_render_output"), "configure_render_output should be supplementary")
 
 func test_get_core_max_count():
 	assert_eq(_classifier.get_core_max_count(), 30, "Core max count should be 30")
