@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **160 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **162 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **160 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 4 | 8 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出） |
 | [Editor Tools](#editor-tools) | 4 | 12 | 16 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 25 | 28 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系） |
+| [Project Tools](#project-tools) | 3 | 27 | 30 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -3997,7 +3997,7 @@ Continue：恢复执行。
 
 ---
 
-### 156. find_resource_usages
+### 159. find_resource_usages
 
 反向依赖查询：查找项目中哪些资源引用了目标资源。按路径和 UID 两种方式匹配。
 
@@ -4024,7 +4024,7 @@ Continue：恢复执行。
 
 ---
 
-### 157. list_unused_resources
+### 160. list_unused_resources
 
 列出没有被任何其他资源引用的孤立资源。仅通过 `class_name` 引用的脚本不被跟踪；入口点（主场景、自动加载）始终视为已使用。
 
@@ -4046,6 +4046,64 @@ Continue：恢复执行。
 | `unused_resources` | array | 孤立资源路径列表 |
 
 **注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 161. scan_migration_compatibility
+
+扫描项目源码（`.gd`/`.cs`）中使用了目标 Godot 版本破坏性变更 API 的位置，并按文件/行号、严重度和修复建议汇总迁移问题。规则表源自官方《Upgrading to Godot 4.7》迁移指南。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `target_version` | string | 否 | 目标 Godot 版本，目前仅支持 `4.7`，默认 `4.7` |
+| `search_path` | string | 否 | 扫描目录，默认 `res://` |
+| `include_behavior` | boolean | 否 | 是否包含行为/默认值变更（可编译但运行时行为不同），默认 `true` |
+| `limit` | int | 否 | 最大返回问题数量，默认 `1000` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `target_version` | string | 目标版本 |
+| `search_path` | string | 搜索路径 |
+| `scanned_files` | int | 扫描的源码文件数 |
+| `must_fix_count` | int | 源码不兼容（必须修改）问题数 |
+| `review_count` | int | 需复核（行为/默认值变更）问题数 |
+| `total_count` | int | 截断前的问题总数 |
+| `truncated` | boolean | 结果是否被截断 |
+| `issues` | array | 问题列表（含 `file`、`line`、`column`、`rule_id`、`severity`、`message`、`gh`、`auto_fixable` 等） |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 162. apply_migration_fixes
+
+为目标 Godot 版本应用安全的、机械式的迁移改写（如枚举/标识符重命名）。默认 `dry_run=true`，仅预览 diff 而不写盘；行为类变更不会被自动改写，只能由 `scan_migration_compatibility` 报告后手动处理。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `target_version` | string | 否 | 目标 Godot 版本，目前仅支持 `4.7`，默认 `4.7` |
+| `search_path` | string | 否 | 扫描并改写的目录，默认 `res://` |
+| `rule_ids` | array | 否 | 限定要应用的规则 id 列表，留空表示全部可自动修复规则 |
+| `dry_run` | boolean | 否 | 为 `true`（默认）时仅预览，不写文件 |
+| `limit` | int | 否 | 最大返回变更数量，默认 `1000` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `target_version` | string | 目标版本 |
+| `search_path` | string | 搜索路径 |
+| `dry_run` | boolean | 是否为预览运行 |
+| `scanned_files` | int | 扫描的源码文件数 |
+| `files_changed` | array | 发生（或将要）改动的文件列表 |
+| `change_count` | int | 变更总数 |
+| `total_count` | int | 截断前的变更总数 |
+| `truncated` | boolean | 结果是否被截断 |
+| `changes` | array | 变更列表（含 `file`、`line`、`rule_id`、`before`、`after`） |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
 
 ---
 
@@ -4148,7 +4206,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **160 个工具**（30 核心 + 130 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **162 个工具**（30 核心 + 132 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema

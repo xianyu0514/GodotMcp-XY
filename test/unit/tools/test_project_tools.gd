@@ -358,3 +358,89 @@ func test_resolve_resource_root_path_strips_prefix_and_resolves_uid():
 	var uid_text: String = ResourceUID.id_to_text(uid_id)
 	assert_eq(project_tools._resolve_resource_root_path("*" + uid_text), "res://scenes/world.tscn", "uid:// entry point should resolve to its res:// path")
 	ResourceUID.remove_id(uid_id)
+
+# --- migration assistant: scan_migration_compatibility / apply_migration_fixes ---
+
+const _MIGRATION_DIR: String = "res://.tmp_migration_test"
+
+func _setup_migration_fixture() -> void:
+	_teardown_migration_fixture()
+	var dir: DirAccess = DirAccess.open("res://")
+	dir.make_dir(".tmp_migration_test")
+	var src: String = "extends Node\n" \
+		+ "func _ready() -> void:\n" \
+		+ "\tvar mask = UPDATE_WIDTH_IN_PERCENT\n" \
+		+ "\tvar pos = analyzer.tap_back_pos\n" \
+		+ "\tvar override_flag = audio_bus_override\n"
+	_write_text_file(_MIGRATION_DIR + "/mig_a.gd", src)
+
+func _teardown_migration_fixture() -> void:
+	if not DirAccess.dir_exists_absolute(_MIGRATION_DIR):
+		return
+	var dir: DirAccess = DirAccess.open(_MIGRATION_DIR)
+	if dir:
+		dir.list_dir_begin()
+		var file_name: String = dir.get_next()
+		while not file_name.is_empty():
+			if file_name != "." and file_name != "..":
+				dir.remove(file_name)
+			file_name = dir.get_next()
+		dir.list_dir_end()
+	DirAccess.remove_absolute(_MIGRATION_DIR)
+
+func test_scan_migration_rejects_unsupported_version():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"target_version": "9.9"})
+	assert_has(result, "error", "Unsupported target_version should return an error")
+
+func test_scan_migration_flags_must_fix_and_behavior():
+	_setup_migration_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": _MIGRATION_DIR, "include_behavior": true})
+	assert_false(result.has("error"), "A valid scan should not error")
+	assert_eq(int(result.get("must_fix_count", 0)), 2, "Should flag the enum rename and the removed member as must_fix")
+	assert_true(int(result.get("review_count", 0)) >= 1, "audio_bus_override should be flagged for review")
+	var rule_ids: Array = []
+	for issue in result.get("issues", []):
+		rule_ids.append(str(issue.get("rule_id", "")))
+	assert_has(rule_ids, "rtl_image_update_mask_rename", "Enum rename rule should fire")
+	assert_has(rule_ids, "audio_spectrum_tap_back_pos_removed", "Removed-member rule should fire")
+	_teardown_migration_fixture()
+
+func test_scan_migration_excludes_behavior_when_disabled():
+	_setup_migration_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": _MIGRATION_DIR, "include_behavior": false})
+	assert_false(result.has("error"), "A valid scan should not error")
+	assert_eq(int(result.get("review_count", 0)), 0, "Behavior issues should be excluded when include_behavior is false")
+	assert_eq(int(result.get("must_fix_count", 0)), 2, "Must-fix issues should still be reported")
+	_teardown_migration_fixture()
+
+func test_apply_migration_fixes_dry_run_does_not_write():
+	_setup_migration_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": true})
+	assert_false(result.has("error"), "A valid dry-run should not error")
+	assert_true(bool(result.get("dry_run", false)), "Result should report dry_run true")
+	assert_eq(int(result.get("change_count", 0)), 1, "Only the auto-fixable enum rename should be a proposed change")
+	var content: String = FileAccess.get_file_as_string(_MIGRATION_DIR + "/mig_a.gd")
+	assert_true(content.contains("UPDATE_WIDTH_IN_PERCENT"), "Dry run must not modify the file on disk")
+	_teardown_migration_fixture()
+
+func test_apply_migration_fixes_writes_enum_rename():
+	_setup_migration_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": false})
+	assert_false(result.has("error"), "A valid apply should not error")
+	assert_eq(int(result.get("change_count", 0)), 1, "Should apply exactly one rewrite")
+	var content: String = FileAccess.get_file_as_string(_MIGRATION_DIR + "/mig_a.gd")
+	assert_false(content.contains("UPDATE_WIDTH_IN_PERCENT"), "Old enum name should be gone after apply")
+	assert_true(content.contains("UPDATE_WIDTH_UNIT"), "New enum name should be present after apply")
+	_teardown_migration_fixture()
+
+func test_apply_migration_fixes_respects_rule_id_filter():
+	_setup_migration_fixture()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": true, "rule_ids": ["audio_spectrum_tap_back_pos_removed"]})
+	assert_has(result, "error", "Selecting only a non-auto-fixable rule should yield no applicable fixes")
+	_teardown_migration_fixture()
