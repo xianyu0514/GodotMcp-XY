@@ -102,11 +102,19 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected project batch test runner tools: {missing_tools}")
 
-        run_result = tool_call(
-            "run_project_tests",
-            {"search_path": "res://test/integration/.tmp_project_test_batch_runner", "framework": "python"},
-            request_id=2,
-        )
+        batch_arguments = {
+            "search_path": "res://test/integration/.tmp_project_test_batch_runner",
+            "framework": "python",
+        }
+        # The batch runs on a background thread: the first call returns "pending"
+        # and the caller polls with the same arguments until it finishes.
+        run_result = tool_call("run_project_tests", batch_arguments, request_id=2)
+        poll_deadline = time.time() + 120.0
+        while run_result.get("status") == "pending":
+            if time.time() > poll_deadline:
+                raise AssertionError(f"Timed out waiting for batch test run to finish: {run_result}")
+            time.sleep(0.5)
+            run_result = tool_call("run_project_tests", batch_arguments, request_id=2)
         if run_result.get("status") != "failed":
             raise AssertionError(f"Expected aggregate batch status to be failed when one test fails: {run_result}")
         if run_result.get("total_count") != 2:

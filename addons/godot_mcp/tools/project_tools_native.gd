@@ -8,6 +8,7 @@ const MAX_CONCURRENT_TEST_JOBS: int = 4
 
 var _editor_interface: EditorInterface = null
 var _test_runner: AsyncJobRunner = AsyncJobRunner.new()
+var _batch_test_runner: AsyncJobRunner = AsyncJobRunner.new()
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -743,7 +744,7 @@ func _execute_project_test_blocking(test_path: String) -> Dictionary:
 func _register_run_project_tests(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"run_project_tests",
-		"Discover and run multiple project tests from a directory. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts.",
+		"Discover and run multiple project tests from a directory without blocking the editor. The first call starts the batch on a background thread and returns status 'pending'; call again with the same arguments to poll for the aggregated result. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts.",
 		{
 			"type": "object",
 			"properties": {
@@ -756,9 +757,10 @@ func _register_run_project_tests(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
-				"status": {"type": "string"},
+				"status": {"type": "string", "description": "'pending' while running, then 'passed', 'failed' or 'skipped'."},
 				"search_path": {"type": "string"},
 				"framework": {"type": "string"},
+				"elapsed_ms": {"type": "integer", "description": "Time elapsed so far while status is 'pending'."},
 				"total_count": {"type": "integer"},
 				"passed_count": {"type": "integer"},
 				"failed_count": {"type": "integer"},
@@ -771,6 +773,49 @@ func _register_run_project_tests(server_core: RefCounted) -> void:
 	)
 
 func _tool_run_project_tests(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", "res://test")).strip_edges()
+	if search_path.is_empty():
+		search_path = "res://test"
+	var framework: String = str(params.get("framework", "")).strip_edges().to_lower()
+	var only_runnable: bool = bool(params.get("only_runnable", true))
+
+	# A batch can spawn many test subprocesses back to back and take minutes.
+	# Run the whole batch on a background thread so the editor stays responsive:
+	# the first call starts the batch and returns "pending"; calling again with
+	# the same arguments polls for the aggregated result.
+	var job_key: String = search_path + "|" + framework + "|" + str(only_runnable)
+
+	if _batch_test_runner.has_job(job_key):
+		var polled: Dictionary = _batch_test_runner.poll(job_key)
+		if not bool(polled["finished"]):
+			return {
+				"status": "pending",
+				"search_path": search_path,
+				"framework": framework,
+				"elapsed_ms": _batch_test_runner.elapsed_ms(job_key),
+				"message": "Test batch is still running; call run_project_tests again with the same arguments to poll for the result."
+			}
+		return polled["result"]
+
+	if _batch_test_runner.active_count() >= MAX_CONCURRENT_TEST_JOBS:
+		return {"error": "Too many test batches in progress; poll the pending runs before starting another."}
+
+	var work_params: Dictionary = {
+		"search_path": search_path,
+		"framework": framework,
+		"only_runnable": only_runnable
+	}
+	_batch_test_runner.start(job_key, Callable(self, "_execute_project_tests_blocking").bind(work_params))
+	return {
+		"status": "pending",
+		"search_path": search_path,
+		"framework": framework,
+		"message": "Test batch started on a background thread; call run_project_tests again with the same arguments to poll for the result."
+	}
+
+# Blocking execution of a test batch. Used by the background worker thread for
+# run_project_tests. Discovers tests and runs each one synchronously.
+func _execute_project_tests_blocking(params: Dictionary) -> Dictionary:
 	var list_result: Dictionary = _tool_list_project_tests({
 		"search_path": params.get("search_path", "res://test"),
 		"framework": params.get("framework", "")

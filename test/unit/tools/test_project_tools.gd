@@ -201,3 +201,44 @@ func test_run_project_test_rejects_when_too_many_jobs():
 	var result: Dictionary = project_tools._tool_run_project_test({"test_path": _EXISTING_TEST_PATH})
 	assert_has(result, "error", "Starting another run beyond the cap is rejected")
 	project_tools._test_runner.flush()
+
+# --- run_project_tests batch async runner ---
+
+func _batch_job_key(params: Dictionary) -> String:
+	var search_path: String = str(params.get("search_path", "res://test")).strip_edges()
+	if search_path.is_empty():
+		search_path = "res://test"
+	var framework: String = str(params.get("framework", "")).strip_edges().to_lower()
+	var only_runnable: bool = bool(params.get("only_runnable", true))
+	return search_path + "|" + framework + "|" + str(only_runnable)
+
+func _fake_batch_result() -> Dictionary:
+	return {"status": "passed", "total_count": 2, "passed_count": 2, "failed_count": 0}
+
+func test_run_project_tests_starts_batch_and_returns_pending():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var params: Dictionary = {"search_path": "res://test/unit", "framework": "gut"}
+	project_tools._batch_test_runner.start(_batch_job_key(params), Callable(self, "_fake_slow_result"))
+	var result: Dictionary = project_tools._tool_run_project_tests(params)
+	assert_eq(result.get("status"), "pending", "A running batch reports pending when polled via the tool")
+	assert_has(result, "elapsed_ms", "Pending batch status reports elapsed time")
+	project_tools._batch_test_runner.flush()
+
+func test_run_project_tests_returns_result_when_finished():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var params: Dictionary = {"search_path": "res://test/unit", "framework": "gut"}
+	project_tools._batch_test_runner.start(_batch_job_key(params), Callable(self, "_fake_batch_result"))
+	OS.delay_msec(50)
+	var result: Dictionary = project_tools._tool_run_project_tests(params)
+	assert_eq(result.get("status"), "passed", "A finished batch returns the aggregated worker result via the tool")
+	assert_eq(result.get("total_count"), 2, "The aggregated batch payload is forwarded unchanged")
+	assert_false(project_tools._batch_test_runner.has_job(_batch_job_key(params)), "The finished batch job is cleared after polling")
+
+func test_run_project_tests_rejects_when_too_many_batches():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	for i in range(project_tools.MAX_CONCURRENT_TEST_JOBS):
+		project_tools._batch_test_runner.start("batch_" + str(i), Callable(self, "_fake_slow_result"))
+	assert_eq(project_tools._batch_test_runner.active_count(), project_tools.MAX_CONCURRENT_TEST_JOBS, "Batch runner saturated to the concurrency cap")
+	var result: Dictionary = project_tools._tool_run_project_tests({"search_path": "res://test/unit", "framework": "gut"})
+	assert_has(result, "error", "Starting another batch beyond the cap is rejected")
+	project_tools._batch_test_runner.flush()

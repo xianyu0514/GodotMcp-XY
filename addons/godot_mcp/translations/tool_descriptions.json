@@ -3,7 +3,7 @@
   "get_project_settings": "Get project settings. Optionally filter by a prefix.",
   "list_project_tests": "Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable.",
   "run_project_test": "Run a single project test script without blocking the editor. The first call starts the run on a background thread and returns status 'pending'; call again with the same test_path to poll for the finished result. Python integration tests are executed with python. GUT unit tests are executed through Godot headless when addons/gut is available.",
-  "run_project_tests": "Discover and run multiple project tests from a directory. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts.",
+  "run_project_tests": "Discover and run multiple project tests from a directory without blocking the editor. The first call starts the batch on a background thread and returns status 'pending'; call again with the same arguments to poll for the aggregated result. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts.",
   "list_project_input_actions": "List project InputMap actions stored in ProjectSettings, including serialized input events.",
   "upsert_project_input_action": "Create or update a project InputMap action in ProjectSettings and save project.godot.",
   "remove_project_input_action": "Remove a project InputMap action from ProjectSettings and save project.godot.",
