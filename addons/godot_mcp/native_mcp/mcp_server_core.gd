@@ -49,6 +49,13 @@ const MAX_REQUEST_QUEUE_SIZE: int = 256
 ## bound prevents a request from hanging forever if the server stalls or stops.
 const MAX_QUEUE_WAIT_SECONDS: float = 30.0
 
+## Maximum number of requests that may simultaneously wait for a free queue slot.
+## The serial queue is capped at MAX_REQUEST_QUEUE_SIZE, but each waiting request
+## is a live coroutine holding its message/context; this second bound caps that
+## coroutine overhead under sustained backpressure. When exceeded, the newest
+## request is rejected immediately instead of adding yet another waiter.
+const MAX_WAITING_REQUESTS: int = 256
+
 ## Read-only tools whose (potentially expensive) results are cached and served
 ## directly on a repeat call until a mutating tool invalidates the cache. The
 ## cache is keyed by tool name plus its arguments, so different args cache apart.
@@ -74,6 +81,13 @@ var _http_port: int = 9080  # HTTP 监听端口
 # the editor stays responsive instead of spiking CPU/memory.
 var _request_queue: Array[Dictionary] = []
 var _is_processing_request: bool = false
+
+# FIFO admission gate for requests that arrive while the queue is full. Each waiter
+# appends a unique, monotonically increasing id; only the waiter at the front of
+# _admission_waiters may enter the queue, so backpressured requests are admitted in
+# arrival order rather than in nondeterministic coroutine-resume order.
+var _admission_waiters: Array[int] = []
+var _admission_waiter_seq: int = 0
 
 # 工具和资源注册表
 var _tools: Dictionary = {}  # String -> MCPTool
@@ -195,11 +209,17 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
 		return
 	
-	# Backpressure: when the queue is full, wait for a slot to free up instead of
-	# rejecting immediately, so concurrent AI clients queue and wait for their turn.
-	# Only reject if no slot opens within MAX_QUEUE_WAIT_SECONDS or the server stops,
-	# which keeps memory bounded without hanging the request forever.
-	if _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE:
+	# Backpressure: when the queue is full (or other requests are already waiting),
+	# wait for a slot through a FIFO admission gate instead of rejecting immediately,
+	# so concurrent AI clients are served in arrival order. Only reject if no slot
+	# opens within MAX_QUEUE_WAIT_SECONDS, the server stops, or there are already too
+	# many waiters — keeping both memory and live coroutines bounded.
+	if _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE or not _admission_waiters.is_empty():
+		if _admission_waiters.size() >= MAX_WAITING_REQUESTS:
+			_log_warn("Too many requests waiting (" + str(_admission_waiters.size()) + "), rejecting request")
+			_send_error(message.get("id"), MCPTypes.ERROR_INTERNAL_ERROR, 
+					   "Server busy: too many requests waiting. Please retry later.", null, context)
+			return
 		var slot_free: bool = await _await_queue_slot()
 		if not slot_free:
 			_log_warn("Request queue full after waiting " + str(MAX_QUEUE_WAIT_SECONDS) + "s, rejecting request")
@@ -211,20 +231,31 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	_request_queue.append({"message": message, "context": context})
 	_drain_request_queue()
 
-## Wait until the request queue has a free slot, the server stops, or the wait
-## bound elapses. Returns true if a slot is available to enqueue into, false if it
-## timed out or the server is no longer active (caller should then reject).
+## Wait in a FIFO line until this request may enter the queue. The caller takes a
+## ticket at the back of _admission_waiters and is admitted only when it reaches the
+## front AND a slot is free, preserving arrival order across concurrent waiters.
+## Returns true if admitted, false if it timed out or the server stopped (caller
+## then rejects). The ticket is always removed on exit so a timed-out waiter never
+## blocks the requests behind it.
 func _await_queue_slot() -> bool:
+	var ticket: int = _admission_waiter_seq
+	_admission_waiter_seq += 1
+	_admission_waiters.append(ticket)
+
 	var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
-	if main_loop == null:
-		# No frame loop to await on; fall back to an immediate capacity check.
-		return _active and _request_queue.size() < MAX_REQUEST_QUEUE_SIZE
 	var deadline_ms: float = Time.get_ticks_msec() + MAX_QUEUE_WAIT_SECONDS * 1000.0
-	while _active and _request_queue.size() >= MAX_REQUEST_QUEUE_SIZE:
-		if Time.get_ticks_msec() >= deadline_ms:
-			return false
+	var admitted: bool = false
+	while _active:
+		# Only the front-of-line ticket may take a free slot (FIFO admission).
+		if _admission_waiters[0] == ticket and _request_queue.size() < MAX_REQUEST_QUEUE_SIZE:
+			admitted = true
+			break
+		if Time.get_ticks_msec() >= deadline_ms or main_loop == null:
+			break
 		await main_loop.process_frame
-	return _active and _request_queue.size() < MAX_REQUEST_QUEUE_SIZE
+
+	_admission_waiters.erase(ticket)
+	return admitted and _active
 
 ## Process the request queue serially: run exactly one request at a time until empty.
 ## All access happens on the main thread (transport marshals via call_deferred), so no
@@ -326,6 +357,9 @@ func stop() -> void:
 	# Drop any queued-but-unprocessed requests (the drain loop exits on _active == false).
 	_request_queue.clear()
 	_is_processing_request = false
+	# Waiting admission coroutines observe _active == false and exit on their next frame;
+	# clear the line so a restarted server starts with no stale waiters.
+	_admission_waiters.clear()
 
 	_log_info("MCP Server stopped")
 

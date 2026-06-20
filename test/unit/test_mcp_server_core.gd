@@ -282,6 +282,51 @@ func test_full_queue_waits_then_accepts_when_slot_frees():
 	await get_tree().process_frame
 	assert_eq(result[0], true, "Waiter should resolve to true once a slot frees up")
 
+func test_admission_preserves_fifo_order_under_backpressure():
+	# Fill the queue, then start three waiters in arrival order A, B, C. Each waiter
+	# re-fills the queue on admission (as the real caller does), so exactly one waiter
+	# is admitted per freed slot. Admission must follow arrival order, not coroutine
+	# resume order.
+	_core._active = true
+	var max_size: int = _core.MAX_REQUEST_QUEUE_SIZE
+	for i in range(max_size):
+		_core._request_queue.append({"message": {}, "context": null})
+	var admit_order: Array = []
+	var make_waiter: Callable = func(tag: String):
+		var ok: bool = await _core._await_queue_slot()
+		if ok:
+			admit_order.append(tag)
+			_core._request_queue.append({"message": {}, "context": null})
+	make_waiter.call("A")
+	await get_tree().process_frame
+	make_waiter.call("B")
+	await get_tree().process_frame
+	make_waiter.call("C")
+	await get_tree().process_frame
+	assert_eq(admit_order, [], "All waiters should be blocked while the queue is full")
+	# Free one slot at a time; each frees exactly one waiter, in arrival order.
+	for expected in ["A", "B", "C"]:
+		_core._request_queue.pop_front()
+		await get_tree().process_frame
+		await get_tree().process_frame
+	assert_eq(admit_order, ["A", "B", "C"], "Backpressured requests must be admitted in FIFO arrival order")
+
+func test_waiter_cap_rejects_when_too_many_waiting():
+	# When the queue is full AND the waiter line is already at MAX_WAITING_REQUESTS,
+	# a new request must be rejected immediately instead of adding another live
+	# coroutine, bounding coroutine overhead under sustained backpressure.
+	_core._active = true
+	var max_size: int = _core.MAX_REQUEST_QUEUE_SIZE
+	for i in range(max_size):
+		_core._request_queue.append({"message": {}, "context": null})
+	for i in range(_core.MAX_WAITING_REQUESTS):
+		_core._admission_waiters.append(i)
+	_core._admission_waiter_seq = _core.MAX_WAITING_REQUESTS
+	var overflow: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x", "arguments": {}}}
+	_core._on_transport_message_received(overflow, null)
+	assert_eq(_core._admission_waiters.size(), _core.MAX_WAITING_REQUESTS, "At the waiter cap, a new request must be rejected, not added as a waiter")
+	assert_eq(_core.get_request_queue_depth(), max_size, "Rejected request must not be enqueued")
+
 func test_serial_queue_runs_requests_in_fifo_order():
 	# Each tool call awaits two frames; if execution were concurrent we'd see
 	# interleaving (start_1, start_2, ...). Serial execution must yield
