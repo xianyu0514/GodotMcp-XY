@@ -432,3 +432,40 @@ func test_cacheable_read_keys_by_arguments():
 	await _core._handle_request(deep)
 	await _core._handle_request(shallow)
 	assert_eq(calls[0], 2, "Different arguments cache separately; each variant computed once")
+
+func test_all_cacheable_read_tools_are_served_from_cache():
+	# Guard the whole CACHEABLE_READ_TOOLS list (not just get_scene_structure):
+	# every listed read-only tool must be served from cache on a repeat call.
+	for tool_name in _core.CACHEABLE_READ_TOOLS:
+		var calls: Array = [0]
+		_core.register_tool(tool_name, "Read", {"type": "object"},
+			func(args):
+				calls[0] += 1
+				return {"ok": true, "n": calls[0]},
+			{}, {"readOnlyHint": true})
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool_name, "arguments": {}}}
+		await _core._handle_request(msg)
+		await _core._handle_request(msg)
+		assert_eq(calls[0], 1, "%s should be served from cache on the second call" % tool_name)
+
+func test_all_cacheable_read_tools_invalidated_by_mutation():
+	# A mutating tool must invalidate the cache for every listed cacheable read,
+	# so none of them can serve stale data after the project/scene changes.
+	_core.register_tool("create_node", "Mutate", {"type": "object"},
+		func(args): return {"status": "success"},
+		{}, {"readOnlyHint": false})
+	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "create_node", "arguments": {}}}
+	for tool_name in _core.CACHEABLE_READ_TOOLS:
+		var calls: Array = [0]
+		_core.register_tool(tool_name, "Read", {"type": "object"},
+			func(args):
+				calls[0] += 1
+				return {"n": calls[0]},
+			{}, {"readOnlyHint": true})
+		var read_msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool_name, "arguments": {}}}
+		await _core._handle_request(read_msg)
+		await _core._handle_request(read_msg)
+		assert_eq(calls[0], 1, "%s should be cached before mutation" % tool_name)
+		await _core._handle_request(mutate_msg)
+		await _core._handle_request(read_msg)
+		assert_eq(calls[0], 2, "%s must recompute after a mutating tool" % tool_name)

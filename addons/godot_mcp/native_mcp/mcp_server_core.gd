@@ -59,7 +59,10 @@ const MAX_WAITING_REQUESTS: int = 256
 ## Read-only tools whose (potentially expensive) results are cached and served
 ## directly on a repeat call until a mutating tool invalidates the cache. The
 ## cache is keyed by tool name plus its arguments, so different args cache apart.
-const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure"]
+## Limited to structural reads (scene-tree walks, filesystem scans) whose result
+## changes only via MCP mutations, which clear the cache; a 5-minute TTL bounds
+## staleness from any out-of-band edit made outside the MCP server.
+const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure", "list_nodes", "list_project_scenes"]
 
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
