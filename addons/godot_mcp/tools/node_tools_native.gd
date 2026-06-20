@@ -32,6 +32,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_find_nodes_in_group(server_core)
 	_register_audit_scene_node_persistence(server_core)
 	_register_audit_scene_inheritance(server_core)
+	_register_set_control_offset_transform(server_core)
+	_register_set_collision_one_way(server_core)
 
 func _register_create_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1911,6 +1913,191 @@ func _tool_set_anchor_preset(params: Dictionary) -> Dictionary:
 		"preset_name": preset_names.get(preset, "UNKNOWN"),
 		"preset_value": preset
 	}
+
+# ============================================================================
+# set_control_offset_transform - Godot 4.7 Control offset transform
+# ============================================================================
+
+static func _to_vector2(value: Variant) -> Vector2:
+	if value is Vector2:
+		return value
+	if value is Dictionary:
+		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return Vector2.ZERO
+
+static func _has_property(obj: Object, prop_name: String) -> bool:
+	if obj == null:
+		return false
+	for d in obj.get_property_list():
+		if str(d.get("name", "")) == prop_name:
+			return true
+	return false
+
+static func _apply_offset_transform(control: Control, params: Dictionary) -> Dictionary:
+	# Godot 4.7 exposes offset_transform_* on Control. On older versions these
+	# properties are absent, so we report the feature as unsupported instead of
+	# crashing.
+	if not _has_property(control, "offset_transform_position"):
+		return {
+			"status": "unsupported",
+			"message": "Control.offset_transform_* requires Godot 4.7 or newer",
+			"godot_version": str(Engine.get_version_info().get("string", "")),
+			"applied": []
+		}
+
+	var applied: Array = []
+	if params.has("enabled") and _has_property(control, "offset_transform_enabled"):
+		control.set("offset_transform_enabled", bool(params["enabled"]))
+		applied.append("offset_transform_enabled")
+	if params.has("position"):
+		control.set("offset_transform_position", _to_vector2(params["position"]))
+		applied.append("offset_transform_position")
+	if params.has("rotation"):
+		control.set("offset_transform_rotation", float(params["rotation"]))
+		applied.append("offset_transform_rotation")
+	if params.has("scale"):
+		control.set("offset_transform_scale", _to_vector2(params["scale"]))
+		applied.append("offset_transform_scale")
+	if params.has("pivot"):
+		control.set("offset_transform_pivot", _to_vector2(params["pivot"]))
+		applied.append("offset_transform_pivot")
+	if params.has("visual_only") and _has_property(control, "offset_transform_visual_only"):
+		control.set("offset_transform_visual_only", bool(params["visual_only"]))
+		applied.append("offset_transform_visual_only")
+
+	return {"status": "success", "applied": applied}
+
+func _register_set_control_offset_transform(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_control_offset_transform",
+		"Set the Godot 4.7 offset transform of a Control node (offset_transform_position/rotation/scale/pivot, plus enabled and visual_only). Offset transforms move/rotate/scale a Control without affecting layout. Only provided fields are changed. Returns status 'unsupported' on Godot versions older than 4.7.",
+		{
+			"type": "object",
+			"properties": {
+				"node_path": {"type": "string", "description": "Path to the Control node (e.g. '/root/MainScene/UI/Panel')"},
+				"enabled": {"type": "boolean", "description": "Toggle offset_transform_enabled."},
+				"position": {"type": "object", "description": "Offset position as {x, y} (pixels)."},
+				"rotation": {"type": "number", "description": "Offset rotation in radians."},
+				"scale": {"type": "object", "description": "Offset scale as {x, y}."},
+				"pivot": {"type": "object", "description": "Offset transform pivot as {x, y} (pixels)."},
+				"visual_only": {"type": "boolean", "description": "When true the offset transform is visual only and does not affect input/mouse picking."}
+			},
+			"required": ["node_path"]
+		},
+		Callable(self, "_tool_set_control_offset_transform"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"node_path": {"type": "string"},
+				"applied": {"type": "array", "items": {"type": "string"}},
+				"godot_version": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Node-Write-Advanced"
+	)
+
+func _tool_set_control_offset_transform(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+
+	var target_node: Node = _resolve_node_path(node_path)
+	if not target_node:
+		return {"error": "Node not found: " + node_path}
+	if not target_node is Control:
+		return {"error": "Node is not a Control: " + node_path}
+
+	var result: Dictionary = _apply_offset_transform(target_node as Control, params)
+	result["node_path"] = node_path
+	if result.get("status", "") == "success":
+		editor_interface.mark_scene_as_unsaved()
+	return result
+
+# ============================================================================
+# set_collision_one_way - one-way collision for 2D collision nodes
+# ============================================================================
+
+static func _apply_one_way_collision(node: Node, params: Dictionary) -> Dictionary:
+	# CollisionShape2D gained one_way_collision in Godot 4.7; CollisionPolygon2D
+	# has had it for longer. one_way_collision_direction is also 4.7+.
+	if not _has_property(node, "one_way_collision"):
+		return {
+			"status": "unsupported",
+			"message": "one_way_collision is not available on %s in this Godot version" % node.get_class(),
+			"godot_version": str(Engine.get_version_info().get("string", "")),
+			"applied": []
+		}
+
+	var applied: Array = []
+	var enabled: bool = bool(params.get("enabled", true))
+	node.set("one_way_collision", enabled)
+	applied.append("one_way_collision")
+	if params.has("margin"):
+		node.set("one_way_collision_margin", float(params["margin"]))
+		applied.append("one_way_collision_margin")
+	if params.has("direction") and _has_property(node, "one_way_collision_direction"):
+		node.set("one_way_collision_direction", _to_vector2(params["direction"]))
+		applied.append("one_way_collision_direction")
+
+	return {"status": "success", "enabled": enabled, "applied": applied}
+
+func _register_set_collision_one_way(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_collision_one_way",
+		"Enable or disable one-way collision on a 2D collision node (CollisionShape2D or CollisionPolygon2D) and optionally set its margin and direction. CollisionShape2D one-way collision and one_way_collision_direction require Godot 4.7; returns status 'unsupported' when the property is absent.",
+		{
+			"type": "object",
+			"properties": {
+				"node_path": {"type": "string", "description": "Path to the CollisionShape2D or CollisionPolygon2D node."},
+				"enabled": {"type": "boolean", "description": "Whether one-way collision is enabled. Default true."},
+				"margin": {"type": "number", "description": "Optional one_way_collision_margin (pixels)."},
+				"direction": {"type": "object", "description": "Optional one_way_collision_direction as {x, y} (Godot 4.7+)."}
+			},
+			"required": ["node_path"]
+		},
+		Callable(self, "_tool_set_collision_one_way"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"node_path": {"type": "string"},
+				"enabled": {"type": "boolean"},
+				"applied": {"type": "array", "items": {"type": "string"}},
+				"godot_version": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Node-Write-Advanced"
+	)
+
+func _tool_set_collision_one_way(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+
+	var target_node: Node = _resolve_node_path(node_path)
+	if not target_node:
+		return {"error": "Node not found: " + node_path}
+	if not (target_node is CollisionShape2D or target_node is CollisionPolygon2D):
+		return {"error": "Node is not a CollisionShape2D or CollisionPolygon2D: " + node_path}
+
+	var result: Dictionary = _apply_one_way_collision(target_node, params)
+	result["node_path"] = node_path
+	if result.get("status", "") == "success":
+		editor_interface.mark_scene_as_unsaved()
+	return result
 
 func _register_connect_signal(server_core: RefCounted) -> void:
 	server_core.register_tool(

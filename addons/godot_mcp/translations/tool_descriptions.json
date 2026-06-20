@@ -167,5 +167,10 @@
   "save_all_scripts": "Save every script currently open in the script editor (Godot 4.7 ScriptEditor.save_all_scripts).",
   "reload_open_scripts": "Reload the editor's open script buffers from disk so the editor does not overwrite externally rewritten files (Godot 4.7).",
   "close_script_tab": "Close a script tab in the editor's script editor, optionally targeting a specific script path (Godot 4.7).",
-  "get_import_status": "Report whether the EditorFileSystem is currently scanning or importing assets (importing field requires Godot 4.7)."
+  "get_import_status": "Report whether the EditorFileSystem is currently scanning or importing assets (importing field requires Godot 4.7).",
+  "set_control_offset_transform": "Set the Godot 4.7 offset transform of a Control node (offset_transform_position/rotation/scale/pivot plus enabled and visual_only) without affecting layout. Returns status unsupported below Godot 4.7.",
+  "set_collision_one_way": "Enable or disable one-way collision on a 2D collision node (CollisionShape2D or CollisionPolygon2D) with optional margin and direction. CollisionShape2D one-way collision requires Godot 4.7.",
+  "create_gradient_texture": "Create and save a GradientTexture2D (.tres) with a configurable color gradient and fill mode (linear radial square or conic). Conic fill requires Godot 4.7.",
+  "pack_pck": "Bundle a set of files into a Godot .pck archive using PCKPacker mapping virtual target paths to existing source files. Useful for building DLC or mod packs.",
+  "configure_render_output": "Configure project-level render output settings including the Godot 4.7 HDR 2D output (rendering/viewport/hdr_2d) and transparent background. Unavailable keys are reported as unsupported."
 }

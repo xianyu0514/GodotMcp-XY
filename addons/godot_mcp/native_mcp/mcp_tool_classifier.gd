@@ -26,6 +26,8 @@ func _build_classifications() -> void:
 		{"name": "get_node_groups", "category": "supplementary", "group": "Node-Advanced"},
 		{"name": "set_node_groups", "category": "supplementary", "group": "Node-Write-Advanced"},
 		{"name": "find_nodes_in_group", "category": "supplementary", "group": "Node-Advanced"},
+		{"name": "set_control_offset_transform", "category": "supplementary", "group": "Node-Write-Advanced"},
+		{"name": "set_collision_one_way", "category": "supplementary", "group": "Node-Write-Advanced"},
 		{"name": "list_project_scripts", "category": "core", "group": "Script"},
 		{"name": "read_script", "category": "core", "group": "Script"},
 		{"name": "batch_read_scripts", "category": "supplementary", "group": "Script-Advanced"},
@@ -179,6 +181,9 @@ func _build_classifications() -> void:
 		{"name": "apply_migration_fixes", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "find_deprecated_api_usage", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "detect_gdextension_addons", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "create_gradient_texture", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "pack_pck", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "configure_render_output", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:

@@ -59,6 +59,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_apply_migration_fixes(server_core)
 	_register_find_deprecated_api_usage(server_core)
 	_register_detect_gdextension_addons(server_core)
+	_register_create_gradient_texture(server_core)
+	_register_pack_pck(server_core)
+	_register_configure_render_output(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -4251,4 +4254,329 @@ func _describe_gdextension(extension_path: String) -> Dictionary:
 		"missing_library_count": missing,
 		"all_libraries_present": libraries.size() > 0 and missing == 0,
 		"dependencies": dependencies
+	}
+
+# ============================================================================
+# create_gradient_texture - build a GradientTexture2D (incl. Godot 4.7 conic)
+# ============================================================================
+
+const _GRADIENT_FILL_MODES: Dictionary = {
+	"linear": 0,
+	"radial": 1,
+	"square": 2,
+	"conic": 3
+}
+
+static func _parse_color(value: Variant) -> Color:
+	if value is Color:
+		return value
+	if value is String:
+		return Color.from_string(value, Color.WHITE)
+	if value is Dictionary:
+		return Color(float(value.get("r", 0.0)), float(value.get("g", 0.0)), float(value.get("b", 0.0)), float(value.get("a", 1.0)))
+	if value is Array and value.size() >= 3:
+		var a: float = float(value[3]) if value.size() >= 4 else 1.0
+		return Color(float(value[0]), float(value[1]), float(value[2]), a)
+	return Color.WHITE
+
+func _gradient_fill_supported(mode_value: int) -> bool:
+	if mode_value != 3:
+		return true
+	return "FILL_CONIC" in ClassDB.class_get_integer_constant_list("GradientTexture2D", false)
+
+func _register_create_gradient_texture(server_core: RefCounted) -> void:
+	var tool_name: String = "create_gradient_texture"
+	var description: String = "Create and save a GradientTexture2D (.tres) with a configurable color gradient and fill mode (linear, radial, square, or conic). The conic fill mode requires Godot 4.7; requesting it on older versions returns status 'unsupported'."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"resource_path": {"type": "string", "description": "Path to save the texture (e.g. 'res://textures/grad.tres')."},
+			"fill": {"type": "string", "description": "Fill mode: linear, radial, square, or conic. Default linear.", "enum": ["linear", "radial", "square", "conic"], "default": "linear"},
+			"colors": {"type": "array", "description": "Gradient stops. Each item is a color string/array, or {offset, color}. Defaults to black->white when omitted."},
+			"fill_from": {"type": "object", "description": "Fill-from point as {x, y} in 0..1 ratio. Default {x:0, y:0}."},
+			"fill_to": {"type": "object", "description": "Fill-to point as {x, y} in 0..1 ratio. Default {x:1, y:0}."},
+			"width": {"type": "integer", "description": "Texture width in pixels. Default 64.", "default": 64},
+			"height": {"type": "integer", "description": "Texture height in pixels. Default 64.", "default": 64}
+		},
+		"required": ["resource_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"fill": {"type": "string"},
+			"fill_mode_value": {"type": "integer"},
+			"stop_count": {"type": "integer"},
+			"godot_version": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_create_gradient_texture"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_create_gradient_texture(params: Dictionary) -> Dictionary:
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(resource_path, [".tres", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	resource_path = validation["sanitized"]
+
+	var fill_name: String = str(params.get("fill", "linear")).strip_edges().to_lower()
+	if not _GRADIENT_FILL_MODES.has(fill_name):
+		return {"error": "Invalid fill mode '%s'. Expected one of: linear, radial, square, conic." % fill_name}
+	var fill_mode: int = int(_GRADIENT_FILL_MODES[fill_name])
+
+	if not _gradient_fill_supported(fill_mode):
+		return {
+			"status": "unsupported",
+			"message": "Conic fill mode (GradientTexture2D.FILL_CONIC) requires Godot 4.7 or newer",
+			"godot_version": str(Engine.get_version_info().get("string", ""))
+		}
+
+	var offsets: PackedFloat32Array = PackedFloat32Array()
+	var colors: PackedColorArray = PackedColorArray()
+	var color_stops: Array = params.get("colors", [])
+	if color_stops is Array and color_stops.size() > 0:
+		var auto_index: int = 0
+		var auto_total: int = max(color_stops.size() - 1, 1)
+		for stop in color_stops:
+			if stop is Dictionary and stop.has("color"):
+				offsets.append(clampf(float(stop.get("offset", float(auto_index) / float(auto_total))), 0.0, 1.0))
+				colors.append(_parse_color(stop.get("color")))
+			else:
+				offsets.append(clampf(float(auto_index) / float(auto_total), 0.0, 1.0))
+				colors.append(_parse_color(stop))
+			auto_index += 1
+	else:
+		offsets = PackedFloat32Array([0.0, 1.0])
+		colors = PackedColorArray([Color.BLACK, Color.WHITE])
+
+	var gradient: Gradient = Gradient.new()
+	gradient.offsets = offsets
+	gradient.colors = colors
+
+	var texture: GradientTexture2D = GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill = fill_mode
+	texture.width = max(1, int(params.get("width", 64)))
+	texture.height = max(1, int(params.get("height", 64)))
+	if params.has("fill_from"):
+		texture.fill_from = _to_vector2(params["fill_from"])
+	if params.has("fill_to"):
+		texture.fill_to = _to_vector2(params["fill_to"])
+
+	var error: Error = ResourceSaver.save(texture, resource_path)
+	if error != OK:
+		return {"error": "Failed to save texture: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"resource_path": resource_path,
+		"fill": fill_name,
+		"fill_mode_value": fill_mode,
+		"stop_count": colors.size(),
+		"godot_version": str(Engine.get_version_info().get("string", ""))
+	}
+
+static func _to_vector2(value: Variant) -> Vector2:
+	if value is Vector2:
+		return value
+	if value is Dictionary:
+		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return Vector2.ZERO
+
+# ============================================================================
+# pack_pck - bundle project files into a .pck archive via PCKPacker
+# ============================================================================
+
+func _register_pack_pck(server_core: RefCounted) -> void:
+	var tool_name: String = "pack_pck"
+	var description: String = "Bundle a set of files into a Godot .pck archive using PCKPacker. Each entry maps a virtual target_path (res://...) to an existing source_path on disk. Useful for building DLC/mod packs that can be loaded with ProjectSettings.load_resource_pack."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"pck_path": {"type": "string", "description": "Output archive path (e.g. 'res://packs/dlc.pck' or 'user://dlc.pck')."},
+			"files": {"type": "array", "description": "Files to pack. Each item is either a source path string (packed at the same res:// path) or {target_path, source_path}."},
+			"alignment": {"type": "integer", "description": "Byte alignment for packed files. Default 32.", "default": 32}
+		},
+		"required": ["pck_path", "files"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"pck_path": {"type": "string"},
+			"packed_count": {"type": "integer"},
+			"size_bytes": {"type": "integer"},
+			"skipped": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_pack_pck"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_pack_pck(params: Dictionary) -> Dictionary:
+	var pck_path: String = str(params.get("pck_path", "")).strip_edges()
+	if pck_path.is_empty():
+		return {"error": "Missing required parameter: pck_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(pck_path, [".pck", ".zip"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	pck_path = validation["sanitized"]
+
+	var files: Array = params.get("files", [])
+	if not (files is Array) or files.is_empty():
+		return {"error": "Parameter 'files' must be a non-empty array"}
+
+	var packer: PCKPacker = PCKPacker.new()
+	var alignment: int = max(1, int(params.get("alignment", 32)))
+	if packer.pck_start(pck_path, alignment) != OK:
+		return {"error": "Failed to start PCK at: " + pck_path}
+
+	var packed_count: int = 0
+	var skipped: Array = []
+	for entry in files:
+		var target_path: String = ""
+		var source_path: String = ""
+		if entry is String:
+			target_path = entry
+			source_path = entry
+		elif entry is Dictionary:
+			source_path = str(entry.get("source_path", ""))
+			target_path = str(entry.get("target_path", source_path))
+		if source_path.is_empty():
+			skipped.append({"entry": entry, "reason": "missing source_path"})
+			continue
+		if not FileAccess.file_exists(source_path):
+			skipped.append({"target_path": target_path, "source_path": source_path, "reason": "source not found"})
+			continue
+		if packer.add_file(target_path, source_path) != OK:
+			skipped.append({"target_path": target_path, "source_path": source_path, "reason": "add_file failed"})
+			continue
+		packed_count += 1
+
+	if packed_count == 0:
+		return {"error": "No files were packed", "skipped": skipped}
+
+	if packer.flush() != OK:
+		return {"error": "Failed to flush PCK archive"}
+
+	var size_bytes: int = 0
+	if FileAccess.file_exists(pck_path):
+		var f: FileAccess = FileAccess.open(pck_path, FileAccess.READ)
+		if f:
+			size_bytes = f.get_length()
+			f.close()
+
+	return {
+		"status": "success",
+		"pck_path": pck_path,
+		"packed_count": packed_count,
+		"size_bytes": size_bytes,
+		"skipped": skipped
+	}
+
+# ============================================================================
+# configure_render_output - HDR 2D output and related render project settings
+# ============================================================================
+
+func _register_configure_render_output(server_core: RefCounted) -> void:
+	var tool_name: String = "configure_render_output"
+	var description: String = "Configure project-level render output settings, including the Godot 4.7 HDR 2D output (rendering/viewport/hdr_2d) and transparent background. Only provided settings are changed; each is guarded with ProjectSettings.has_setting so unavailable keys are reported as unsupported instead of being created."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"hdr_2d": {"type": "boolean", "description": "Enable HDR 2D output (Godot 4.7 'rendering/viewport/hdr_2d')."},
+			"transparent_background": {"type": "boolean", "description": "Set 'rendering/viewport/transparent_background'."},
+			"persist": {"type": "boolean", "description": "Persist changes to project.godot via ProjectSettings.save(). Default true.", "default": true}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"persisted": {"type": "boolean"},
+			"changes": {"type": "array"},
+			"godot_version": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_configure_render_output"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_configure_render_output(params: Dictionary) -> Dictionary:
+	var setting_keys: Dictionary = {
+		"hdr_2d": "rendering/viewport/hdr_2d",
+		"transparent_background": "rendering/viewport/transparent_background"
+	}
+
+	var changes: Array = []
+	var any_persistable: bool = false
+	for param_name in setting_keys:
+		if not params.has(param_name):
+			continue
+		var setting_key: String = setting_keys[param_name]
+		var new_value: bool = bool(params[param_name])
+		if not ProjectSettings.has_setting(setting_key):
+			changes.append({"setting": setting_key, "status": "unsupported", "requested": new_value})
+			continue
+		var previous: Variant = ProjectSettings.get_setting(setting_key)
+		ProjectSettings.set_setting(setting_key, new_value)
+		any_persistable = true
+		changes.append({"setting": setting_key, "status": "updated", "previous": previous, "new": new_value})
+
+	if changes.is_empty():
+		return {"error": "No render output settings provided. Supported: hdr_2d, transparent_background."}
+
+	var persisted: bool = false
+	var persist: bool = bool(params.get("persist", true))
+	if persist and any_persistable:
+		if ProjectSettings.save() == OK:
+			persisted = true
+
+	return {
+		"status": "success",
+		"persisted": persisted,
+		"changes": changes,
+		"godot_version": str(Engine.get_version_info().get("string", ""))
 	}

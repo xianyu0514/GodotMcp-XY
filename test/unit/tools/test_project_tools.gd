@@ -540,3 +540,106 @@ func test_detect_gdextension_addons_empty_when_none():
 	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": _REVERSE_RES_DIR})
 	assert_false(result.has("error"), "Scanning a directory without extensions should not error")
 	assert_false(bool(result.get("has_native_extensions", true)), "No extensions should be reported for a plain directory")
+
+# --- create_gradient_texture ---
+
+func test_create_gradient_texture_missing_path():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_gradient_texture({})
+	assert_has(result, "error", "Missing resource_path should return error")
+
+func test_create_gradient_texture_invalid_fill():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_gradient_texture({"resource_path": "res://.tmp_grad.tres", "fill": "bogus"})
+	assert_has(result, "error", "An invalid fill mode should be rejected")
+
+func test_create_gradient_texture_linear_saves():
+	var out_path: String = "res://.tmp_grad_linear.tres"
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_gradient_texture({
+		"resource_path": out_path,
+		"fill": "linear",
+		"colors": ["#ff0000", "#0000ff"],
+		"width": 32,
+		"height": 8
+	})
+	assert_eq(result.get("status", ""), "success", "A linear gradient texture should save")
+	assert_eq(int(result.get("stop_count", 0)), 2, "Two color stops should be recorded")
+	assert_true(FileAccess.file_exists(out_path), "The texture file should exist on disk")
+	var loaded = load(out_path)
+	assert_true(loaded is GradientTexture2D, "The saved resource should be a GradientTexture2D")
+	DirAccess.remove_absolute(out_path)
+
+func test_create_gradient_texture_conic_guarded():
+	var out_path: String = "res://.tmp_grad_conic.tres"
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_create_gradient_texture({
+		"resource_path": out_path,
+		"fill": "conic"
+	})
+	var conic_available: bool = "FILL_CONIC" in ClassDB.class_get_integer_constant_list("GradientTexture2D", false)
+	if conic_available:
+		assert_eq(result.get("status", ""), "success", "Conic fill should save on Godot 4.7")
+		assert_eq(int(result.get("fill_mode_value", -1)), 3, "Conic maps to fill value 3")
+		if FileAccess.file_exists(out_path):
+			DirAccess.remove_absolute(out_path)
+	else:
+		assert_eq(result.get("status", ""), "unsupported", "Conic fill should be unsupported on older Godot")
+
+# --- pack_pck ---
+
+func test_pack_pck_missing_params():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_pack_pck({"pck_path": "res://.tmp_out.pck"})
+	assert_has(result, "error", "Missing files array should return error")
+
+func test_pack_pck_packs_existing_file():
+	var src_path: String = "res://.tmp_pack_src.txt"
+	var pck_path: String = "res://.tmp_pack_out.pck"
+	_write_text_file(src_path, "hello pck")
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_pack_pck({
+		"pck_path": pck_path,
+		"files": [{"target_path": "res://data/hello.txt", "source_path": src_path}]
+	})
+	assert_eq(result.get("status", ""), "success", "Packing an existing file should succeed")
+	assert_eq(int(result.get("packed_count", 0)), 1, "Exactly one file should be packed")
+	assert_true(FileAccess.file_exists(pck_path), "The .pck file should be created")
+	DirAccess.remove_absolute(src_path)
+	DirAccess.remove_absolute(pck_path)
+
+func test_pack_pck_skips_missing_source():
+	var pck_path: String = "res://.tmp_pack_missing.pck"
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_pack_pck({
+		"pck_path": pck_path,
+		"files": ["res://does_not_exist_12345.txt"]
+	})
+	assert_has(result, "error", "Packing only missing sources yields no packed files and errors")
+	if FileAccess.file_exists(pck_path):
+		DirAccess.remove_absolute(pck_path)
+
+# --- configure_render_output ---
+
+func test_configure_render_output_requires_a_setting():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_configure_render_output({"persist": false})
+	assert_has(result, "error", "Calling with no settings should error")
+
+func test_configure_render_output_sets_hdr_2d():
+	var key: String = "rendering/viewport/hdr_2d"
+	var had_setting: bool = ProjectSettings.has_setting(key)
+	var original: Variant = ProjectSettings.get_setting(key) if had_setting else null
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_configure_render_output({"hdr_2d": true, "persist": false})
+	assert_eq(result.get("status", ""), "success", "Configuring render output should succeed")
+	var change_status: String = ""
+	for change in result.get("changes", []):
+		if str(change.get("setting", "")) == key:
+			change_status = str(change.get("status", ""))
+	if had_setting:
+		assert_eq(change_status, "updated", "hdr_2d should be updated when the setting exists")
+		assert_false(bool(result.get("persisted", true)), "persist=false should not persist to disk")
+		ProjectSettings.set_setting(key, original)
+	else:
+		assert_eq(change_status, "unsupported", "hdr_2d should be unsupported when the setting is absent")
