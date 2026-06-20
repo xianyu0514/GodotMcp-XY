@@ -2941,19 +2941,29 @@ func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
 
 func _collect_project_resource_roots() -> Array:
 	var roots: Array = []
-	var main_scene: String = str(ProjectSettings.get_setting("application/run/main_scene", "")).strip_edges()
-	if not main_scene.is_empty():
+	var main_scene: String = _resolve_resource_root_path(str(ProjectSettings.get_setting("application/run/main_scene", "")))
+	if not main_scene.is_empty() and not roots.has(main_scene):
 		roots.append(main_scene)
 	for property in ProjectSettings.get_property_list():
 		var property_name: String = str(property.get("name", ""))
 		if not property_name.begins_with("autoload/"):
 			continue
-		var value: String = str(ProjectSettings.get_setting(property_name, "")).strip_edges()
-		if value.begins_with("*"):
-			value = value.substr(1)
-		if value.begins_with("res://") and not roots.has(value):
+		var value: String = _resolve_resource_root_path(str(ProjectSettings.get_setting(property_name, "")))
+		if not value.is_empty() and not roots.has(value):
 			roots.append(value)
 	return roots
+
+# Normalize a project entry-point setting (main scene / autoload) to a res:// path.
+# Strips the autoload "*" prefix and resolves uid:// values to their res:// path.
+func _resolve_resource_root_path(raw_value: String) -> String:
+	var value: String = raw_value.strip_edges()
+	if value.begins_with("*"):
+		value = value.substr(1)
+	if value.begins_with("uid://"):
+		value = ResourceUID.uid_to_path(value)
+	if value.begins_with("res://"):
+		return value
+	return ""
 
 func _analyze_script_diagnostics(script_path: String, include_warnings: bool) -> Dictionary:
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)

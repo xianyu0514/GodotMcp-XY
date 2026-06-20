@@ -347,3 +347,14 @@ func test_list_unused_resources_rejects_invalid_path():
 	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
 	var result: Dictionary = project_tools._tool_list_unused_resources({"search_path": "C:\\Windows"})
 	assert_has(result, "error", "An unsafe directory path should be rejected")
+
+func test_resolve_resource_root_path_strips_prefix_and_resolves_uid():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	assert_eq(project_tools._resolve_resource_root_path("res://scenes/main.tscn"), "res://scenes/main.tscn", "Plain res:// path should pass through")
+	assert_eq(project_tools._resolve_resource_root_path("*res://autoload/game.gd"), "res://autoload/game.gd", "Leading autoload '*' should be stripped")
+	assert_eq(project_tools._resolve_resource_root_path(""), "", "Empty value resolves to empty")
+	var uid_id: int = ResourceUID.create_id()
+	ResourceUID.add_id(uid_id, "res://scenes/world.tscn")
+	var uid_text: String = ResourceUID.id_to_text(uid_id)
+	assert_eq(project_tools._resolve_resource_root_path("*" + uid_text), "res://scenes/world.tscn", "uid:// entry point should resolve to its res:// path")
+	ResourceUID.remove_id(uid_id)
