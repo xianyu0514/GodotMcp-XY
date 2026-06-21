@@ -28,6 +28,8 @@ func _build_classifications() -> void:
 		{"name": "find_nodes_in_group", "category": "supplementary", "group": "Node-Advanced"},
 		{"name": "set_control_offset_transform", "category": "supplementary", "group": "Node-Write-Advanced"},
 		{"name": "set_collision_one_way", "category": "supplementary", "group": "Node-Write-Advanced"},
+		{"name": "set_node_subresource", "category": "supplementary", "group": "Node-Write-Advanced"},
+		{"name": "get_node_subresource", "category": "supplementary", "group": "Node-Advanced"},
 		{"name": "list_project_scripts", "category": "core", "group": "Script"},
 		{"name": "read_script", "category": "core", "group": "Script"},
 		{"name": "batch_read_scripts", "category": "supplementary", "group": "Script-Advanced"},

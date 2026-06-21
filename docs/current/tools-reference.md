@@ -18,11 +18,11 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **196 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **198 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
-| [Node Tools](#node-tools) | 9 | 15 | 24 | `node_tools_native.gd` | 节点管理（创建、删除、修改属性、复制、移动、重命名、信号、组、批量读取/连接、Control 偏移变换、2D 单向碰撞） |
+| [Node Tools](#node-tools) | 9 | 17 | 26 | `node_tools_native.gd` | 节点管理（创建、删除、修改属性、复制、移动、重命名、信号、组、批量读取/连接、Control 偏移变换、2D 单向碰撞、内联子资源设置/读取） |
 | [Script Tools](#script-tools) | 7 | 10 | 17 | `script_tools_native.gd` | 脚本管理（读取、批量读取、创建、修改、分析、附加、验证、着色器校验、搜索、符号索引） |
 | [Scene Tools](#scene-tools) | 4 | 8 | 12 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取） |
 | [Editor Tools](#editor-tools) | 4 | 19 | 23 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择、缓冲区同步、导入状态） |
@@ -4992,6 +4992,68 @@ Continue：恢复执行。
 
 ---
 
+### 197. set_node_subresource
+
+在当前编辑场景中创建一个内置 `Resource` 类型的内联子资源，设置其属性后赋给目标节点的某个属性（用编辑器 UndoRedo 包裹）。可用于设置 `CollisionShape2D.shape = RectangleShape2D{size:[64,32]}`、`Sprite2D.material = CanvasItemMaterial`、`Line2D.gradient = Gradient` 等。与 `add_resource`（创建子节点、只能赋空资源）不同，本工具会写入子资源自身的属性。向量属性接受 `[x,y]`/`[x,y,z]` 或 `{x,y}`，颜色接受 `#rrggbbaa`。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `node_path` | string | 是 | 编辑场景中目标节点路径，如 `/root/Main/Player/CollisionShape2D` |
+| `property_name` | string | 是 | 节点上要赋值的 Object/Resource 属性（如 `shape`、`material`、`gradient`） |
+| `resource_type` | string | 是 | 要实例化的内置 Resource 类（如 `RectangleShape2D`、`CircleShape2D`、`CanvasItemMaterial`） |
+| `properties` | object | 否 | 设置到新子资源上的属性值（如 `{"size":[64,32]}` 或 `{"radius":16}`）；未知键被跳过并在 `properties_skipped` 中报告 |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `node_path` | string | 节点路径 |
+| `property_name` | string | 被赋值的属性名 |
+| `resource_type` | string | 创建的资源类 |
+| `properties_set` | Array[string] | 成功设置的子资源属性名列表 |
+| `properties_skipped` | Array[object] | 跳过的属性及原因 `{name, reason}` |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+**行为**：
+- `resource_type` 必须是可实例化的 `Resource` 子类，否则返回错误
+- 目标属性必须是 Object 类型（不接受资源时返回错误）
+- 无打开场景或找不到节点时返回错误
+- 成功后标记场景为未保存
+
+---
+
+### 198. get_node_subresource
+
+读取当前编辑场景中节点某个 Object 属性上已赋的内联子资源（例如查看 `CollisionShape2D.shape` 的尺寸或材质字段）。以 JSON 友好形式返回资源类名及其存储属性。属性为空时 `has_resource` 为 `false`。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `node_path` | string | 是 | 编辑场景中节点路径 |
+| `property_name` | string | 是 | 要读取的 Object/Resource 属性（如 `shape`、`material`） |
+| `property_names` | array | 否 | 仅返回这些子资源属性名；省略则返回全部存储属性 |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `node_path` | string | 节点路径 |
+| `property_name` | string | 读取的属性名 |
+| `has_resource` | boolean | 该属性是否持有资源 |
+| `resource_class` | string | 资源类名（无资源时为空串） |
+| `resource_path` | string | 资源磁盘路径（内联子资源为空串） |
+| `properties` | object | 子资源的存储属性（JSON 友好形式） |
+
+**注解**：`readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+**行为**：
+- 无打开场景或找不到节点时返回错误
+- 属性不持有 Resource 时返回 `has_resource=false`、空属性集
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -5091,7 +5153,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **196 个工具**（30 核心 + 166 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **198 个工具**（30 核心 + 168 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema

@@ -34,6 +34,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_audit_scene_inheritance(server_core)
 	_register_set_control_offset_transform(server_core)
 	_register_set_collision_one_way(server_core)
+	_register_set_node_subresource(server_core)
+	_register_get_node_subresource(server_core)
 
 func _register_create_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -2513,3 +2515,342 @@ func _tool_find_nodes_in_group(params: Dictionary) -> Dictionary:
 		"nodes": result_nodes,
 		"node_count": result_nodes.size()
 	}
+
+# ============================================================================
+# set_node_subresource - Create an inline sub-resource of a built-in Resource
+# type, set its properties, and assign it to a node property in the edited
+# scene (e.g. CollisionShape2D.shape = RectangleShape2D with a custom size).
+# Fills the gap where add_resource / update_node_property can only assign an
+# empty resource and cannot set the new resource's own properties.
+# ============================================================================
+
+func _register_set_node_subresource(server_core: RefCounted) -> void:
+	var description: String = "Create an inline sub-resource of a built-in Resource type, set its properties, and assign it to a node property in the edited scene (wrapped in editor UndoRedo). Use this to set up things like CollisionShape2D.shape = RectangleShape2D{size:[64,32]}, Sprite2D.material = CanvasItemMaterial, or Line2D.gradient = Gradient. Unlike add_resource (which creates child nodes) this writes the sub-resource's own properties. Vector properties accept [x,y]/[x,y,z], {x,y}, colors accept '#rrggbbaa'."
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"node_path": {"type": "string", "description": "Path to the target node in the edited scene (e.g. '/root/Main/Player/CollisionShape2D')."},
+			"property_name": {"type": "string", "description": "Object/Resource property to assign on the node (e.g. 'shape', 'material', 'gradient', 'texture')."},
+			"resource_type": {"type": "string", "description": "Built-in Resource class to instantiate (e.g. 'RectangleShape2D', 'CircleShape2D', 'CapsuleShape2D', 'CanvasItemMaterial', 'Gradient')."},
+			"properties": {"type": "object", "description": "Optional property values to set on the new sub-resource (e.g. {\"size\":[64,32]} or {\"radius\":16}). Unknown keys are skipped and reported."}
+		},
+		"required": ["node_path", "property_name", "resource_type"]
+	}
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"property_name": {"type": "string"},
+			"resource_type": {"type": "string"},
+			"properties_set": {"type": "array"},
+			"properties_skipped": {"type": "array"}
+		}
+	}
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+	server_core.register_tool("set_node_subresource", description, input_schema,
+						  Callable(self, "_tool_set_node_subresource"),
+						  output_schema, annotations,
+						  "supplementary", "Node-Write-Advanced")
+
+func _tool_set_node_subresource(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	var property_name: String = str(params.get("property_name", "")).strip_edges()
+	if property_name.is_empty():
+		return {"error": "Missing required parameter: property_name"}
+	var resource_type: String = str(params.get("resource_type", "")).strip_edges()
+	if resource_type.is_empty():
+		return {"error": "Missing required parameter: resource_type"}
+
+	if not ClassDB.class_exists(resource_type):
+		return {"error": "Unknown resource type: " + resource_type}
+	if not ClassDB.is_parent_class(resource_type, "Resource"):
+		return {"error": "resource_type must be a Resource subclass: " + resource_type}
+	if not ClassDB.can_instantiate(resource_type):
+		return {"error": "Resource type cannot be instantiated: " + resource_type}
+
+	var properties: Dictionary = {}
+	if params.has("properties"):
+		if not (params["properties"] is Dictionary):
+			return {"error": "Parameter 'properties' must be an object"}
+		properties = params["properties"]
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+
+	var target_node: Node = _resolve_node_path(node_path)
+	if not target_node:
+		return {"error": "Node not found: " + node_path}
+
+	var property_type: int = TYPE_NIL
+	var property_found: bool = false
+	for prop in target_node.get_property_list():
+		if prop["name"] == property_name:
+			property_type = prop["type"]
+			property_found = true
+			break
+	if not property_found:
+		return {"error": "Property '" + property_name + "' not found on node " + node_path}
+	if property_type != TYPE_OBJECT:
+		return {"error": "Property '" + property_name + "' does not accept a resource (it is not an Object property)"}
+
+	var new_resource: Resource = ClassDB.instantiate(resource_type) as Resource
+	if not new_resource:
+		return {"error": "Failed to instantiate resource type: " + resource_type}
+
+	var properties_set: Array = []
+	var properties_skipped: Array = []
+	for prop_name in properties:
+		if not (prop_name in new_resource):
+			properties_skipped.append({"name": prop_name, "reason": "not a property of " + resource_type})
+			continue
+		var coerced: Variant = _coerce_object_property(new_resource, prop_name, properties[prop_name])
+		new_resource.set(prop_name, coerced)
+		properties_set.append(prop_name)
+
+	var old_value: Variant = target_node.get(property_name)
+	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+	if undo_redo:
+		undo_redo.create_action("Set Subresource: " + property_name)
+		undo_redo.add_do_property(target_node, property_name, new_resource)
+		undo_redo.add_undo_property(target_node, property_name, old_value)
+		undo_redo.commit_action()
+	else:
+		target_node.set(property_name, new_resource)
+
+	editor_interface.mark_scene_as_unsaved()
+
+	return {
+		"status": "success",
+		"node_path": node_path,
+		"property_name": property_name,
+		"resource_type": resource_type,
+		"properties_set": properties_set,
+		"properties_skipped": properties_skipped
+	}
+
+# ============================================================================
+# get_node_subresource - Read the properties of the inline Resource currently
+# assigned to a node's Object property (e.g. inspect CollisionShape2D.shape).
+# ============================================================================
+
+func _register_get_node_subresource(server_core: RefCounted) -> void:
+	var description: String = "Read the inline sub-resource currently assigned to a node's Object property in the edited scene (e.g. inspect CollisionShape2D.shape size, or a material's fields). Returns the resource class and its storage properties in a JSON-friendly form. 'has_resource' is false when the property is null."
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"node_path": {"type": "string", "description": "Path to the node in the edited scene."},
+			"property_name": {"type": "string", "description": "Object/Resource property to read (e.g. 'shape', 'material')."},
+			"property_names": {"type": "array", "description": "Optional list of sub-resource property names to return. Omit to return all storage properties.", "items": {"type": "string"}}
+		},
+		"required": ["node_path", "property_name"]
+	}
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"property_name": {"type": "string"},
+			"has_resource": {"type": "boolean"},
+			"resource_class": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"properties": {"type": "object"}
+		}
+	}
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+	server_core.register_tool("get_node_subresource", description, input_schema,
+						  Callable(self, "_tool_get_node_subresource"),
+						  output_schema, annotations,
+						  "supplementary", "Node-Advanced")
+
+func _tool_get_node_subresource(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	var property_name: String = str(params.get("property_name", "")).strip_edges()
+	if property_name.is_empty():
+		return {"error": "Missing required parameter: property_name"}
+
+	var requested: Array = []
+	if params.has("property_names"):
+		if not (params["property_names"] is Array):
+			return {"error": "Parameter 'property_names' must be an array of strings"}
+		for item in (params["property_names"] as Array):
+			requested.append(str(item))
+
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+
+	var target_node: Node = _resolve_node_path(node_path)
+	if not target_node:
+		return {"error": "Node not found: " + node_path}
+	if not (property_name in target_node):
+		return {"error": "Property '" + property_name + "' not found on node " + node_path}
+
+	var value: Variant = target_node.get(property_name)
+	if not (value is Resource):
+		return {
+			"status": "success",
+			"node_path": node_path,
+			"property_name": property_name,
+			"has_resource": false,
+			"resource_class": "",
+			"resource_path": "",
+			"properties": {}
+		}
+
+	var resource: Resource = value
+	var props: Dictionary = {}
+	for prop in resource.get_property_list():
+		var prop_name: String = prop["name"]
+		if prop_name == "script" or prop_name == "resource_path" or prop_name == "resource_name" or prop_name == "resource_local_to_scene":
+			continue
+		if int(prop["usage"]) & PROPERTY_USAGE_STORAGE == 0:
+			continue
+		if int(prop["type"]) == TYPE_NIL:
+			continue
+		if not requested.is_empty() and not requested.has(prop_name):
+			continue
+		props[prop_name] = _serialize_resource_value(resource.get(prop_name))
+
+	return {
+		"status": "success",
+		"node_path": node_path,
+		"property_name": property_name,
+		"has_resource": true,
+		"resource_class": resource.get_class(),
+		"resource_path": resource.resource_path,
+		"properties": props
+	}
+
+# ----------------------------------------------------------------------------
+# Helpers shared by the sub-resource tools
+# ----------------------------------------------------------------------------
+
+func _coerce_object_property(obj: Object, property_name: String, value: Variant) -> Variant:
+	if value == null:
+		return value
+	var property_type: int = TYPE_NIL
+	for prop in obj.get_property_list():
+		if prop["name"] == property_name:
+			property_type = prop["type"]
+			break
+	if property_type == TYPE_NIL:
+		return value
+	match property_type:
+		TYPE_VECTOR2:
+			var v2: Variant = _subres_to_vector2(value)
+			if v2 != null:
+				return v2
+		TYPE_VECTOR2I:
+			var v2i: Variant = _subres_to_vector2(value)
+			if v2i != null:
+				return Vector2i(v2i)
+		TYPE_VECTOR3:
+			var v3: Variant = _subres_to_vector3(value)
+			if v3 != null:
+				return v3
+		TYPE_VECTOR3I:
+			var v3i: Variant = _subres_to_vector3(value)
+			if v3i != null:
+				return Vector3i(v3i)
+		TYPE_COLOR:
+			if value is String:
+				return Color(value)
+			if value is Dictionary:
+				return Color(float(value.get("r", 0.0)), float(value.get("g", 0.0)), float(value.get("b", 0.0)), float(value.get("a", 1.0)))
+			if value is Array and (value as Array).size() >= 3:
+				var arr: Array = value
+				var alpha: float = float(arr[3]) if arr.size() >= 4 else 1.0
+				return Color(float(arr[0]), float(arr[1]), float(arr[2]), alpha)
+		TYPE_BOOL:
+			if value is String:
+				return (value as String).to_lower() == "true"
+			if value is int or value is float:
+				return value != 0
+		TYPE_INT:
+			if value is String:
+				return int(value)
+			if value is float:
+				return int(value)
+		TYPE_FLOAT:
+			if value is String:
+				return float(value)
+			if value is int:
+				return float(value)
+		TYPE_STRING, TYPE_STRING_NAME:
+			return str(value)
+		TYPE_NODE_PATH:
+			if value is String:
+				return NodePath(value)
+		TYPE_OBJECT:
+			if value is String:
+				var s: String = value
+				if s.begins_with("res://"):
+					var loaded: Resource = load(s)
+					if loaded:
+						return loaded
+				if ClassDB.class_exists(s) and ClassDB.is_parent_class(s, "Resource") and ClassDB.can_instantiate(s):
+					return ClassDB.instantiate(s)
+	return value
+
+static func _subres_to_vector2(value: Variant) -> Variant:
+	if value is Vector2:
+		return value
+	if value is Vector2i:
+		return Vector2(value)
+	if value is Dictionary:
+		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	if value is Array and (value as Array).size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return null
+
+static func _subres_to_vector3(value: Variant) -> Variant:
+	if value is Vector3:
+		return value
+	if value is Vector3i:
+		return Vector3(value)
+	if value is Dictionary:
+		return Vector3(float(value.get("x", 0.0)), float(value.get("y", 0.0)), float(value.get("z", 0.0)))
+	if value is Array and (value as Array).size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return null
+
+static func _serialize_resource_value(value: Variant) -> Variant:
+	match typeof(value):
+		TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING:
+			return value
+		TYPE_STRING_NAME:
+			return str(value)
+		TYPE_VECTOR2, TYPE_VECTOR2I:
+			return [value.x, value.y]
+		TYPE_VECTOR3, TYPE_VECTOR3I:
+			return [value.x, value.y, value.z]
+		TYPE_RECT2:
+			return [value.position.x, value.position.y, value.size.x, value.size.y]
+		TYPE_COLOR:
+			return "#" + value.to_html()
+		TYPE_OBJECT:
+			if value is Resource:
+				var res: Resource = value
+				if not res.resource_path.is_empty():
+					return res.resource_path
+				return "<" + res.get_class() + ">"
+			return str(value)
+		_:
+			return str(value)

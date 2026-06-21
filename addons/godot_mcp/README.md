@@ -13,8 +13,8 @@ A powerful Godot Engine plugin that integrates AI assistants (Claude, etc.) via 
 - **Full Project Access**: AI assistants can read and modify scripts, scenes, nodes, and resources
 - **Native Implementation**: No Node.js dependency required - runs entirely within Godot
 - **Real-time Editing**: Apply AI suggestions directly in the editor
-- **Comprehensive Tool Set** (196 tools — 30 core + 166 supplementary):
-  - **Node Tools** (9 core + 15 advanced): Create, modify, manage scene nodes, duplicate, move, rename, signal connections, anchor presets, group management, batch operations (update/read properties, connect signals), scene auditing, Control offset transform (Godot 4.7), 2D one-way collision
+- **Comprehensive Tool Set** (198 tools — 30 core + 168 supplementary):
+  - **Node Tools** (9 core + 17 advanced): Create, modify, manage scene nodes, duplicate, move, rename, signal connections, anchor presets, group management, batch operations (update/read properties, connect signals), scene auditing, Control offset transform (Godot 4.7), 2D one-way collision, inline sub-resource set/get (set_node_subresource/get_node_subresource)
   - **Script Tools** (7 core + 10 advanced): Edit, analyze, create, attach, validate GDScript and C# files, validate shaders, batch read scripts, execute scripts, search in files, symbol indexing, definition & reference lookup
   - **Scene Tools** (4 core + 8 advanced): Manipulate scene structure, save scenes, list/open/close scene tabs, project scene listing, instance prefab scenes, save node branches as scenes, set/get TileMapLayer cells (Godot 4.x, set_tilemap_layer_cells/get_tilemap_layer_cells)
   - **Editor Tools** (4 core + 19 advanced): Control editor functionality, screenshot, signal inspection, filesystem reload, node/file selection, export management (templates + Android config), property inspector, editor buffer sync (unsaved changes, save/reload/close scripts), import status
