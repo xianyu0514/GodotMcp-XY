@@ -220,6 +220,19 @@ func test_terrain_unknown_peering_neighbor():
 	})
 	assert_has(result, "error", "Unknown neighbor name should error")
 
+func test_terrain_peering_invalid_for_mode():
+	var path: String = _make_tileset()
+	_project_tools._tool_configure_tileset_layers({
+		"tileset_path": path,
+		"terrain_sets": [{"mode": "corners", "terrains": [{"name": "grass"}]}]
+	})
+	var result: Dictionary = _project_tools._tool_set_tile_terrain({
+		"tileset_path": path, "source_id": 0, "tile_coords": [0, 0],
+		"terrain_set": 0, "terrain": 0, "peering_bits": {"top_side": 0}
+	})
+	assert_has(result, "error", "Side neighbor under corners mode should error")
+	assert_true(result.get("error", "").contains("not valid"), "Error explains invalid peering bit")
+
 func test_terrain_assignment_roundtrip():
 	var path: String = _make_tileset()
 	_project_tools._tool_configure_tileset_layers({

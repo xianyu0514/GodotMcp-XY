@@ -6544,7 +6544,7 @@ func _tool_set_tile_collision_polygon(params: Dictionary) -> Dictionary:
 
 func _register_set_tile_terrain(server_core: RefCounted) -> void:
 	var tool_name: String = "set_tile_terrain"
-	var description: String = "Assign a terrain set and terrain to a tile in a TileSet atlas source, and optionally set terrain peering bits for autotiling. The terrain set and terrain must already exist (create them with configure_tileset_layers). peering_bits maps neighbor names (right_side, bottom_right_corner, bottom_side, bottom_left_corner, left_side, top_left_corner, top_side, top_right_corner) to a terrain index; only the neighbors valid for the terrain set's match mode are meaningful. Saves the TileSet."
+	var description: String = "Assign a terrain set and terrain to a tile in a TileSet atlas source, and optionally set terrain peering bits for autotiling. The terrain set and terrain must already exist (create them with configure_tileset_layers). peering_bits maps neighbor names (right_side, bottom_right_corner, bottom_side, bottom_left_corner, left_side, top_left_corner, top_side, top_right_corner) to a terrain index; neighbors that are not valid for the terrain set's match mode and tile shape are rejected with an error. Saves the TileSet."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -6630,6 +6630,8 @@ func _tool_set_tile_terrain(params: Dictionary) -> Dictionary:
 			var key: String = str(neighbor_name).strip_edges().to_lower()
 			if not _TILESET_CELL_NEIGHBORS.has(key):
 				return {"error": "Unknown peering neighbor '%s'" % str(neighbor_name)}
+			if not tile_set.is_valid_terrain_peering_bit(terrain_set, _TILESET_CELL_NEIGHBORS[key]):
+				return {"error": "peering neighbor '%s' is not valid for terrain set %d (check its match mode and tile shape)" % [key, terrain_set]}
 			var peer_terrain: int = int(params["peering_bits"][neighbor_name])
 			if peer_terrain < 0 or peer_terrain >= tile_set.get_terrains_count(terrain_set):
 				return {"error": "peering_bits['%s'] terrain %d out of range" % [key, peer_terrain]}
