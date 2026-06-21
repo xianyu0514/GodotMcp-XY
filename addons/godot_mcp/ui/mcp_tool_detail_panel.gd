@@ -45,11 +45,11 @@ func show_tool(info: Dictionary) -> void:
 	_build_header(info)
 	_build_meta(info)
 	_build_description(info)
+	_build_ai_prompt(info)
 	_build_behavior(info.get("annotations", {}))
 	_build_params(info.get("input_schema", {}))
 	_build_returns(info.get("output_schema", {}))
 	_build_example(info)
-	_build_ai_prompt(info)
 
 func _clear() -> void:
 	if not _content:
@@ -79,6 +79,15 @@ func _build_header(info: Dictionary) -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.clip_text = true
 	row.add_child(title)
+
+	var copy_name: Button = Button.new()
+	copy_name.text = _tr("ui.detail_copy_name")
+	copy_name.add_theme_font_size_override("font_size", 10)
+	copy_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	copy_name.pressed.connect(
+		_on_copy_pressed.bind(info.get("name", ""), copy_name, _tr("ui.detail_copy_name"))
+	)
+	row.add_child(copy_name)
 
 func _build_meta(info: Dictionary) -> void:
 	var grid: GridContainer = GridContainer.new()
@@ -245,9 +254,39 @@ func _build_example(info: Dictionary) -> void:
 	body.add_child(_make_code_block(json_text))
 
 func _build_ai_prompt(info: Dictionary) -> void:
-	var body: VBoxContainer = _section(_tr("ui.detail_ai_prompt"))
 	var prompt: String = _compose_ai_prompt(info)
-	body.add_child(_make_code_block(prompt))
+
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _accent_style())
+	_content.add_child(card)
+
+	var box: VBoxContainer = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	card.add_child(box)
+
+	var head: HBoxContainer = HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	box.add_child(head)
+
+	var title: Label = Label.new()
+	title.text = _tr("ui.detail_ai_prompt")
+	title.add_theme_font_size_override("font_size", 12)
+	title.add_theme_color_override("font_color", ACCENT)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(title)
+
+	var copy_label: String = _tr("ui.detail_copy_prompt")
+	var copy_button: Button = Button.new()
+	copy_button.text = copy_label
+	copy_button.pressed.connect(_on_copy_pressed.bind(prompt, copy_button, copy_label))
+	head.add_child(copy_button)
+
+	var text_label: Label = Label.new()
+	text_label.text = prompt
+	text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	text_label.add_theme_font_size_override("font_size", 12)
+	text_label.add_theme_color_override("font_color", Color(0.88, 0.9, 0.96))
+	box.add_child(text_label)
 
 func _compose_ai_prompt(info: Dictionary) -> String:
 	var lines: Array = []
@@ -332,16 +371,16 @@ func _make_code_block(text: String) -> Control:
 	var copy_button: Button = Button.new()
 	copy_button.text = _tr("ui.detail_copy")
 	copy_button.size_flags_horizontal = Control.SIZE_SHRINK_END
-	copy_button.pressed.connect(_on_copy_pressed.bind(text, copy_button))
+	copy_button.pressed.connect(_on_copy_pressed.bind(text, copy_button, _tr("ui.detail_copy")))
 	wrap.add_child(copy_button)
 	return wrap
 
-func _on_copy_pressed(text: String, button: Button) -> void:
+func _on_copy_pressed(text: String, button: Button, revert_label: String) -> void:
 	DisplayServer.clipboard_set(text)
 	button.text = _tr("ui.detail_copied")
 	await get_tree().create_timer(1.2).timeout
 	if is_instance_valid(button):
-		button.text = _tr("ui.detail_copy")
+		button.text = revert_label
 
 func _panel_style() -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
@@ -353,6 +392,18 @@ func _panel_style() -> StyleBoxFlat:
 	style.content_margin_right = 12
 	style.content_margin_top = 12
 	style.content_margin_bottom = 12
+	return style
+
+func _accent_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.30, 0.50, 0.95, 0.10)
+	style.border_color = Color(0.40, 0.62, 1.0, 0.55)
+	style.border_width_left = 3
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
 	return style
 
 func _row_style() -> StyleBoxFlat:

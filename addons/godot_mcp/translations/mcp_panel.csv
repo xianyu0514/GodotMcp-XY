@@ -94,3 +94,10 @@ ui.detail_behavior,Behavior,Behavior,行为特性
 ui.ai_prompt_use,Please use the Godot MCP tool,Please use the Godot MCP tool,请使用 Godot MCP 工具
 ui.ai_prompt_required,Required parameters,Required parameters,必填参数
 ui.ai_prompt_optional,Optional parameters,Optional parameters,可选参数
+ui.scope_all,All,All,全部
+ui.scope_core,Core,Core,核心
+ui.scope_extended,Extended,Extended,扩展
+ui.extended_tools,Extended tools,Extended tools,扩展工具
+ui.extended_desc,"Advanced tools, enable as needed","Advanced tools, enable as needed",进阶工具，按需开启
+ui.detail_copy_name,Copy name,Copy name,复制名称
+ui.detail_copy_prompt,Copy prompt,Copy prompt,复制提示词
