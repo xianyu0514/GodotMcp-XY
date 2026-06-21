@@ -2,6 +2,10 @@
 class_name MCPToolGroupItem
 extends VBoxContainer
 
+signal group_toggled(group_name: String, enabled: bool)
+signal item_toggled(tool_name: String, enabled: bool)
+signal tool_selected(tool_name: String)
+
 var _group_name: String = ""
 var _is_collapsed: bool = false
 var _group_check: CheckBox = null
@@ -10,9 +14,6 @@ var _collapse_button: Button = null
 var _count_label: Label = null
 var _desc_label: Label = null
 var _tool_container: VBoxContainer = null
-
-signal group_toggled(group_name: String, enabled: bool)
-signal item_toggled(tool_name: String, enabled: bool)
 
 func setup(group_name: String, items: Array, translation_manager = null) -> void:
 	_group_name = group_name
@@ -86,6 +87,7 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 		var tool_item: MCPToolItem = MCPToolItem.new()
 		tool_item.setup(tool_name, description, enabled, category, _group_name)
 		tool_item.tool_toggled.connect(_on_tool_item_toggled)
+		tool_item.tool_selected.connect(_on_tool_item_selected)
 		_tool_container.add_child(tool_item)
 
 	_update_count()
@@ -126,6 +128,15 @@ func set_group_enabled(enabled: bool) -> void:
 
 func get_tool_container() -> VBoxContainer:
 	return _tool_container
+
+func get_tool_items() -> Array:
+	var items: Array = []
+	if _tool_container:
+		for child in _tool_container.get_children():
+			var tool_item: MCPToolItem = child as MCPToolItem
+			if tool_item:
+				items.append(tool_item)
+	return items
 
 func _get_desc_label() -> Label:
 	return _desc_label
@@ -199,6 +210,9 @@ func _on_group_toggled(button_pressed: bool) -> void:
 func _on_tool_item_toggled(tool_name: String, enabled: bool) -> void:
 	_update_count()
 	item_toggled.emit(tool_name, enabled)
+
+func _on_tool_item_selected(tool_name: String) -> void:
+	tool_selected.emit(tool_name)
 
 func _update_count() -> void:
 	var container: VBoxContainer = get_tool_container()

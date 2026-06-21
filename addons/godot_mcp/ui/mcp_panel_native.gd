@@ -52,6 +52,8 @@ var _detail_desc: Label = null
 var _detail_count: Label = null
 var _enable_all_button: Button = null
 var _disable_all_button: Button = null
+var _tool_detail_panel: MCPToolDetailPanel = null
+var _selected_tool_name: String = ""
 var _language_option: OptionButton = null
 
 var _log_file_path: String = "user://mcp_server.log"
@@ -402,11 +404,17 @@ func _create_tools_tab() -> VBoxContainer:
 	_category_nav_container.add_theme_constant_override("separation", 2)
 	nav_scroll.add_child(_category_nav_container)
 
+	var middle_split: HSplitContainer = HSplitContainer.new()
+	middle_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	middle_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	middle_split.split_offset = 360
+	split.add_child(middle_split)
+
 	var detail: VBoxContainer = VBoxContainer.new()
 	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	detail.add_theme_constant_override("separation", 4)
-	split.add_child(detail)
+	middle_split.add_child(detail)
 
 	var header_margin: MarginContainer = MarginContainer.new()
 	header_margin.add_theme_constant_override("margin_left", 10)
@@ -464,6 +472,11 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tools_list_container.add_theme_constant_override("separation", 6)
 	scroll.add_child(_tools_list_container)
+
+	_tool_detail_panel = MCPToolDetailPanel.new()
+	_tool_detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tool_detail_panel.setup(_translation_manager)
+	middle_split.add_child(_tool_detail_panel)
 
 	return tab
 
@@ -711,6 +724,7 @@ func _create_group_widget(group_name: String, group_tools: Array) -> void:
 	widget.setup(group_name, group_tools, _translation_manager)
 	widget.group_toggled.connect(_on_group_toggled)
 	widget.item_toggled.connect(_on_tool_toggled)
+	widget.tool_selected.connect(_on_tool_selected)
 	_tools_list_container.add_child(widget)
 	_group_widgets[group_name] = widget
 
@@ -770,6 +784,12 @@ func _group_icon_name(group_name: String) -> String:
 			return by_prefix[prefix]
 	return ""
 
+func _group_icon_texture(group_name: String) -> Texture2D:
+	var icon_name: String = _group_icon_name(group_name)
+	if icon_name != "" and has_theme_icon(icon_name, "EditorIcons"):
+		return get_theme_icon(icon_name, "EditorIcons")
+	return null
+
 func _group_display_name(group_name: String) -> String:
 	var key: String = "group." + group_name
 	var translated: String = _tr(key)
@@ -811,6 +831,7 @@ func _apply_view() -> void:
 	else:
 		_apply_search_view(query)
 	_update_detail_count()
+	_ensure_tool_selection()
 
 func _apply_category_view() -> void:
 	var scope: Array = _groups_for_selection()
@@ -925,6 +946,8 @@ func _on_tool_toggled(tool_name: String, enabled: bool) -> void:
 	_update_tools_count()
 	_update_nav_counts()
 	_update_detail_count()
+	if tool_name == _selected_tool_name:
+		_populate_detail(tool_name)
 	_debounce_save()
 
 func _on_group_toggled(group_name: String, enabled: bool) -> void:
@@ -933,7 +956,92 @@ func _on_group_toggled(group_name: String, enabled: bool) -> void:
 	_update_tools_count()
 	_update_nav_counts()
 	_update_detail_count()
+	if not _selected_tool_name.is_empty():
+		_populate_detail(_selected_tool_name)
 	_debounce_save()
+
+# --- Tool detail pane (right column) ---
+
+func _ordered_group_names() -> Array:
+	return _core_group_names + _supp_group_names
+
+func _find_tool_item(tool_name: String) -> MCPToolItem:
+	if tool_name.is_empty():
+		return null
+	for group_name in _group_widgets:
+		var widget: MCPToolGroupItem = _group_widgets[group_name]
+		if widget == null:
+			continue
+		for item in widget.get_tool_items():
+			if item.get_tool_name() == tool_name:
+				return item
+	return null
+
+func _on_tool_selected(tool_name: String) -> void:
+	if _selected_tool_name != tool_name:
+		var prev: MCPToolItem = _find_tool_item(_selected_tool_name)
+		if prev:
+			prev.set_selected(false)
+	_selected_tool_name = tool_name
+	var current: MCPToolItem = _find_tool_item(tool_name)
+	if current:
+		current.set_selected(true)
+	_populate_detail(tool_name)
+
+func _clear_tool_selection() -> void:
+	var prev: MCPToolItem = _find_tool_item(_selected_tool_name)
+	if prev:
+		prev.set_selected(false)
+	_selected_tool_name = ""
+	if _tool_detail_panel:
+		_tool_detail_panel.show_empty()
+
+func _ensure_tool_selection() -> void:
+	var first_name: String = ""
+	var still_visible: bool = false
+	for group_name in _ordered_group_names():
+		var widget: MCPToolGroupItem = _group_widgets.get(group_name)
+		if widget == null or not widget.visible:
+			continue
+		for item in widget.get_tool_items():
+			if not item.visible:
+				continue
+			if first_name.is_empty():
+				first_name = item.get_tool_name()
+			if item.get_tool_name() == _selected_tool_name:
+				still_visible = true
+	if still_visible:
+		_on_tool_selected(_selected_tool_name)
+	elif not first_name.is_empty():
+		_on_tool_selected(first_name)
+	else:
+		_clear_tool_selection()
+
+func _populate_detail(tool_name: String) -> void:
+	if not _tool_detail_panel:
+		return
+	if _server_core == null or not _server_core.has_method("get_tool"):
+		return
+	var tool: MCPTypes.MCPTool = _server_core.get_tool(tool_name)
+	if tool == null:
+		_tool_detail_panel.show_empty()
+		return
+	var description: String = tool.description
+	var translated: String = _tr(tool_name)
+	if translated != tool_name:
+		description = translated
+	_tool_detail_panel.show_tool({
+		"name": tool.name,
+		"description": description,
+		"category": tool.category,
+		"group": tool.group,
+		"group_display": _group_display_name(tool.group),
+		"enabled": tool.enabled,
+		"input_schema": tool.input_schema,
+		"output_schema": tool.output_schema,
+		"annotations": tool.annotations,
+		"icon": _group_icon_texture(tool.group),
+	})
 
 func _update_tools_count() -> void:
 	if not _tools_count_label:

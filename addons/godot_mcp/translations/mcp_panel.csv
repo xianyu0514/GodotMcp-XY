@@ -71,3 +71,26 @@ ui.enable_all,Enable all,Enable all,全选
 ui.disable_all,Disable all,Disable all,全不选
 ui.no_results,No tools match your search,No tools match your search,没有匹配的工具
 ui.search_results,Search results,Search results,搜索结果
+ui.detail_select_hint,Select a tool to view its details,Select a tool to view its details,选择左侧工具查看详情
+ui.detail_category,Category,Category,所属分类
+ui.detail_type,Type,Type,类型
+ui.detail_status,Status,Status,状态
+ui.detail_enabled,Enabled,Enabled,已启用
+ui.detail_disabled,Disabled,Disabled,已禁用
+ui.detail_description,Description,Description,功能描述
+ui.detail_params,Parameters,Parameters,参数
+ui.detail_no_params,No parameters,No parameters,无参数
+ui.detail_required,Required,Required,必需
+ui.detail_optional,Optional,Optional,可选
+ui.detail_returns,Returns,Returns,返回值
+ui.detail_no_returns,No return value,No return value,无返回值
+ui.detail_example,Example call,Example call,调用示例
+ui.detail_ai_prompt,AI prompt,AI prompt,AI 提示词
+ui.detail_copy,Copy,Copy,复制
+ui.detail_copied,Copied,Copied,已复制
+ui.detail_readonly,Read-only,Read-only,只读
+ui.detail_destructive,Destructive,Destructive,破坏性
+ui.detail_behavior,Behavior,Behavior,行为特性
+ui.ai_prompt_use,Please use the Godot MCP tool,Please use the Godot MCP tool,请使用 Godot MCP 工具
+ui.ai_prompt_required,Required parameters,Required parameters,必填参数
+ui.ai_prompt_optional,Optional parameters,Optional parameters,可选参数
