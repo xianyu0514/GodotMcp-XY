@@ -100,6 +100,22 @@ func get_tool_container() -> VBoxContainer:
 			return child as VBoxContainer
 	return null
 
+func _get_desc_label() -> Label:
+	for child in get_children():
+		if child.name == "DescLabel":
+			return child as Label
+	return null
+
+# Show or hide everything below the header row (description + tool list).
+func _set_body_visible(body_visible: bool) -> void:
+	var container: VBoxContainer = get_tool_container()
+	if container:
+		container.visible = body_visible
+	var desc: Label = _get_desc_label()
+	if desc:
+		desc.visible = body_visible
+	_update_collapse_glyph(body_visible)
+
 func _tr(key: String) -> String:
 	if _translation_manager:
 		return _translation_manager.get_text(key)
@@ -121,10 +137,7 @@ func _get_group_description() -> String:
 
 func _toggle_collapse() -> void:
 	_is_collapsed = not _is_collapsed
-	var container: VBoxContainer = get_tool_container()
-	if container:
-		container.visible = not _is_collapsed
-	_update_collapse_glyph(not _is_collapsed)
+	_set_body_visible(not _is_collapsed)
 
 func _update_collapse_glyph(expanded: bool) -> void:
 	var btn: Button = get_child(0).get_child(0) as Button
@@ -152,11 +165,9 @@ func apply_filter(query: String) -> int:
 		if is_match:
 			visible_count += 1
 	if query.is_empty():
-		container.visible = not _is_collapsed
-		_update_collapse_glyph(not _is_collapsed)
+		_set_body_visible(not _is_collapsed)
 	else:
-		container.visible = visible_count > 0
-		_update_collapse_glyph(visible_count > 0)
+		_set_body_visible(visible_count > 0)
 	return visible_count
 
 func _on_group_toggled(button_pressed: bool) -> void:
