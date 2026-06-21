@@ -101,3 +101,11 @@ ui.extended_tools,Extended tools,Extended tools,扩展工具
 ui.extended_desc,"Advanced tools, enable as needed","Advanced tools, enable as needed",进阶工具，按需开启
 ui.detail_copy_name,Copy name,Copy name,复制名称
 ui.detail_copy_prompt,Copy prompt,Copy prompt,复制提示词
+ui.section_transport,Transport,Transport,传输
+ui.section_behavior,Behavior,Behavior,行为
+ui.section_security,Security & Logging,Security & Logging,安全与日志
+ui.section_general,General,General,通用
+ui.copy_url,Copy URL,Copy URL,复制地址
+ui.copied,Copied,Copied,已复制
+ui.clear_log,Clear log,Clear log,清空日志
+ui.reset_defaults,Reset to defaults,Reset to defaults,恢复默认
