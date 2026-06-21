@@ -40,6 +40,11 @@ func setup(name: String, description: String, enabled: bool, category: String, g
 func get_tool_name() -> String:
 	return _tool_name
 
+func matches_filter(query: String) -> bool:
+	if query.is_empty():
+		return true
+	return _tool_name.to_lower().contains(query) or _description.to_lower().contains(query)
+
 func is_enabled() -> bool:
 	var check: CheckBox = get_child(0) as CheckBox
 	return check.button_pressed if check else true

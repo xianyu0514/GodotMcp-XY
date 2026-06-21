@@ -40,6 +40,11 @@ var _open_log_button: Button = null
 var _tab_container: TabContainer = null
 var _debounce_timer: Timer = null
 var _group_widgets: Dictionary = {}
+var _tools_search_edit: LineEdit = null
+var _core_section_label: Label = null
+var _supp_section_label: Label = null
+var _core_group_names: Array = []
+var _supp_group_names: Array = []
 var _language_option: OptionButton = null
 
 var _log_file_path: String = "user://mcp_server.log"
@@ -365,6 +370,13 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	toolbar.add_child(_tools_count_label)
 
+	_tools_search_edit = LineEdit.new()
+	_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
+	_tools_search_edit.clear_button_enabled = true
+	_tools_search_edit.custom_minimum_size = Vector2(180, 0)
+	_tools_search_edit.text_changed.connect(_on_tools_search_changed)
+	toolbar.add_child(_tools_search_edit)
+
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -574,6 +586,10 @@ func _refresh_tools_list() -> void:
 	for child in _tools_list_container.get_children():
 		child.queue_free()
 	_group_widgets.clear()
+	_core_section_label = null
+	_supp_section_label = null
+	_core_group_names = []
+	_supp_group_names = []
 
 	var tools: Array = []
 	if _server_core and _server_core.has_method("get_registered_tools"):
@@ -605,29 +621,34 @@ func _refresh_tools_list() -> void:
 			else:
 				core_group_names.append(group_name)
 
+	_core_group_names = core_group_names
+	_supp_group_names = supp_group_names
+
 	if core_group_names.size() > 0:
-		var core_section: Label = Label.new()
-		core_section.text = _tr("ui.core_tools")
-		core_section.add_theme_font_size_override("font_size", 14)
-		core_section.add_theme_color_override("font_color", Color(0.3, 0.7, 0.7))
-		core_section.add_theme_constant_override("margin_top", 4)
-		_tools_list_container.add_child(core_section)
+		_core_section_label = Label.new()
+		_core_section_label.text = _tr("ui.core_tools")
+		_core_section_label.add_theme_font_size_override("font_size", 14)
+		_core_section_label.add_theme_color_override("font_color", Color(0.3, 0.7, 0.7))
+		_core_section_label.add_theme_constant_override("margin_top", 4)
+		_tools_list_container.add_child(_core_section_label)
 
 		for group_name in core_group_names:
 			_create_group_widget(group_name, tools_by_group[group_name])
 
 	if supp_group_names.size() > 0:
-		var supp_section: Label = Label.new()
-		supp_section.text = _tr("ui.supplementary_tools")
-		supp_section.add_theme_font_size_override("font_size", 14)
-		supp_section.add_theme_color_override("font_color", Color(0.7, 0.7, 0.3))
-		supp_section.add_theme_constant_override("margin_top", 8)
-		_tools_list_container.add_child(supp_section)
+		_supp_section_label = Label.new()
+		_supp_section_label.text = _tr("ui.supplementary_tools")
+		_supp_section_label.add_theme_font_size_override("font_size", 14)
+		_supp_section_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.3))
+		_supp_section_label.add_theme_constant_override("margin_top", 8)
+		_tools_list_container.add_child(_supp_section_label)
 
 		for group_name in supp_group_names:
 			_create_group_widget(group_name, tools_by_group[group_name])
 
 	_update_tools_count()
+	if _tools_search_edit and not _tools_search_edit.text.strip_edges().is_empty():
+		_apply_tools_filter(_tools_search_edit.text)
 
 func _create_group_widget(group_name: String, group_tools: Array) -> void:
 	var widget: MCPToolGroupItem = MCPToolGroupItem.new()
@@ -636,6 +657,30 @@ func _create_group_widget(group_name: String, group_tools: Array) -> void:
 	widget.item_toggled.connect(_on_tool_toggled)
 	_tools_list_container.add_child(widget)
 	_group_widgets[group_name] = widget
+
+func _on_tools_search_changed(new_text: String) -> void:
+	_apply_tools_filter(new_text)
+
+func _apply_tools_filter(query: String) -> void:
+	var q: String = query.strip_edges().to_lower()
+	var core_visible: int = 0
+	var supp_visible: int = 0
+	for group_name in _group_widgets:
+		var widget: MCPToolGroupItem = _group_widgets[group_name]
+		if widget == null:
+			continue
+		var visible_count: int = widget.apply_filter(q)
+		var group_shown: bool = q.is_empty() or visible_count > 0
+		widget.visible = group_shown
+		if group_shown:
+			if _supp_group_names.has(group_name):
+				supp_visible += 1
+			else:
+				core_visible += 1
+	if _core_section_label:
+		_core_section_label.visible = q.is_empty() or core_visible > 0
+	if _supp_section_label:
+		_supp_section_label.visible = q.is_empty() or supp_visible > 0
 
 func _on_tool_toggled(tool_name: String, enabled: bool) -> void:
 	if _server_core and _server_core.has_method("set_tool_enabled"):
@@ -715,6 +760,8 @@ func _refresh_translations() -> void:
 		_language_label.text = _tr("ui.language")
 	if _refresh_tools_button:
 		_refresh_tools_button.text = _tr("ui.refresh_tools")
+	if _tools_search_edit:
+		_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	if _open_log_button:
 		_open_log_button.text = _tr("ui.open_log")
 	if _language_option:
