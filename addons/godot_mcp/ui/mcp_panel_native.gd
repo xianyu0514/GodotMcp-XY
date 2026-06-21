@@ -36,6 +36,10 @@ var _rate_limit_label: Label = null
 var _language_label: Label = null
 var _refresh_tools_button: Button = null
 var _open_log_button: Button = null
+var _clear_log_button: Button = null
+var _copy_url_button: Button = null
+var _status_dot: Panel = null
+var _section_titles: Array = []
 
 var _tab_container: TabContainer = null
 var _debounce_timer: Timer = null
@@ -141,9 +145,19 @@ func _create_ui() -> void:
 	_update_ui_state()
 	_refresh_tools_list()
 
-func _create_status_bar() -> HBoxContainer:
+func _create_status_bar() -> Control:
+	var frame: PanelContainer = PanelContainer.new()
+	frame.add_theme_stylebox_override("panel", _banner_style())
+
 	var bar: HBoxContainer = HBoxContainer.new()
 	bar.add_theme_constant_override("separation", 8)
+	frame.add_child(bar)
+
+	_status_dot = Panel.new()
+	_status_dot.custom_minimum_size = Vector2(10, 10)
+	_status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_status_dot.add_theme_stylebox_override("panel", _dot_style(Color(0.55, 0.55, 0.6)))
+	bar.add_child(_status_dot)
 
 	_status_label = Label.new()
 	_status_label.text = _tr("ui.status_unknown")
@@ -157,6 +171,12 @@ func _create_status_bar() -> HBoxContainer:
 	_connection_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	bar.add_child(_connection_info_label)
 
+	_copy_url_button = Button.new()
+	_copy_url_button.text = _tr("ui.copy_url")
+	_copy_url_button.flat = true
+	_copy_url_button.pressed.connect(_on_copy_url_pressed)
+	bar.add_child(_copy_url_button)
+
 	_start_button = Button.new()
 	_start_button.text = _tr("ui.start_server")
 	_start_button.pressed.connect(_on_start_pressed)
@@ -167,75 +187,107 @@ func _create_status_bar() -> HBoxContainer:
 	_stop_button.pressed.connect(_on_stop_pressed)
 	bar.add_child(_stop_button)
 
-	return bar
+	return frame
+
+func _banner_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(1, 1, 1, 0.03)
+	style.border_color = Color(1, 1, 1, 0.07)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	return style
+
+func _dot_style(color: Color) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = color
+	style.set_corner_radius_all(5)
+	return style
+
+func _on_copy_url_pressed() -> void:
+	var port: int = 9080
+	if _plugin and _plugin.get("http_port") != null:
+		port = _plugin.http_port
+	elif _http_port_spin:
+		port = int(_http_port_spin.value)
+	DisplayServer.clipboard_set("http://127.0.0.1:%d" % port)
+	if _copy_url_button:
+		_copy_url_button.text = _tr("ui.copied")
+		await get_tree().create_timer(1.2).timeout
+		if is_instance_valid(_copy_url_button):
+			_copy_url_button.text = _tr("ui.copy_url")
 
 func _create_settings_tab() -> VBoxContainer:
 	var tab: VBoxContainer = VBoxContainer.new()
 	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tab.add_theme_constant_override("separation", 4)
+
+	var scroll: ScrollContainer = ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tab.add_child(scroll)
 
 	var margin: MarginContainer = MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 12)
 	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_bottom", 8)
-	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tab.add_child(margin)
+	scroll.add_child(margin)
 
 	var content: VBoxContainer = VBoxContainer.new()
-	content.add_theme_constant_override("separation", 6)
+	content.add_theme_constant_override("separation", 10)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	margin.add_child(content)
 
+	_section_titles.clear()
+	_build_transport_card(content)
+	_build_behavior_card(content)
+	_build_security_card(content)
+	_build_general_card(content)
+
+	return tab
+
+func _build_transport_card(content: VBoxContainer) -> void:
 	_transport_title_label = Label.new()
 	_transport_title_label.text = _tr("ui.transport_settings")
-	_transport_title_label.add_theme_font_size_override("font_size", 13)
-	content.add_child(_transport_title_label)
-
-	var transport_hbox: HBoxContainer = HBoxContainer.new()
-	content.add_child(transport_hbox)
+	var body: VBoxContainer = _settings_card(content, _transport_title_label)
 
 	_transport_mode_label = Label.new()
 	_transport_mode_label.text = _tr("ui.transport_mode")
-	transport_hbox.add_child(_transport_mode_label)
-
 	_transport_mode_option = OptionButton.new()
 	_transport_mode_option.add_item("http", 1)
 	_transport_mode_option.item_selected.connect(_on_transport_mode_selected)
-	transport_hbox.add_child(_transport_mode_option)
+	_settings_row(body, _transport_mode_label, _transport_mode_option, false)
 
 	_http_config_container = VBoxContainer.new()
-	_http_config_container.add_theme_constant_override("separation", 4)
-	content.add_child(_http_config_container)
-
-	var port_hbox: HBoxContainer = HBoxContainer.new()
-	_http_config_container.add_child(port_hbox)
+	_http_config_container.add_theme_constant_override("separation", 6)
+	body.add_child(_http_config_container)
 
 	_http_port_label = Label.new()
 	_http_port_label.text = _tr("ui.http_port")
-	port_hbox.add_child(_http_port_label)
-
 	_http_port_spin = SpinBox.new()
 	_http_port_spin.min_value = 1024
 	_http_port_spin.max_value = 65535
 	_http_port_spin.value = 9080
 	_http_port_spin.step = 1
 	_http_port_spin.value_changed.connect(_on_http_port_changed)
-	port_hbox.add_child(_http_port_spin)
+	_settings_row(_http_config_container, _http_port_label, _http_port_spin, false)
 
 	var auth_hbox: HBoxContainer = HBoxContainer.new()
+	auth_hbox.add_theme_constant_override("separation", 8)
 	_http_config_container.add_child(auth_hbox)
-
 	_auth_enabled_check = CheckBox.new()
 	_auth_enabled_check.text = _tr("ui.enable_auth")
 	_auth_enabled_check.toggled.connect(_on_auth_enabled_toggled)
 	auth_hbox.add_child(_auth_enabled_check)
-
 	_auth_token_label = Label.new()
 	_auth_token_label.text = _tr("ui.auth_token")
 	auth_hbox.add_child(_auth_token_label)
-
 	_auth_token_edit = LineEdit.new()
 	_auth_token_edit.secret = true
 	_auth_token_edit.placeholder_text = _tr("ui.token_placeholder")
@@ -253,100 +305,135 @@ func _create_settings_tab() -> VBoxContainer:
 	_allow_remote_check.toggled.connect(_on_allow_remote_toggled)
 	_http_config_container.add_child(_allow_remote_check)
 
-	var cors_hbox: HBoxContainer = HBoxContainer.new()
-	_http_config_container.add_child(cors_hbox)
-
 	_cors_origin_label = Label.new()
 	_cors_origin_label.text = _tr("ui.cors_origin")
-	cors_hbox.add_child(_cors_origin_label)
-
 	_cors_origin_edit = LineEdit.new()
 	_cors_origin_edit.text = "*"
-	_cors_origin_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_cors_origin_edit.text_changed.connect(_on_cors_origin_changed)
-	cors_hbox.add_child(_cors_origin_edit)
+	_settings_row(_http_config_container, _cors_origin_label, _cors_origin_edit, true)
 
 	_http_config_container.visible = false
 
-	content.add_child(HSeparator.new())
+func _build_behavior_card(content: VBoxContainer) -> void:
+	var title: Label = Label.new()
+	title.text = _tr("ui.section_behavior")
+	var body: VBoxContainer = _settings_card(content, title)
+	_register_section_title(title, "ui.section_behavior")
 
 	_auto_start_check = CheckBox.new()
 	_auto_start_check.text = _tr("ui.auto_start")
 	_auto_start_check.toggled.connect(_on_auto_start_toggled)
-	content.add_child(_auto_start_check)
+	body.add_child(_auto_start_check)
 
 	_vibe_coding_mode_check = CheckBox.new()
 	_vibe_coding_mode_check.text = _tr("ui.vibe_coding_mode")
 	_vibe_coding_mode_check.toggled.connect(_on_vibe_coding_mode_toggled)
-	content.add_child(_vibe_coding_mode_check)
-
-	var log_hbox: HBoxContainer = HBoxContainer.new()
-	content.add_child(log_hbox)
-
-	_log_level_label = Label.new()
-	_log_level_label.text = _tr("ui.log_level")
-	log_hbox.add_child(_log_level_label)
-
-	_log_level_option = OptionButton.new()
-	_log_level_option.add_item("ERROR", 0)
-	_log_level_option.add_item("WARN", 1)
-	_log_level_option.add_item("INFO", 2)
-	_log_level_option.add_item("DEBUG", 3)
-	_log_level_option.item_selected.connect(_on_log_level_selected)
-	log_hbox.add_child(_log_level_option)
-
-	var security_hbox: HBoxContainer = HBoxContainer.new()
-	content.add_child(security_hbox)
-
-	_security_label = Label.new()
-	_security_label.text = _tr("ui.security")
-	security_hbox.add_child(_security_label)
-
-	_security_level_option = OptionButton.new()
-	_security_level_option.add_item("PERMISSIVE", 0)
-	_security_level_option.add_item("STRICT", 1)
-	_security_level_option.item_selected.connect(_on_security_level_selected)
-	security_hbox.add_child(_security_level_option)
-
-	var rate_hbox: HBoxContainer = HBoxContainer.new()
-	content.add_child(rate_hbox)
+	body.add_child(_vibe_coding_mode_check)
 
 	_rate_limit_label = Label.new()
 	_rate_limit_label.text = _tr("ui.rate_limit")
-	rate_hbox.add_child(_rate_limit_label)
-
 	_rate_limit_spin = SpinBox.new()
 	_rate_limit_spin.min_value = 10
 	_rate_limit_spin.max_value = 2000
 	_rate_limit_spin.step = 10
 	_rate_limit_spin.value = 1000
 	_rate_limit_spin.value_changed.connect(_on_rate_limit_changed)
-	rate_hbox.add_child(_rate_limit_spin)
+	_settings_row(body, _rate_limit_label, _rate_limit_spin, false)
 
-	content.add_child(HSeparator.new())
+func _build_security_card(content: VBoxContainer) -> void:
+	var title: Label = Label.new()
+	title.text = _tr("ui.section_security")
+	var body: VBoxContainer = _settings_card(content, title)
+	_register_section_title(title, "ui.section_security")
 
-	var lang_hbox: HBoxContainer = HBoxContainer.new()
-	content.add_child(lang_hbox)
+	_security_label = Label.new()
+	_security_label.text = _tr("ui.security")
+	_security_level_option = OptionButton.new()
+	_security_level_option.add_item("PERMISSIVE", 0)
+	_security_level_option.add_item("STRICT", 1)
+	_security_level_option.item_selected.connect(_on_security_level_selected)
+	_settings_row(body, _security_label, _security_level_option, false)
+
+	_log_level_label = Label.new()
+	_log_level_label.text = _tr("ui.log_level")
+	_log_level_option = OptionButton.new()
+	_log_level_option.add_item("ERROR", 0)
+	_log_level_option.add_item("WARN", 1)
+	_log_level_option.add_item("INFO", 2)
+	_log_level_option.add_item("DEBUG", 3)
+	_log_level_option.item_selected.connect(_on_log_level_selected)
+	_settings_row(body, _log_level_label, _log_level_option, false)
+
+	var buttons: HBoxContainer = HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	body.add_child(buttons)
+	_open_log_button = Button.new()
+	_open_log_button.text = _tr("ui.open_log")
+	_open_log_button.pressed.connect(_open_log_file)
+	buttons.add_child(_open_log_button)
+	_clear_log_button = Button.new()
+	_clear_log_button.text = _tr("ui.clear_log")
+	_clear_log_button.pressed.connect(clear_log)
+	buttons.add_child(_clear_log_button)
+
+func _build_general_card(content: VBoxContainer) -> void:
+	var title: Label = Label.new()
+	title.text = _tr("ui.section_general")
+	var body: VBoxContainer = _settings_card(content, title)
+	_register_section_title(title, "ui.section_general")
 
 	_language_label = Label.new()
 	_language_label.text = _tr("ui.language")
-	lang_hbox.add_child(_language_label)
-
 	_language_option = OptionButton.new()
 	_language_option.add_item(_tr("ui.english"), 0)
 	_language_option.add_item(_tr("ui.chinese"), 1)
 	_language_option.item_selected.connect(_on_language_selected)
-	lang_hbox.add_child(_language_option)
+	_settings_row(body, _language_label, _language_option, false)
 
-	content.add_child(HSeparator.new())
+func _register_section_title(label: Label, key: String) -> void:
+	_section_titles.append({"label": label, "key": key})
 
-	_open_log_button = Button.new()
-	_open_log_button.text = _tr("ui.open_log")
-	_open_log_button.pressed.connect(_open_log_file)
-	_open_log_button.size_flags_horizontal = Control.SIZE_SHRINK_END
-	content.add_child(_open_log_button)
+func _settings_card(content: VBoxContainer, title: Label) -> VBoxContainer:
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _panel_card_style())
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_child(card)
 
-	return tab
+	var box: VBoxContainer = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	card.add_child(box)
+
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color(0.62, 0.74, 1.0))
+	box.add_child(title)
+	return box
+
+func _settings_row(parent: VBoxContainer, label: Label, control: Control, expand: bool) -> void:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	label.custom_minimum_size = Vector2(120, 0)
+	label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
+	row.add_child(label)
+
+	if expand:
+		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		control.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	row.add_child(control)
+
+func _panel_card_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(1, 1, 1, 0.025)
+	style.border_color = Color(1, 1, 1, 0.06)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 12
+	style.content_margin_bottom = 12
+	return style
 
 func _create_tools_tab() -> VBoxContainer:
 	var tab: VBoxContainer = VBoxContainer.new()
@@ -498,10 +585,14 @@ func _update_ui_state() -> void:
 
 	if is_running:
 		_status_label.text = _tr("ui.status_running")
-		_status_label.add_theme_color_override("font_color", Color.GREEN)
+		_status_label.add_theme_color_override("font_color", Color(0.36, 0.78, 0.42))
+		if _status_dot:
+			_status_dot.add_theme_stylebox_override("panel", _dot_style(Color(0.36, 0.78, 0.42)))
 	else:
 		_status_label.text = _tr("ui.status_stopped")
-		_status_label.add_theme_color_override("font_color", Color.RED)
+		_status_label.add_theme_color_override("font_color", Color(0.82, 0.42, 0.42))
+		if _status_dot:
+			_status_dot.add_theme_stylebox_override("panel", _dot_style(Color(0.55, 0.55, 0.6)))
 
 	if _start_button:
 		_start_button.disabled = is_running
@@ -1159,6 +1250,14 @@ func _refresh_translations() -> void:
 		_disable_all_button.text = _tr("ui.disable_all")
 	if _open_log_button:
 		_open_log_button.text = _tr("ui.open_log")
+	if _clear_log_button:
+		_clear_log_button.text = _tr("ui.clear_log")
+	if _copy_url_button:
+		_copy_url_button.text = _tr("ui.copy_url")
+	for entry in _section_titles:
+		var label: Label = entry["label"]
+		if is_instance_valid(label):
+			label.text = _tr(entry["key"])
 	if _language_option:
 		var current_locale: String = _translation_manager.get_locale() if _translation_manager else "en"
 		var locales: Array = _translation_manager.get_available_locales() if _translation_manager else ["en", "zh"]
