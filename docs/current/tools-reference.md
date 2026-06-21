@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **188 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **191 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **188 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 6 | 10 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出、实例化预制场景、节点分支另存为场景） |
 | [Editor Tools](#editor-tools) | 4 | 19 | 23 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择、缓冲区同步、导入状态） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 41 | 44 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写、UI 主题创建与设置） |
+| [Project Tools](#project-tools) | 3 | 44 | 47 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写、UI 主题创建与设置、项目设置写入、自动加载增删） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -4790,6 +4790,84 @@ Continue：恢复执行。
 
 ---
 
+### 189. set_project_setting
+
+设置一个项目设置（`ProjectSettings`）并可选持久化到 `project.godot`。用于窗口大小、渲染、物理层、应用配置、输入设备设置等。传 `value_type` 可将值强制转换为 `int`/`float`/`bool`/`string`/`vector2`/`vector3`/`color`；否则按原样存储。`persist=false` 时只改内存不写盘。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `setting` | string | 是 | 设置键，例如 `display/window/size/viewport_width` |
+| `value` | any | 是 | 新值。JSON 标量直接映射；向量/颜色配合 `value_type` |
+| `value_type` | string | 否 | 值强制转换：`int`/`float`/`bool`/`string`/`vector2`/`vector3`/`color` |
+| `require_existing` | boolean | 否 | 为 `true` 时若键不存在则报错，防止笔误创建无用键（默认 `false`） |
+| `persist` | boolean | 否 | 是否经 `ProjectSettings.save()` 持久化到 `project.godot`（默认 `true`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `setting` | string | 写入的设置键 |
+| `previous` | any | 写入前的值（不存在时为 `null`） |
+| `new` | any | 写入后的值 |
+| `existed` | boolean | 写入前键是否已存在 |
+| `persisted` | boolean | 是否已写入 `project.godot` |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 190. add_project_autoload
+
+注册一个项目 autoload 单例（如 `GameState`/`RNG`/`SaveManager` 脚本）并持久化到 `project.godot`。`path` 必须指向已存在的 `.gd`/`.tscn`/`.scn`/`.cs` 资源。`enabled=false` 时注册为不带单例 `*` 前缀；`overwrite=true` 可替换同名条目。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `name` | string | 是 | autoload 名称，须为合法标识符，例如 `GameState` |
+| `path` | string | 是 | autoload 脚本或场景的 `res://` 路径（`.gd`/`.tscn`/`.scn`/`.cs`） |
+| `enabled` | boolean | 否 | 注册为启用的单例（`*` 前缀）（默认 `true`） |
+| `overwrite` | boolean | 否 | 同名 autoload 已存在时是否覆盖（默认 `false`） |
+| `persist` | boolean | 否 | 是否持久化到 `project.godot`（默认 `true`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `name` | string | autoload 名称 |
+| `path` | string | 解析后的资源路径 |
+| `setting` | string | 写入的项目设置键（`autoload/<name>`） |
+| `enabled` | boolean | 是否作为启用单例注册 |
+| `replaced` | boolean | 是否替换了已有同名条目 |
+| `persisted` | boolean | 是否已写入 `project.godot` |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
+### 191. remove_project_autoload
+
+按名称移除一个项目 autoload 单例并将更改持久化到 `project.godot`。若不存在同名 autoload 则返回错误。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `name` | string | 是 | 要移除的 autoload 名称，例如 `GameState` |
+| `persist` | boolean | 否 | 是否持久化到 `project.godot`（默认 `true`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `name` | string | 被移除的 autoload 名称 |
+| `setting` | string | 被移除的项目设置键（`autoload/<name>`） |
+| `removed_value` | string | 移除前的原始值 |
+| `persisted` | boolean | 是否已写入 `project.godot` |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=true`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -4889,7 +4967,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **188 个工具**（30 核心 + 158 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **191 个工具**（30 核心 + 161 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema
