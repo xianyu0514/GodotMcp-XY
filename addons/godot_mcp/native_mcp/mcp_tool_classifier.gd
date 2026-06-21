@@ -208,6 +208,9 @@ func _build_classifications() -> void:
 		{"name": "create_animation", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "insert_animation_keys", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "create_tileset", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "configure_tileset_layers", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "set_tile_collision_polygon", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "set_tile_terrain", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:

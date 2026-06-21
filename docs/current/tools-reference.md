@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **198 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **201 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **198 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 8 | 12 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取） |
 | [Editor Tools](#editor-tools) | 4 | 19 | 23 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择、缓冲区同步、导入状态） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 47 | 50 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建） |
+| [Project Tools](#project-tools) | 3 | 50 | 53 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置、逐图块碰撞多边形/地形设置） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -5054,6 +5054,84 @@ Continue：恢复执行。
 
 ---
 
+### 199. configure_tileset_layers
+
+在已有 TileSet（.tres/.res）上追加并配置图层：物理层（collision_layer/mask 位掩码）、导航层、自定义数据层（名称 + Variant 类型）、以及带地形（名称/颜色/匹配模式）的地形集。新图层为追加，原有图层保留。保存 TileSet。配合 `create_tileset` 使用，使图块能支持碰撞、自动拼接、寻路与逐图块元数据。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `tileset_path` | string | 是 | 已有 TileSet（.tres/.res）路径 |
+| `physics_layers` | array | 否 | 要追加的物理层，每项 `{collision_layer:int=1, collision_mask:int=1}` |
+| `navigation_layers` | array | 否 | 要追加的导航层，每项 `{layers:int=1}` |
+| `custom_data_layers` | array | 否 | 要追加的自定义数据层，每项 `{name:string, type:int}`（type 为 Variant.Type，默认 4=String） |
+| `terrain_sets` | array | 否 | 要追加的地形集，每项 `{mode:string(corners\|sides\|corners_and_sides), terrains:[{name, color}]}` |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `tileset_path` | string | TileSet 路径 |
+| `physics_layers_count` / `navigation_layers_count` / `custom_data_layers_count` / `terrain_sets_count` | integer | 操作后各图层总数 |
+| `physics_layers_added` / `navigation_layers_added` / `custom_data_layers_added` / `terrain_sets_added` | integer | 本次追加数量 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
+### 200. set_tile_collision_polygon
+
+在 TileSet atlas 源的某图块上、指定物理层设置碰撞多边形。可传显式多边形点，或省略以自动按 `tile_size` 生成整格矩形（让图块变实心），可选标记为单向碰撞。物理层须已存在（见 `configure_tileset_layers`）。保存 TileSet。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `tileset_path` | string | 是 | 已有 TileSet 路径 |
+| `source_id` | integer | 是 | atlas 源 id（由 `create_tileset` 返回） |
+| `tile_coords` | array | 是 | atlas 图块坐标 `[x, y]` |
+| `alternative_id` | integer | 否 | 备选图块 id，默认 0 |
+| `physics_layer` | integer | 否 | TileSet 物理层索引，默认 0 |
+| `points` | array | 否 | 多边形顶点 `[[x,y]...]`（图块本地像素，居中于原点）；省略则生成整格矩形 |
+| `one_way` | boolean | 否 | 是否单向碰撞，默认 false |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `tileset_path` / `source_id` / `tile_coords` / `physics_layer` | - | 回显输入 |
+| `polygon_points` | array | 实际写入的多边形顶点 |
+| `one_way` | boolean | 是否单向 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
+### 201. set_tile_terrain
+
+为 TileSet atlas 源的某图块指定地形集与地形，并可设置用于自动拼接的地形 peering 位。地形集与地形须已存在（见 `configure_tileset_layers`）。`peering_bits` 将邻居名称（`right_side`、`bottom_right_corner`、`bottom_side`、`bottom_left_corner`、`left_side`、`top_left_corner`、`top_side`、`top_right_corner`）映射到地形索引。保存 TileSet。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `tileset_path` | string | 是 | 已有 TileSet 路径 |
+| `source_id` | integer | 是 | atlas 源 id |
+| `tile_coords` | array | 是 | atlas 图块坐标 `[x, y]` |
+| `alternative_id` | integer | 否 | 备选图块 id，默认 0 |
+| `terrain_set` | integer | 是 | 地形集索引 |
+| `terrain` | integer | 是 | 地形集内的地形索引 |
+| `peering_bits` | object | 否 | 邻居名称 → 地形索引 的映射，用于自动拼接 |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `tileset_path` / `source_id` / `tile_coords` / `terrain_set` / `terrain` | - | 回显输入 |
+| `peering_bits_set` | array | 实际设置的邻居名称列表 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -5153,7 +5231,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **198 个工具**（30 核心 + 168 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **201 个工具**（30 核心 + 171 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema

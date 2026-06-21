@@ -13,13 +13,13 @@
 - **完整项目访问**：AI 助手可以读取和修改脚本、场景、节点和资源
 - **原生实现**：无需 Node.js 依赖——完全在 Godot 中运行
 - **实时编辑**：直接在编辑器中应用 AI 建议
-- **全面的工具集**（198 个工具——30 核心 + 168 补充）：
+- **全面的工具集**（201 个工具——30 核心 + 171 补充）：
   - **节点工具**（9 核心 + 17 高级）：创建、修改、管理场景节点，复制、移动、重命名，锚点预设，信号连接，组管理，批量操作（更新/读取属性、连接信号），场景审计，Control 偏移变换（Godot 4.7），2D 单向碰撞，内联子资源设置/读取（set_node_subresource/get_node_subresource）
   - **脚本工具**（7 核心 + 10 高级）：编辑、分析、创建、附加、验证 GDScript 文件，校验着色器，批量读取脚本，执行脚本，文件搜索，符号索引，定义和引用查找
   - **场景工具**（4 核心 + 8 高级）：操作场景结构、保存场景、列出/打开/关闭场景标签页，项目场景列表，实例化预制场景，节点分支另存为场景，TileMapLayer（Godot 4.x）单元格设置/读取（set_tilemap_layer_cells/get_tilemap_layer_cells）
   - **编辑器工具**（4 核心 + 19 高级）：控制编辑器功能、截图、信号检查、文件系统重载，节点/文件选择，导出管理，属性检查器，编辑器缓冲区同步（未保存改动、保存/重载/关闭脚本），导入状态
   - **调试工具**（3 核心 + 67 高级）：日志、调试会话、断点、栈帧/变量读取、性能分析器、运行时探针，动画/音频/着色器/瓦片地图运行时控制，调试执行控制
-  - **项目工具**（3 核心 + 47 高级）：访问项目设置、列出资源、创建资源、自定义/脚本资源与批量创建、资源属性读写，运行测试、管理输入映射、检查自动加载/全局类，资源诊断与健康审计，反向资源引用与孤立资源检测、迁移兼容性扫描与修复，弃用 4.x API 扫描，GDExtension 插件检测，渐变纹理创建（含 Godot 4.7 锥形），PCK 打包，渲染输出（HDR 2D）配置，可绘制纹理创建与绘制（Godot 4.7），UI 主题创建与设置（create_theme/set_theme_item/set_default_theme）、项目设置写入（set_project_setting）、自动加载增删（add_project_autoload/remove_project_autoload）、动画资源创建与关键帧插入（create_animation/insert_animation_keys）、TileSet 资源创建（create_tileset）
+  - **项目工具**（3 核心 + 50 高级）：访问项目设置、列出资源、创建资源、自定义/脚本资源与批量创建、资源属性读写，运行测试、管理输入映射、检查自动加载/全局类，资源诊断与健康审计，反向资源引用与孤立资源检测、迁移兼容性扫描与修复，弃用 4.x API 扫描，GDExtension 插件检测，渐变纹理创建（含 Godot 4.7 锥形），PCK 打包，渲染输出（HDR 2D）配置，可绘制纹理创建与绘制（Godot 4.7），UI 主题创建与设置（create_theme/set_theme_item/set_default_theme）、项目设置写入（set_project_setting）、自动加载增删（add_project_autoload/remove_project_autoload）、动画资源创建与关键帧插入（create_animation/insert_animation_keys）、TileSet 资源创建（create_tileset/configure_tileset_layers/set_tile_collision_polygon/set_tile_terrain）
 
 ## 📦 安装
 
