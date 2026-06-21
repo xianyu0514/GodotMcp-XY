@@ -109,3 +109,23 @@ ui.copy_url,Copy URL,Copy URL,复制地址
 ui.copied,Copied,Copied,已复制
 ui.clear_log,Clear log,Clear log,清空日志
 ui.reset_defaults,Reset to defaults,Reset to defaults,恢复默认
+ui.copy_config,Copy Config,Copy Config,复制客户端配置
+ui.copy_config_http,HTTP (Cursor / Cline),HTTP (Cursor / Cline),HTTP（Cursor / Cline 等）
+ui.copy_config_stdio,stdio (Claude Desktop),stdio (Claude Desktop),stdio（Claude Desktop 等）
+ui.self_check,Self-Check,Self-Check,连接自检
+ui.check_not_running,Server is not running.,Server is not running.,服务器未运行。
+ui.check_stdio,stdio transport has no HTTP endpoint to probe.,stdio transport has no HTTP endpoint to probe.,stdio 传输模式没有可探测的 HTTP 端点。
+ui.check_ok,Server reachable (HTTP %d).,Server reachable (HTTP %d).,服务器可达（HTTP %d）。
+ui.check_failed,Server unreachable.,Server unreachable.,服务器不可达。
+ui.preset_label,Preset:,Preset:,预设档：
+ui.preset_apply,Apply,Apply,套用
+ui.preset_export,Export,Export,导出
+ui.preset_import,Import,Import,导入
+ui.preset_export_title,Export tool preset,Export tool preset,导出工具预设
+ui.preset_import_title,Import tool preset,Import tool preset,导入工具预设
+ui.preset_minimal_core,Minimal (core only),Minimal (core only),最小核心
+ui.preset_level_design,Level Design,Level Design,关卡设计
+ui.preset_debugging,Debugging,Debugging,调试诊断
+ui.preset_automation_qa,QA Automation,QA Automation,自动化测试
+ui.preset_art_resources,Art & Resources,Art & Resources,资源美术
+ui.preset_all,All tools,All tools,全部工具

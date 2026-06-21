@@ -52,6 +52,11 @@ for authentication, SSE, the stdio transport, headless launch, and CLI flags.
 All snippets assume HTTP mode on the default port. For authentication and other transports,
 see [Configuration → Client configuration](configuration.md#client-configuration).
 
+> Tip: instead of copying the snippets below by hand, use the **Copy Config** menu in the
+> panel's status bar — it builds the HTTP or stdio configuration for you with the current
+> port and auth token filled in. See
+> [Configuration → Generate snippets from the panel](configuration.md#generate-snippets-from-the-panel).
+
 ### Claude Desktop
 
 Claude Desktop connects through the `mcp-remote` bridge:

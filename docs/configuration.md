@@ -132,6 +132,47 @@ The default port is `9080` and the endpoint is `/mcp`. Pick the form your client
 Per-client variants (Cursor, Trae, Cline, OpenCode, Codex) are listed in
 [Getting Started → Connect an AI client](getting-started.md#5-connect-an-ai-client).
 
+### Generate snippets from the panel
+
+You don't have to write these by hand. The status bar exposes a **Copy Config** menu that
+copies a ready-to-paste configuration to the clipboard, with the current port and (when
+enabled) the auth token already filled in:
+
+- **HTTP (Cursor / Cline)** — emits the `url` form shown above, adding the `Authorization`
+  header automatically when authentication is enabled.
+- **stdio (Claude Desktop)** — emits a `command`/`args` form that launches this project
+  headless with `--mcp-server --mcp-transport=stdio`, using the running editor's executable
+  and project path.
+
+The **Self-Check** button next to it issues a quick HTTP probe to the running server and
+reports whether the endpoint is reachable, so customers can confirm connectivity before
+wiring up a client.
+
+## Tool presets
+
+The Tool Manager tab includes a **preset selector** so teams can switch the enabled tool set
+in one click instead of toggling tools individually. Each preset enables the 30 core tools
+plus the advanced groups relevant to a workflow:
+
+| Preset | Enables | Typical use |
+| --- | --- | --- |
+| Minimal (core only) | 30 core tools | Smallest, safest surface for vibe-coding |
+| Level Design | core + node/scene/editor authoring | Building and arranging scenes |
+| Debugging | core + runtime/debugger tools | Inspecting a running game |
+| QA Automation | core + debug + project (test runners) | Automated test and input flows |
+| Art & Resources | core + resource/scene authoring | Themes, tilesets, materials, resources |
+| All tools | every registered tool (201) | Power users |
+
+Presets can be shared across a team:
+
+- **Export** writes the currently enabled tools to a `.json` file
+  (`{ "version": 1, "enabled_tools": [...] }`).
+- **Import** reads such a file and applies it; unknown tool names are ignored, so a preset
+  exported from a newer build still loads safely.
+
+A team lead can export one curated file and distribute it so every client starts from the
+same tool configuration.
+
 ## Security recommendations
 
 - **Production:** turn on `auth_enabled` and set a strong `auth_token`.

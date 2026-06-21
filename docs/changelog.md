@@ -18,6 +18,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   `--mcp-port` / `--mcp-transport` command-line overrides for parallel instances.
 - Godot 4.7-aware tools (editor buffer sync, migration scanning/fixes, Control offset
   transform, drawable textures, conic gradients, TileSet layer configuration).
+- **Client config generator** — *Copy Config* menu in the panel emits ready-to-paste HTTP
+  or stdio client configuration with the current port and auth token pre-filled.
+- **Server self-check** — one-click HTTP reachability probe from the status bar.
+- **Tool presets** — one-click enable/disable of curated tool collections (Minimal,
+  Level Design, Debugging, QA Automation, Art & Resources, All), with JSON export/import
+  for sharing a configuration across a team.
 
 ## 1.0.6
 

@@ -38,6 +38,10 @@ var _refresh_tools_button: Button = null
 var _open_log_button: Button = null
 var _clear_log_button: Button = null
 var _copy_url_button: Button = null
+var _copy_config_button: MenuButton = null
+var _self_check_button: Button = null
+var _self_check_http: HTTPRequest = null
+var _self_check_dialog: AcceptDialog = null
 var _status_dot: Panel = null
 var _section_titles: Array = []
 
@@ -62,6 +66,15 @@ var _tool_detail_panel: MCPToolDetailPanel = null
 var _selected_tool_name: String = ""
 var _language_option: OptionButton = null
 
+var _preset_manager = null
+var _preset_label: Label = null
+var _preset_option: OptionButton = null
+var _apply_preset_button: Button = null
+var _export_preset_button: Button = null
+var _import_preset_button: Button = null
+var _preset_file_dialog: FileDialog = null
+var _preset_dialog_save: bool = false
+
 var _log_file_path: String = "user://mcp_server.log"
 var _log_file_flush_count: int = 10
 var _log_pending_write: Array[String] = []
@@ -75,6 +88,7 @@ func _ready() -> void:
 	_translation_manager = MCPTranslationManager.new()
 	_translation_manager.load_all()
 	_settings_manager = MCPSettingsManager.new()
+	_preset_manager = MCPToolPresetManager.new()
 	_create_ui()
 	_debounce_timer = Timer.new()
 	_debounce_timer.one_shot = true
@@ -93,6 +107,8 @@ func set_plugin(plugin: EditorPlugin) -> void:
 		_translation_manager.load_all()
 	if _settings_manager == null:
 		_settings_manager = MCPSettingsManager.new()
+	if _preset_manager == null:
+		_preset_manager = MCPToolPresetManager.new()
 	if _plugin and _plugin.has_method("get_native_server"):
 		_server_core = _plugin.get_native_server()
 	_load_settings()
@@ -177,6 +193,21 @@ func _create_status_bar() -> Control:
 	_copy_url_button.pressed.connect(_on_copy_url_pressed)
 	bar.add_child(_copy_url_button)
 
+	_copy_config_button = MenuButton.new()
+	_copy_config_button.text = _tr("ui.copy_config")
+	_copy_config_button.flat = true
+	var config_popup: PopupMenu = _copy_config_button.get_popup()
+	config_popup.add_item(_tr("ui.copy_config_http"), 0)
+	config_popup.add_item(_tr("ui.copy_config_stdio"), 1)
+	config_popup.id_pressed.connect(_on_copy_config_id_pressed)
+	bar.add_child(_copy_config_button)
+
+	_self_check_button = Button.new()
+	_self_check_button.text = _tr("ui.self_check")
+	_self_check_button.flat = true
+	_self_check_button.pressed.connect(_on_self_check_pressed)
+	bar.add_child(_self_check_button)
+
 	_start_button = Button.new()
 	_start_button.text = _tr("ui.start_server")
 	_start_button.pressed.connect(_on_start_pressed)
@@ -219,6 +250,79 @@ func _on_copy_url_pressed() -> void:
 		await get_tree().create_timer(1.2).timeout
 		if is_instance_valid(_copy_url_button):
 			_copy_url_button.text = _tr("ui.copy_url")
+
+func _current_port() -> int:
+	var port: int = 9080
+	if _plugin and _plugin.get("http_port") != null:
+		port = _plugin.http_port
+	elif _http_port_spin:
+		port = int(_http_port_spin.value)
+	return port
+
+func _current_transport() -> String:
+	if _plugin and _plugin.get("transport_mode") != null:
+		return _plugin.transport_mode
+	if _transport_mode_option:
+		return _transport_mode_option.get_item_text(_transport_mode_option.selected)
+	return "http"
+
+func _on_copy_config_id_pressed(id: int) -> void:
+	var text: String = ""
+	if id == 1:
+		var exe: String = OS.get_executable_path()
+		var project_dir: String = ProjectSettings.globalize_path("res://")
+		text = MCPClientConfig.stdio_config(exe, project_dir)
+	else:
+		var token: String = ""
+		if _auth_enabled_check and _auth_enabled_check.button_pressed and _auth_token_edit:
+			token = _auth_token_edit.text
+		text = MCPClientConfig.http_config(_current_port(), token)
+	DisplayServer.clipboard_set(text)
+	if _copy_config_button:
+		_copy_config_button.text = _tr("ui.copied")
+		await get_tree().create_timer(1.2).timeout
+		if is_instance_valid(_copy_config_button):
+			_copy_config_button.text = _tr("ui.copy_config")
+
+func _on_self_check_pressed() -> void:
+	var running: bool = false
+	if _server_core and _server_core.has_method("is_running"):
+		running = _server_core.is_running()
+	if not running:
+		_show_self_check(_tr("ui.check_not_running"))
+		return
+	if _current_transport() != "http":
+		_show_self_check(_tr("ui.check_stdio"))
+		return
+	if _self_check_http == null or not is_instance_valid(_self_check_http):
+		_self_check_http = HTTPRequest.new()
+		add_child(_self_check_http)
+		_self_check_http.request_completed.connect(_on_self_check_completed)
+	if _self_check_button:
+		_self_check_button.disabled = true
+	var url: String = "http://127.0.0.1:%d/" % _current_port()
+	var err: int = _self_check_http.request(url, PackedStringArray(), HTTPClient.METHOD_GET)
+	if err != OK:
+		if _self_check_button:
+			_self_check_button.disabled = false
+		_show_self_check(_tr("ui.check_failed"))
+
+func _on_self_check_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if _self_check_button:
+		_self_check_button.disabled = false
+	if result == HTTPRequest.RESULT_SUCCESS and response_code > 0:
+		_show_self_check(_trf("ui.check_ok", [response_code]))
+	else:
+		_show_self_check(_tr("ui.check_failed"))
+
+func _show_self_check(message: String) -> void:
+	if _self_check_dialog == null or not is_instance_valid(_self_check_dialog):
+		_self_check_dialog = AcceptDialog.new()
+		_self_check_dialog.title = _tr("ui.self_check")
+		add_child(_self_check_dialog)
+	_self_check_dialog.title = _tr("ui.self_check")
+	_self_check_dialog.dialog_text = message
+	_self_check_dialog.popup_centered()
 
 func _create_settings_tab() -> VBoxContainer:
 	var tab: VBoxContainer = VBoxContainer.new()
@@ -435,6 +539,108 @@ func _panel_card_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
+func _build_preset_row(content: VBoxContainer) -> void:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	content.add_child(row)
+
+	_preset_label = Label.new()
+	_preset_label.text = _tr("ui.preset_label")
+	_preset_label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
+	row.add_child(_preset_label)
+
+	_preset_option = OptionButton.new()
+	if _preset_manager:
+		for preset_id in _preset_manager.get_preset_ids():
+			_preset_option.add_item(_tr("ui.preset_" + preset_id))
+	row.add_child(_preset_option)
+
+	_apply_preset_button = Button.new()
+	_apply_preset_button.text = _tr("ui.preset_apply")
+	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
+	row.add_child(_apply_preset_button)
+
+	var spacer: Control = Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+
+	_export_preset_button = Button.new()
+	_export_preset_button.text = _tr("ui.preset_export")
+	_export_preset_button.flat = true
+	_export_preset_button.pressed.connect(_on_export_preset_pressed)
+	row.add_child(_export_preset_button)
+
+	_import_preset_button = Button.new()
+	_import_preset_button.text = _tr("ui.preset_import")
+	_import_preset_button.flat = true
+	_import_preset_button.pressed.connect(_on_import_preset_pressed)
+	row.add_child(_import_preset_button)
+
+func _registered_tool_names() -> Array:
+	var names: Array = []
+	if _server_core and _server_core.has_method("get_registered_tools"):
+		for info in _server_core.get_registered_tools():
+			names.append(info.get("name", ""))
+	return names
+
+func _apply_states(states: Dictionary) -> void:
+	if _server_core == null or not _server_core.has_method("set_tool_enabled"):
+		return
+	for tool_name in states:
+		_server_core.set_tool_enabled(tool_name, states[tool_name])
+	_refresh_tools_list()
+	_update_nav_counts()
+	_update_tools_count()
+	_update_detail_count()
+	_debounce_save()
+
+func _on_apply_preset_pressed() -> void:
+	if _preset_manager == null or _preset_option == null:
+		return
+	var ids: Array = _preset_manager.get_preset_ids()
+	var idx: int = _preset_option.selected
+	if idx < 0 or idx >= ids.size():
+		return
+	var states: Dictionary = _preset_manager.resolve_preset_states(ids[idx], _registered_tool_names())
+	_apply_states(states)
+
+func _ensure_preset_file_dialog() -> void:
+	if _preset_file_dialog and is_instance_valid(_preset_file_dialog):
+		return
+	_preset_file_dialog = FileDialog.new()
+	_preset_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_preset_file_dialog.use_native_dialog = true
+	_preset_file_dialog.add_filter("*.json", "JSON")
+	_preset_file_dialog.file_selected.connect(_on_preset_file_selected)
+	add_child(_preset_file_dialog)
+
+func _on_export_preset_pressed() -> void:
+	_ensure_preset_file_dialog()
+	_preset_dialog_save = true
+	_preset_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_preset_file_dialog.title = _tr("ui.preset_export_title")
+	_preset_file_dialog.current_file = "godot_mcp_tools.json"
+	_preset_file_dialog.popup_centered(Vector2i(760, 520))
+
+func _on_import_preset_pressed() -> void:
+	_ensure_preset_file_dialog()
+	_preset_dialog_save = false
+	_preset_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_preset_file_dialog.title = _tr("ui.preset_import_title")
+	_preset_file_dialog.popup_centered(Vector2i(760, 520))
+
+func _on_preset_file_selected(path: String) -> void:
+	if _preset_dialog_save:
+		var states: Dictionary = {}
+		if _server_core and _server_core.has_method("get_registered_tools"):
+			for info in _server_core.get_registered_tools():
+				states[info.get("name", "")] = info.get("enabled", true)
+		MCPToolPresetManager.export_states_to_file(states, path)
+	else:
+		var result: Dictionary = MCPToolPresetManager.import_states_from_file(path, _registered_tool_names())
+		if result.get("ok", false):
+			_apply_states(result["states"])
+
 func _create_tools_tab() -> VBoxContainer:
 	var tab: VBoxContainer = VBoxContainer.new()
 	tab.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -468,6 +674,8 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tools_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	toolbar.add_child(_tools_count_label)
+
+	_build_preset_row(content)
 
 	var search_row: HBoxContainer = HBoxContainer.new()
 	search_row.add_theme_constant_override("separation", 8)
@@ -1259,6 +1467,27 @@ func _refresh_translations() -> void:
 		_clear_log_button.text = _tr("ui.clear_log")
 	if _copy_url_button:
 		_copy_url_button.text = _tr("ui.copy_url")
+	if _copy_config_button:
+		_copy_config_button.text = _tr("ui.copy_config")
+		var config_popup: PopupMenu = _copy_config_button.get_popup()
+		if config_popup.item_count >= 2:
+			config_popup.set_item_text(0, _tr("ui.copy_config_http"))
+			config_popup.set_item_text(1, _tr("ui.copy_config_stdio"))
+	if _self_check_button:
+		_self_check_button.text = _tr("ui.self_check")
+	if _preset_label:
+		_preset_label.text = _tr("ui.preset_label")
+	if _apply_preset_button:
+		_apply_preset_button.text = _tr("ui.preset_apply")
+	if _export_preset_button:
+		_export_preset_button.text = _tr("ui.preset_export")
+	if _import_preset_button:
+		_import_preset_button.text = _tr("ui.preset_import")
+	if _preset_option and _preset_manager:
+		var preset_ids: Array = _preset_manager.get_preset_ids()
+		for i in range(preset_ids.size()):
+			if i < _preset_option.item_count:
+				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
 	for entry in _section_titles:
 		var label: Label = entry["label"]
 		if is_instance_valid(label):
