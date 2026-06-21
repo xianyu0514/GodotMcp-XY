@@ -113,6 +113,8 @@ func _build_classifications() -> void:
 		{"name": "close_scene_tab", "category": "supplementary", "group": "Scene-Advanced"},
 		{"name": "instantiate_scene", "category": "supplementary", "group": "Scene-Advanced"},
 		{"name": "save_branch_as_scene", "category": "supplementary", "group": "Scene-Advanced"},
+		{"name": "set_tilemap_layer_cells", "category": "supplementary", "group": "Scene-Advanced"},
+		{"name": "get_tilemap_layer_cells", "category": "supplementary", "group": "Scene-Advanced"},
 		{"name": "list_project_script_symbols", "category": "supplementary", "group": "Script-Advanced"},
 		{"name": "find_script_symbol_definition", "category": "supplementary", "group": "Script-Advanced"},
 		{"name": "find_script_symbol_references", "category": "supplementary", "group": "Script-Advanced"},
@@ -203,6 +205,7 @@ func _build_classifications() -> void:
 		{"name": "remove_project_autoload", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "create_animation", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "insert_animation_keys", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "create_tileset", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:

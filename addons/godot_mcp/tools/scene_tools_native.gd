@@ -73,6 +73,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_close_scene_tab(server_core)
 	_register_instantiate_scene(server_core)
 	_register_save_branch_as_scene(server_core)
+	_register_set_tilemap_layer_cells(server_core)
+	_register_get_tilemap_layer_cells(server_core)
 
 # ============================================================================
 # create_scene - 创建新场�?
@@ -1076,3 +1078,237 @@ func _collect_scenes(directory_path: String, result: Array[String]) -> void:
 		file_name = dir.get_next()
 	
 	dir.list_dir_end()
+
+# ============================================================================
+# set_tilemap_layer_cells - Paint/erase cells on a TileMapLayer (Godot 4.x)
+# in the currently edited scene. Operates with the single-layer TileMapLayer
+# API (one node per layer), unlike the legacy multi-layer TileMap runtime tool.
+# ============================================================================
+
+func _register_set_tilemap_layer_cells(server_core: RefCounted) -> void:
+	var tool_name: String = "set_tilemap_layer_cells"
+	var description: String = "Set or erase a batch of cells on a TileMapLayer node (Godot 4.x) in the currently edited scene. Uses the single-layer TileMapLayer API. Each cell is {coords:[x,y], source_id, atlas_coords:[x,y], alternative} or {coords:[x,y], erase:true}. Assign a TileSet to the layer (e.g. via create_tileset + update_node_property) so painted cells render. Wrapped in editor UndoRedo."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"node_path": {"type": "string", "description": "Path to the TileMapLayer node in the edited scene (e.g. '/root/Main/Ground')."},
+			"cells": {
+				"type": "array",
+				"description": "Cells to set/erase. Each item: {coords:[x,y], source_id, atlas_coords:[x,y], alternative} or {coords:[x,y], erase:true}.",
+				"items": {"type": "object"}
+			}
+		},
+		"required": ["node_path", "cells"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"cells_set": {"type": "integer"},
+			"cells_erased": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_set_tilemap_layer_cells"),
+						  output_schema, annotations,
+						  "supplementary", "Scene-Advanced")
+
+func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	if not params.has("cells"):
+		return {"error": "Missing required parameter: cells"}
+
+	var cells: Variant = params["cells"]
+	if not (cells is Array) or (cells as Array).is_empty():
+		return {"error": "Parameter 'cells' must be a non-empty array"}
+
+	# Pre-validate every cell entry before touching the editor so bad input
+	# fails cleanly and is testable without an editor.
+	var prepared: Array = []
+	for entry in (cells as Array):
+		if not (entry is Dictionary):
+			return {"error": "Each cell must be an object"}
+		var cell: Dictionary = entry
+		if not cell.has("coords"):
+			return {"error": "Each cell must include 'coords'"}
+		var coords_value: Variant = _parse_vector2i(cell["coords"])
+		if coords_value == null:
+			return {"error": "Cell 'coords' must be [x, y] or {x, y}"}
+		var prepared_cell: Dictionary = {"coords": coords_value, "erase": bool(cell.get("erase", false))}
+		if not prepared_cell["erase"]:
+			prepared_cell["source_id"] = int(cell.get("source_id", -1))
+			var atlas_value: Variant = _parse_vector2i(cell.get("atlas_coords", [-1, -1]))
+			if atlas_value == null:
+				return {"error": "Cell 'atlas_coords' must be [x, y] or {x, y}"}
+			prepared_cell["atlas_coords"] = atlas_value
+			prepared_cell["alternative"] = int(cell.get("alternative", 0))
+		prepared.append(prepared_cell)
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+
+	var node: Node = _resolve_node_path(node_path)
+	if not node:
+		return {"error": "Node not found: " + node_path}
+	if not (node is TileMapLayer):
+		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
+	var layer: TileMapLayer = node
+
+	var cells_set: int = 0
+	var cells_erased: int = 0
+	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+	if undo_redo:
+		undo_redo.create_action("Set TileMapLayer Cells: " + node_path.get_file())
+	for prepared_cell in prepared:
+		var coords: Vector2i = prepared_cell["coords"]
+		var old_source: int = layer.get_cell_source_id(coords)
+		var old_atlas: Vector2i = layer.get_cell_atlas_coords(coords)
+		var old_alt: int = layer.get_cell_alternative_tile(coords)
+		if prepared_cell["erase"]:
+			if undo_redo:
+				undo_redo.add_do_method(layer, "erase_cell", coords)
+			else:
+				layer.erase_cell(coords)
+			cells_erased += 1
+		else:
+			if undo_redo:
+				undo_redo.add_do_method(layer, "set_cell", coords, prepared_cell["source_id"], prepared_cell["atlas_coords"], prepared_cell["alternative"])
+			else:
+				layer.set_cell(coords, prepared_cell["source_id"], prepared_cell["atlas_coords"], prepared_cell["alternative"])
+			cells_set += 1
+		if undo_redo:
+			if old_source == -1:
+				undo_redo.add_undo_method(layer, "erase_cell", coords)
+			else:
+				undo_redo.add_undo_method(layer, "set_cell", coords, old_source, old_atlas, old_alt)
+	if undo_redo:
+		undo_redo.commit_action()
+
+	editor_interface.mark_scene_as_unsaved()
+
+	return {
+		"status": "success",
+		"node_path": node_path,
+		"cells_set": cells_set,
+		"cells_erased": cells_erased
+	}
+
+# ============================================================================
+# get_tilemap_layer_cells - Read cells from a TileMapLayer (Godot 4.x)
+# in the currently edited scene. Returns used cells, or specific coords.
+# ============================================================================
+
+func _register_get_tilemap_layer_cells(server_core: RefCounted) -> void:
+	var tool_name: String = "get_tilemap_layer_cells"
+	var description: String = "Read cells from a TileMapLayer node (Godot 4.x) in the currently edited scene. Without 'coords' it returns every used cell; with 'coords' (array of [x,y]) it returns just those. Each cell reports source_id, atlas_coords and alternative (source_id -1 means empty)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"node_path": {"type": "string", "description": "Path to the TileMapLayer node in the edited scene (e.g. '/root/Main/Ground')."},
+			"coords": {
+				"type": "array",
+				"description": "Optional list of [x,y] cells to query. Omit to return all used cells.",
+				"items": {"type": "array"}
+			}
+		},
+		"required": ["node_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"cell_count": {"type": "integer"},
+			"cells": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_get_tilemap_layer_cells"),
+						  output_schema, annotations,
+						  "supplementary", "Scene-Advanced")
+
+func _tool_get_tilemap_layer_cells(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+
+	var requested: Array = []
+	if params.has("coords"):
+		var coords_param: Variant = params["coords"]
+		if not (coords_param is Array):
+			return {"error": "Parameter 'coords' must be an array of [x, y]"}
+		for item in (coords_param as Array):
+			var parsed: Variant = _parse_vector2i(item)
+			if parsed == null:
+				return {"error": "Each entry in 'coords' must be [x, y] or {x, y}"}
+			requested.append(parsed)
+
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+
+	var node: Node = _resolve_node_path(node_path)
+	if not node:
+		return {"error": "Node not found: " + node_path}
+	if not (node is TileMapLayer):
+		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
+	var layer: TileMapLayer = node
+
+	var target_coords: Array = requested
+	if target_coords.is_empty() and not params.has("coords"):
+		for used in layer.get_used_cells():
+			target_coords.append(used)
+
+	var cells: Array = []
+	for coords in target_coords:
+		var source_id: int = layer.get_cell_source_id(coords)
+		var atlas: Vector2i = layer.get_cell_atlas_coords(coords)
+		cells.append({
+			"coords": [coords.x, coords.y],
+			"source_id": source_id,
+			"atlas_coords": [atlas.x, atlas.y],
+			"alternative": layer.get_cell_alternative_tile(coords)
+		})
+
+	return {
+		"status": "success",
+		"node_path": node_path,
+		"cell_count": cells.size(),
+		"cells": cells
+	}
+
+static func _parse_vector2i(value: Variant) -> Variant:
+	if value is Vector2i:
+		return value
+	if value is Vector2:
+		return Vector2i(value)
+	if value is Dictionary:
+		return Vector2i(int(value.get("x", 0)), int(value.get("y", 0)))
+	if value is Array and value.size() >= 2:
+		return Vector2i(int(value[0]), int(value[1]))
+	return null
