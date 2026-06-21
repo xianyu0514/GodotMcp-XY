@@ -130,10 +130,10 @@ gh pr review <number> --request-changes --body "审查意见..."
 
 ### Step 6：记录审查文档
 
-创建审查文档到 `docs/debugging/`：
+创建审查文档到 `docs/reviews/`：
 
 ```
-docs/debugging/pr<number>-<feature>-review-<date>.md
+docs/reviews/pr<number>-<feature>-review-<date>.md
 ```
 
 文档模板：

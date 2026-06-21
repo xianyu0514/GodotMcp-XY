@@ -1,10 +1,10 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **201 个工具**（30 核心 + 171 补充），分为 6 大类，供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **201 个工具**（30 核心 + 171 补充），分为 6 大类，供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
-- **作者**：yurineko73 | **版本**：1.0.7-pre1
+- **作者**：xianyu0514 | **版本**：1.0.7-pre1
 - **许可证**：MIT
 - **渲染器**：GL Compatibility
 
@@ -22,7 +22,7 @@
 ## 命令
 
 ### 运行 Godot 项目
-在 Godot 编辑器（4.6.x，GL Compatibility 渲染器）中打开 `project.godot`。
+在 Godot 编辑器（4.7.x，GL Compatibility 渲染器）中打开 `project.godot`。
 
 ### GUT 单元测试
 ```powershell
@@ -107,13 +107,13 @@ addons/godot_mcp/
 
 ### 新增工具流程
 
-创建新 MCP 工具时，必须按顺序完成所有步骤。完整参考指南见 `docs/development/adding-new-tools.md`。
+创建新 MCP 工具时，必须按顺序完成所有步骤。完整参考指南见 `docs/contributing.md`（“Adding a new tool”章节）。
 
 1. **实现处理器** — 在对应的 `*_tools_native.gd` 中创建 `_register_<name>()` 和 `_tool_<name>()` 函数，用 8 个参数调用 `server_core.register_tool()`（name, desc, input_schema, Callable, output_schema, annotations, category, group）
 2. **注册到分类器** — 在 `mcp_tool_classifier.gd` 的 `_build_classifications()` 中添加条目，然后更新 `test_mcp_tool_classifier.gd` 中的工具总数和 supplementary 计数
 3. **添加单元测试** — 在 `test/unit/tools/` 中覆盖缺失参数/无效参数/边界情况
 4. **更新翻译文件** — 在 `translations/tool_descriptions.json` 和 `translations/tool_descriptions.csv` 中添加工具描述（中英文）
-5. **更新文档** — `docs/current/tools-reference.md`（更新概览表格 + 添加工具条目）、`addons/godot_mcp/README.md` 和 `README.zh.md`
+5. **更新文档** — `docs/tools/<category>-tools.md`（对应分类页，新增工具行 + 更新分组计数）、`docs/tools/README.md`（分类总数表）、根与 `addons/godot_mcp/` 下的 `README.md` / `README.zh.md`
 6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
 **注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。
@@ -122,20 +122,17 @@ addons/godot_mcp/
 
 每次修改已有工具（新增参数、返回值、行为变更）时，必须同步更新以下文档：
 
-1. **`docs/current/tools-reference.md`**
-   - 更新工具的**参数表**（新增/变更的参数名、类型、必需、描述）
-   - 更新工具的**返回值表**（新增/变更的字段名、类型、描述）
-   - 更新概览表中的分类计数（如调试工具 67→68）
-   - 重编号后续工具（新增工具条目时）
-2. **`README.md` 和 `README.zh.md`**（项目根目录和 `addons/godot_mcp/` 下）
-   - 更新功能列表中的工具计数（`Comprehensive Tool Set` / `全面的工具集`）
-   - 更新详细工具列表的分类计数（如 `### Debug (3 core + N advanced)`）
-   - 在对应分类下**新增工具条目**（使用工具的 snake_case 名称）
-3. **`docs/current/architecture.md`** — 如果工具分类数量有大幅变化，更新工具注册章节的统计表
-4. **翻译文件**
+1. **`docs/tools/<category>-tools.md`**（对应分类页）
+   - 在分类页表格中**新增/更新工具行**（工具名、Tier、描述）
+   - 更新该分组标题中的工具计数
+2. **`docs/tools/README.md`** — 更新分类总数表（core / advanced / total）
+3. **`README.md` 和 `README.zh.md`**（项目根目录和 `addons/godot_mcp/` 下）
+   - 更新功能列表中的工具计数与分类计数表
+4. **`docs/architecture.md`** — 如果工具分类数量有大幅变化，更新工具注册章节的统计表
+5. **翻译文件**
    - `translations/tool_descriptions.json` — 新工具有描述文本
    - `translations/tool_descriptions.csv` — 新工具有中英文描述
-5. **`docs/development/adding-new-tools.md`** — 如果工具创建流程有变化
+6. **`docs/contributing.md`** — 如果工具创建流程有变化
 
 **验证清单：**
 - [ ] 全文搜索旧工具数（`154`、`66`、`124`、`70`）确认已替换
@@ -148,10 +145,10 @@ addons/godot_mcp/
 3. `test/integration/.tmp_*` 文件夹 — 集成测试临时目录
 
 ### PR 审查与合并
-参见完整规范：`docs/development/pr-review-merge-spec.md`
+参见完整规范：`docs/contributing.md`（“Pull request workflow”章节）
 核心步骤：创建 `integration/pr-review` 分支 → 审查代码 + 测试 + 规范 → 运行完整 GUT（0 失败）→ 处理修复 → 通过 GitHub Squash Merge 合并
 
-## Godot 4.6 特殊注意事项
+## Godot 4.7 特殊注意事项
 - `float()` 构造函数不可用 — 使用 `as float`
 - `AnimationNodeStateMachine.set_start_node()` 不存在 — 使用 `add_node()`
 - 运行时 TileMap 工具（`mcp_runtime_probe.gd`）仅支持旧版 `TileMap`，不支持 `TileMapLayer`；编辑期的 `set_tilemap_layer_cells` / `get_tilemap_layer_cells`（Scene-Advanced）使用 4.x 单层 `TileMapLayer` API
