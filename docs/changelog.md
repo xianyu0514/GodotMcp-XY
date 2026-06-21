@@ -24,6 +24,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 - **Tool presets** — one-click enable/disable of curated tool collections (Minimal,
   Level Design, Debugging, QA Automation, Art & Resources, All), with JSON export/import
   for sharing a configuration across a team.
+- **Remote / cloud access** — a Settings card turns a public tunnel URL (e.g. Cloudflare)
+  into ready-to-paste remote client configs, including an `mcp-remote` bridge config for
+  stdio-only clients (Claude Desktop) and a one-click `cloudflared` tunnel command. See
+  [Remote & Cloud Access](remote-access.md).
+- **Fix:** the generated stdio config now includes `--editor`, which the `EditorPlugin`
+  requires to start in headless mode (the previous snippet never launched the server).
 
 ## 1.0.6
 

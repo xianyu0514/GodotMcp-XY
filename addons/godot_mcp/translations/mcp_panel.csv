@@ -129,3 +129,10 @@ ui.preset_debugging,Debugging,Debugging,调试诊断
 ui.preset_automation_qa,QA Automation,QA Automation,自动化测试
 ui.preset_art_resources,Art & Resources,Art & Resources,资源美术
 ui.preset_all,All tools,All tools,全部工具
+ui.section_remote,Remote / Cloud access,Remote / Cloud access,远程 / 云端访问
+ui.remote_hint,"Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","用免费隧道（如 Cloudflare）把本地服务器暴露到公网。在下方粘贴公网地址即可生成远程客户端配置。若端点可公开访问，请先启用鉴权令牌。"
+ui.remote_url,Public URL,Public URL,公网地址
+ui.remote_url_placeholder,https://your-tunnel.trycloudflare.com,https://your-tunnel.trycloudflare.com,https://your-tunnel.trycloudflare.com
+ui.remote_copy_http,Copy HTTP config,Copy HTTP config,复制 HTTP 配置
+ui.remote_copy_bridge,Copy Claude (mcp-remote),Copy Claude (mcp-remote),复制 Claude（mcp-remote）配置
+ui.remote_copy_tunnel,Copy tunnel command,Copy tunnel command,复制隧道命令

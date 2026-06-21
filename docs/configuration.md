@@ -141,12 +141,16 @@ enabled) the auth token already filled in:
 - **HTTP (Cursor / Cline)** — emits the `url` form shown above, adding the `Authorization`
   header automatically when authentication is enabled.
 - **stdio (Claude Desktop)** — emits a `command`/`args` form that launches this project
-  headless with `--mcp-server --mcp-transport=stdio`, using the running editor's executable
-  and project path.
+  with `--editor --headless ... -- --mcp-server --mcp-transport=stdio`, using the running
+  editor's executable and project path. `--editor` is required: the server is an
+  `EditorPlugin`, so it only starts when the editor loads.
 
 The **Self-Check** button next to it issues a quick HTTP probe to the running server and
 reports whether the endpoint is reachable, so customers can confirm connectivity before
 wiring up a client.
+
+To reach the server from a remote client or the cloud, use the **Remote / Cloud access**
+card in Settings — see [Remote & Cloud Access](remote-access.md).
 
 ## Tool presets
 

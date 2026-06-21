@@ -42,6 +42,13 @@ var _copy_config_button: MenuButton = null
 var _self_check_button: Button = null
 var _self_check_http: HTTPRequest = null
 var _self_check_dialog: AcceptDialog = null
+var _remote_title_label: Label = null
+var _remote_hint_label: Label = null
+var _remote_url_label: Label = null
+var _remote_url_edit: LineEdit = null
+var _remote_copy_http_button: Button = null
+var _remote_copy_bridge_button: Button = null
+var _remote_copy_tunnel_button: Button = null
 var _status_dot: Panel = null
 var _section_titles: Array = []
 
@@ -266,6 +273,11 @@ func _current_transport() -> String:
 		return _transport_mode_option.get_item_text(_transport_mode_option.selected)
 	return "http"
 
+func _current_auth_token() -> String:
+	if _auth_enabled_check and _auth_enabled_check.button_pressed and _auth_token_edit:
+		return _auth_token_edit.text
+	return ""
+
 func _on_copy_config_id_pressed(id: int) -> void:
 	var text: String = ""
 	if id == 1:
@@ -273,10 +285,7 @@ func _on_copy_config_id_pressed(id: int) -> void:
 		var project_dir: String = ProjectSettings.globalize_path("res://")
 		text = MCPClientConfig.stdio_config(exe, project_dir)
 	else:
-		var token: String = ""
-		if _auth_enabled_check and _auth_enabled_check.button_pressed and _auth_token_edit:
-			token = _auth_token_edit.text
-		text = MCPClientConfig.http_config(_current_port(), token)
+		text = MCPClientConfig.http_config(_current_port(), _current_auth_token())
 	DisplayServer.clipboard_set(text)
 	if _copy_config_button:
 		_copy_config_button.text = _tr("ui.copied")
@@ -352,9 +361,80 @@ func _create_settings_tab() -> VBoxContainer:
 	_build_transport_card(content)
 	_build_behavior_card(content)
 	_build_security_card(content)
+	_build_remote_card(content)
 	_build_general_card(content)
 
 	return tab
+
+func _build_remote_card(content: VBoxContainer) -> void:
+	_remote_title_label = Label.new()
+	_remote_title_label.text = _tr("ui.section_remote")
+	var body: VBoxContainer = _settings_card(content, _remote_title_label)
+	_register_section_title(_remote_title_label, "ui.section_remote")
+
+	_remote_hint_label = Label.new()
+	_remote_hint_label.text = _tr("ui.remote_hint")
+	_remote_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_remote_hint_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
+	body.add_child(_remote_hint_label)
+
+	_remote_url_label = Label.new()
+	_remote_url_label.text = _tr("ui.remote_url")
+	_remote_url_edit = LineEdit.new()
+	_remote_url_edit.placeholder_text = _tr("ui.remote_url_placeholder")
+	_remote_url_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_settings_row(body, _remote_url_label, _remote_url_edit, true)
+
+	var buttons: HBoxContainer = HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	body.add_child(buttons)
+
+	_remote_copy_http_button = Button.new()
+	_remote_copy_http_button.text = _tr("ui.remote_copy_http")
+	_remote_copy_http_button.pressed.connect(_on_remote_copy_http_pressed)
+	buttons.add_child(_remote_copy_http_button)
+
+	_remote_copy_bridge_button = Button.new()
+	_remote_copy_bridge_button.text = _tr("ui.remote_copy_bridge")
+	_remote_copy_bridge_button.pressed.connect(_on_remote_copy_bridge_pressed)
+	buttons.add_child(_remote_copy_bridge_button)
+
+	var spacer: Control = Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	buttons.add_child(spacer)
+
+	_remote_copy_tunnel_button = Button.new()
+	_remote_copy_tunnel_button.text = _tr("ui.remote_copy_tunnel")
+	_remote_copy_tunnel_button.flat = true
+	_remote_copy_tunnel_button.pressed.connect(_on_remote_copy_tunnel_pressed)
+	buttons.add_child(_remote_copy_tunnel_button)
+
+func _flash_button(button: Button, restore_key: String) -> void:
+	if button == null:
+		return
+	button.text = _tr("ui.copied")
+	await get_tree().create_timer(1.2).timeout
+	if is_instance_valid(button):
+		button.text = _tr(restore_key)
+
+func _remote_base_url() -> String:
+	if _remote_url_edit:
+		return _remote_url_edit.text
+	return ""
+
+func _on_remote_copy_http_pressed() -> void:
+	var text: String = MCPClientConfig.remote_http_config(_remote_base_url(), _current_auth_token())
+	DisplayServer.clipboard_set(text)
+	_flash_button(_remote_copy_http_button, "ui.remote_copy_http")
+
+func _on_remote_copy_bridge_pressed() -> void:
+	var text: String = MCPClientConfig.remote_stdio_bridge_config(_remote_base_url(), _current_auth_token())
+	DisplayServer.clipboard_set(text)
+	_flash_button(_remote_copy_bridge_button, "ui.remote_copy_bridge")
+
+func _on_remote_copy_tunnel_pressed() -> void:
+	DisplayServer.clipboard_set(MCPClientConfig.cloudflared_command(_current_port()))
+	_flash_button(_remote_copy_tunnel_button, "ui.remote_copy_tunnel")
 
 func _build_transport_card(content: VBoxContainer) -> void:
 	_transport_title_label = Label.new()
@@ -1475,6 +1555,20 @@ func _refresh_translations() -> void:
 			config_popup.set_item_text(1, _tr("ui.copy_config_stdio"))
 	if _self_check_button:
 		_self_check_button.text = _tr("ui.self_check")
+	if _remote_title_label:
+		_remote_title_label.text = _tr("ui.section_remote")
+	if _remote_hint_label:
+		_remote_hint_label.text = _tr("ui.remote_hint")
+	if _remote_url_label:
+		_remote_url_label.text = _tr("ui.remote_url")
+	if _remote_url_edit:
+		_remote_url_edit.placeholder_text = _tr("ui.remote_url_placeholder")
+	if _remote_copy_http_button:
+		_remote_copy_http_button.text = _tr("ui.remote_copy_http")
+	if _remote_copy_bridge_button:
+		_remote_copy_bridge_button.text = _tr("ui.remote_copy_bridge")
+	if _remote_copy_tunnel_button:
+		_remote_copy_tunnel_button.text = _tr("ui.remote_copy_tunnel")
 	if _preset_label:
 		_preset_label.text = _tr("ui.preset_label")
 	if _apply_preset_button:

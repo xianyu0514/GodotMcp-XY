@@ -3,13 +3,14 @@
     "godot-mcp": {
       "command": "path/to/godot.exe",
       "args": [
+        "--editor",
         "--headless",
-        "--script",
-        "res://addons/godot_mcp/mcp_server_native.gd"
-      ],
-      "env": {
-        "MCP_TRANSPORT": "stdio"
-      }
+        "--path",
+        "/absolute/path/to/your/godot/project",
+        "--",
+        "--mcp-server",
+        "--mcp-transport=stdio"
+      ]
     }
   }
 }

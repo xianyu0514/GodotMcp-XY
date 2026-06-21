@@ -13,6 +13,7 @@ This folder is the documentation root. Pick a path below based on what you want 
 | --- | --- |
 | Install the plugin and connect an AI client | [Getting Started](getting-started.md) |
 | Tune ports, transports, authentication and CLI flags | [Configuration](configuration.md) |
+| Reach the server from a remote client / the cloud | [Remote & Cloud Access](remote-access.md) |
 | Understand how the server is built | [Architecture](architecture.md) |
 | Browse every tool the AI can call | [Tools Reference](tools/README.md) |
 | Run the unit and integration test suites | [Testing](testing.md) |
