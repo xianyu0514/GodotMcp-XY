@@ -36,3 +36,20 @@ func test_group_filter_shared_term():
 func test_group_name_match_reveals_all_tools():
 	var group: MCPToolGroupItem = _make_group()
 	assert_eq(group.apply_filter("write"), 2, "Group name match reveals all tools")
+
+func test_collapse_hides_description_label():
+	var manager: MCPTranslationManager = MCPTranslationManager.new()
+	manager.load_all()
+	var group: MCPToolGroupItem = MCPToolGroupItem.new()
+	add_child_autofree(group)
+	group.setup("Node-Write", [
+		{"name": "create_node", "description": "Create a node", "enabled": true, "category": "core"}
+	], manager)
+	var desc: Label = group._get_desc_label()
+	assert_not_null(desc, "Group with a translated description renders a DescLabel")
+	assert_true(desc.visible, "Description is visible while expanded")
+	group._toggle_collapse()
+	assert_false(desc.visible, "Description hides together with the tool list when collapsed")
+	assert_false(group.get_tool_container().visible, "Tool list hidden when collapsed")
+	group._toggle_collapse()
+	assert_true(desc.visible, "Description returns when expanded again")
