@@ -37,6 +37,12 @@ func test_group_name_match_reveals_all_tools():
 	var group: MCPToolGroupItem = _make_group()
 	assert_eq(group.apply_filter("write"), 2, "Group name match reveals all tools")
 
+func test_group_uses_card_container():
+	var group: MCPToolGroupItem = _make_group()
+	assert_eq(group.get_child_count(), 1, "Group wraps its content in a single card")
+	assert_true(group.get_child(0) is PanelContainer, "Card is a PanelContainer")
+	assert_not_null(group.get_tool_container(), "Tool container resolvable after refactor")
+
 func test_collapse_hides_description_label():
 	var manager: MCPTranslationManager = MCPTranslationManager.new()
 	manager.load_all()

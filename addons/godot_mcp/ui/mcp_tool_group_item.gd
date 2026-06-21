@@ -6,6 +6,10 @@ var _group_name: String = ""
 var _is_collapsed: bool = false
 var _group_check: CheckBox = null
 var _translation_manager: MCPTranslationManager = null
+var _collapse_button: Button = null
+var _count_label: Label = null
+var _desc_label: Label = null
+var _tool_container: VBoxContainer = null
 
 signal group_toggled(group_name: String, enabled: bool)
 signal item_toggled(tool_name: String, enabled: bool)
@@ -13,47 +17,61 @@ signal item_toggled(tool_name: String, enabled: bool)
 func setup(group_name: String, items: Array, translation_manager = null) -> void:
 	_group_name = group_name
 	_translation_manager = translation_manager
+	add_theme_constant_override("separation", 0)
+
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _make_card_style())
+	add_child(card)
+
+	var inner: VBoxContainer = VBoxContainer.new()
+	inner.add_theme_constant_override("separation", 4)
+	card.add_child(inner)
 
 	var header: HBoxContainer = HBoxContainer.new()
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_child(header)
+	header.add_theme_constant_override("separation", 6)
+	inner.add_child(header)
 
-	var collapse_button: Button = Button.new()
-	collapse_button.text = "▼"
-	collapse_button.flat = true
-	collapse_button.tooltip_text = "Collapse/Expand"
-	collapse_button.pressed.connect(_toggle_collapse)
-	header.add_child(collapse_button)
+	_collapse_button = Button.new()
+	_collapse_button.text = "▼"
+	_collapse_button.flat = true
+	_collapse_button.focus_mode = Control.FOCUS_NONE
+	_collapse_button.tooltip_text = "Collapse/Expand"
+	_collapse_button.pressed.connect(_toggle_collapse)
+	header.add_child(_collapse_button)
 
 	_group_check = CheckBox.new()
 	_group_check.text = _get_group_display_name()
-	_group_check.add_theme_font_size_override("font_size", 13)
+	_group_check.add_theme_font_size_override("font_size", 14)
+	_group_check.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95))
 	var group_desc: String = _get_group_description()
 	if not group_desc.is_empty():
 		_group_check.tooltip_text = group_desc
 	_group_check.toggled.connect(_on_group_toggled)
 	header.add_child(_group_check)
 
-	var count_label: Label = Label.new()
-	count_label.name = "CountLabel"
-	count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(count_label)
+	var spacer: Control = Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
 
-	var sep: HSeparator = HSeparator.new()
-	header.add_child(sep)
+	_count_label = Label.new()
+	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_count_label.add_theme_font_size_override("font_size", 11)
+	_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
+	header.add_child(_count_label)
 
 	if not group_desc.is_empty():
-		var desc_label: Label = Label.new()
-		desc_label.name = "DescLabel"
-		desc_label.text = group_desc
-		desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-		desc_label.add_theme_font_size_override("font_size", 11)
-		desc_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-		add_child(desc_label)
+		_desc_label = Label.new()
+		_desc_label.text = group_desc
+		_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		_desc_label.add_theme_font_size_override("font_size", 11)
+		_desc_label.add_theme_color_override("font_color", Color(0.58, 0.58, 0.62))
+		inner.add_child(_desc_label)
 
-	var tool_container: VBoxContainer = VBoxContainer.new()
-	tool_container.name = "ToolContainer"
-	add_child(tool_container)
+	_tool_container = VBoxContainer.new()
+	_tool_container.name = "ToolContainer"
+	_tool_container.add_theme_constant_override("separation", 2)
+	inner.add_child(_tool_container)
 
 	for item in items:
 		var tool_name: String = item.get("name", "")
@@ -68,9 +86,21 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 		var tool_item: MCPToolItem = MCPToolItem.new()
 		tool_item.setup(tool_name, description, enabled, category, _group_name)
 		tool_item.tool_toggled.connect(_on_tool_item_toggled)
-		tool_container.add_child(tool_item)
+		_tool_container.add_child(tool_item)
 
 	_update_count()
+
+func _make_card_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(1, 1, 1, 0.035)
+	style.border_color = Color(1, 1, 1, 0.06)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	style.content_margin_top = 8
+	style.content_margin_bottom = 8
+	return style
 
 func get_group_name() -> String:
 	return _group_name
@@ -95,25 +125,17 @@ func set_group_enabled(enabled: bool) -> void:
 			tool_item.set_enabled(enabled)
 
 func get_tool_container() -> VBoxContainer:
-	for child in get_children():
-		if child.name == "ToolContainer":
-			return child as VBoxContainer
-	return null
+	return _tool_container
 
 func _get_desc_label() -> Label:
-	for child in get_children():
-		if child.name == "DescLabel":
-			return child as Label
-	return null
+	return _desc_label
 
 # Show or hide everything below the header row (description + tool list).
 func _set_body_visible(body_visible: bool) -> void:
-	var container: VBoxContainer = get_tool_container()
-	if container:
-		container.visible = body_visible
-	var desc: Label = _get_desc_label()
-	if desc:
-		desc.visible = body_visible
+	if _tool_container:
+		_tool_container.visible = body_visible
+	if _desc_label:
+		_desc_label.visible = body_visible
 	_update_collapse_glyph(body_visible)
 
 func _tr(key: String) -> String:
@@ -140,9 +162,8 @@ func _toggle_collapse() -> void:
 	_set_body_visible(not _is_collapsed)
 
 func _update_collapse_glyph(expanded: bool) -> void:
-	var btn: Button = get_child(0).get_child(0) as Button
-	if btn:
-		btn.text = "▼" if expanded else "▶"
+	if _collapse_button:
+		_collapse_button.text = "▼" if expanded else "▶"
 
 # Filter tools by a lowercase query. A match on the group name reveals all of
 # its tools. Returns how many tool items remain visible.
@@ -192,11 +213,8 @@ func _update_count() -> void:
 			if tool_item.is_enabled():
 				enabled += 1
 
-	var header: HBoxContainer = get_child(0) as HBoxContainer
-	if header:
-		var count_label: Label = header.get_node("CountLabel") as Label
-		if count_label:
-			count_label.text = _tr("ui.enabled_format") % [enabled, total]
+	if _count_label:
+		_count_label.text = _tr("ui.enabled_format") % [enabled, total]
 
 	if _group_check:
 		_group_check.set_block_signals(true)

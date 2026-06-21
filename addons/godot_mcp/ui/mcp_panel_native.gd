@@ -386,6 +386,7 @@ func _create_tools_tab() -> VBoxContainer:
 
 	_tools_list_container = VBoxContainer.new()
 	_tools_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_list_container.add_theme_constant_override("separation", 6)
 	scroll.add_child(_tools_list_container)
 
 	return tab
