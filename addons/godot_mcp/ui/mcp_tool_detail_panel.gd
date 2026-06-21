@@ -13,7 +13,7 @@ const FAINT: Color = Color(0.52, 0.52, 0.56)
 var _translation_manager: MCPTranslationManager = null
 var _content: VBoxContainer = null
 
-func setup(translation_manager = null) -> void:
+func setup(translation_manager: MCPTranslationManager = null) -> void:
 	_translation_manager = translation_manager
 	custom_minimum_size = Vector2(300, 0)
 	add_theme_stylebox_override("panel", _panel_style())
