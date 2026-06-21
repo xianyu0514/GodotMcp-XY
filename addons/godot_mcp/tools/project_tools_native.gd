@@ -71,6 +71,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_create_theme(server_core)
 	_register_set_theme_item(server_core)
 	_register_set_default_theme(server_core)
+	_register_set_project_setting(server_core)
+	_register_add_project_autoload(server_core)
+	_register_remove_project_autoload(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -5527,4 +5530,296 @@ func _tool_set_default_theme(params: Dictionary) -> Dictionary:
 		"setting": setting_key,
 		"theme_path": theme_path,
 		"cleared": false
+	}
+
+# ============================================================================
+# set_project_setting - Set an arbitrary ProjectSettings key and persist it
+# ============================================================================
+
+func _register_set_project_setting(server_core: RefCounted) -> void:
+	var tool_name: String = "set_project_setting"
+	var description: String = "Set a project setting (ProjectSettings) and optionally persist it to project.godot. Use for window size, rendering, physics layers, application config, input device settings, etc. Pass value_type to coerce the value to int/float/bool/string/vector2/vector3/color; otherwise the value is stored as provided."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"setting": {"type": "string", "description": "Setting key, e.g. 'display/window/size/viewport_width'."},
+			"value": {"description": "New value. JSON scalars map directly; use value_type to coerce vectors/colors."},
+			"value_type": {"type": "string", "description": "Optional coercion of value.", "enum": ["int", "float", "bool", "string", "vector2", "vector3", "color"]},
+			"require_existing": {"type": "boolean", "description": "When true, fail if the setting does not already exist (guards against typos creating junk keys). Default false.", "default": false},
+			"persist": {"type": "boolean", "description": "Persist to project.godot via ProjectSettings.save(). Default true.", "default": true}
+		},
+		"required": ["setting", "value"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"setting": {"type": "string"},
+			"previous": {},
+			"new": {},
+			"existed": {"type": "boolean"},
+			"persisted": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_set_project_setting"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_set_project_setting(params: Dictionary) -> Dictionary:
+	var setting: String = str(params.get("setting", "")).strip_edges()
+	if setting.is_empty():
+		return {"error": "Missing required parameter: setting"}
+	if not params.has("value"):
+		return {"error": "Missing required parameter: value"}
+
+	var existed: bool = ProjectSettings.has_setting(setting)
+	if bool(params.get("require_existing", false)) and not existed:
+		return {"error": "Project setting does not exist: " + setting}
+
+	var value_type: String = str(params.get("value_type", "")).strip_edges().to_lower()
+	var coerced: Dictionary = _coerce_setting_value(params["value"], value_type)
+	if coerced.has("error"):
+		return {"error": coerced["error"]}
+	var new_value: Variant = coerced["value"]
+
+	var previous: Variant = ProjectSettings.get_setting(setting) if existed else null
+	ProjectSettings.set_setting(setting, new_value)
+
+	var persisted: bool = false
+	if bool(params.get("persist", true)):
+		var save_error: Error = ProjectSettings.save()
+		if save_error != OK:
+			return {"error": "Failed to save project settings: " + error_string(save_error)}
+		persisted = true
+
+	return {
+		"status": "success",
+		"setting": setting,
+		"previous": previous,
+		"new": new_value,
+		"existed": existed,
+		"persisted": persisted
+	}
+
+# Coerce a raw parameter value to the requested type for ProjectSettings.
+func _coerce_setting_value(value: Variant, value_type: String) -> Dictionary:
+	match value_type:
+		"", "any":
+			return {"value": value}
+		"string":
+			return {"value": str(value)}
+		"int":
+			return {"value": int(value)}
+		"float":
+			return {"value": float(value)}
+		"bool":
+			if value is String:
+				var s: String = str(value).strip_edges().to_lower()
+				return {"value": s == "true" or s == "1" or s == "yes"}
+			return {"value": bool(value)}
+		"color":
+			return {"value": _parse_color(value)}
+		"vector2":
+			var v2: Variant = _parse_vector2(value)
+			if v2 == null:
+				return {"error": "Cannot parse vector2 from value (use [x, y] or {x, y})"}
+			return {"value": v2}
+		"vector3":
+			var v3: Variant = _parse_vector3(value)
+			if v3 == null:
+				return {"error": "Cannot parse vector3 from value (use [x, y, z] or {x, y, z})"}
+			return {"value": v3}
+		_:
+			return {"error": "Unknown value_type: " + value_type}
+
+static func _parse_vector2(value: Variant) -> Variant:
+	if value is Vector2:
+		return value
+	if value is Dictionary:
+		return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+	if value is Array and value.size() >= 2:
+		return Vector2(float(value[0]), float(value[1]))
+	return null
+
+static func _parse_vector3(value: Variant) -> Variant:
+	if value is Vector3:
+		return value
+	if value is Dictionary:
+		return Vector3(float(value.get("x", 0.0)), float(value.get("y", 0.0)), float(value.get("z", 0.0)))
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return null
+
+# Validate that a string is a legal GDScript/autoload identifier.
+func _is_valid_identifier(text: String) -> bool:
+	if text.is_empty():
+		return false
+	var regex: RegEx = RegEx.new()
+	regex.compile("^[A-Za-z_][A-Za-z0-9_]*$")
+	return regex.search(text) != null
+
+# ============================================================================
+# add_project_autoload - Register an autoload singleton in project.godot
+# ============================================================================
+
+func _register_add_project_autoload(server_core: RefCounted) -> void:
+	var tool_name: String = "add_project_autoload"
+	var description: String = "Register a project autoload singleton (e.g. a GameState/RNG/SaveManager script) and persist it to project.godot. The path must point to an existing .gd/.tscn/.scn/.cs resource. Set enabled=false to register the autoload without the singleton '*' prefix; pass overwrite=true to replace an existing entry of the same name."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "description": "Autoload name; must be a valid identifier, e.g. 'GameState'."},
+			"path": {"type": "string", "description": "res:// path to the autoload script or scene (.gd/.tscn/.scn/.cs)."},
+			"enabled": {"type": "boolean", "description": "Register as an enabled singleton ('*' prefix). Default true.", "default": true},
+			"overwrite": {"type": "boolean", "description": "Overwrite an existing autoload with the same name. Default false.", "default": false},
+			"persist": {"type": "boolean", "description": "Persist to project.godot via ProjectSettings.save(). Default true.", "default": true}
+		},
+		"required": ["name", "path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"name": {"type": "string"},
+			"path": {"type": "string"},
+			"setting": {"type": "string"},
+			"enabled": {"type": "boolean"},
+			"replaced": {"type": "boolean"},
+			"persisted": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_add_project_autoload"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_add_project_autoload(params: Dictionary) -> Dictionary:
+	var autoload_name: String = str(params.get("name", "")).strip_edges()
+	var path: String = str(params.get("path", "")).strip_edges()
+	if autoload_name.is_empty():
+		return {"error": "Missing required parameter: name"}
+	if path.is_empty():
+		return {"error": "Missing required parameter: path"}
+	if not _is_valid_identifier(autoload_name):
+		return {"error": "Invalid autoload name: must be a valid identifier (letters, digits, underscore; not starting with a digit)"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(path, [".gd", ".tscn", ".scn", ".cs"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	path = validation["sanitized"]
+	if not FileAccess.file_exists(path):
+		return {"error": "Autoload path not found: " + path}
+
+	var setting_key: String = "autoload/" + autoload_name
+	var existed: bool = ProjectSettings.has_setting(setting_key)
+	if existed and not bool(params.get("overwrite", false)):
+		return {"error": "Autoload already exists: " + autoload_name + " (pass overwrite=true to replace)"}
+
+	var enabled: bool = bool(params.get("enabled", true))
+	var prefix: String = "*" if enabled else ""
+	ProjectSettings.set_setting(setting_key, prefix + path)
+
+	var persisted: bool = false
+	if bool(params.get("persist", true)):
+		var save_error: Error = ProjectSettings.save()
+		if save_error != OK:
+			return {"error": "Failed to save project settings: " + error_string(save_error)}
+		persisted = true
+
+	return {
+		"status": "success",
+		"name": autoload_name,
+		"path": path,
+		"setting": setting_key,
+		"enabled": enabled,
+		"replaced": existed,
+		"persisted": persisted
+	}
+
+# ============================================================================
+# remove_project_autoload - Remove an autoload singleton from project.godot
+# ============================================================================
+
+func _register_remove_project_autoload(server_core: RefCounted) -> void:
+	var tool_name: String = "remove_project_autoload"
+	var description: String = "Remove a project autoload singleton by name and persist the change to project.godot. Returns an error if no autoload with that name exists."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "description": "Name of the autoload to remove, e.g. 'GameState'."},
+			"persist": {"type": "boolean", "description": "Persist to project.godot via ProjectSettings.save(). Default true.", "default": true}
+		},
+		"required": ["name"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"name": {"type": "string"},
+			"setting": {"type": "string"},
+			"removed_value": {"type": "string"},
+			"persisted": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": true,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_remove_project_autoload"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
+	var autoload_name: String = str(params.get("name", "")).strip_edges()
+	if autoload_name.is_empty():
+		return {"error": "Missing required parameter: name"}
+
+	var setting_key: String = "autoload/" + autoload_name
+	if not ProjectSettings.has_setting(setting_key):
+		return {"error": "Autoload not found: " + autoload_name}
+
+	var removed_value: String = str(ProjectSettings.get_setting(setting_key))
+	ProjectSettings.set_setting(setting_key, null)
+
+	var persisted: bool = false
+	if bool(params.get("persist", true)):
+		var save_error: Error = ProjectSettings.save()
+		if save_error != OK:
+			return {"error": "Failed to save project settings: " + error_string(save_error)}
+		persisted = true
+
+	return {
+		"status": "success",
+		"name": autoload_name,
+		"setting": setting_key,
+		"removed_value": removed_value,
+		"persisted": persisted
 	}

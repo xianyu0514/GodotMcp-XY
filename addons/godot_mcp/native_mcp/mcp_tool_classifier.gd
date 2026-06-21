@@ -198,6 +198,9 @@ func _build_classifications() -> void:
 		{"name": "create_theme", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "set_theme_item", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "set_default_theme", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "set_project_setting", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "add_project_autoload", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "remove_project_autoload", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:
