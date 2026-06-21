@@ -1,6 +1,6 @@
 # Godot MCP Native — Documentation
 
-Godot MCP Native is a Godot 4.x `EditorPlugin` that runs a **Model Context Protocol
+Godot MCP Native is a Godot 4.7 `EditorPlugin` that runs a **Model Context Protocol
 (MCP) server inside the editor**. It exposes the project — scenes, scripts, nodes,
 resources and the running game — to AI assistants over a standard protocol, with **no
 Node.js, Python, or external bridge process** required.
@@ -40,5 +40,5 @@ Ready-to-copy MCP client snippets live in [`configuration/`](configuration/):
 
 - **Author:** xianyu0514
 - **License:** [MIT](../LICENSE)
-- **Engine:** Godot 4.x (developed against 4.6, GL Compatibility renderer)
+- **Engine:** Godot 4.7 (GL Compatibility renderer)
 - **Plugin entry point:** `addons/godot_mcp/mcp_server_native.gd`

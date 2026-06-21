@@ -81,7 +81,7 @@ Verification:
 4. Open the PR with a clear summary of *what* changed and *why*.
 5. Address review feedback, then merge (squash) once approved and green.
 
-## Godot 4.6 gotchas
+## Godot 4.7 gotchas
 
 - The `float()` constructor is unavailable — use `as float`.
 - `AnimationNodeStateMachine.set_start_node()` does not exist — use `add_node()`.

@@ -7,7 +7,7 @@ project — usually in under ten minutes.
 
 | Requirement | Notes |
 | --- | --- |
-| Godot Engine 4.x | Developed against 4.6 (GL Compatibility). 4.5+ recommended. |
+| Godot Engine 4.7 | GL Compatibility renderer; 4.7+ recommended. |
 | An MCP-capable AI client | Claude Desktop, Cursor, Trae, Cline, OpenCode, Codex, … |
 | `npx` / Node (optional) | Only needed for clients that connect through `mcp-remote`. |
 | Python 3.8+ (optional) | Only for running the integration test suite. |

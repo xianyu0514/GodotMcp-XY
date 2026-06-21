@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **201 个工具**（30 核心 + 171 补充），分为 6 大类，供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **201 个工具**（30 核心 + 171 补充），分为 6 大类，供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -22,7 +22,7 @@
 ## 命令
 
 ### 运行 Godot 项目
-在 Godot 编辑器（4.6.x，GL Compatibility 渲染器）中打开 `project.godot`。
+在 Godot 编辑器（4.7.x，GL Compatibility 渲染器）中打开 `project.godot`。
 
 ### GUT 单元测试
 ```powershell
@@ -148,7 +148,7 @@ addons/godot_mcp/
 参见完整规范：`docs/contributing.md`（“Pull request workflow”章节）
 核心步骤：创建 `integration/pr-review` 分支 → 审查代码 + 测试 + 规范 → 运行完整 GUT（0 失败）→ 处理修复 → 通过 GitHub Squash Merge 合并
 
-## Godot 4.6 特殊注意事项
+## Godot 4.7 特殊注意事项
 - `float()` 构造函数不可用 — 使用 `as float`
 - `AnimationNodeStateMachine.set_start_node()` 不存在 — 使用 `add_node()`
 - 运行时 TileMap 工具（`mcp_runtime_probe.gd`）仅支持旧版 `TileMap`，不支持 `TileMapLayer`；编辑期的 `set_tilemap_layer_cells` / `get_tilemap_layer_cells`（Scene-Advanced）使用 4.x 单层 `TileMapLayer` API

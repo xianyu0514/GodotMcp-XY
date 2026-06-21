@@ -1,6 +1,6 @@
 # Godot MCP Native
 
-[![Godot](https://img.shields.io/badge/Godot-4.x-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
+[![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
 [![Tools](https://img.shields.io/badge/MCP%20tools-201-blue.svg)](docs/tools/README.md)
@@ -100,7 +100,7 @@ godot --editor --path /path/to/project -- --mcp-server --mcp-port=9080
 
 ## 环境要求
 
-- Godot 引擎 4.x（基于 4.6 开发，GL Compatibility 渲染器）。
+- Godot 引擎 4.7（GL Compatibility 渲染器）。
 - 无运行时依赖。仅当客户端通过 `mcp-remote` 连接时才需要 `npx`；仅运行集成测试时才需要 Python 3.8+。
 
 ## 文档
