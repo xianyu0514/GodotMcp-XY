@@ -26,8 +26,11 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 	header.add_child(collapse_button)
 
 	_group_check = CheckBox.new()
-	_group_check.text = _group_name
+	_group_check.text = _get_group_display_name()
 	_group_check.add_theme_font_size_override("font_size", 13)
+	var group_desc: String = _get_group_description()
+	if not group_desc.is_empty():
+		_group_check.tooltip_text = group_desc
 	_group_check.toggled.connect(_on_group_toggled)
 	header.add_child(_group_check)
 
@@ -92,6 +95,20 @@ func _tr(key: String) -> String:
 	if _translation_manager:
 		return _translation_manager.get_text(key)
 	return key
+
+func _get_group_display_name() -> String:
+	var key: String = "group." + _group_name
+	var translated: String = _tr(key)
+	if translated == key:
+		return _group_name
+	return translated
+
+func _get_group_description() -> String:
+	var key: String = "groupdesc." + _group_name
+	var translated: String = _tr(key)
+	if translated == key:
+		return ""
+	return translated
 
 func _toggle_collapse() -> void:
 	_is_collapsed = not _is_collapsed

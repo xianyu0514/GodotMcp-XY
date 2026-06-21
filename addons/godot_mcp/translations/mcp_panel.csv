@@ -32,3 +32,32 @@ ui.enabled_format,Enabled: %d / %d,Enabled: %d / %d,已启用：%d / %d
 ui.connection_url,URL: http://localhost:%d/mcp,URL: http://localhost:%d/mcp,地址：http://localhost:%d/mcp
 ui.connection_stdio,Mode: stdio (via stdin/stdout),Mode: stdio (via stdin/stdout),模式：stdio（标准输入/输出）
 ui.tools_init,Tools: 0,Tools: 0,工具：0
+ui.group_count_format,%s tools,%s tools,%s 个工具
+group.Node-Read,Nodes - Read,Nodes - Read,节点 · 读取
+group.Node-Write,Nodes - Write,Nodes - Write,节点 · 写入
+group.Node-Advanced,Nodes - Advanced,Nodes - Advanced,节点 · 高级
+group.Node-Write-Advanced,Nodes - Write (Advanced),Nodes - Write (Advanced),节点 · 写入（高级）
+group.Script,Scripts,Scripts,脚本
+group.Script-Advanced,Scripts - Advanced,Scripts - Advanced,脚本 · 高级
+group.Scene,Scenes,Scenes,场景
+group.Scene-Advanced,Scenes - Advanced,Scenes - Advanced,场景 · 高级
+group.Editor,Editor,Editor,编辑器
+group.Editor-Advanced,Editor - Advanced,Editor - Advanced,编辑器 · 高级
+group.Debug,Debug,Debug,调试
+group.Debug-Advanced,Debug - Advanced,Debug - Advanced,调试 · 高级
+group.Project,Project,Project,项目
+group.Project-Advanced,Project - Advanced,Project - Advanced,项目 · 高级
+groupdesc.Node-Read,Inspect scene nodes properties and the scene tree (read-only),Inspect scene nodes properties and the scene tree (read-only),查询场景中的节点、属性与场景树（只读）
+groupdesc.Node-Write,Create delete duplicate move and rename nodes,Create delete duplicate move and rename nodes,创建、删除、复制、移动、重命名节点
+groupdesc.Node-Advanced,Batch node edits groups and scene audits,Batch node edits groups and scene audits,批量节点编辑、分组查询与场景审计
+groupdesc.Node-Write-Advanced,Resources signals anchors and sub-resources,Resources signals anchors and sub-resources,资源、信号、锚点、子资源等高级写入
+groupdesc.Script,Read create modify and attach scripts,Read create modify and attach scripts,读取、创建、修改、附加脚本
+groupdesc.Script-Advanced,Analyze validate index and search scripts,Analyze validate index and search scripts,脚本分析、校验、符号索引与搜索
+groupdesc.Scene,Create save open and switch scenes,Create save open and switch scenes,创建、保存、打开与切换场景
+groupdesc.Scene-Advanced,Scene structure instancing and tilemap cells,Scene structure instancing and tilemap cells,场景结构、实例化与 TileMapLayer 单元格
+groupdesc.Editor,Run or stop the project and read editor state,Run or stop the project and read editor state,运行/停止项目、读取编辑器状态
+groupdesc.Editor-Advanced,Selection screenshots export and editor buffers,Selection screenshots export and editor buffers,选择、截图、导出与缓冲区同步
+groupdesc.Debug,Editor logs and debug output,Editor logs and debug output,编辑器日志与调试输出
+groupdesc.Debug-Advanced,Breakpoints stack frames profiler and runtime probe,Breakpoints stack frames profiler and runtime probe,断点、栈帧、性能分析与运行时探针
+groupdesc.Project,Project info settings and resource listing,Project info settings and resource listing,项目信息、设置与资源列表
+groupdesc.Project-Advanced,Resource creation input map themes and TileSet,Resource creation input map themes and TileSet,资源创建、输入映射、主题与 TileSet 配置
