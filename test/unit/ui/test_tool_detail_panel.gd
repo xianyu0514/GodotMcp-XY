@@ -38,6 +38,26 @@ func test_show_tool_populates_content():
 	panel.show_tool(_sample_info())
 	assert_gt(panel._content.get_child_count(), 1, "Tool detail builds multiple sections")
 
+func _has_button_with_text(node: Node, txt: String) -> bool:
+	for child in node.get_children():
+		if child is Button and (child as Button).text == txt:
+			return true
+		if _has_button_with_text(child, txt):
+			return true
+	return false
+
+func test_show_tool_renders_copy_buttons():
+	var panel: MCPToolDetailPanel = _make_panel()
+	panel.show_tool(_sample_info())
+	assert_true(
+		_has_button_with_text(panel, "ui.detail_copy_prompt"),
+		"AI prompt card exposes a copy-prompt button"
+	)
+	assert_true(
+		_has_button_with_text(panel, "ui.detail_copy_name"),
+		"Header exposes a copy-name button"
+	)
+
 func test_example_args_uses_type_placeholders():
 	var panel: MCPToolDetailPanel = _make_panel()
 	var schema: Dictionary = {

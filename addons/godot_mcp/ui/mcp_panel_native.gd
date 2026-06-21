@@ -1172,6 +1172,12 @@ func _refresh_translations() -> void:
 		_language_option.set_block_signals(false)
 	if _tools_count_label:
 		_tools_count_label.text = _tr("ui.tools_init")
+	if _scope_chips.has("__all__"):
+		_scope_chips["__all__"].set_label(_tr("ui.scope_all"))
+	if _scope_chips.has("__recommended__"):
+		_scope_chips["__recommended__"].set_label(_tr("ui.scope_core"))
+	if _scope_chips.has("__supplementary__"):
+		_scope_chips["__supplementary__"].set_label(_tr("ui.scope_extended"))
 	_update_ui_state()
 	_update_connection_info()
 	_refresh_tools_list()

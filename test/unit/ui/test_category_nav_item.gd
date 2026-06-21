@@ -26,6 +26,13 @@ func test_press_emits_selection():
 	item.button_pressed = true
 	assert_signal_emitted_with_parameters(item, "category_selected", ["__all__"])
 
+func test_set_label_updates_text():
+	var item: MCPCategoryNavItem = _make_item("__all__", "All")
+	item.set_count(2, 4)
+	item.set_label("Everything")
+	assert_string_contains(item.text, "Everything", "set_label updates the visible base label")
+	assert_string_contains(item.text, "2", "Existing count is preserved after relabel")
+
 func test_set_selected_is_silent():
 	var item: MCPCategoryNavItem = _make_item("Node-Read", "Nodes")
 	watch_signals(item)

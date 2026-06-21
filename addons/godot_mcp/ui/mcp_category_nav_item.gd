@@ -34,6 +34,10 @@ func set_count(enabled: int, total: int) -> void:
 	_total = total
 	_render()
 
+func set_label(label: String) -> void:
+	_base_label = label
+	_render()
+
 func set_selected(value: bool) -> void:
 	set_block_signals(true)
 	button_pressed = value
