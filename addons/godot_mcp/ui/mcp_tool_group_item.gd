@@ -42,6 +42,15 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 	var sep: HSeparator = HSeparator.new()
 	header.add_child(sep)
 
+	if not group_desc.is_empty():
+		var desc_label: Label = Label.new()
+		desc_label.name = "DescLabel"
+		desc_label.text = group_desc
+		desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		desc_label.add_theme_font_size_override("font_size", 11)
+		desc_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		add_child(desc_label)
+
 	var tool_container: VBoxContainer = VBoxContainer.new()
 	tool_container.name = "ToolContainer"
 	add_child(tool_container)
@@ -115,9 +124,40 @@ func _toggle_collapse() -> void:
 	var container: VBoxContainer = get_tool_container()
 	if container:
 		container.visible = not _is_collapsed
+	_update_collapse_glyph(not _is_collapsed)
+
+func _update_collapse_glyph(expanded: bool) -> void:
 	var btn: Button = get_child(0).get_child(0) as Button
 	if btn:
-		btn.text = "▶" if _is_collapsed else "▼"
+		btn.text = "▼" if expanded else "▶"
+
+# Filter tools by a lowercase query. A match on the group name reveals all of
+# its tools. Returns how many tool items remain visible.
+func apply_filter(query: String) -> int:
+	var container: VBoxContainer = get_tool_container()
+	if container == null:
+		return 0
+	var group_matches: bool = (not query.is_empty()) and (
+		_group_name.to_lower().contains(query)
+		or _get_group_display_name().to_lower().contains(query)
+		or _get_group_description().to_lower().contains(query)
+	)
+	var visible_count: int = 0
+	for child in container.get_children():
+		var tool_item: MCPToolItem = child as MCPToolItem
+		if tool_item == null:
+			continue
+		var is_match: bool = query.is_empty() or group_matches or tool_item.matches_filter(query)
+		tool_item.visible = is_match
+		if is_match:
+			visible_count += 1
+	if query.is_empty():
+		container.visible = not _is_collapsed
+		_update_collapse_glyph(not _is_collapsed)
+	else:
+		container.visible = visible_count > 0
+		_update_collapse_glyph(visible_count > 0)
+	return visible_count
 
 func _on_group_toggled(button_pressed: bool) -> void:
 	set_group_enabled(button_pressed)

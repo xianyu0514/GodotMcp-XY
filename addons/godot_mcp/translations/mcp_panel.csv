@@ -33,6 +33,7 @@ ui.connection_url,URL: http://localhost:%d/mcp,URL: http://localhost:%d/mcp,地�
 ui.connection_stdio,Mode: stdio (via stdin/stdout),Mode: stdio (via stdin/stdout),模式：stdio（标准输入/输出）
 ui.tools_init,Tools: 0,Tools: 0,工具：0
 ui.group_count_format,%s tools,%s tools,%s 个工具
+ui.search_placeholder,Search tools...,Search tools...,搜索工具…
 group.Node-Read,Nodes - Read,Nodes - Read,节点 · 读取
 group.Node-Write,Nodes - Write,Nodes - Write,节点 · 写入
 group.Node-Advanced,Nodes - Advanced,Nodes - Advanced,节点 · 高级
