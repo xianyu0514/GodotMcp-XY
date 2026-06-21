@@ -68,6 +68,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_configure_render_output(server_core)
 	_register_create_drawable_texture(server_core)
 	_register_draw_on_texture(server_core)
+	_register_create_theme(server_core)
+	_register_set_theme_item(server_core)
+	_register_set_default_theme(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -5239,4 +5242,289 @@ func _tool_draw_on_texture(params: Dictionary) -> Dictionary:
 		"applied_count": applied,
 		"skipped": skipped,
 		"godot_version": str(Engine.get_version_info().get("string", ""))
+	}
+
+# ============================================================================
+# create_theme - create and save an empty Theme resource (.tres/.theme)
+# ============================================================================
+
+func _register_create_theme(server_core: RefCounted) -> void:
+	var tool_name: String = "create_theme"
+	var description: String = "Create and save a Theme resource (.tres or .theme) for styling Control-based UI such as card and HUD scenes. Optionally set default base scale, default font size, and a default font resource. Use set_theme_item afterwards to populate per-control colors, constants, fonts, icons, and styleboxes."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"theme_path": {"type": "string", "description": "Save path for the theme (.tres or .theme), e.g. res://ui/card_theme.tres."},
+			"default_base_scale": {"type": "number", "description": "Optional Theme.default_base_scale (UI scaling factor). Must be > 0 to apply."},
+			"default_font_size": {"type": "integer", "description": "Optional Theme.default_font_size in pixels. Must be > 0 to apply."},
+			"default_font_path": {"type": "string", "description": "Optional path to a Font resource to use as Theme.default_font."}
+		},
+		"required": ["theme_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"theme_path": {"type": "string"},
+			"default_base_scale": {"type": "number"},
+			"default_font_size": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_create_theme"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_create_theme(params: Dictionary) -> Dictionary:
+	var theme_path: String = str(params.get("theme_path", "")).strip_edges()
+	if theme_path.is_empty():
+		return {"error": "Missing required parameter: theme_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(theme_path, [".tres", ".theme", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	theme_path = validation["sanitized"]
+
+	var theme: Theme = Theme.new()
+
+	var base_scale: float = float(params.get("default_base_scale", 0.0))
+	if base_scale > 0.0:
+		theme.default_base_scale = base_scale
+
+	var font_size: int = int(params.get("default_font_size", 0))
+	if font_size > 0:
+		theme.default_font_size = font_size
+
+	var font_path: String = str(params.get("default_font_path", "")).strip_edges()
+	if not font_path.is_empty():
+		if not ResourceLoader.exists(font_path):
+			return {"error": "Font resource not found: " + font_path}
+		var font_res: Resource = ResourceLoader.load(font_path)
+		if not (font_res is Font):
+			return {"error": "Resource is not a Font: " + font_path}
+		theme.default_font = font_res
+
+	var dir_path: String = theme_path.get_base_dir()
+	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
+		var mk: Error = DirAccess.make_dir_recursive_absolute(dir_path)
+		if mk != OK:
+			return {"error": "Failed to create directory: " + dir_path}
+
+	var error: Error = ResourceSaver.save(theme, theme_path)
+	if error != OK:
+		return {"error": "Failed to save theme: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"theme_path": theme_path,
+		"default_base_scale": theme.default_base_scale,
+		"default_font_size": theme.default_font_size
+	}
+
+# ============================================================================
+# set_theme_item - set a single item on an existing Theme resource
+# ============================================================================
+
+func _register_set_theme_item(server_core: RefCounted) -> void:
+	var tool_name: String = "set_theme_item"
+	var description: String = "Load an existing Theme resource, set one item, and re-save it. Supports item_type of color, constant, font_size (value provided directly) and font, icon, stylebox (value is a path to a Font/Texture2D/StyleBox resource). theme_type is the Control class the item applies to (e.g. Button, Label, Panel). Use to style card and HUD UI without editing the theme by hand."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"theme_path": {"type": "string", "description": "Path to an existing theme file (.tres/.theme/.res)."},
+			"item_type": {"type": "string", "description": "One of: color, constant, font_size, font, icon, stylebox."},
+			"item_name": {"type": "string", "description": "Theme item name, e.g. 'font_color', 'h_separation', 'panel'."},
+			"theme_type": {"type": "string", "description": "Control type the item applies to, e.g. 'Button', 'Label', 'Panel'."},
+			"value": {"type": ["string", "number", "integer", "object", "array"], "description": "For color: a color string/array/object. For constant/font_size: an integer. For font/icon/stylebox: a res:// path to the resource."}
+		},
+		"required": ["theme_path", "item_type", "item_name", "theme_type", "value"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"theme_path": {"type": "string"},
+			"item_type": {"type": "string"},
+			"item_name": {"type": "string"},
+			"theme_type": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_set_theme_item"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_set_theme_item(params: Dictionary) -> Dictionary:
+	var theme_path: String = str(params.get("theme_path", "")).strip_edges()
+	var item_type: String = str(params.get("item_type", "")).strip_edges().to_lower()
+	var item_name: String = str(params.get("item_name", "")).strip_edges()
+	var theme_type: String = str(params.get("theme_type", "")).strip_edges()
+
+	if theme_path.is_empty():
+		return {"error": "Missing required parameter: theme_path"}
+	if item_type.is_empty():
+		return {"error": "Missing required parameter: item_type"}
+	if item_name.is_empty():
+		return {"error": "Missing required parameter: item_name"}
+	if theme_type.is_empty():
+		return {"error": "Missing required parameter: theme_type"}
+	if not params.has("value"):
+		return {"error": "Missing required parameter: value"}
+
+	var supported: Array = ["color", "constant", "font_size", "font", "icon", "stylebox"]
+	if not supported.has(item_type):
+		return {"error": "Invalid item_type '%s'. Expected one of: color, constant, font_size, font, icon, stylebox." % item_type}
+
+	var validation: Dictionary = PathValidator.validate_file_path(theme_path, [".tres", ".theme", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	theme_path = validation["sanitized"]
+
+	if not ResourceLoader.exists(theme_path):
+		return {"error": "Theme not found: " + theme_path}
+	var theme: Theme = ResourceLoader.load(theme_path) as Theme
+	if not theme:
+		return {"error": "Resource is not a Theme: " + theme_path}
+
+	var value: Variant = params["value"]
+
+	match item_type:
+		"color":
+			theme.set_color(item_name, theme_type, _parse_color(value))
+		"constant":
+			theme.set_constant(item_name, theme_type, int(value))
+		"font_size":
+			theme.set_font_size(item_name, theme_type, int(value))
+		"font", "icon", "stylebox":
+			var res_path: String = str(value).strip_edges()
+			if res_path.is_empty():
+				return {"error": "For item_type '%s', value must be a resource path." % item_type}
+			if not ResourceLoader.exists(res_path):
+				return {"error": "Resource not found: " + res_path}
+			var res: Resource = ResourceLoader.load(res_path)
+			if item_type == "font":
+				if not (res is Font):
+					return {"error": "Resource is not a Font: " + res_path}
+				theme.set_font(item_name, theme_type, res)
+			elif item_type == "icon":
+				if not (res is Texture2D):
+					return {"error": "Resource is not a Texture2D: " + res_path}
+				theme.set_icon(item_name, theme_type, res)
+			else:
+				if not (res is StyleBox):
+					return {"error": "Resource is not a StyleBox: " + res_path}
+				theme.set_stylebox(item_name, theme_type, res)
+
+	var error: Error = ResourceSaver.save(theme, theme_path)
+	if error != OK:
+		return {"error": "Failed to save theme: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"theme_path": theme_path,
+		"item_type": item_type,
+		"item_name": item_name,
+		"theme_type": theme_type
+	}
+
+# ============================================================================
+# set_default_theme - set/clear the project-wide default GUI theme
+# ============================================================================
+
+func _register_set_default_theme(server_core: RefCounted) -> void:
+	var tool_name: String = "set_default_theme"
+	var description: String = "Set or clear the project-wide default GUI theme (the 'gui/theme/custom' project setting) and persist it to project.godot. Pass clear=true to remove the custom theme and fall back to the engine default. Use to apply a card-game theme across every Control without assigning it per scene."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"theme_path": {"type": "string", "description": "Path to a theme resource (.tres/.theme/.res) to set as the project default."},
+			"clear": {"type": "boolean", "description": "When true, clear the custom default theme instead of setting one.", "default": false}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"setting": {"type": "string"},
+			"theme_path": {"type": "string"},
+			"cleared": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_set_default_theme"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_set_default_theme(params: Dictionary) -> Dictionary:
+	var setting_key: String = "gui/theme/custom"
+	var clear: bool = bool(params.get("clear", false))
+
+	if clear:
+		if ProjectSettings.has_setting(setting_key):
+			ProjectSettings.set_setting(setting_key, "")
+		var clear_error: Error = ProjectSettings.save()
+		if clear_error != OK:
+			return {"error": "Failed to save project settings: " + error_string(clear_error)}
+		return {
+			"status": "success",
+			"setting": setting_key,
+			"theme_path": "",
+			"cleared": true
+		}
+
+	var theme_path: String = str(params.get("theme_path", "")).strip_edges()
+	if theme_path.is_empty():
+		return {"error": "Missing required parameter: theme_path (or pass clear=true)"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(theme_path, [".tres", ".theme", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	theme_path = validation["sanitized"]
+
+	if not ResourceLoader.exists(theme_path):
+		return {"error": "Theme not found: " + theme_path}
+	var theme: Theme = ResourceLoader.load(theme_path) as Theme
+	if not theme:
+		return {"error": "Resource is not a Theme: " + theme_path}
+
+	ProjectSettings.set_setting(setting_key, theme_path)
+	var error: Error = ProjectSettings.save()
+	if error != OK:
+		return {"error": "Failed to save project settings: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"setting": setting_key,
+		"theme_path": theme_path,
+		"cleared": false
 	}

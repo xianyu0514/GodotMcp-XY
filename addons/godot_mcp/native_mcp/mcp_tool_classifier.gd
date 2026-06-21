@@ -195,6 +195,9 @@ func _build_classifications() -> void:
 		{"name": "configure_render_output", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "create_drawable_texture", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "draw_on_texture", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "create_theme", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "set_theme_item", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "set_default_theme", "category": "supplementary", "group": "Project-Advanced"},
 	]
 
 	for item in classifications:

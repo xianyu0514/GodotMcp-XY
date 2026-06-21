@@ -18,7 +18,7 @@
 
 ## 工具概述
 
-Godot MCP Native 实现了 **185 个工具**，分为 6 大类（含核心和补充工具）：
+Godot MCP Native 实现了 **188 个工具**，分为 6 大类（含核心和补充工具）：
 
 | 类别 | 核心工具 | 补充工具 | 总计 | 源文件 | 用途 |
 |------|----------|----------|------|--------|------|
@@ -27,7 +27,7 @@ Godot MCP Native 实现了 **185 个工具**，分为 6 大类（含核心和补
 | [Scene Tools](#scene-tools) | 4 | 6 | 10 | `scene_tools_native.gd` | 场景管理（创建、保存、打开、列出、实例化预制场景、节点分支另存为场景） |
 | [Editor Tools](#editor-tools) | 4 | 19 | 23 | `editor_tools_native.gd` | 编辑器操作（运行、停止、状态、截图、信号、导出、选择、缓冲区同步、导入状态） |
 | [Debug Tools](#debug-tools) | 3 | 67 | 70 | `debug_tools_native.gd` | 调试和运行时（日志、断点、栈帧、Profiler、运行时探针、动画、音频、着色器、瓦片地图） |
-| [Project Tools](#project-tools) | 3 | 38 | 41 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写） |
+| [Project Tools](#project-tools) | 3 | 41 | 44 | `project_tools_native.gd` | 项目配置（信息、设置、测试、输入映射、自动加载、全局类、资源诊断、反向资源关系、迁移检查、弃用 API 扫描、GDExtension 检测、渐变纹理创建、PCK 打包、渲染输出配置、可绘制纹理创建与绘制、自定义/批量资源创建与属性读写、UI 主题创建与设置） |
 
 ### Vibe Coding / 免打扰模式
 
@@ -4718,6 +4718,78 @@ Continue：恢复执行。
 
 ---
 
+### 186. create_theme
+
+创建并保存一个 Theme 资源（`.tres`/`.theme`），用于为卡牌、HUD 等基于 `Control` 的 UI 设置样式。可选设置默认缩放、默认字号和默认字体。之后用 `set_theme_item` 填充各控件的颜色、常量、字体、图标和样式盒。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `theme_path` | string | 是 | 主题保存路径（`.tres` 或 `.theme`），如 `res://ui/card_theme.tres` |
+| `default_base_scale` | number | 否 | `Theme.default_base_scale`（UI 缩放系数），需 > 0 才应用 |
+| `default_font_size` | integer | 否 | `Theme.default_font_size`（像素），需 > 0 才应用 |
+| `default_font_path` | string | 否 | 用作 `Theme.default_font` 的 Font 资源路径 |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `theme_path` | string | 保存的主题路径 |
+| `default_base_scale` | number | 主题的默认缩放 |
+| `default_font_size` | integer | 主题的默认字号 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=false`, `openWorldHint=false`
+
+---
+
+### 187. set_theme_item
+
+加载已有 Theme，设置其中一个项并重新保存。`item_type` 支持 `color`、`constant`、`font_size`（直接给值）以及 `font`、`icon`、`stylebox`（值为指向 Font/Texture2D/StyleBox 资源的路径）。`theme_type` 是该项作用的 Control 类型（如 `Button`、`Label`、`Panel`）。用于在不手工编辑主题文件的情况下为卡牌、HUD UI 设置样式。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `theme_path` | string | 是 | 已有主题文件路径（`.tres`/`.theme`/`.res`） |
+| `item_type` | string | 是 | `color`、`constant`、`font_size`、`font`、`icon`、`stylebox` 之一 |
+| `item_name` | string | 是 | 主题项名称，如 `font_color`、`h_separation`、`panel` |
+| `theme_type` | string | 是 | 该项作用的 Control 类型，如 `Button`、`Label`、`Panel` |
+| `value` | any | 是 | color：颜色字符串/数组/对象；constant/font_size：整数；font/icon/stylebox：`res://` 资源路径 |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `theme_path` | string | 主题路径 |
+| `item_type` | string | 设置的项类型 |
+| `item_name` | string | 设置的项名称 |
+| `theme_type` | string | 作用的 Control 类型 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
+### 188. set_default_theme
+
+设置或清除项目级默认 GUI 主题（`gui/theme/custom` 项目设置）并持久化到 `project.godot`。传 `clear=true` 可移除自定义主题、回退到引擎默认。用于一次性把卡牌游戏主题应用到所有 `Control`，无需逐场景挂载。
+
+**参数**：
+| 参数 | 类型 | 必需 | 描述 |
+|------|------|------|------|
+| `theme_path` | string | 否 | 设为项目默认的主题资源路径（`.tres`/`.theme`/`.res`）。未设 `clear` 时必填 |
+| `clear` | boolean | 否 | 为 `true` 时清除自定义默认主题而非设置（默认 `false`） |
+
+**返回值**：
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `status` | string | `"success"` |
+| `setting` | string | 写入的项目设置键（`gui/theme/custom`） |
+| `theme_path` | string | 设置的主题路径（清除时为空） |
+| `cleared` | boolean | 是否执行了清除 |
+
+**注解**：`readOnlyHint=false`, `destructiveHint=false`, `idempotentHint=true`, `openWorldHint=false`
+
+---
+
 ## 通用数据类型
 
 ### Vector2
@@ -4817,7 +4889,7 @@ Continue：恢复执行。
 
 ## 总结
 
-本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **185 个工具**（30 核心 + 155 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
+本手册详细说明了 Godot MCP Native 项目的所有核心工具及部分补充工具。项目共 **188 个工具**（30 核心 + 158 补充），所有工具均可通过 MCP 工具管理面板按分组动态启用/禁用。补充工具（`*-Advanced` 分组）默认不启用，需在工具管理面板中手动开启。
 
 **提示**：
 - 使用 `tools/list` 方法获取所有工具的实时列表和完整 JSON Schema

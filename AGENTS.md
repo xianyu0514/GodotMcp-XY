@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **185 个工具**（30 核心 + 155 补充），分为 6 大类，供 AI 助手读取和修改项目。
+一个 **Godot 4.6 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **188 个工具**（30 核心 + 158 补充），分为 6 大类，供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：yurineko73 | **版本**：1.0.7-pre1
@@ -64,7 +64,7 @@ addons/godot_mcp/
 │   ├── scene_tools_native.gd   # 10 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景
 │   ├── editor_tools_native.gd  # 23 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态
 │   ├── debug_tools_native.gd   # 70 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制
-│   └── project_tools_native.gd # 38 个工具 — 项目信息/设置、资源、自定义/批量资源创建与属性读写、输入映射、自动加载、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、PCK 打包、渲染输出
+│   └── project_tools_native.gd # 41 个工具 — 项目信息/设置、资源、自定义/批量资源创建与属性读写、输入映射、自动加载、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、PCK 打包、渲染输出、UI 主题创建与设置
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
 │   ├── mcp_tool_item.gd        # 单个工具开关 UI
