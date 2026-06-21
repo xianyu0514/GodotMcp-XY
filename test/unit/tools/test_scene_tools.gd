@@ -128,3 +128,84 @@ func test_assign_owner_recursive_sets_owner():
 	assert_eq(child.owner, root, "child owner should be the branch root")
 	assert_eq(grandchild.owner, root, "grandchild owner should be the branch root")
 	root.free()
+
+func test_assign_owner_recursive_skips_instanced_subscene_internals():
+	# An instanced sub-scene root should be owned by the branch root (so it is
+	# included), but its internals must NOT be re-owned, otherwise pack() would
+	# flatten the instance into inline nodes.
+	var sub_path: String = "res://test/unit/tools/.tmp_owner_sub.tscn"
+	var sub_root: Node2D = Node2D.new()
+	sub_root.name = "SubRoot"
+	var sub_child: Node2D = Node2D.new()
+	sub_child.name = "SubChild"
+	sub_root.add_child(sub_child)
+	sub_child.owner = sub_root
+	var sub_pack: PackedScene = PackedScene.new()
+	assert_eq(sub_pack.pack(sub_root), OK, "sub-scene should pack")
+	assert_eq(ResourceSaver.save(sub_pack, sub_path), OK, "sub-scene should save")
+	sub_root.free()
+
+	var loaded_sub: PackedScene = load(sub_path) as PackedScene
+	var branch: Node2D = Node2D.new()
+	branch.name = "Branch"
+	var plain: Node2D = Node2D.new()
+	plain.name = "Plain"
+	branch.add_child(plain)
+	var instance: Node = loaded_sub.instantiate()
+	instance.name = "Instance"
+	branch.add_child(instance)
+	assert_false(instance.scene_file_path.is_empty(), "instance should carry scene_file_path")
+
+	_scene_tools._assign_owner_recursive(branch, branch)
+	assert_eq(plain.owner, branch, "plain child should be owned by branch root")
+	assert_eq(instance.owner, branch, "instance root should be owned by branch root")
+	var instance_child: Node = instance.get_node("SubChild")
+	assert_ne(instance_child.owner, branch, "instance internals must not be re-owned by branch root")
+
+	branch.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(sub_path))
+
+func test_save_branch_round_trip_preserves_nested_instance():
+	# Mirror the tool's duplicate+own+pack+save flow and confirm a nested
+	# instance survives as a scene reference (non-empty scene_file_path) rather
+	# than being flattened.
+	var sub_path: String = "res://test/unit/tools/.tmp_rt_sub.tscn"
+	var out_path: String = "res://test/unit/tools/.tmp_rt_branch.tscn"
+	var sub_root: Node2D = Node2D.new()
+	sub_root.name = "SubRoot"
+	var sub_child: Node2D = Node2D.new()
+	sub_child.name = "SubChild"
+	sub_root.add_child(sub_child)
+	sub_child.owner = sub_root
+	var sub_pack: PackedScene = PackedScene.new()
+	assert_eq(sub_pack.pack(sub_root), OK, "sub-scene should pack")
+	assert_eq(ResourceSaver.save(sub_pack, sub_path), OK, "sub-scene should save")
+	sub_root.free()
+
+	var loaded_sub: PackedScene = load(sub_path) as PackedScene
+	var branch: Node2D = Node2D.new()
+	branch.name = "Branch"
+	var instance: Node = loaded_sub.instantiate()
+	instance.name = "Instance"
+	branch.add_child(instance)
+
+	var dup: Node = branch.duplicate(
+		Node.DUPLICATE_SIGNALS | Node.DUPLICATE_GROUPS
+		| Node.DUPLICATE_SCRIPTS | Node.DUPLICATE_USE_INSTANTIATION)
+	_scene_tools._assign_owner_recursive(dup, dup)
+	assert_false(dup.get_node("Instance").scene_file_path.is_empty(),
+		"duplicate should keep nested instance scene_file_path")
+
+	var packed: PackedScene = PackedScene.new()
+	assert_eq(packed.pack(dup), OK, "branch should pack")
+	assert_eq(ResourceSaver.save(packed, out_path), OK, "branch should save")
+
+	var reloaded: Node = (load(out_path) as PackedScene).instantiate()
+	assert_false(reloaded.get_node("Instance").scene_file_path.is_empty(),
+		"reloaded branch should keep the nested instance as a scene reference")
+
+	branch.free()
+	dup.free()
+	reloaded.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(sub_path))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(out_path))

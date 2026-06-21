@@ -988,8 +988,12 @@ func _tool_save_branch_as_scene(params: Dictionary) -> Dictionary:
 
 	# Duplicate the branch so we can reassign ownership without mutating the
 	# live scene, then own every descendant by the duplicate root so pack()
-	# includes the whole subtree.
-	var branch: Node = source.duplicate()
+	# includes the whole subtree. DUPLICATE_USE_INSTANTIATION recreates nested
+	# instanced sub-scenes through their PackedScene so scene_file_path is
+	# preserved instead of the instance being flattened into inline nodes.
+	var branch: Node = source.duplicate(
+		Node.DUPLICATE_SIGNALS | Node.DUPLICATE_GROUPS
+		| Node.DUPLICATE_SCRIPTS | Node.DUPLICATE_USE_INSTANTIATION)
 	if not branch:
 		return {"error": "Failed to duplicate branch: " + node_path}
 	_assign_owner_recursive(branch, branch)
@@ -1033,11 +1037,15 @@ func _resolve_node_path(node_path: String) -> Node:
 	return scene_root.get_node_or_null(relative)
 
 # Recursively set the owner of every descendant so PackedScene.pack() captures
-# the full subtree.
+# the full subtree. Instanced sub-scene roots are owned by root (so they are
+# included) but their internal children are left untouched: descending into
+# them would force pack() to serialize the instance inline instead of as a
+# scene reference, flattening the nested instance.
 func _assign_owner_recursive(node: Node, root: Node) -> void:
 	for child in node.get_children():
 		child.owner = root
-		_assign_owner_recursive(child, root)
+		if child.scene_file_path.is_empty():
+			_assign_owner_recursive(child, root)
 
 # 辅助函数：递归收集场景文件
 func _collect_scenes(directory_path: String, result: Array[String]) -> void:
