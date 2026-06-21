@@ -76,6 +76,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_remove_project_autoload(server_core)
 	_register_create_animation(server_core)
 	_register_insert_animation_keys(server_core)
+	_register_create_tileset(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -6094,4 +6095,134 @@ static func _parse_quaternion(value: Variant) -> Variant:
 			return Quaternion(float(value[0]), float(value[1]), float(value[2]), float(value[3]))
 		if value.size() >= 3:
 			return Quaternion.from_euler(Vector3(float(value[0]), float(value[1]), float(value[2])))
+	return null
+
+# ============================================================================
+# create_tileset - Create and save a TileSet (.tres/.res) for 2D tile maps.
+# Optionally add a TileSetAtlasSource from a texture and auto-create the atlas
+# tiles in the grid. Pairs with set_tilemap_layer_cells (4.7 TileMapLayer).
+# ============================================================================
+
+func _register_create_tileset(server_core: RefCounted) -> void:
+	var tool_name: String = "create_tileset"
+	var description: String = "Create and save a TileSet resource (.tres/.res) for 2D tile maps consumed by a TileMapLayer (Godot 4.x). Sets tile_size, and optionally adds a TileSetAtlasSource from a texture (texture_region_size defaults to tile_size). When create_tiles is true (default) every grid cell that fits in the texture is created as a tile. Returns the atlas source_id and how many tiles were created."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"tileset_path": {"type": "string", "description": "Save path for the TileSet (.tres/.res), e.g. res://tilesets/ground.tres."},
+			"tile_size": {"type": "array", "description": "Tile grid size in pixels as [w, h] (or {x, y}). Default [16, 16].", "items": {"type": "integer"}},
+			"texture_path": {"type": "string", "description": "Optional res:// path to a Texture2D to add as a TileSetAtlasSource."},
+			"texture_region_size": {"type": "array", "description": "Atlas tile region size in pixels as [w, h]. Defaults to tile_size.", "items": {"type": "integer"}},
+			"create_tiles": {"type": "boolean", "description": "Auto-create every atlas grid tile that fits in the texture. Default true.", "default": true}
+		},
+		"required": ["tileset_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"tileset_path": {"type": "string"},
+			"tile_size": {"type": "array"},
+			"source_id": {"type": "integer"},
+			"tiles_created": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_create_tileset"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_create_tileset(params: Dictionary) -> Dictionary:
+	var tileset_path: String = str(params.get("tileset_path", "")).strip_edges()
+	if tileset_path.is_empty():
+		return {"error": "Missing required parameter: tileset_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(tileset_path, [".tres", ".res"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	tileset_path = validation["sanitized"]
+
+	var tile_size: Vector2i = Vector2i(16, 16)
+	if params.has("tile_size"):
+		var parsed_size: Variant = _parse_vector2i(params["tile_size"])
+		if parsed_size == null:
+			return {"error": "Parameter 'tile_size' must be [w, h] or {x, y}"}
+		tile_size = parsed_size
+	if tile_size.x <= 0 or tile_size.y <= 0:
+		return {"error": "tile_size must be positive"}
+
+	var tile_set: TileSet = TileSet.new()
+	tile_set.tile_size = tile_size
+
+	var source_id: int = -1
+	var tiles_created: int = 0
+	var texture_path: String = str(params.get("texture_path", "")).strip_edges()
+	if not texture_path.is_empty():
+		if not ResourceLoader.exists(texture_path):
+			return {"error": "Texture not found: " + texture_path}
+		var texture: Texture2D = ResourceLoader.load(texture_path) as Texture2D
+		if not texture:
+			return {"error": "Resource is not a Texture2D: " + texture_path}
+
+		var region_size: Vector2i = tile_size
+		if params.has("texture_region_size"):
+			var parsed_region: Variant = _parse_vector2i(params["texture_region_size"])
+			if parsed_region == null:
+				return {"error": "Parameter 'texture_region_size' must be [w, h] or {x, y}"}
+			region_size = parsed_region
+		if region_size.x <= 0 or region_size.y <= 0:
+			return {"error": "texture_region_size must be positive"}
+
+		var atlas: TileSetAtlasSource = TileSetAtlasSource.new()
+		atlas.texture = texture
+		atlas.texture_region_size = region_size
+		source_id = tile_set.add_source(atlas)
+
+		if bool(params.get("create_tiles", true)):
+			var columns: int = int(texture.get_width() / region_size.x)
+			var rows: int = int(texture.get_height() / region_size.y)
+			for ty in range(rows):
+				for tx in range(columns):
+					var coords: Vector2i = Vector2i(tx, ty)
+					if not atlas.has_tile(coords):
+						atlas.create_tile(coords)
+						tiles_created += 1
+
+	var dir_path: String = tileset_path.get_base_dir()
+	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
+		var mk: Error = DirAccess.make_dir_recursive_absolute(dir_path)
+		if mk != OK:
+			return {"error": "Failed to create directory: " + dir_path}
+
+	var error: Error = ResourceSaver.save(tile_set, tileset_path)
+	if error != OK:
+		return {"error": "Failed to save tileset: " + error_string(error)}
+
+	return {
+		"status": "success",
+		"tileset_path": tileset_path,
+		"tile_size": [tile_set.tile_size.x, tile_set.tile_size.y],
+		"source_id": source_id,
+		"tiles_created": tiles_created
+	}
+
+static func _parse_vector2i(value: Variant) -> Variant:
+	if value is Vector2i:
+		return value
+	if value is Vector2:
+		return Vector2i(value)
+	if value is Dictionary:
+		return Vector2i(int(value.get("x", 0)), int(value.get("y", 0)))
+	if value is Array and value.size() >= 2:
+		return Vector2i(int(value[0]), int(value[1]))
 	return null
