@@ -46,6 +46,8 @@ var _supp_group_names: Array = []
 var _category_nav_container: VBoxContainer = null
 var _nav_group: ButtonGroup = null
 var _nav_items: Dictionary = {}
+var _scope_chip_group: ButtonGroup = null
+var _scope_chips: Dictionary = {}
 var _selected_category: String = "__recommended__"
 var _detail_title: Label = null
 var _detail_desc: Label = null
@@ -380,12 +382,18 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	toolbar.add_child(_tools_count_label)
 
+	var search_row: HBoxContainer = HBoxContainer.new()
+	search_row.add_theme_constant_override("separation", 8)
+	content.add_child(search_row)
+
 	_tools_search_edit = LineEdit.new()
 	_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	_tools_search_edit.clear_button_enabled = true
 	_tools_search_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tools_search_edit.text_changed.connect(_on_tools_search_changed)
-	content.add_child(_tools_search_edit)
+	search_row.add_child(_tools_search_edit)
+
+	_build_scope_chips(search_row)
 
 	var split: HSplitContainer = HSplitContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -739,6 +747,7 @@ func _build_category_nav() -> void:
 	_nav_group = ButtonGroup.new()
 
 	_add_nav_item("__recommended__", _tr("ui.recommended"), "Favorites")
+	_add_nav_item("__supplementary__", _tr("ui.extended_tools"), "Tools")
 	_add_nav_item("__all__", _tr("ui.all_tools"), "GuiTreeArrowDown")
 
 	if _core_group_names.size() > 0:
@@ -804,6 +813,8 @@ func _groups_for_selection() -> Array:
 	match _selected_category:
 		"__recommended__":
 			return _core_group_names.duplicate()
+		"__supplementary__":
+			return _supp_group_names.duplicate()
 		"__all__":
 			return _core_group_names + _supp_group_names
 		_:
@@ -817,7 +828,27 @@ func _select_category(key: String) -> void:
 		_tools_search_edit.set_block_signals(false)
 	if _nav_items.has(key):
 		_nav_items[key].set_selected(true)
+	_sync_scope_chips()
 	_apply_view()
+
+func _build_scope_chips(parent: HBoxContainer) -> void:
+	_scope_chips.clear()
+	_scope_chip_group = ButtonGroup.new()
+	var defs: Array = [
+		["__all__", _tr("ui.scope_all")],
+		["__recommended__", _tr("ui.scope_core")],
+		["__supplementary__", _tr("ui.scope_extended")],
+	]
+	for entry in defs:
+		var chip: MCPCategoryNavItem = MCPCategoryNavItem.new()
+		parent.add_child(chip)
+		chip.setup(entry[0], entry[1], null, _scope_chip_group)
+		chip.category_selected.connect(_select_category)
+		_scope_chips[entry[0]] = chip
+
+func _sync_scope_chips() -> void:
+	for key in _scope_chips:
+		_scope_chips[key].set_selected(_selected_category == key)
 
 func _on_tools_search_changed(_new_text: String) -> void:
 	_apply_view()
@@ -846,6 +877,9 @@ func _apply_category_view() -> void:
 		"__recommended__":
 			_detail_title.text = _tr("ui.recommended")
 			_detail_desc.text = _tr("ui.recommended_desc")
+		"__supplementary__":
+			_detail_title.text = _tr("ui.extended_tools")
+			_detail_desc.text = _tr("ui.extended_desc")
 		"__all__":
 			_detail_title.text = _tr("ui.all_tools")
 			_detail_desc.text = _tr("ui.all_tools_desc")
@@ -922,8 +956,16 @@ func _update_nav_counts() -> void:
 			_nav_items[group_name].set_count(c2["enabled"], c2["total"])
 	if _nav_items.has("__recommended__"):
 		_nav_items["__recommended__"].set_count(core_enabled, core_total)
+	if _nav_items.has("__supplementary__"):
+		_nav_items["__supplementary__"].set_count(supp_enabled, supp_total)
 	if _nav_items.has("__all__"):
 		_nav_items["__all__"].set_count(core_enabled + supp_enabled, core_total + supp_total)
+	if _scope_chips.has("__recommended__"):
+		_scope_chips["__recommended__"].set_count(core_enabled, core_total)
+	if _scope_chips.has("__supplementary__"):
+		_scope_chips["__supplementary__"].set_count(supp_enabled, supp_total)
+	if _scope_chips.has("__all__"):
+		_scope_chips["__all__"].set_count(core_enabled + supp_enabled, core_total + supp_total)
 
 func _update_detail_count() -> void:
 	if not _detail_count:
