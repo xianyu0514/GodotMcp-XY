@@ -732,8 +732,8 @@ func _on_tunnel_poll_timeout() -> void:
 	if not _tunnel_manager.is_running():
 		_tunnel_poll_timer.stop()
 		_reset_tunnel_buttons()
-		if _tunnel_manager.get_public_url().is_empty():
-			_set_tunnel_status("ui.tunnel_exited")
+		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
+		_set_tunnel_status("ui.tunnel_exited")
 		return
 	var url: String = _tunnel_manager.poll()
 	if not url.is_empty():
@@ -755,10 +755,22 @@ func _reset_tunnel_buttons() -> void:
 func _on_tunnel_stop_pressed() -> void:
 	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer.stop()
+	var tunnel_url: String = ""
 	if _tunnel_manager:
+		tunnel_url = _tunnel_manager.get_public_url()
 		_tunnel_manager.stop()
+	_clear_tunnel_url_if_owned(tunnel_url)
 	_reset_tunnel_buttons()
 	_set_tunnel_status("ui.tunnel_stopped")
+
+## Clears the remote URL field (and hides the public endpoint card) only when it
+## still holds the now-dead tunnel-provided URL; manual entries are left intact.
+func _clear_tunnel_url_if_owned(tunnel_url: String) -> void:
+	if tunnel_url.strip_edges().is_empty():
+		return
+	if _remote_url_edit and _remote_url_edit.text.strip_edges() == tunnel_url.strip_edges():
+		_remote_url_edit.text = ""
+		_update_public_endpoint()
 
 func _build_transport_card(content: VBoxContainer) -> void:
 	_transport_title_label = Label.new()
