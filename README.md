@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-204-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-205-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)
 
@@ -23,7 +23,7 @@ GDScript and talks directly to the engine.
   nothing else to install or keep running.
 - **Two transports** — HTTP/SSE (default, port `9080`) for editor and remote clients, and
   stdio for local-process clients.
-- **204 tools, sensibly scoped** — 30 high-value *core* tools are on by default; 172 more
+- **205 tools, sensibly scoped** — 30 high-value *core* tools are on by default; 173 more
   *advanced* tools are one click away when you need them.
 - **Runtime-aware** — a probe lets the AI inspect and manipulate a *running* game, not just
   edit-time state: live scene tree, expression evaluation, input injection, animation/audio
@@ -64,7 +64,7 @@ Snippets for Claude Desktop, Cursor, Trae, Cline, OpenCode and Codex are in
 
 ## What the AI can do
 
-The plugin exposes **204 tools** in six categories (plus 2 always-on *meta* tools for tool discovery). Each links to a full, per-tool reference.
+The plugin exposes **205 tools** in six categories (plus 2 always-on *meta* tools for tool discovery). Each links to a full, per-tool reference.
 
 | Category | Tools | What it covers |
 | --- | ---: | --- |
@@ -73,10 +73,10 @@ The plugin exposes **204 tools** in six categories (plus 2 always-on *meta* tool
 | [Scene](docs/tools/scene-tools.md) | 12 | Create/open/save scenes, structure, prefab instancing, tilemaps |
 | [Editor](docs/tools/editor-tools.md) | 23 | Run/stop, screenshots, selection, inspector, export, buffer sync |
 | [Debug & Runtime](docs/tools/debug-tools.md) | 71 | Logs, debugger, breakpoints, profilers, live runtime control |
-| [Project](docs/tools/project-tools.md) | 53 | Settings, resources, input map, audits, 4.7 migration, assets |
+| [Project](docs/tools/project-tools.md) | 54 | Settings, resources, input map, audits, 4.7 migration, asset generation |
 | [Meta](docs/tools/README.md#meta-tools-tool-discovery) | 2 | Always-on tool discovery & on-demand enabling (`list_tool_catalog`, `enable_tools`) |
 
-Only the 30 **core** tools (plus 2 always-on **meta** tools) are enabled by default — enable any of the 172 **advanced** tools
+Only the 30 **core** tools (plus 2 always-on **meta** tools) are enabled by default — enable any of the 173 **advanced** tools
 from the MCP panel. See the [Tools Reference](docs/tools/README.md).
 
 ### Example prompts

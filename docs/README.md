@@ -16,6 +16,7 @@ This folder is the documentation root. Pick a path below based on what you want 
 | Reach the server from a remote client / the cloud | [Remote & Cloud Access](remote-access.md) |
 | Understand how the server is built | [Architecture](architecture.md) |
 | Browse every tool the AI can call | [Tools Reference](tools/README.md) |
+| Have the AI build a whole game (asset + planning + iteration loops) | [Industrialization Guide](industrialization/README.md) |
 | Run the unit and integration test suites | [Testing](testing.md) |
 | Add a tool or send a pull request | [Contributing](contributing.md) |
 | See what changed between versions | [Changelog](changelog.md) |
@@ -24,7 +25,7 @@ This folder is the documentation root. Pick a path below based on what you want 
 
 - **Native** — the MCP server is implemented in GDScript and runs in the editor process.
 - **Two transports** — HTTP/SSE (default, port `9080`) and stdio.
-- **204 tools** in 6 categories — 30 enabled by default ("core"), 172 opt-in ("advanced"), plus 2 always-on "meta" tools for tool discovery.
+- **205 tools** in 6 categories — 30 enabled by default ("core"), 173 opt-in ("advanced"), plus 2 always-on "meta" tools for tool discovery.
 - **Runtime-aware** — a probe autoload lets the AI inspect and drive a *running* game,
   not just edit-time state.
 - **Secure by design** — optional Bearer-token auth, path validation, and a configurable

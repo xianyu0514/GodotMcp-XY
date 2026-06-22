@@ -13,7 +13,7 @@ The server is pure GDScript: **no Node.js, no Python, no external bridge**.
 
 ## Highlights
 
-- **204 MCP tools** in 6 categories (30 core enabled by default; 172 advanced, opt-in) plus 2 always-on meta tools for tool discovery (`list_tool_catalog`, `enable_tools`).
+- **205 MCP tools** in 6 categories (30 core enabled by default; 173 advanced, opt-in) plus 2 always-on meta tools for tool discovery (`list_tool_catalog`, `enable_tools`).
 - **HTTP/SSE** (default port `9080`) and **stdio** transports.
 - **Runtime probe** to inspect and drive a *running* game, not just edit-time state.
 - Optional **Bearer-token auth**, path validation, and a configurable security level.
@@ -40,7 +40,7 @@ The server is pure GDScript: **no Node.js, no Python, no external bridge**.
 | --- | ---: | --- | ---: |
 | Node | 26 | Editor | 23 |
 | Script | 17 | Debug & Runtime | 71 |
-| Scene | 12 | Project | 53 |
+| Scene | 12 | Project | 54 |
 
 Only the 30 core tools are on by default; enable advanced tools from the MCP panel.
 Full list: [Tools Reference](../../docs/tools/README.md).

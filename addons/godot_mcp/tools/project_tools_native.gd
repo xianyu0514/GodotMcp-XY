@@ -68,6 +68,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_configure_render_output(server_core)
 	_register_create_drawable_texture(server_core)
 	_register_draw_on_texture(server_core)
+	_register_generate_asset(server_core)
 	_register_create_theme(server_core)
 	_register_set_theme_item(server_core)
 	_register_set_default_theme(server_core)
@@ -5252,6 +5253,562 @@ func _tool_draw_on_texture(params: Dictionary) -> Dictionary:
 		"skipped": skipped,
 		"godot_version": str(Engine.get_version_info().get("string", ""))
 	}
+
+# ============================================================================
+# generate_asset - asset generation adapter (placeholder-first + external API)
+# ============================================================================
+#
+# Closes the asset-generation loop for AI-driven game production:
+#   - provider "placeholder" (default, offline, deterministic): synthesizes a
+#     procedural sprite/texture (Image -> PNG) or sound effect
+#     (AudioStreamWAV -> .tres/.wav) from the prompt, so a prototype never
+#     blocks on missing art. Generation parameters are derived from a stable
+#     hash of the prompt, so the same prompt yields the same asset.
+#   - provider "external": calls an external image/audio/TTS HTTP API, validates
+#     the returned bytes, then lands them into res:// (and reimports). When no
+#     endpoint is configured it returns status "unconfigured" with guidance
+#     instead of failing, so callers can gracefully fall back to placeholders.
+# Either way the result is dropped into res:// and (best effort) reimported so
+# the engine sees a real Texture2D / AudioStream.
+
+const _ASSET_IMAGE_TYPES: Array = ["texture", "sprite", "icon"]
+const _ASSET_AUDIO_TYPES: Array = ["audio", "sfx", "tone"]
+const _ASSET_PATTERNS: Array = ["solid", "gradient", "checker", "circle", "frame", "noise"]
+const _ASSET_WAVEFORMS: Array = ["sine", "square", "saw", "triangle", "noise"]
+
+func _asset_category(asset_type: String) -> String:
+	if asset_type in _ASSET_IMAGE_TYPES:
+		return "image"
+	if asset_type in _ASSET_AUDIO_TYPES:
+		return "audio"
+	return ""
+
+static func _asset_seed(prompt: String) -> int:
+	# Stable, non-negative seed so the same prompt is reproducible.
+	return int(abs(prompt.hash()))
+
+static func _asset_seed_color(seed: int, salt: int) -> Color:
+	var hue: float = float((seed + salt * 2654435761) % 1000) / 1000.0
+	var sat: float = 0.45 + float((seed >> 3) % 45) / 100.0
+	var val: float = 0.60 + float((seed >> 7) % 35) / 100.0
+	return Color.from_hsv(hue, sat, val, 1.0)
+
+func _register_generate_asset(server_core: RefCounted) -> void:
+	var tool_name: String = "generate_asset"
+	var description: String = "Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes, and saves them (returns status 'unconfigured' when no endpoint is set so callers can fall back to placeholders). The result is reimported when an editor interface is available."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"type": {"type": "string", "description": "Asset type. Image: texture, sprite, icon. Audio: audio, sfx, tone.", "enum": ["texture", "sprite", "icon", "audio", "sfx", "tone"]},
+			"prompt": {"type": "string", "description": "Text prompt describing the asset. Seeds deterministic placeholder generation and is sent to external providers."},
+			"resource_path": {"type": "string", "description": "Where to save (res:// or user://). Image: .png/.jpg/.webp. Audio: .tres/.wav."},
+			"provider": {"type": "string", "description": "Generation provider. Default 'placeholder' (offline procedural). 'external' calls an HTTP API.", "enum": ["placeholder", "external"], "default": "placeholder"},
+			"width": {"type": "integer", "description": "Image width in pixels. Default 64.", "default": 64},
+			"height": {"type": "integer", "description": "Image height in pixels. Default 64.", "default": 64},
+			"pattern": {"type": "string", "description": "Image pattern. Default 'auto' (derived from prompt).", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise"], "default": "auto"},
+			"colors": {"type": "array", "description": "Foreground colors (color string/array/{r,g,b,a}). Defaults derived from prompt."},
+			"background": {"description": "Background color. Defaults derived from prompt."},
+			"duration": {"type": "number", "description": "Audio duration in seconds. Default 0.5.", "default": 0.5},
+			"frequency": {"type": "number", "description": "Audio base frequency in Hz. Default 0 (auto from prompt).", "default": 0.0},
+			"waveform": {"type": "string", "description": "Audio waveform. Default 'auto'.", "enum": ["auto", "sine", "square", "saw", "triangle", "noise"], "default": "auto"},
+			"sample_rate": {"type": "integer", "description": "Audio sample rate in Hz. Default 22050.", "default": 22050},
+			"amplitude": {"type": "number", "description": "Audio amplitude 0..1. Default 0.6.", "default": 0.6},
+			"endpoint": {"type": "string", "description": "External provider URL (provider=external)."},
+			"api_key_env": {"type": "string", "description": "Name of an OS environment variable holding the API key for the external provider. The key value is never logged."},
+			"http_method": {"type": "string", "description": "External HTTP method. Default POST.", "enum": ["GET", "POST"], "default": "POST"},
+			"headers": {"type": "object", "description": "Extra HTTP headers for the external request."},
+			"request_body": {"description": "External request body. Object/array is sent as JSON; string is sent verbatim."},
+			"response_field": {"type": "string", "description": "Dot path to a base64-encoded payload inside a JSON response (e.g. 'data.0.b64_json'). When omitted the raw response body is treated as the asset bytes."},
+			"timeout_sec": {"type": "number", "description": "External request timeout in seconds. Default 30.", "default": 30.0},
+			"record_prompt": {"type": "boolean", "description": "Write a '<resource_path>.gen.json' manifest with prompt + parameters for traceability. Default true.", "default": true},
+			"reimport": {"type": "boolean", "description": "Reimport the saved file via EditorFileSystem when available. Default true.", "default": true}
+		},
+		"required": ["type", "prompt", "resource_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"type": {"type": "string"},
+			"category": {"type": "string"},
+			"provider": {"type": "string"},
+			"prompt": {"type": "string"},
+			"generator": {"type": "object"},
+			"size_bytes": {"type": "integer"},
+			"manifest_path": {"type": "string"},
+			"reimported": {"type": "boolean"},
+			"reimport_skipped_reason": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": true
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_generate_asset"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_generate_asset(params: Dictionary) -> Dictionary:
+	var asset_type: String = str(params.get("type", "")).strip_edges().to_lower()
+	if asset_type.is_empty():
+		return {"error": "Missing required parameter: type"}
+	var category: String = _asset_category(asset_type)
+	if category.is_empty():
+		return {"error": "Invalid type '%s'. Image: texture, sprite, icon. Audio: audio, sfx, tone." % asset_type}
+
+	var prompt: String = str(params.get("prompt", "")).strip_edges()
+	if prompt.is_empty():
+		return {"error": "Missing required parameter: prompt"}
+
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+
+	var allowed_ext: Array = [".png", ".jpg", ".jpeg", ".webp"] if category == "image" else [".tres", ".res", ".wav"]
+	var validation: Dictionary = PathValidator.validate_file_path(resource_path, allowed_ext)
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	resource_path = validation["sanitized"]
+
+	var dir_path: String = resource_path.get_base_dir()
+	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
+		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
+			return {"error": "Failed to create directory: " + dir_path}
+
+	var provider: String = str(params.get("provider", "placeholder")).strip_edges().to_lower()
+	if provider != "placeholder" and provider != "external":
+		return {"error": "Invalid provider '%s'. Expected 'placeholder' or 'external'." % provider}
+
+	var seed: int = _asset_seed(prompt)
+	var generator: Dictionary = {}
+	var save_result: Dictionary = {}
+
+	if provider == "external":
+		var fetched: Dictionary = _generate_asset_external(params, category)
+		if fetched.has("error"):
+			return fetched
+		if fetched.get("status", "") == "unconfigured":
+			return fetched
+		generator = fetched.get("generator", {})
+		save_result = _land_asset_bytes(fetched.get("bytes", PackedByteArray()), resource_path, category)
+	elif category == "image":
+		var gen_image: Dictionary = _generate_placeholder_image(params, seed)
+		generator = gen_image["generator"]
+		save_result = _save_image_asset(gen_image["image"], resource_path)
+	else:
+		var gen_audio: Dictionary = _generate_placeholder_audio(params, seed)
+		generator = gen_audio["generator"]
+		save_result = _save_audio_asset(gen_audio["stream"], resource_path)
+
+	if save_result.has("error"):
+		return save_result
+
+	var result: Dictionary = {
+		"status": "success",
+		"resource_path": resource_path,
+		"type": asset_type,
+		"category": category,
+		"provider": provider,
+		"prompt": prompt,
+		"generator": generator,
+		"size_bytes": int(save_result.get("size_bytes", 0))
+	}
+
+	if bool(params.get("record_prompt", true)):
+		var manifest_path: String = resource_path + ".gen.json"
+		var manifest: Dictionary = {
+			"prompt": prompt,
+			"type": asset_type,
+			"category": category,
+			"provider": provider,
+			"generator": generator,
+			"godot_version": str(Engine.get_version_info().get("string", ""))
+		}
+		var mf: FileAccess = FileAccess.open(manifest_path, FileAccess.WRITE)
+		if mf:
+			mf.store_string(JSON.stringify(manifest, "\t"))
+			mf.close()
+			result["manifest_path"] = manifest_path
+
+	if bool(params.get("reimport", true)):
+		var reimport: Dictionary = _reimport_asset(resource_path)
+		result["reimported"] = bool(reimport.get("reimported", false))
+		if reimport.has("reason"):
+			result["reimport_skipped_reason"] = reimport["reason"]
+	else:
+		result["reimported"] = false
+		result["reimport_skipped_reason"] = "reimport disabled by caller"
+
+	return result
+
+func _generate_placeholder_image(params: Dictionary, seed: int) -> Dictionary:
+	var width: int = clampi(int(params.get("width", 64)), 1, 4096)
+	var height: int = clampi(int(params.get("height", 64)), 1, 4096)
+
+	var pattern: String = str(params.get("pattern", "auto")).strip_edges().to_lower()
+	if pattern == "auto" or not (pattern in _ASSET_PATTERNS):
+		pattern = _ASSET_PATTERNS[seed % _ASSET_PATTERNS.size()]
+
+	var fg_colors: Array = []
+	var raw_colors: Variant = params.get("colors", [])
+	if raw_colors is Array and not (raw_colors as Array).is_empty():
+		for c in raw_colors:
+			fg_colors.append(_parse_color(c))
+	else:
+		fg_colors = [_asset_seed_color(seed, 1), _asset_seed_color(seed, 7)]
+
+	var background: Color = _parse_color(params["background"]) if params.has("background") else _asset_seed_color(seed, 13).darkened(0.55)
+
+	var image: Image = Image.create(width, height, false, Image.FORMAT_RGBA8)
+	image.fill(background)
+	var primary: Color = fg_colors[0]
+	var secondary: Color = fg_colors[1] if fg_colors.size() > 1 else fg_colors[0]
+
+	match pattern:
+		"solid":
+			image.fill(primary)
+		"gradient":
+			for y in range(height):
+				var t: float = float(y) / float(max(1, height - 1))
+				var row: Color = primary.lerp(secondary, t)
+				for x in range(width):
+					image.set_pixel(x, y, row)
+		"checker":
+			var cell: int = max(2, int(round(float(min(width, height)) / 8.0)))
+			for y in range(height):
+				for x in range(width):
+					var on: bool = ((x / cell) + (y / cell)) % 2 == 0
+					image.set_pixel(x, y, primary if on else secondary)
+		"circle":
+			var cx: float = float(width) / 2.0
+			var cy: float = float(height) / 2.0
+			var radius: float = float(min(width, height)) * 0.42
+			for y in range(height):
+				for x in range(width):
+					if Vector2(float(x) + 0.5 - cx, float(y) + 0.5 - cy).length() <= radius:
+						image.set_pixel(x, y, primary)
+		"frame":
+			var thickness: int = max(1, int(round(float(min(width, height)) / 16.0)))
+			for y in range(height):
+				for x in range(width):
+					if x < thickness or y < thickness or x >= width - thickness or y >= height - thickness:
+						image.set_pixel(x, y, primary)
+		"noise":
+			var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+			rng.seed = seed
+			for y in range(height):
+				for x in range(width):
+					image.set_pixel(x, y, primary.lerp(secondary, rng.randf()))
+
+	var generator: Dictionary = {
+		"mode": "procedural_image",
+		"pattern": pattern,
+		"width": width,
+		"height": height,
+		"seed": seed
+	}
+	return {"image": image, "generator": generator}
+
+func _save_image_asset(image: Image, resource_path: String) -> Dictionary:
+	var ext: String = resource_path.get_extension().to_lower()
+	var error: Error = OK
+	match ext:
+		"png":
+			error = image.save_png(resource_path)
+		"jpg", "jpeg":
+			error = image.save_jpg(resource_path)
+		"webp":
+			error = image.save_webp(resource_path)
+		_:
+			return {"error": "Unsupported image extension '%s'. Use .png, .jpg or .webp." % ext}
+	if error != OK:
+		return {"error": "Failed to save image: " + error_string(error)}
+	return {"size_bytes": _file_size(resource_path)}
+
+func _generate_placeholder_audio(params: Dictionary, seed: int) -> Dictionary:
+	var sample_rate: int = clampi(int(params.get("sample_rate", 22050)), 8000, 48000)
+	var duration: float = clampf(float(params.get("duration", 0.5)), 0.01, 30.0)
+
+	var frequency: float = float(params.get("frequency", 0.0))
+	if frequency <= 0.0:
+		frequency = 220.0 + float(seed % 660)
+
+	var waveform: String = str(params.get("waveform", "auto")).strip_edges().to_lower()
+	if waveform == "auto" or not (waveform in _ASSET_WAVEFORMS):
+		waveform = _ASSET_WAVEFORMS[seed % _ASSET_WAVEFORMS.size()]
+
+	var amplitude: float = clampf(float(params.get("amplitude", 0.6)), 0.0, 1.0)
+
+	var sample_count: int = max(1, int(round(duration * float(sample_rate))))
+	var fade_samples: int = max(1, int(float(sample_count) * 0.1))
+	var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+	rng.seed = seed
+
+	var bytes: PackedByteArray = PackedByteArray()
+	bytes.resize(sample_count * 2)
+	for i in range(sample_count):
+		var t: float = float(i) / float(sample_rate)
+		var phase: float = fposmod(t * frequency, 1.0)
+		var value: float = 0.0
+		match waveform:
+			"sine":
+				value = sin(TAU * phase)
+			"square":
+				value = 1.0 if phase < 0.5 else -1.0
+			"saw":
+				value = 2.0 * phase - 1.0
+			"triangle":
+				value = 2.0 * abs(2.0 * phase - 1.0) - 1.0
+			"noise":
+				value = rng.randf_range(-1.0, 1.0)
+		# Linear fade-out tail to avoid an end-of-sample click.
+		var remaining: int = sample_count - i
+		if remaining < fade_samples:
+			value *= float(remaining) / float(fade_samples)
+		var sample16: int = int(clampf(value * amplitude, -1.0, 1.0) * 32767.0)
+		bytes.encode_s16(i * 2, sample16)
+
+	var stream: AudioStreamWAV = AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = sample_rate
+	stream.stereo = false
+	stream.data = bytes
+
+	var generator: Dictionary = {
+		"mode": "procedural_audio",
+		"waveform": waveform,
+		"frequency": frequency,
+		"duration": duration,
+		"sample_rate": sample_rate,
+		"sample_count": sample_count,
+		"seed": seed
+	}
+	return {"stream": stream, "generator": generator}
+
+func _save_audio_asset(stream: AudioStreamWAV, resource_path: String) -> Dictionary:
+	var ext: String = resource_path.get_extension().to_lower()
+	if ext == "wav":
+		var werr: Error = stream.save_to_wav(resource_path)
+		if werr != OK:
+			return {"error": "Failed to save WAV: " + error_string(werr)}
+	else:
+		var serr: Error = ResourceSaver.save(stream, resource_path)
+		if serr != OK:
+			return {"error": "Failed to save audio resource: " + error_string(serr)}
+	return {"size_bytes": _file_size(resource_path)}
+
+# Validate then write external/raw asset bytes to res://.
+func _land_asset_bytes(bytes: PackedByteArray, resource_path: String, category: String) -> Dictionary:
+	if bytes.is_empty():
+		return {"error": "External provider returned no data"}
+	if not _validate_asset_bytes(bytes, category):
+		return {"error": "External payload failed validation: bytes do not look like a valid %s asset" % category}
+	var dir_path: String = resource_path.get_base_dir()
+	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
+		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
+			return {"error": "Failed to create directory: " + dir_path}
+	var f: FileAccess = FileAccess.open(resource_path, FileAccess.WRITE)
+	if not f:
+		return {"error": "Failed to open file for write: " + resource_path}
+	f.store_buffer(bytes)
+	f.close()
+	return {"size_bytes": bytes.size()}
+
+# Magic-byte sniffing so we never land a JSON error body as if it were art.
+static func _validate_asset_bytes(bytes: PackedByteArray, category: String) -> bool:
+	if bytes.size() < 4:
+		return false
+	if category == "image":
+		# PNG
+		if bytes[0] == 0x89 and bytes[1] == 0x50 and bytes[2] == 0x4E and bytes[3] == 0x47:
+			return true
+		# JPEG
+		if bytes[0] == 0xFF and bytes[1] == 0xD8 and bytes[2] == 0xFF:
+			return true
+		# WEBP (RIFF....WEBP)
+		if bytes.size() >= 12 and bytes[0] == 0x52 and bytes[1] == 0x49 and bytes[2] == 0x46 and bytes[3] == 0x46 and bytes[8] == 0x57 and bytes[9] == 0x45 and bytes[10] == 0x42 and bytes[11] == 0x50:
+			return true
+		return false
+	if category == "audio":
+		# RIFF (WAV) or OGG
+		if bytes[0] == 0x52 and bytes[1] == 0x49 and bytes[2] == 0x46 and bytes[3] == 0x46:
+			return true
+		if bytes[0] == 0x4F and bytes[1] == 0x67 and bytes[2] == 0x67 and bytes[3] == 0x53:
+			return true
+		return false
+	return false
+
+func _generate_asset_external(params: Dictionary, category: String) -> Dictionary:
+	var endpoint: String = str(params.get("endpoint", "")).strip_edges()
+	if endpoint.is_empty():
+		return {
+			"status": "unconfigured",
+			"message": "provider 'external' requires an 'endpoint'. Set 'endpoint' (and optionally 'api_key_env' naming an OS env var) to call an image/audio/TTS API, or use provider 'placeholder' for offline procedural assets.",
+			"category": category
+		}
+
+	var api_key: String = ""
+	var api_key_env: String = str(params.get("api_key_env", "")).strip_edges()
+	if not api_key_env.is_empty():
+		api_key = OS.get_environment(api_key_env)
+		if api_key.is_empty():
+			return {"error": "Environment variable '%s' is not set or empty" % api_key_env}
+
+	var headers: PackedStringArray = PackedStringArray()
+	if not api_key.is_empty():
+		headers.append("Authorization: Bearer " + api_key)
+	var extra_headers: Variant = params.get("headers", {})
+	if extra_headers is Dictionary:
+		for key in extra_headers:
+			headers.append("%s: %s" % [str(key), str(extra_headers[key])])
+
+	var method: int = HTTPClient.METHOD_POST if str(params.get("http_method", "POST")).to_upper() == "POST" else HTTPClient.METHOD_GET
+	var body: String = ""
+	if params.has("request_body"):
+		var raw_body: Variant = params["request_body"]
+		if raw_body is String:
+			body = raw_body
+		else:
+			body = JSON.stringify(raw_body)
+			var has_content_type: bool = false
+			for h in headers:
+				if (h as String).to_lower().begins_with("content-type:"):
+					has_content_type = true
+					break
+			if not has_content_type:
+				headers.append("Content-Type: application/json")
+
+	var timeout_sec: float = clampf(float(params.get("timeout_sec", 30.0)), 1.0, 120.0)
+	var fetched: Dictionary = _http_blocking_request(endpoint, method, headers, body, timeout_sec)
+	if fetched.has("error"):
+		return fetched
+
+	var response_bytes: PackedByteArray = fetched["bytes"]
+	var response_field: String = str(params.get("response_field", "")).strip_edges()
+	if not response_field.is_empty():
+		var decoded: Dictionary = _extract_base64_field(response_bytes, response_field)
+		if decoded.has("error"):
+			return decoded
+		response_bytes = decoded["bytes"]
+
+	return {
+		"bytes": response_bytes,
+		"generator": {
+			"mode": "external_http",
+			"endpoint": endpoint,
+			"http_status": int(fetched.get("http_status", 0)),
+			"response_field": response_field
+		}
+	}
+
+# Blocking HTTPClient request usable from a RefCounted tool (no SceneTree node).
+func _http_blocking_request(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float) -> Dictionary:
+	var scheme_end: int = url.find("://")
+	if scheme_end == -1:
+		return {"error": "Invalid endpoint URL (missing scheme): " + url}
+	var scheme: String = url.substr(0, scheme_end).to_lower()
+	var use_ssl: bool = scheme == "https"
+	var rest: String = url.substr(scheme_end + 3)
+	var slash: int = rest.find("/")
+	var host_port: String = rest if slash == -1 else rest.substr(0, slash)
+	var path: String = "/" if slash == -1 else rest.substr(slash)
+	var host: String = host_port
+	var port: int = 443 if use_ssl else 80
+	var colon: int = host_port.rfind(":")
+	if colon != -1:
+		host = host_port.substr(0, colon)
+		port = int(host_port.substr(colon + 1))
+
+	var http: HTTPClient = HTTPClient.new()
+	if http.connect_to_host(host, port, TLSOptions.client() if use_ssl else null) != OK:
+		return {"error": "Failed to connect to host: " + host}
+
+	var deadline: int = Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while http.get_status() == HTTPClient.STATUS_CONNECTING or http.get_status() == HTTPClient.STATUS_RESOLVING:
+		http.poll()
+		if Time.get_ticks_msec() > deadline:
+			return {"error": "Timed out connecting to " + host}
+		OS.delay_msec(20)
+	if http.get_status() != HTTPClient.STATUS_CONNECTED:
+		return {"error": "Could not connect to host (status %d)" % http.get_status()}
+
+	if http.request(method, path, headers, body) != OK:
+		return {"error": "Failed to issue HTTP request"}
+
+	while http.get_status() == HTTPClient.STATUS_REQUESTING:
+		http.poll()
+		if Time.get_ticks_msec() > deadline:
+			return {"error": "Timed out waiting for response from " + host}
+		OS.delay_msec(20)
+
+	if not (http.get_status() == HTTPClient.STATUS_BODY or http.get_status() == HTTPClient.STATUS_CONNECTED):
+		return {"error": "Unexpected HTTP status after request: %d" % http.get_status()}
+
+	var http_status: int = http.get_response_code()
+	var response: PackedByteArray = PackedByteArray()
+	while http.get_status() == HTTPClient.STATUS_BODY:
+		http.poll()
+		var chunk: PackedByteArray = http.read_response_body_chunk()
+		if chunk.size() > 0:
+			response.append_array(chunk)
+		elif Time.get_ticks_msec() > deadline:
+			return {"error": "Timed out reading response body from " + host}
+		else:
+			OS.delay_msec(10)
+	http.close()
+
+	if http_status < 200 or http_status >= 300:
+		return {"error": "External provider returned HTTP %d" % http_status, "http_status": http_status}
+	return {"bytes": response, "http_status": http_status}
+
+func _extract_base64_field(response_bytes: PackedByteArray, field_path: String) -> Dictionary:
+	var text: String = response_bytes.get_string_from_utf8()
+	var parsed: Variant = JSON.parse_string(text)
+	if parsed == null:
+		return {"error": "response_field set but response is not valid JSON"}
+	var node: Variant = parsed
+	for part in field_path.split("."):
+		if node is Dictionary and (node as Dictionary).has(part):
+			node = (node as Dictionary)[part]
+		elif node is Array and part.is_valid_int() and int(part) < (node as Array).size():
+			node = (node as Array)[int(part)]
+		else:
+			return {"error": "response_field path '%s' not found in JSON response" % field_path}
+	if not (node is String):
+		return {"error": "response_field '%s' did not resolve to a base64 string" % field_path}
+	var decoded: PackedByteArray = Marshalls.base64_to_raw(node)
+	if decoded.is_empty():
+		return {"error": "response_field '%s' is not valid base64" % field_path}
+	return {"bytes": decoded}
+
+func _reimport_asset(resource_path: String) -> Dictionary:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"reimported": false, "reason": "editor interface not available (e.g. headless/non-editor run)"}
+	var fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if not fs:
+		return {"reimported": false, "reason": "EditorFileSystem not available"}
+	if fs.is_scanning():
+		return {"reimported": false, "reason": "EditorFileSystem is scanning"}
+	fs.update_file(resource_path)
+	fs.reimport_files(PackedStringArray([resource_path]))
+	return {"reimported": true}
+
+static func _file_size(path: String) -> int:
+	var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if not f:
+		return 0
+	var size: int = f.get_length()
+	f.close()
+	return size
 
 # ============================================================================
 # create_theme - create and save an empty Theme resource (.tres/.theme)
