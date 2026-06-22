@@ -49,6 +49,25 @@ func test_init_creates_plan_file():
 	assert_true(FileAccess.file_exists(ProjectSettings.globalize_path(_plan_path)))
 	assert_eq((r["plan"] as Dictionary).get("goal"), "Vertical slice")
 
+func test_init_no_reset_preserves_corrupt_plan():
+	# A corrupt plan file must NOT be silently overwritten when reset=false.
+	var abs_path: String = ProjectSettings.globalize_path(_plan_path)
+	var f: FileAccess = FileAccess.open(_plan_path, FileAccess.WRITE)
+	f.store_string("{ this is not valid json ]")
+	f.close()
+	var r: Dictionary = _call({"action": "init", "goal": "G"})
+	assert_has(r, "error", "corrupt plan should surface a load error, not be overwritten")
+	# The corrupt bytes must remain on disk (no data loss).
+	var raw: String = FileAccess.get_file_as_string(abs_path)
+	assert_eq(raw, "{ this is not valid json ]", "corrupt file must be left untouched")
+
+func test_init_reset_overwrites_corrupt_plan():
+	var f: FileAccess = FileAccess.open(_plan_path, FileAccess.WRITE)
+	f.store_string("{ not json")
+	f.close()
+	var r: Dictionary = _call({"action": "init", "goal": "G", "reset": true})
+	assert_eq(r.get("status"), "ok", "reset=true should discard the corrupt plan")
+
 func test_add_task_and_get():
 	_call({"action": "init", "goal": "G"})
 	var added: Dictionary = _call({"action": "add_task", "title": "Movement", "dod": ["jumps"]})
