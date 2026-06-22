@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **202 个工具**（30 核心 + 172 补充），分为 6 大类，供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **204 个工具**（30 核心 + 172 补充 + 2 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -64,7 +64,8 @@ addons/godot_mcp/
 │   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
 │   ├── editor_tools_native.gd  # 23 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态
 │   ├── debug_tools_native.gd   # 71 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制、play_and_verify 编排
-│   └── project_tools_native.gd # 53 个工具（3 核心 + 50 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）
+│   ├── project_tools_native.gd # 53 个工具（3 核心 + 50 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）
+│   └── meta_tools_native.gd    # 2 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
 │   ├── mcp_tool_item.gd        # 单个工具开关 UI
@@ -117,7 +118,7 @@ addons/godot_mcp/
 5. **更新文档** — `docs/tools/<category>-tools.md`（对应分类页，新增工具行 + 更新分组计数）、`docs/tools/README.md`（分类总数表）、根与 `addons/godot_mcp/` 下的 `README.md` / `README.zh.md`
 6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
-**注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。
+**注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
 
 ### 修改已有工具后的文档更新流程
 

@@ -24,7 +24,7 @@ This folder is the documentation root. Pick a path below based on what you want 
 
 - **Native** — the MCP server is implemented in GDScript and runs in the editor process.
 - **Two transports** — HTTP/SSE (default, port `9080`) and stdio.
-- **202 tools** in 6 categories — 30 enabled by default ("core"), 172 opt-in ("advanced").
+- **204 tools** in 6 categories — 30 enabled by default ("core"), 172 opt-in ("advanced"), plus 2 always-on "meta" tools for tool discovery.
 - **Runtime-aware** — a probe autoload lets the AI inspect and drive a *running* game,
   not just edit-time state.
 - **Secure by design** — optional Bearer-token auth, path validation, and a configurable

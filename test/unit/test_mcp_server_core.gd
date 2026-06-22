@@ -18,9 +18,35 @@ func test_negotiate_protocol_version_unsupported():
 	var result: String = _core._negotiate_protocol_version("2099-01-01")
 	assert_ne(result, "2099-01-01", "Should not return unsupported version")
 
+func test_initialize_includes_instructions():
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var result: Dictionary = response.get("result", {})
+	assert_true(result.has("instructions"), "Initialize result should include an instructions field")
+	var instructions: String = result.get("instructions", "")
+	assert_true(instructions.contains("list_tool_catalog"), "Instructions should mention list_tool_catalog")
+	assert_true(instructions.contains("enable_tools"), "Instructions should mention enable_tools")
+
 func test_register_tool():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	assert_true(_core.has_tool("test_tool"), "Should have registered tool")
+
+func test_meta_tool_cannot_be_disabled_via_set_tool_enabled():
+	_core.register_tool("list_tool_catalog", "meta", {"type": "object"}, func(args): return {}, {}, {}, "meta", "Meta")
+	_core.set_tool_enabled("list_tool_catalog", false)
+	var enabled: bool = false
+	for t in _core.get_registered_tools():
+		if t.get("name") == "list_tool_catalog":
+			enabled = t.get("enabled")
+	assert_true(enabled, "Always-on meta tool must stay enabled despite a disable request")
+
+func test_meta_group_cannot_be_disabled_via_set_group_enabled():
+	_core.register_tool("enable_tools", "meta", {"type": "object"}, func(args): return {}, {}, {}, "meta", "Meta")
+	_core.set_group_enabled("Meta", false)
+	var enabled: bool = false
+	for t in _core.get_registered_tools():
+		if t.get("name") == "enable_tools":
+			enabled = t.get("enabled")
+	assert_true(enabled, "Disabling the Meta group must not disable always-on meta tools")
 
 func test_register_tool_with_category_and_group():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"}, {}, {}, "supplementary", "Editor-Advanced")

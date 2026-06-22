@@ -11,9 +11,21 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_202_tools_registered():
+func test_all_204_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 202, "Should have exactly 202 tools registered")
+	assert_eq(all_tools.size(), 204, "Should have exactly 204 tools registered")
+
+func test_meta_tools_registered():
+	var meta_tools: Array = _classifier.get_meta_tools()
+	assert_eq(meta_tools.size(), 2, "Should have exactly 2 meta tools")
+	assert_true("list_tool_catalog" in meta_tools, "list_tool_catalog should be a meta tool")
+	assert_true("enable_tools" in meta_tools, "enable_tools should be a meta tool")
+
+func test_meta_tools_are_not_core_or_supplementary():
+	assert_true(_classifier.is_meta_tool("list_tool_catalog"), "list_tool_catalog should be meta")
+	assert_false(_classifier.is_core_tool("enable_tools"), "enable_tools should not be core")
+	assert_false(_classifier.is_supplementary_tool("enable_tools"), "enable_tools should not be supplementary")
+	assert_eq(_classifier.get_tool_group("list_tool_catalog"), "Meta", "list_tool_catalog should be in Meta group")
 
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")

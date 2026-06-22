@@ -156,16 +156,21 @@ card in Settings — see [Remote & Cloud Access](remote-access.md).
 
 The Tool Manager tab includes a **preset selector** so teams can switch the enabled tool set
 in one click instead of toggling tools individually. Each preset enables the 30 core tools
-plus the advanced groups relevant to a workflow:
+(plus the 2 always-on meta tools) and the advanced groups relevant to a workflow:
 
-| Preset | Enables | Typical use |
-| --- | --- | --- |
-| Minimal (core only) | 30 core tools | Smallest, safest surface for vibe-coding |
-| Level Design | core + node/scene/editor authoring | Building and arranging scenes |
-| Debugging | core + runtime/debugger tools | Inspecting a running game |
-| QA Automation | core + debug + project (test runners) | Automated test and input flows |
-| Art & Resources | core + resource/scene authoring | Themes, tilesets, materials, resources |
-| All tools | every registered tool (202) | Power users |
+| Preset | `preset` id | Enables | Typical use |
+| --- | --- | --- | --- |
+| Minimal (core only) | `minimal_core` | 30 core + 2 meta | Smallest, safest surface for vibe-coding |
+| Level Design | `level_design` | core + node/scene/editor authoring | Building and arranging scenes |
+| Debugging | `debugging` | core + runtime/debugger tools | Inspecting a running game |
+| QA Automation | `automation_qa` | core + debug + project (test runners) | Automated test and input flows |
+| Art & Resources | `art_resources` | core + resource/scene authoring | Themes, tilesets, materials, resources |
+| All tools | `all` | every registered tool (204) | Power users |
+
+The AI can also apply these presets itself without touching the panel by calling the
+`enable_tools` meta tool with a `preset` id (e.g. `enable_tools({preset: "debugging"})`), or
+discover individual tools first with `list_tool_catalog`. See
+[Meta tools](tools/README.md#meta-tools-tool-discovery).
 
 Presets can be shared across a team:
 
