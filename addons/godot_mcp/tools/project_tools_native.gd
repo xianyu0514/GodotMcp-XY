@@ -7436,7 +7436,11 @@ func _tool_manage_task_plan(params: Dictionary) -> Dictionary:
 		var store: TaskPlanStore = TaskPlanStore.new()
 		if not bool(params.get("reset", false)) and TaskPlanStore.plan_exists(plan_path):
 			var existing = TaskPlanStore.load_plan(plan_path)
-			if existing is Dictionary and not existing.has("error"):
+			if existing is Dictionary and existing.has("error"):
+				# Surface the load failure instead of overwriting a corrupted plan
+				# with an empty one. Use reset=true to deliberately discard it.
+				return existing
+			if existing is Dictionary:
 				store = TaskPlanStore.new(existing)
 		store.init_plan(str(params.get("goal", "")), bool(params.get("reset", false)))
 		var save_init: Dictionary = TaskPlanStore.save_plan(store.plan, plan_path)
