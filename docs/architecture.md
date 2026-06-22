@@ -68,11 +68,14 @@ Tool implementations live in `addons/godot_mcp/tools/`, one file per category:
 | `editor_tools_native.gd` | Editor | 23 |
 | `debug_tools_native.gd` | Debug & Runtime | 71 |
 | `project_tools_native.gd` | Project | 53 |
-| | **Total** | **202** |
+| `meta_tools_native.gd` | Meta | 2 |
+| | **Total** | **204** |
 
 Each tool registers a name, JSON input/output schema, a handler `Callable`, annotations, and
 its category/group. The classifier decides whether a tool ships as **core** (enabled by
-default) or **advanced** (registered but disabled until the user turns it on). See the
+default) or **advanced** (registered but disabled until the user turns it on), with a small
+**meta** category (`list_tool_catalog`, `enable_tools`) that is always enabled so the model can
+discover and switch on more tools on demand. See the
 [Tools Reference](tools/README.md) for the full list.
 
 ## Runtime probe

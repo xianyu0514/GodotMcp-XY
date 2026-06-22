@@ -5,8 +5,11 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **202 MCP tools** across 6 categories (30 core, 172 advanced), classified by
-  `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30.
+- **204 MCP tools** across 6 categories (30 core, 172 advanced) plus 2 always-on **meta**
+  tools (`list_tool_catalog`, `enable_tools`) for on-demand tool discovery, classified by
+  `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30. The MCP `initialize` response
+  carries an `instructions` field describing the lazy-loading workflow, so compatible clients
+  auto-inject it without any manual prompt setup.
 - Dual transport: **HTTP/SSE** (default, port `9080`) and **stdio**.
 - **Runtime probe** autoload for inspecting and driving a running game (scene tree, node
   inspection/mutation, expression evaluation, input injection, animation/audio/shader/theme

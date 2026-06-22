@@ -37,6 +37,11 @@ signal log_message(level: String, message: String)
 const JSONRPC_VERSION: String = "2.0"
 const PROTOCOL_VERSION: String = "2025-11-25"
 
+## Guidance returned in the MCP `initialize` result. Compatible clients inject this
+## into the model's system context automatically, so the lazy-loading workflow is
+## delivered on connect without the user pasting any rules.
+const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a preset (minimal_core, level_design, debugging, automation_qa, art_resources, all). After enabling, the new tools appear in tools/list and you can call them directly. This keeps context small and saves compute."
+
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
 ## one at a time so the editor is not overloaded. Requests beyond this bound are
@@ -451,7 +456,8 @@ func _handle_initialize(message: Dictionary) -> Dictionary:
 		"serverInfo": {
 			"name": "godot-native-mcp",
 			"version": "2.0.0"
-		}
+		},
+		"instructions": SERVER_INSTRUCTIONS
 	}
 	
 	var response: Dictionary = MCPTypes.create_response(id, result)
@@ -811,7 +817,7 @@ func register_tool(name: String, description: String,
 	tool.callable = callable
 	tool.category = category
 	tool.group = group
-	tool.enabled = (category == "core")
+	tool.enabled = (category == "core" or category == "meta")
 	
 	if not tool.is_valid():
 		var reason: String = "unknown"
@@ -861,6 +867,15 @@ func get_registered_tools() -> Array:
 
 func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 	if _tools.has(tool_name):
+		# Always-on meta tools (discovery/activation) can never be disabled, regardless of
+		# the caller (UI toggle, preset apply, or restored persisted state). This enforces
+		# the "always enabled" invariant at the system level, not just in the meta-tool path.
+		if not enabled and _is_always_on_tool(tool_name):
+			if not _tools[tool_name].enabled:
+				_tools[tool_name].enabled = true
+				_tool_list_dirty = true
+			_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
+			return
 		_tools[tool_name].enabled = enabled
 		_tool_list_dirty = true
 		if enabled:
@@ -871,12 +886,21 @@ func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 		if enabled:
 			_log_warn("Cannot enable unregistered tool: " + tool_name)
 
+func _is_always_on_tool(tool_name: String) -> bool:
+	var classifier = get_classifier()
+	if classifier and classifier.has_method("is_meta_tool"):
+		return classifier.is_meta_tool(tool_name)
+	return false
+
 func set_group_enabled(group_name: String, enabled: bool) -> int:
 	if _classifier == null:
 		_classifier = load("res://addons/godot_mcp/native_mcp/mcp_tool_classifier.gd").new()
 	var group_tools: Array[String] = _classifier.get_group_tools(group_name)
 	var changed_count: int = 0
 	for tool_name in group_tools:
+		# Never disable always-on meta tools, even if the 'Meta' group is toggled off.
+		if not enabled and _is_always_on_tool(tool_name):
+			continue
 		if _tools.has(tool_name) and _tools[tool_name].enabled != enabled:
 			_tools[tool_name].enabled = enabled
 			changed_count += 1

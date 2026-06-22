@@ -54,9 +54,12 @@ Complete every step, in order:
 5. **Update the docs** (see below).
 6. **Verify.** Run the full GUT suite with zero failures.
 
-> New **advanced** tools are disabled by default (`enabled = (category == "core")`) and won't
-> appear in `tools/list` until enabled in the MCP panel — or, in tests, via
-> `core.set_tool_enabled("<tool>", true)`.
+> New **advanced** tools are disabled by default (`enabled = (category == "core" or category
+> == "meta")`) and won't appear in `tools/list` until enabled in the MCP panel — or, in tests,
+> via `core.set_tool_enabled("<tool>", true)`. The `meta` category
+> (`list_tool_catalog`, `enable_tools` in `meta_tools_native.gd`) is always enabled, is excluded
+> from the 30-core cap, and is preserved by every preset so the model can discover and enable
+> other tools on demand.
 
 ## Documentation update checklist
 

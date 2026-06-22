@@ -105,7 +105,8 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"SceneToolsNative": "res://addons/godot_mcp/tools/scene_tools_native.gd",
 	"EditorToolsNative": "res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"DebugToolsNative": "res://addons/godot_mcp/tools/debug_tools_native.gd",
-	"ProjectToolsNative": "res://addons/godot_mcp/tools/project_tools_native.gd"
+	"ProjectToolsNative": "res://addons/godot_mcp/tools/project_tools_native.gd",
+	"MetaToolsNative": "res://addons/godot_mcp/tools/meta_tools_native.gd"
 }
 
 # ============================================================================

@@ -212,6 +212,8 @@ func _build_classifications() -> void:
 		{"name": "configure_tileset_layers", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "set_tile_collision_polygon", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "set_tile_terrain", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "list_tool_catalog", "category": "meta", "group": "Meta"},
+		{"name": "enable_tools", "category": "meta", "group": "Meta"},
 	]
 
 	for item in classifications:
@@ -267,6 +269,16 @@ func is_core_tool(tool_name: String) -> bool:
 
 func is_supplementary_tool(tool_name: String) -> bool:
 	return get_tool_category(tool_name) == "supplementary"
+
+func is_meta_tool(tool_name: String) -> bool:
+	return get_tool_category(tool_name) == "meta"
+
+func get_meta_tools() -> Array[String]:
+	var tools: Array[String] = []
+	for tool_name in _tool_classifications:
+		if _tool_classifications[tool_name]["category"] == "meta":
+			tools.append(tool_name)
+	return tools
 
 func get_all_tools() -> Array:
 	return _tool_classifications.keys()

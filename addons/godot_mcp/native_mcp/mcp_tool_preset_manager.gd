@@ -61,6 +61,11 @@ func resolve_preset_states(preset_id: String, all_tool_names: Array) -> Dictiona
 	if _classifier:
 		for tool_name in _classifier.get_core_tools():
 			enabled[tool_name] = true
+		# Always-on meta tools (discovery/activation) survive every preset so the
+		# agent can re-enable other tools after switching to a minimal profile.
+		if _classifier.has_method("get_meta_tools"):
+			for tool_name in _classifier.get_meta_tools():
+				enabled[tool_name] = true
 		for group_name in PRESET_GROUPS.get(preset_id, []):
 			for tool_name in _classifier.get_group_tools(group_name):
 				enabled[tool_name] = true
