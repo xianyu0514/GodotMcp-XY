@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**54 tools** — 3 core, 51 advanced.
+**55 tools** — 3 core, 52 advanced.
 
 Project-level tools: project info and settings (read and write), resource creation and property editing, input map and autoload management, global-class / ClassDB metadata, the test runner, health and dependency audits, Godot 4.7 migration scanning/fixes, and asset authoring (themes, gradients, drawable textures, animations, TileSets, PCK packing).
 
@@ -18,7 +18,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `get_project_settings` | Core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | Core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 
-### Project-Advanced (51)
+### Project-Advanced (52)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -73,3 +73,4 @@ Project-level tools: project info and settings (read and write), resource creati
 | `configure_tileset_layers` | Advanced | Add and configure layers on an existing TileSet (.tres/.res): physics layers (collision_layer/mask bitmasks), navigation layers, custom data layers (name + Variant type), and terrain sets with terrains (name, color, match mode). New layers are appended; existing ones are preserved. Saves the TileSet. Use after create_tileset so tiles can support collision, autotiling, navigation, and per-tile metadata. |
 | `set_tile_collision_polygon` | Advanced | Set a collision polygon on a tile in a TileSet atlas source, on a given physics layer. Provide explicit polygon points, or omit them to auto-generate a full-tile rectangle (sized to tile_size) so the tile becomes solid. Optionally mark it one-way. The physics layer must already exist (configure_tileset_layers). Saves the TileSet. |
 | `set_tile_terrain` | Advanced | Assign a terrain set and terrain to a tile in a TileSet atlas source, and optionally set terrain peering bits for autotiling. The terrain set and terrain must already exist (configure_tileset_layers). peering_bits maps neighbor names (right_side, bottom_side, left_side, top_side, and the four corners) to a terrain index. Saves the TileSet. |
+| `manage_task_plan` | Advanced | Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default `res://.mcp/task_plan.json`) so the plan → execute → run → verify → fix loop survives across sessions. `action='init'` creates/resets the plan with a goal; `add_task` appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; `update_task` edits fields; `set_status` sets pending/in_progress/blocked/done (refuses `done` unless every DoD criterion is met, unless `force=true`); `set_dod` replaces the criteria list or updates one criterion's met/evidence; `get` returns the whole graph (or one task) plus progress; `next` returns dependency-ready tasks, blocked tasks and progress; `remove_task` deletes a task and strips dangling dependency references. |

@@ -32,6 +32,12 @@ Pop the next task whose `depends_on` are all done. If none are ready and tasks
 remain, that is a planning bug — surface it. Each task carries its `do` action
 and a `done_when` list (see the planner playbook).
 
+Persist this graph with [`manage_task_plan`](../tools/project-tools.md) instead of
+keeping it only in chat: `manage_task_plan(action="init", goal=...)` once, then
+`add_task` (with `depends_on` and `dod` criteria) per task. `action="next"`
+returns the dependency-ready tasks, blocked tasks and overall progress, so the
+loop resumes deterministically even across sessions.
+
 ### 2. EXECUTE
 Perform the task's action with the relevant tools:
 - **Assets:** `generate_asset` (placeholder-first), `create_custom_resource`,
@@ -55,7 +61,10 @@ Check the task's `done_when` using assertions:
 
 ### 5. DoD gate
 If every `done_when` passes, mark the task done and record results in memory.
-If not, go to FIX.
+If not, go to FIX. With `manage_task_plan`, record each criterion via
+`set_dod(id, index/criterion, met=true, evidence=...)`; `set_status(id, "done")`
+then refuses to complete a task whose DoD criteria are not all met (override with
+`force=true`), turning the DoD into an enforced gate rather than a checklist.
 
 ### 6. FIX
 Diagnose with `get_debug_output`, the measured-vs-target delta from VERIFY, and

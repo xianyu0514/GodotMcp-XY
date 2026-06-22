@@ -5,7 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **205 MCP tools** across 6 categories (30 core, 173 advanced) plus 2 always-on **meta**
+- **206 MCP tools** across 6 categories (30 core, 174 advanced) plus 2 always-on **meta**
   tools (`list_tool_catalog`, `enable_tools`) for on-demand tool discovery, classified by
   `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30. The MCP `initialize` response
   carries an `instructions` field describing the lazy-loading workflow, so compatible clients
@@ -37,6 +37,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   no manual install or command. An optional path field reuses a self-managed binary.
 - **Fix:** the generated stdio config now includes `--editor`, which the `EditorPlugin`
   requires to start in headless mode (the previous snippet never launched the server).
+- **`manage_task_plan`** — a durable task graph + Definition-of-Done store (backed by
+  `TaskPlanStore`) that persists the plan → execute → run → verify → fix loop to versioned
+  JSON (default `res://.mcp/task_plan.json`), so an AI can resume a build across sessions.
+  Supports init/add_task/update_task/set_status/set_dod/get/next/remove_task with dependency
+  and cycle validation, a DoD gate on marking tasks done, and next-actionable + progress
+  queries.
 
 ## 1.0.6
 

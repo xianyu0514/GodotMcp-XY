@@ -46,6 +46,7 @@ runtime is required for the offline path.
 | Verify | tests | `run_project_tests`, `run_project_test`, `list_project_tests` |
 | Verify | visual | `get_editor_screenshot`, `compare_render_screenshots` |
 | Iterate | inspect/fix | `get_debug_output`, `detect_broken_scripts`, `validate_script`, `audit_project_health` |
+| Orchestrate | plan state | `manage_task_plan` (durable task graph + DoD, dependency-ready `next`, progress) |
 
 ## Using a real art / TTS provider (BYO key)
 

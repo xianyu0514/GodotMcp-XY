@@ -11,9 +11,9 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_205_tools_registered():
+func test_all_206_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 205, "Should have exactly 205 tools registered")
+	assert_eq(all_tools.size(), 206, "Should have exactly 206 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
@@ -31,13 +31,17 @@ func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
 	assert_eq(_classifier.get_tool_group("play_and_verify"), "Debug-Advanced", "play_and_verify should be in Debug-Advanced group")
 
+func test_manage_task_plan_is_supplementary_project_advanced():
+	assert_true(_classifier.is_supplementary_tool("manage_task_plan"), "manage_task_plan should be supplementary")
+	assert_eq(_classifier.get_tool_group("manage_task_plan"), "Project-Advanced", "manage_task_plan should be in Project-Advanced group")
+
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
 	assert_eq(core_tools.size(), 30, "Should have exactly 30 core tools")
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 173, "Should have 173 supplementary tools")
+	assert_eq(supp_tools.size(), 174, "Should have 174 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")

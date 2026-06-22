@@ -81,6 +81,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_configure_tileset_layers(server_core)
 	_register_set_tile_collision_polygon(server_core)
 	_register_set_tile_terrain(server_core)
+	_register_manage_task_plan(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -7348,3 +7349,157 @@ func _tool_set_tile_terrain(params: Dictionary) -> Dictionary:
 		"terrain": terrain,
 		"peering_bits_set": peering_set
 	}
+
+# ============================================================================
+# manage_task_plan - durable task graph + Definition-of-Done store
+# ============================================================================
+#
+# Persists the AI production loop's state (plan -> execute -> run -> verify ->
+# fix) to a versioned JSON file (default res://.mcp/task_plan.json) so an agent
+# can resume across sessions instead of re-deriving the plan from chat. All
+# graph logic lives in TaskPlanStore (unit-tested); this handler only validates
+# parameters, loads the plan, dispatches the action and saves the result.
+
+const _TASK_PLAN_DEFAULT_PATH: String = "res://.mcp/task_plan.json"
+const _TASK_PLAN_ACTIONS: Array = ["init", "add_task", "update_task", "set_status", "set_dod", "get", "next", "remove_task"]
+
+func _register_manage_task_plan(server_core: RefCounted) -> void:
+	var tool_name: String = "manage_task_plan"
+	var description: String = "Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default res://.mcp/task_plan.json) so plan -> execute -> run -> verify -> fix survives across sessions. action='init' creates/resets the plan with a goal; 'add_task' appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; 'update_task' edits fields; 'set_status' sets pending/in_progress/blocked/done (refuses 'done' unless every DoD criterion is met, unless force=true); 'set_dod' replaces the criteria list or updates one criterion's met/evidence; 'get' returns the whole graph (or one task) plus progress; 'next' returns dependency-ready tasks, blocked tasks and progress; 'remove_task' deletes a task and strips dangling dependency references."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": _TASK_PLAN_ACTIONS, "description": "Operation to perform."},
+			"plan_path": {"type": "string", "description": "Where the plan JSON lives (res:// or user://). Default res://.mcp/task_plan.json.", "default": _TASK_PLAN_DEFAULT_PATH},
+			"goal": {"type": "string", "description": "action='init': the overall goal/objective for this plan."},
+			"reset": {"type": "boolean", "description": "action='init': discard any existing plan and start empty. Default false.", "default": false},
+			"id": {"type": "string", "description": "Task id. For add_task it is optional (auto 't<N>' when omitted); required for update_task/set_status/set_dod/remove_task and optional for get."},
+			"title": {"type": "string", "description": "Task title (required for add_task)."},
+			"description": {"type": "string", "description": "Task description / the action to perform."},
+			"status": {"type": "string", "enum": TaskPlanStore.VALID_STATUSES, "description": "Task status for add_task/update_task/set_status."},
+			"depends_on": {"type": "array", "items": {"type": "string"}, "description": "Ids this task depends on. Validated for existence and cycles."},
+			"dod": {"type": "array", "description": "Definition-of-Done criteria: strings, or objects {criterion, met, evidence}. For set_dod this replaces the whole list."},
+			"tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags."},
+			"journal": {"type": "string", "description": "A note to append to the task's journal (update_task / set_status)."},
+			"force": {"type": "boolean", "description": "action='set_status': allow marking 'done' even when DoD criteria are unmet. Default false.", "default": false},
+			"index": {"type": "integer", "description": "action='set_dod': index of the criterion to update."},
+			"criterion": {"type": "string", "description": "action='set_dod': criterion text to match (or add) when not using index."},
+			"met": {"type": "boolean", "description": "action='set_dod': whether the targeted criterion is met."},
+			"evidence": {"type": "string", "description": "action='set_dod': evidence string for the targeted criterion."}
+		},
+		"required": ["action"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"action": {"type": "string"},
+			"plan_path": {"type": "string"},
+			"plan": {"type": "object"},
+			"task": {"type": "object"},
+			"tasks": {"type": "array"},
+			"ready": {"type": "array"},
+			"blocked": {"type": "array"},
+			"progress": {"type": "object"},
+			"removed": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_manage_task_plan"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_manage_task_plan(params: Dictionary) -> Dictionary:
+	var action: String = str(params.get("action", "")).strip_edges()
+	if action.is_empty():
+		return {"error": "action is required"}
+	if not (action in _TASK_PLAN_ACTIONS):
+		return {"error": "Invalid action '%s'. Expected one of: %s" % [action, ", ".join(_TASK_PLAN_ACTIONS)]}
+
+	var plan_path: String = str(params.get("plan_path", _TASK_PLAN_DEFAULT_PATH)).strip_edges()
+	if plan_path.is_empty():
+		plan_path = _TASK_PLAN_DEFAULT_PATH
+	if not (plan_path.begins_with("res://") or plan_path.begins_with("user://")):
+		return {"error": "plan_path must be a res:// or user:// path"}
+
+	if action == "init":
+		var store: TaskPlanStore = TaskPlanStore.new()
+		if not bool(params.get("reset", false)) and TaskPlanStore.plan_exists(plan_path):
+			var existing = TaskPlanStore.load_plan(plan_path)
+			if existing is Dictionary and not existing.has("error"):
+				store = TaskPlanStore.new(existing)
+		store.init_plan(str(params.get("goal", "")), bool(params.get("reset", false)))
+		var save_init: Dictionary = TaskPlanStore.save_plan(store.plan, plan_path)
+		if save_init.has("error"):
+			return save_init
+		return {"status": "ok", "action": action, "plan_path": plan_path, "plan": store.plan, "progress": store.progress()}
+
+	# All other actions require an existing plan.
+	var loaded = TaskPlanStore.load_plan(plan_path)
+	if not (loaded is Dictionary) or loaded.has("error"):
+		return loaded if loaded is Dictionary else {"error": "could not load task plan"}
+	var plan_store: TaskPlanStore = TaskPlanStore.new(loaded)
+
+	var result: Dictionary = {}
+	var mutated: bool = true
+	match action:
+		"add_task":
+			result = plan_store.add_task(params)
+		"update_task":
+			var uid: String = str(params.get("id", "")).strip_edges()
+			if uid.is_empty():
+				return {"error": "id is required for update_task"}
+			result = plan_store.update_task(uid, params)
+		"set_status":
+			var sid: String = str(params.get("id", "")).strip_edges()
+			if sid.is_empty():
+				return {"error": "id is required for set_status"}
+			if not params.has("status"):
+				return {"error": "status is required for set_status"}
+			result = plan_store.set_status(sid, str(params["status"]).strip_edges(), bool(params.get("force", false)), str(params.get("journal", "")))
+		"set_dod":
+			var did: String = str(params.get("id", "")).strip_edges()
+			if did.is_empty():
+				return {"error": "id is required for set_dod"}
+			result = plan_store.set_dod(did, params)
+		"get":
+			mutated = false
+			var gid: String = str(params.get("id", "")).strip_edges()
+			if gid.is_empty():
+				result = {"status": "ok", "plan": plan_store.plan, "progress": plan_store.progress()}
+			else:
+				if not plan_store.has_task(gid):
+					return {"error": "task '%s' not found" % gid}
+				result = {"status": "ok", "task": plan_store.get_task(gid), "progress": plan_store.progress()}
+		"next":
+			mutated = false
+			result = plan_store.next_actionable()
+			result["status"] = "ok"
+		"remove_task":
+			var rid: String = str(params.get("id", "")).strip_edges()
+			if rid.is_empty():
+				return {"error": "id is required for remove_task"}
+			result = plan_store.remove_task(rid)
+
+	if result.has("error"):
+		return result
+
+	if mutated:
+		var save_result: Dictionary = TaskPlanStore.save_plan(plan_store.plan, plan_path)
+		if save_result.has("error"):
+			return save_result
+		result["progress"] = plan_store.progress()
+
+	result["action"] = action
+	result["plan_path"] = plan_path
+	return result
