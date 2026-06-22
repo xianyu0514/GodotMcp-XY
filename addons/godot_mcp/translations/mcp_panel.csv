@@ -138,7 +138,7 @@ ui.copy,Copy,Copy,复制
 ui.public_endpoint,Public MCP endpoint,Public MCP endpoint,公网 MCP 地址
 ui.public_endpoint_hint,Ready to use — paste this into any remote MCP client.,Ready to use — paste this into any remote MCP client.,可直接使用 —— 粘贴到任意远程 MCP 客户端即可。
 ui.section_remote,Remote / Cloud access,Remote / Cloud access,远程 / 云端访问
-ui.remote_hint,"Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","用免费隧道（如 Cloudflare）把本地服务器暴露到公网。在下方粘贴公网地址即可生成远程客户端配置。若端点可公开访问，请先启用鉴权令牌。"
+ui.remote_hint,"Expose this server publicly with a free tunnel. Enable an auth token if it's reachable from the internet.","Expose this server publicly with a free tunnel. Enable an auth token if it's reachable from the internet.","用免费隧道把服务器暴露到公网。如可被公网访问，请先启用鉴权令牌。"
 ui.remote_url,Public URL,Public URL,公网地址
 ui.remote_url_placeholder,https://your-tunnel.trycloudflare.com,https://your-tunnel.trycloudflare.com,https://your-tunnel.trycloudflare.com
 ui.remote_copy_http,Copy HTTP config,Copy HTTP config,复制 HTTP 配置
@@ -146,10 +146,8 @@ ui.remote_copy_bridge,Copy Claude (mcp-remote),Copy Claude (mcp-remote),复制 C
 ui.remote_copy_tunnel,Copy tunnel command,Copy tunnel command,复制隧道命令
 ui.tunnel_start,Start free tunnel,Start free tunnel,启动免费隧道
 ui.tunnel_stop,Stop tunnel,Stop tunnel,停止隧道
-ui.tunnel_binary,cloudflared path (optional),cloudflared path (optional),cloudflared 路径（可选）
-ui.tunnel_binary_placeholder,Leave blank to auto-download the official binary,Leave blank to auto-download the official binary,留空则自动下载官方二进制
 ui.tunnel_idle,Tunnel not running.,Tunnel not running.,隧道未运行。
-ui.tunnel_unsupported,No prebuilt cloudflared for this platform; set a path manually.,No prebuilt cloudflared for this platform; set a path manually.,该平台无预编译 cloudflared，请手动指定路径。
+ui.tunnel_unsupported,No prebuilt cloudflared for this platform.,No prebuilt cloudflared for this platform.,该平台暂无预编译 cloudflared。
 ui.tunnel_downloading,Downloading cloudflared (first run only)...,Downloading cloudflared (first run only)...,正在下载 cloudflared（仅首次）...
 ui.tunnel_download_failed,Download failed; check your connection.,Download failed; check your connection.,下载失败，请检查网络连接。
 ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
