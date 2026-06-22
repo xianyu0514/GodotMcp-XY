@@ -49,6 +49,15 @@ var _remote_url_edit: LineEdit = null
 var _remote_copy_http_button: Button = null
 var _remote_copy_bridge_button: Button = null
 var _remote_copy_tunnel_button: Button = null
+var _tunnel_start_button: Button = null
+var _tunnel_stop_button: Button = null
+var _tunnel_status_label: Label = null
+var _tunnel_binary_label: Label = null
+var _tunnel_binary_edit: LineEdit = null
+var _tunnel_manager: MCPTunnelManager = null
+var _tunnel_http: HTTPRequest = null
+var _tunnel_poll_timer: Timer = null
+var _tunnel_platform_key: String = ""
 var _status_dot: Panel = null
 var _section_titles: Array = []
 
@@ -106,6 +115,10 @@ func _exit_tree() -> void:
 	_flush_log_to_file()
 	if _debounce_timer:
 		_debounce_timer.stop()
+	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
+		_tunnel_poll_timer.stop()
+	if _tunnel_manager and _tunnel_manager.is_running():
+		_tunnel_manager.stop()
 
 func set_plugin(plugin: EditorPlugin) -> void:
 	_plugin = plugin
@@ -378,6 +391,34 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_remote_hint_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
 	body.add_child(_remote_hint_label)
 
+	var tunnel_buttons: HBoxContainer = HBoxContainer.new()
+	tunnel_buttons.add_theme_constant_override("separation", 8)
+	body.add_child(tunnel_buttons)
+
+	_tunnel_start_button = Button.new()
+	_tunnel_start_button.text = _tr("ui.tunnel_start")
+	_tunnel_start_button.pressed.connect(_on_tunnel_start_pressed)
+	tunnel_buttons.add_child(_tunnel_start_button)
+
+	_tunnel_stop_button = Button.new()
+	_tunnel_stop_button.text = _tr("ui.tunnel_stop")
+	_tunnel_stop_button.disabled = true
+	_tunnel_stop_button.pressed.connect(_on_tunnel_stop_pressed)
+	tunnel_buttons.add_child(_tunnel_stop_button)
+
+	_tunnel_status_label = Label.new()
+	_tunnel_status_label.text = _tr("ui.tunnel_idle")
+	_tunnel_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_tunnel_status_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
+	body.add_child(_tunnel_status_label)
+
+	_tunnel_binary_label = Label.new()
+	_tunnel_binary_label.text = _tr("ui.tunnel_binary")
+	_tunnel_binary_edit = LineEdit.new()
+	_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
+	_tunnel_binary_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_settings_row(body, _tunnel_binary_label, _tunnel_binary_edit, true)
+
 	_remote_url_label = Label.new()
 	_remote_url_label.text = _tr("ui.remote_url")
 	_remote_url_edit = LineEdit.new()
@@ -435,6 +476,158 @@ func _on_remote_copy_bridge_pressed() -> void:
 func _on_remote_copy_tunnel_pressed() -> void:
 	DisplayServer.clipboard_set(MCPClientConfig.cloudflared_command(_current_port()))
 	_flash_button(_remote_copy_tunnel_button, "ui.remote_copy_tunnel")
+
+func _set_tunnel_status(key: String) -> void:
+	if _tunnel_status_label:
+		_tunnel_status_label.text = _tr(key)
+
+func _override_binary_path() -> String:
+	if _tunnel_binary_edit:
+		return _tunnel_binary_edit.text.strip_edges()
+	return ""
+
+func _on_tunnel_start_pressed() -> void:
+	if _tunnel_manager == null:
+		_tunnel_manager = MCPTunnelManager.new()
+	if _tunnel_manager.is_running():
+		_set_tunnel_status("ui.tunnel_already")
+		return
+
+	# Advanced override: a user-supplied cloudflared launches directly, no download.
+	var override: String = _override_binary_path()
+	if not override.is_empty():
+		if not FileAccess.file_exists(override):
+			_set_tunnel_status("ui.tunnel_start_failed")
+			return
+		_launch_tunnel(override)
+		return
+
+	_tunnel_platform_key = MCPCloudflaredProvider.detect_platform_key()
+	if _tunnel_platform_key.is_empty():
+		_set_tunnel_status("ui.tunnel_unsupported")
+		return
+
+	if MCPCloudflaredProvider.is_installed(_tunnel_platform_key):
+		var bin: String = ProjectSettings.globalize_path(MCPCloudflaredProvider.binary_path(_tunnel_platform_key))
+		_launch_tunnel(bin)
+		return
+
+	_download_cloudflared(_tunnel_platform_key)
+
+func _download_cloudflared(key: String) -> void:
+	var url: String = MCPCloudflaredProvider.download_url(key)
+	if url.is_empty():
+		_set_tunnel_status("ui.tunnel_unsupported")
+		return
+	DirAccess.make_dir_recursive_absolute(MCPCloudflaredProvider.INSTALL_DIR)
+	if _tunnel_http == null or not is_instance_valid(_tunnel_http):
+		_tunnel_http = HTTPRequest.new()
+		add_child(_tunnel_http)
+		_tunnel_http.request_completed.connect(_on_tunnel_download_completed)
+	_tunnel_http.download_file = MCPCloudflaredProvider.download_target(key)
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = true
+	_set_tunnel_status("ui.tunnel_downloading")
+	var err: int = _tunnel_http.request(url)
+	if err != OK:
+		if _tunnel_start_button:
+			_tunnel_start_button.disabled = false
+		_set_tunnel_status("ui.tunnel_download_failed")
+
+func _on_tunnel_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = false
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		_set_tunnel_status("ui.tunnel_download_failed")
+		return
+	var key: String = _tunnel_platform_key
+	var target: String = MCPCloudflaredProvider.download_target(key)
+	if not MCPCloudflaredProvider.verify_checksum(target, key):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(target))
+		_set_tunnel_status("ui.tunnel_verify_failed")
+		return
+	var bin: String = _install_binary(key, target)
+	if bin.is_empty():
+		_set_tunnel_status("ui.tunnel_start_failed")
+		return
+	_launch_tunnel(bin)
+
+## Moves/extracts the verified download into the runnable binary path and makes it
+## executable. Returns the absolute binary path, or "" on failure.
+func _install_binary(key: String, target: String) -> String:
+	var bin_rel: String = MCPCloudflaredProvider.binary_path(key)
+	var bin_abs: String = ProjectSettings.globalize_path(bin_rel)
+	var target_abs: String = ProjectSettings.globalize_path(target)
+	if MCPCloudflaredProvider.is_archive(key):
+		var dir_abs: String = ProjectSettings.globalize_path(MCPCloudflaredProvider.INSTALL_DIR)
+		var out: Array = []
+		var code: int = OS.execute("tar", PackedStringArray(["-xzf", target_abs, "-C", dir_abs]), out, true)
+		if code != 0 or not FileAccess.file_exists(bin_rel):
+			return ""
+	else:
+		if FileAccess.file_exists(bin_rel):
+			DirAccess.remove_absolute(bin_abs)
+		var derr: int = DirAccess.rename_absolute(target_abs, bin_abs)
+		if derr != OK:
+			return ""
+	if OS.get_name() != "Windows":
+		OS.execute("chmod", PackedStringArray(["+x", bin_abs]), [], true)
+	return bin_abs
+
+func _launch_tunnel(binary_abs: String) -> void:
+	if _tunnel_manager == null:
+		_tunnel_manager = MCPTunnelManager.new()
+	var err: int = _tunnel_manager.start(binary_abs, _current_port())
+	if err == ERR_ALREADY_IN_USE:
+		_set_tunnel_status("ui.tunnel_already")
+		return
+	if err != OK:
+		_set_tunnel_status("ui.tunnel_start_failed")
+		return
+	_set_tunnel_status("ui.tunnel_starting")
+	if _tunnel_stop_button:
+		_tunnel_stop_button.disabled = false
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = true
+	if _tunnel_poll_timer == null or not is_instance_valid(_tunnel_poll_timer):
+		_tunnel_poll_timer = Timer.new()
+		_tunnel_poll_timer.wait_time = 1.0
+		_tunnel_poll_timer.timeout.connect(_on_tunnel_poll_timeout)
+		add_child(_tunnel_poll_timer)
+	_tunnel_poll_timer.start()
+
+func _on_tunnel_poll_timeout() -> void:
+	if _tunnel_manager == null:
+		return
+	if not _tunnel_manager.is_running():
+		_tunnel_poll_timer.stop()
+		_reset_tunnel_buttons()
+		if _tunnel_manager.get_public_url().is_empty():
+			_set_tunnel_status("ui.tunnel_exited")
+		return
+	var url: String = _tunnel_manager.poll()
+	if not url.is_empty():
+		if _remote_url_edit:
+			_remote_url_edit.text = url
+		_set_tunnel_status_live(url)
+
+func _set_tunnel_status_live(url: String) -> void:
+	if _tunnel_status_label:
+		_tunnel_status_label.text = _trf("ui.tunnel_live", [url])
+
+func _reset_tunnel_buttons() -> void:
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = false
+	if _tunnel_stop_button:
+		_tunnel_stop_button.disabled = true
+
+func _on_tunnel_stop_pressed() -> void:
+	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
+		_tunnel_poll_timer.stop()
+	if _tunnel_manager:
+		_tunnel_manager.stop()
+	_reset_tunnel_buttons()
+	_set_tunnel_status("ui.tunnel_stopped")
 
 func _build_transport_card(content: VBoxContainer) -> void:
 	_transport_title_label = Label.new()
@@ -1569,6 +1762,14 @@ func _refresh_translations() -> void:
 		_remote_copy_bridge_button.text = _tr("ui.remote_copy_bridge")
 	if _remote_copy_tunnel_button:
 		_remote_copy_tunnel_button.text = _tr("ui.remote_copy_tunnel")
+	if _tunnel_start_button:
+		_tunnel_start_button.text = _tr("ui.tunnel_start")
+	if _tunnel_stop_button:
+		_tunnel_stop_button.text = _tr("ui.tunnel_stop")
+	if _tunnel_binary_label:
+		_tunnel_binary_label.text = _tr("ui.tunnel_binary")
+	if _tunnel_binary_edit:
+		_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
 	if _preset_label:
 		_preset_label.text = _tr("ui.preset_label")
 	if _apply_preset_button:
