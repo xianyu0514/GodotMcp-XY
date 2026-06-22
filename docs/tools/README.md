@@ -51,6 +51,11 @@ switch them on. This keeps the steady-state context to just the core tools plus 
 tool, minimising token/compute cost. See also the
 [task → preset guide](../configuration.md#tool-presets).
 
+**Delivered automatically on connect.** The server returns this workflow in the MCP
+`initialize` response's `instructions` field, so compatible clients inject it into the model's
+system context the moment it connects — no manual prompt or rule file needed. (Clients that
+ignore `instructions` simply don't get the hint; the tools still work the same way.)
+
 ### Enabling advanced tools
 
 - **In the editor:** open the **MCP** dock panel, expand a tool group, and toggle the tools
