@@ -63,8 +63,6 @@ var _remote_copy_tunnel_button: Button = null
 var _tunnel_start_button: Button = null
 var _tunnel_stop_button: Button = null
 var _tunnel_status_label: Label = null
-var _tunnel_binary_label: Label = null
-var _tunnel_binary_edit: LineEdit = null
 var _tunnel_manager: MCPTunnelManager = null
 var _tunnel_http: HTTPRequest = null
 var _tunnel_poll_timer: Timer = null
@@ -457,6 +455,7 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_tunnel_start_button = Button.new()
 	_tunnel_start_button.text = _tr("ui.tunnel_start")
 	_tunnel_start_button.pressed.connect(_on_tunnel_start_pressed)
+	_make_primary_button(_tunnel_start_button)
 	tunnel_buttons.add_child(_tunnel_start_button)
 
 	_tunnel_stop_button = Button.new()
@@ -470,13 +469,6 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_tunnel_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_tunnel_status_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
 	body.add_child(_tunnel_status_label)
-
-	_tunnel_binary_label = Label.new()
-	_tunnel_binary_label.text = _tr("ui.tunnel_binary")
-	_tunnel_binary_edit = LineEdit.new()
-	_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
-	_tunnel_binary_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_settings_row(body, _tunnel_binary_label, _tunnel_binary_edit, true)
 
 	_remote_url_label = Label.new()
 	_remote_url_label.text = _tr("ui.remote_url")
@@ -563,6 +555,25 @@ func _accent_card_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
+func _button_fill_style(bg: Color) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg
+	style.set_corner_radius_all(5)
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 7
+	style.content_margin_bottom = 7
+	return style
+
+## Styles a button as the green primary action (matches the ready-state accent).
+func _make_primary_button(button: Button) -> void:
+	var base: Color = Color(0.30, 0.66, 0.38)
+	button.add_theme_stylebox_override("normal", _button_fill_style(base))
+	button.add_theme_stylebox_override("hover", _button_fill_style(base.lightened(0.10)))
+	button.add_theme_stylebox_override("pressed", _button_fill_style(base.darkened(0.12)))
+	button.add_theme_color_override("font_color", Color(0.96, 1.0, 0.97))
+	button.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+
 ## Reveals/updates the public endpoint card from the current remote base URL.
 func _update_public_endpoint() -> void:
 	if not _public_endpoint_card:
@@ -613,25 +624,11 @@ func _set_tunnel_status(key: String) -> void:
 	if _tunnel_status_label:
 		_tunnel_status_label.text = _tr(key)
 
-func _override_binary_path() -> String:
-	if _tunnel_binary_edit:
-		return _tunnel_binary_edit.text.strip_edges()
-	return ""
-
 func _on_tunnel_start_pressed() -> void:
 	if _tunnel_manager == null:
 		_tunnel_manager = MCPTunnelManager.new()
 	if _tunnel_manager.is_running():
 		_set_tunnel_status("ui.tunnel_already")
-		return
-
-	# Advanced override: a user-supplied cloudflared launches directly, no download.
-	var override: String = _override_binary_path()
-	if not override.is_empty():
-		if not FileAccess.file_exists(override):
-			_set_tunnel_status("ui.tunnel_start_failed")
-			return
-		_launch_tunnel(override)
 		return
 
 	_tunnel_platform_key = MCPCloudflaredProvider.detect_platform_key()
@@ -1934,10 +1931,6 @@ func _refresh_translations() -> void:
 		_tunnel_start_button.text = _tr("ui.tunnel_start")
 	if _tunnel_stop_button:
 		_tunnel_stop_button.text = _tr("ui.tunnel_stop")
-	if _tunnel_binary_label:
-		_tunnel_binary_label.text = _tr("ui.tunnel_binary")
-	if _tunnel_binary_edit:
-		_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
 	if _preset_label:
 		_preset_label.text = _tr("ui.preset_label")
 	if _apply_preset_button:
