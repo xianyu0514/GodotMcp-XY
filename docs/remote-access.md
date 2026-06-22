@@ -21,21 +21,36 @@ Because `cloudflared` (or any tunnel daemon) runs on the **same machine** as the
 connects to `127.0.0.1`. You therefore do **not** need to turn on *Allow remote* — leaving
 the server bound to localhost is fine and more secure; the tunnel is the only public ingress.
 
-## Option A — Cloudflare Quick Tunnel (recommended, no account)
+## Option A — Built-in one-click tunnel (recommended, no account, no install)
 
-1. Install `cloudflared` ([downloads](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)).
-2. Start the MCP server in the panel (HTTP transport, port `9080`).
-3. Run:
+The panel can run a Cloudflare Quick Tunnel for you — you do **not** install anything by hand.
 
-   ```bash
-   cloudflared tunnel --url http://localhost:9080
-   ```
+1. Start the MCP server in the panel (HTTP transport, port `9080`).
+2. Open **Settings → Remote / Cloud access** and click **Start free tunnel**.
+3. On first use the plugin downloads the official, version-pinned `cloudflared` binary for
+   your OS/architecture, **verifies its SHA-256 checksum**, and caches it under `user://`
+   (subsequent runs reuse it — no re-download). It then launches
+   `cloudflared tunnel --url http://localhost:<port>`.
+4. When the tunnel is live the public URL (e.g. `https://random-words-1234.trycloudflare.com`)
+   is detected automatically and filled into the **Public URL** field. Click *Copy HTTP config*
+   (or *Copy Claude (mcp-remote)*) for a ready-to-paste client config.
+5. Click **Stop tunnel** when done; the plugin also stops the tunnel when the editor closes.
 
-   The panel's **Remote / Cloud access** card has a *Copy tunnel command* button that
-   produces this line with your current port already filled in.
-4. `cloudflared` prints a public URL, e.g. `https://random-words-1234.trycloudflare.com`.
-   Paste it into the panel's **Public URL** field and click *Copy HTTP config* (or
-   *Copy Claude (mcp-remote)*) to get a ready-to-paste client config.
+> **Where the binary comes from.** The plugin fetches the official release from
+> `github.com/cloudflare/cloudflared/releases` at a pinned version and refuses to use the
+> file unless its SHA-256 matches the published checksum. Nothing is auto-updated. If you
+> prefer to manage the binary yourself, point the optional *cloudflared path* field at your
+> own install and the plugin will use it directly (offline-friendly).
+
+### Manual fallback
+
+If you'd rather run it yourself, install `cloudflared`
+([downloads](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/))
+and run the command from the *Copy tunnel command* button (your current port is pre-filled):
+
+```bash
+cloudflared tunnel --url http://localhost:9080
+```
 
 Quick Tunnel URLs are **ephemeral** (they change each run). For a stable hostname, create a
 free Cloudflare account and a [named tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).

@@ -28,6 +28,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   into ready-to-paste remote client configs, including an `mcp-remote` bridge config for
   stdio-only clients (Claude Desktop) and a one-click `cloudflared` tunnel command. See
   [Remote & Cloud Access](remote-access.md).
+- **Built-in one-click Cloudflare tunnel** — *Start free tunnel* in the Remote / Cloud
+  access card auto-downloads the official, version-pinned `cloudflared` (SHA-256 verified,
+  cached under `user://`), launches a Quick Tunnel, and auto-fills the detected public URL —
+  no manual install or command. An optional path field reuses a self-managed binary.
 - **Fix:** the generated stdio config now includes `--editor`, which the `EditorPlugin`
   requires to start in headless mode (the previous snippet never launched the server).
 

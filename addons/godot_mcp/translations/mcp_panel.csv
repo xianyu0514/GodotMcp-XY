@@ -136,3 +136,18 @@ ui.remote_url_placeholder,https://your-tunnel.trycloudflare.com,https://your-tun
 ui.remote_copy_http,Copy HTTP config,Copy HTTP config,复制 HTTP 配置
 ui.remote_copy_bridge,Copy Claude (mcp-remote),Copy Claude (mcp-remote),复制 Claude（mcp-remote）配置
 ui.remote_copy_tunnel,Copy tunnel command,Copy tunnel command,复制隧道命令
+ui.tunnel_start,Start free tunnel,Start free tunnel,启动免费隧道
+ui.tunnel_stop,Stop tunnel,Stop tunnel,停止隧道
+ui.tunnel_binary,cloudflared path (optional),cloudflared path (optional),cloudflared 路径（可选）
+ui.tunnel_binary_placeholder,Leave blank to auto-download the official binary,Leave blank to auto-download the official binary,留空则自动下载官方二进制
+ui.tunnel_idle,Tunnel not running.,Tunnel not running.,隧道未运行。
+ui.tunnel_unsupported,No prebuilt cloudflared for this platform; set a path manually.,No prebuilt cloudflared for this platform; set a path manually.,该平台无预编译 cloudflared，请手动指定路径。
+ui.tunnel_downloading,Downloading cloudflared (first run only)...,Downloading cloudflared (first run only)...,正在下载 cloudflared（仅首次）...
+ui.tunnel_download_failed,Download failed; check your connection.,Download failed; check your connection.,下载失败，请检查网络连接。
+ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
+ui.tunnel_starting,Starting tunnel...,Starting tunnel...,正在启动隧道...
+ui.tunnel_start_failed,Could not start cloudflared.,Could not start cloudflared.,无法启动 cloudflared。
+ui.tunnel_live,Tunnel live: %s,Tunnel live: %s,隧道已就绪：%s
+ui.tunnel_exited,Tunnel process exited.,Tunnel process exited.,隧道进程已退出。
+ui.tunnel_stopped,Tunnel stopped.,Tunnel stopped.,隧道已停止。
+ui.tunnel_already,Tunnel already running.,Tunnel already running.,隧道已在运行。
