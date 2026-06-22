@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**70 tools** — 3 core, 67 advanced.
+**71 tools** — 3 core, 68 advanced.
 
 The largest category. Edit-time debugging (logs, debugger sessions, breakpoints, stack frames and variables, profilers) plus a rich **runtime probe** API that inspects and drives a *running* game: live scene tree, node inspection/mutation, expression evaluation, input injection, and animation / audio / shader / theme / tilemap control.
 
@@ -18,7 +18,7 @@ The largest category. Edit-time debugging (logs, debugger sessions, breakpoints,
 | `debug_print` | Core | Print debug messages to the editor console. |
 | `clear_output` | Core | Clear the editor output panel. |
 
-### Debug-Advanced (67)
+### Debug-Advanced (68)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -44,6 +44,7 @@ The largest category. Edit-time debugging (logs, debugger sessions, breakpoints,
 | `evaluate_runtime_expression` | Advanced | Evaluate an expression in the running game context. |
 | `await_runtime_condition` | Advanced | Wait for a condition to be true in the running game. |
 | `assert_runtime_condition` | Advanced | Assert a condition in the running game. |
+| `play_and_verify` | Advanced | Drive the running game through scripted input steps (with waits/screenshots), then evaluate a batch of runtime assertions and return a single pass/fail report. |
 | `get_debug_threads` | Advanced | Return DAP-style debugger threads visible from the active Godot debug session. |
 | `get_debug_state_events` | Advanced | Read recorded debugger break/resume/stop state transitions from the bridge. |
 | `get_debug_output` | Advanced | Read categorized runtime debugger output captured by the editor bridge. |

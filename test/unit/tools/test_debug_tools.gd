@@ -438,3 +438,33 @@ func test_request_key_omits_empty_match_fields():
 	assert_true(key.contains("mcp:runtime_info"), "Key should contain response_messages")
 	# It should NOT end with an extra dangling separator from empty match_fields
 	assert_false(key.ends_with("|"), "Key should not end with |")
+
+# --- play_and_verify tests ---
+
+func test_merge_runtime_params_carries_session_and_timeout():
+	"""_merge_runtime_params should propagate session_id/timeout_ms to sub-tool params"""
+	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var merged: Dictionary = tool._merge_runtime_params({"session_id": 7, "timeout_ms": 1234}, {})
+	assert_eq(merged.get("session_id", -1), 7, "session_id should be carried over")
+	assert_eq(merged.get("timeout_ms", -1), 1234, "timeout_ms should be carried over")
+
+func test_merge_runtime_params_applies_overrides():
+	"""_merge_runtime_params should apply per-call overrides on top of shared fields"""
+	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var merged: Dictionary = tool._merge_runtime_params({"session_id": 3}, {"action_name": "jump", "pressed": true})
+	assert_eq(merged.get("action_name", ""), "jump", "override action_name should be present")
+	assert_eq(merged.get("pressed", false), true, "override pressed should be present")
+	assert_eq(merged.get("session_id", -1), 3, "shared session_id should still be present")
+
+func test_await_real_ms_zero_returns_immediately():
+	"""_await_real_ms(0) should complete without blocking"""
+	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	await tool._await_real_ms(0)
+	assert_true(true, "Awaiting 0ms should return immediately")
+
+func test_play_and_verify_requires_running_session():
+	"""play_and_verify should error cleanly when no runtime probe session is reachable"""
+	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var result: Dictionary = await tool._tool_play_and_verify({"steps": [], "assertions": []})
+	assert_has(result, "error", "Should return an error without a running session")
+	assert_true(str(result.get("error", "")).contains("runtime probe"), "Error should guide user to install the runtime probe")

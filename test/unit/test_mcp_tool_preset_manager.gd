@@ -41,11 +41,11 @@ func test_minimal_core_enables_only_core_tools():
 func test_all_enables_everything():
 	var states: Dictionary = _manager.resolve_preset_states("all", _all_names)
 	assert_eq(_count_enabled(states), _all_names.size(), "all preset should enable every registered tool")
-	assert_eq(_count_enabled(states), 201, "all preset should enable 201 tools")
+	assert_eq(_count_enabled(states), 202, "all preset should enable 202 tools")
 
 func test_debugging_includes_core_plus_debug_advanced():
 	var states: Dictionary = _manager.resolve_preset_states("debugging", _all_names)
-	assert_eq(_count_enabled(states), 97, "debugging = 30 core + 67 Debug-Advanced")
+	assert_eq(_count_enabled(states), 98, "debugging = 30 core + 68 Debug-Advanced")
 	assert_true(states["create_node"], "Core tool should remain enabled")
 	assert_true(states["get_runtime_info"], "Debug-Advanced tool should be enabled")
 	assert_false(states["run_export"], "Unrelated Project-Advanced tool should stay disabled")

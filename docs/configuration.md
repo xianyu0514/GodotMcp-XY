@@ -165,7 +165,7 @@ plus the advanced groups relevant to a workflow:
 | Debugging | core + runtime/debugger tools | Inspecting a running game |
 | QA Automation | core + debug + project (test runners) | Automated test and input flows |
 | Art & Resources | core + resource/scene authoring | Themes, tilesets, materials, resources |
-| All tools | every registered tool (201) | Power users |
+| All tools | every registered tool (202) | Power users |
 
 Presets can be shared across a team:
 

@@ -5,7 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **201 MCP tools** across 6 categories (30 core, 171 advanced), classified by
+- **202 MCP tools** across 6 categories (30 core, 172 advanced), classified by
   `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30.
 - Dual transport: **HTTP/SSE** (default, port `9080`) and **stdio**.
 - **Runtime probe** autoload for inspecting and driving a running game (scene tree, node

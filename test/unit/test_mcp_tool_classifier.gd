@@ -11,9 +11,13 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_201_tools_registered():
+func test_all_202_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 201, "Should have exactly 201 tools registered")
+	assert_eq(all_tools.size(), 202, "Should have exactly 202 tools registered")
+
+func test_play_and_verify_is_supplementary_debug_advanced():
+	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
+	assert_eq(_classifier.get_tool_group("play_and_verify"), "Debug-Advanced", "play_and_verify should be in Debug-Advanced group")
 
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
@@ -21,7 +25,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 171, "Should have 171 supplementary tools")
+	assert_eq(supp_tools.size(), 172, "Should have 172 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")

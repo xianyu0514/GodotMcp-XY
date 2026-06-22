@@ -82,6 +82,7 @@ func _build_classifications() -> void:
 		{"name": "evaluate_runtime_expression", "category": "supplementary", "group": "Debug-Advanced"},
 		{"name": "await_runtime_condition", "category": "supplementary", "group": "Debug-Advanced"},
 		{"name": "assert_runtime_condition", "category": "supplementary", "group": "Debug-Advanced"},
+		{"name": "play_and_verify", "category": "supplementary", "group": "Debug-Advanced"},
 		{"name": "get_project_info", "category": "core", "group": "Project"},
 		{"name": "get_project_settings", "category": "core", "group": "Project"},
 		{"name": "list_project_resources", "category": "core", "group": "Project"},

@@ -145,6 +145,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_runtime_screenshot(server_core)
 	_register_await_runtime_condition(server_core)
 	_register_assert_runtime_condition(server_core)
+	_register_play_and_verify(server_core)
 
 func _on_log_message(level: String, message: String) -> void:
 	var log_entry: String = "[%s] %s" % [level, message]
@@ -2894,6 +2895,176 @@ func _compare_values(actual: String, expected: String, operator: String) -> bool
 		"lte":
 			return float(actual) <= float(expected)
 	return false
+
+func _register_play_and_verify(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"play_and_verify",
+		"Drive the running game through a scripted sequence of input steps (with optional waits and screenshots), then evaluate a batch of runtime assertions, returning a single pass/fail report. Composes simulate_runtime_input_*, assert_runtime_condition and get_runtime_screenshot. Requires the game to be running with the runtime probe installed.",
+		{
+			"type": "object",
+			"properties": {
+				"steps": {
+					"type": "array",
+					"description": "Ordered input steps. Each step may set 'action' (InputMap action name) with optional 'pressed'/'strength', or 'event' (structured InputEvent payload). Optional per-step 'wait_ms' or 'wait_frames' pauses after the input, and 'screenshot' captures a frame after the wait.",
+					"items": {"type": "object"}
+				},
+				"assertions": {
+					"type": "array",
+					"description": "Runtime checks evaluated after all steps. Each item: {expression, node_path?, expected?, operator?, description?, timeout_ms?}. Without 'expected' the expression must be truthy; with 'expected' it is compared using 'operator' (eq/ne/gt/gte/lt/lte).",
+					"items": {"type": "object"}
+				},
+				"settle_ms": {"type": "integer", "default": 0, "description": "Wait this many milliseconds after the last step before evaluating assertions, to let the simulation settle."},
+				"screenshot_dir": {"type": "string", "default": "user://mcp_play_and_verify", "description": "Directory (res:// or user://) where per-step screenshots are written."},
+				"screenshot_format": {"type": "string", "enum": ["png", "jpg"], "default": "jpg"},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 3000}
+			}
+		},
+		Callable(self, "_tool_play_and_verify"),
+		{"type": "object", "properties": {"status": {"type": "string"}, "passed": {"type": "boolean"}, "steps_executed": {"type": "integer"}, "assertions_total": {"type": "integer"}, "assertions_passed": {"type": "integer"}, "assertions": {"type": "array"}, "screenshots": {"type": "array"}, "errors": {"type": "array"}, "runtime_info": {"type": "object"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_play_and_verify(params: Dictionary) -> Dictionary:
+	var steps: Array = params.get("steps", []) if params.get("steps", []) is Array else []
+	var assertions: Array = params.get("assertions", []) if params.get("assertions", []) is Array else []
+	var format: String = String(params.get("screenshot_format", "jpg")).to_lower()
+	if not ["png", "jpg"].has(format):
+		format = "jpg"
+	var ext: String = "png" if format == "png" else "jpg"
+	var screenshot_dir: String = String(params.get("screenshot_dir", "user://mcp_play_and_verify")).strip_edges()
+	while screenshot_dir.ends_with("/"):
+		screenshot_dir = screenshot_dir.substr(0, screenshot_dir.length() - 1)
+
+	# Verify a runtime session with the probe is reachable before doing anything.
+	var info: Dictionary = await _tool_get_runtime_info(_merge_runtime_params(params, {}))
+	if info.has("error") or info.get("status", "") == "no_active_sessions":
+		return {
+			"error": "No running game with a runtime probe is reachable. Run the project and install_runtime_probe first.",
+			"detail": info
+		}
+
+	var errors: Array = []
+	var screenshots: Array = []
+	var executed: int = 0
+
+	for i in steps.size():
+		var step: Dictionary = steps[i] if steps[i] is Dictionary else {}
+		if step.has("action"):
+			var input_params: Dictionary = _merge_runtime_params(params, {
+				"action_name": String(step.get("action", "")),
+				"pressed": bool(step.get("pressed", true))
+			})
+			if step.has("strength"):
+				input_params["strength"] = float(step["strength"])
+			var action_result: Dictionary = await _tool_simulate_runtime_input_action(input_params)
+			if action_result.has("error"):
+				errors.append({"step": i, "phase": "input", "error": action_result["error"]})
+		elif step.has("event"):
+			var event_params: Dictionary = _merge_runtime_params(params, {"event": step["event"]})
+			var event_result: Dictionary = await _tool_simulate_runtime_input_event(event_params)
+			if event_result.has("error"):
+				errors.append({"step": i, "phase": "input", "error": event_result["error"]})
+
+		var wait_ms: int = int(step.get("wait_ms", 0))
+		if step.has("wait_frames"):
+			wait_ms = maxi(wait_ms, int(step["wait_frames"]) * 17)
+		if wait_ms > 0:
+			await _await_real_ms(wait_ms)
+
+		if bool(step.get("screenshot", false)):
+			var save_path: String = "%s/step_%02d.%s" % [screenshot_dir, i, ext]
+			var shot_params: Dictionary = _merge_runtime_params(params, {"save_path": save_path, "format": format})
+			var shot_result: Dictionary = await _tool_get_runtime_screenshot(shot_params)
+			if shot_result.has("error"):
+				errors.append({"step": i, "phase": "screenshot", "error": shot_result["error"]})
+			else:
+				screenshots.append({"step": i, "save_path": save_path, "size": shot_result.get("size", "")})
+		executed += 1
+
+	if int(params.get("settle_ms", 0)) > 0:
+		await _await_real_ms(int(params["settle_ms"]))
+
+	var assertion_results: Array = []
+	var passed_count: int = 0
+	for i in assertions.size():
+		var spec: Dictionary = assertions[i] if assertions[i] is Dictionary else {}
+		var expression: String = String(spec.get("expression", "")).strip_edges()
+		if expression.is_empty():
+			assertion_results.append({"index": i, "passed": false, "error": "Missing 'expression'"})
+			continue
+		var assert_params: Dictionary = _merge_runtime_params(params, {"expression": expression})
+		assert_params["description"] = String(spec.get("description", spec.get("label", expression)))
+		if spec.has("node_path"):
+			assert_params["node_path"] = spec["node_path"]
+		if spec.has("expected"):
+			assert_params["expected"] = spec["expected"]
+		if spec.has("operator"):
+			assert_params["operator"] = spec["operator"]
+		if spec.has("timeout_ms"):
+			assert_params["timeout_ms"] = spec["timeout_ms"]
+		var assert_result: Dictionary = await _tool_assert_runtime_condition(assert_params)
+		var passed: bool
+		if assert_result.has("error"):
+			passed = false
+		elif assert_result.has("passed"):
+			passed = bool(assert_result["passed"])
+		else:
+			passed = assert_result.get("status", "") == "success"
+		if passed:
+			passed_count += 1
+		assertion_results.append({
+			"index": i,
+			"description": assert_params["description"],
+			"expression": expression,
+			"passed": passed,
+			"expected": assert_result.get("expected", null),
+			"actual": assert_result.get("actual", null),
+			"last_value": assert_result.get("last_value", null),
+			"error": assert_result.get("error", null)
+		})
+
+	var end_info: Dictionary = await _tool_get_runtime_info(_merge_runtime_params(params, {}))
+	var all_passed: bool = errors.is_empty() and passed_count == assertion_results.size()
+	return {
+		"status": "success" if all_passed else "failed",
+		"passed": all_passed,
+		"steps_executed": executed,
+		"assertions_total": assertion_results.size(),
+		"assertions_passed": passed_count,
+		"assertions": assertion_results,
+		"screenshots": screenshots,
+		"errors": errors,
+		"runtime_info": {
+			"fps": end_info.get("fps", null),
+			"node_count": end_info.get("node_count", null),
+			"current_scene": end_info.get("current_scene", "")
+		}
+	}
+
+## Awaits roughly `ms` of real time by yielding editor frames, letting the
+## separately-running game process advance while we wait.
+func _await_real_ms(ms: int) -> void:
+	var deadline_ms: int = Time.get_ticks_msec() + maxi(ms, 0)
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	while Time.get_ticks_msec() < deadline_ms:
+		if tree:
+			await tree.process_frame
+		else:
+			OS.delay_msec(16)
+
+## Builds a params dict for a sub-tool, carrying over the shared session/timeout
+## fields and applying any per-call overrides.
+func _merge_runtime_params(params: Dictionary, extra: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	if params.has("session_id"):
+		out["session_id"] = params["session_id"]
+	if params.has("timeout_ms"):
+		out["timeout_ms"] = params["timeout_ms"]
+	for key in extra:
+		out[key] = extra[key]
+	return out
 
 func _request_runtime_probe(command: String, payload: Array, response_messages: Array, params: Dictionary, match_fields: Dictionary = {}) -> Dictionary:
 	var bridge: RefCounted = _get_debugger_bridge()

@@ -1,6 +1,6 @@
 # Tools Reference
 
-The plugin exposes **201 MCP tools** to connected AI clients, split into 6 categories.
+The plugin exposes **202 MCP tools** to connected AI clients, split into 6 categories.
 Every tool is listed — with its tier and description — in the category page it belongs to.
 
 ## Categories
@@ -11,9 +11,9 @@ Every tool is listed — with its tier and description — in the category page 
 | Script | 17 | 7 | 10 | [script-tools.md](script-tools.md) |
 | Scene | 12 | 4 | 8 | [scene-tools.md](scene-tools.md) |
 | Editor | 23 | 4 | 19 | [editor-tools.md](editor-tools.md) |
-| Debug & Runtime | 70 | 3 | 67 | [debug-tools.md](debug-tools.md) |
+| Debug & Runtime | 71 | 3 | 68 | [debug-tools.md](debug-tools.md) |
 | Project | 53 | 3 | 50 | [project-tools.md](project-tools.md) |
-| **Total** | **201** | **30** | **171** | |
+| **Total** | **202** | **30** | **172** | |
 
 ## Core vs. advanced
 
@@ -22,7 +22,7 @@ single source of truth for the tables above.
 
 - **Core** — the 30 highest-value tools. They are enabled automatically and returned by
   `tools/list` as soon as the server starts. The cap is `CORE_MAX_COUNT = 30`.
-- **Advanced** — the remaining 171 tools. They are registered but **disabled by default**
+- **Advanced** — the remaining 172 tools. They are registered but **disabled by default**
   (`enabled = (category == "core")`), so they are hidden from `tools/list` until you turn
   them on. This keeps the default tool surface small and focused for the model.
 

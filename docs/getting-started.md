@@ -134,7 +134,7 @@ description. From there you can drive the editor in natural language:
 >
 > "Create a main menu scene with Play, Options and Quit buttons."
 
-Only the 30 **core** tools are available immediately. To unlock the other 171, enable them
+Only the 30 **core** tools are available immediately. To unlock the other 172, enable them
 in the MCP panel — see the [Tools Reference](tools/README.md#enabling-advanced-tools).
 
 ## Troubleshooting

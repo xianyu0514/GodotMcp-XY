@@ -66,9 +66,9 @@ Tool implementations live in `addons/godot_mcp/tools/`, one file per category:
 | `script_tools_native.gd` | Script | 17 |
 | `scene_tools_native.gd` | Scene | 12 |
 | `editor_tools_native.gd` | Editor | 23 |
-| `debug_tools_native.gd` | Debug & Runtime | 70 |
+| `debug_tools_native.gd` | Debug & Runtime | 71 |
 | `project_tools_native.gd` | Project | 53 |
-| | **Total** | **201** |
+| | **Total** | **202** |
 
 Each tool registers a name, JSON input/output schema, a handler `Callable`, annotations, and
 its category/group. The classifier decides whether a tool ships as **core** (enabled by
