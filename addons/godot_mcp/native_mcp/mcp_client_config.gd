@@ -59,6 +59,16 @@ static func _normalize_base_url(base_url: String) -> String:
 		base = "https://your-tunnel.example.com"
 	return base
 
+## Public MCP endpoint URL for a tunnel base URL: normalized base + `/mcp`.
+## Used by the panel to show a directly usable public address once a tunnel is up.
+static func public_mcp_endpoint(base_url: String) -> String:
+	return _normalize_base_url(base_url) + "/mcp"
+
+## Local MCP endpoint URL for the loopback HTTP server on the given port.
+static func local_mcp_endpoint(port: int) -> String:
+	var effective_port: int = port if port > 0 else DEFAULT_PORT
+	return "http://127.0.0.1:%d/mcp" % effective_port
+
 ## Remote HTTP / SSE transport — same shape as http_config but pointed at a
 ## public base URL (e.g. a Cloudflare/Tailscale tunnel) instead of 127.0.0.1.
 ## For URL-capable clients (Cursor, Cline, …). Append `/mcp` to the base URL.

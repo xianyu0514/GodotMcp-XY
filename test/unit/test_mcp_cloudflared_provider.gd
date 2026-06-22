@@ -30,6 +30,23 @@ func test_download_url_is_pinned_release():
 func test_download_url_unknown_key_is_empty():
 	assert_eq(ProviderScript.download_url("solaris-sparc"), "", "Unknown key should produce no URL")
 
+func test_download_urls_first_is_official_direct():
+	var urls: PackedStringArray = ProviderScript.download_urls("windows-amd64")
+	assert_true(urls.size() >= 1, "Should have at least the official URL")
+	assert_eq(urls[0], ProviderScript.download_url("windows-amd64"), "First candidate should be the direct official URL")
+
+func test_download_urls_appends_mirror_prefixes():
+	var urls: PackedStringArray = ProviderScript.download_urls("windows-amd64")
+	var official: String = ProviderScript.download_url("windows-amd64")
+	assert_eq(urls.size(), ProviderScript.MIRROR_PREFIXES.size(), "One candidate per mirror prefix")
+	for i in range(1, urls.size()):
+		var prefix: String = ProviderScript.MIRROR_PREFIXES[i]
+		assert_eq(urls[i], prefix + official, "Mirror candidate should prepend its prefix to the official URL")
+		assert_true(urls[i].ends_with(official), "Mirror candidate should still target the official asset URL")
+
+func test_download_urls_unknown_key_is_empty():
+	assert_eq(ProviderScript.download_urls("solaris-sparc").size(), 0, "Unknown key should produce no candidates")
+
 func test_checksums_are_64_hex_chars():
 	for key in ProviderScript.ASSETS.keys():
 		var sum: String = ProviderScript.checksum(key)

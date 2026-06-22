@@ -129,6 +129,14 @@ ui.preset_debugging,Debugging,Debugging,调试诊断
 ui.preset_automation_qa,QA Automation,QA Automation,自动化测试
 ui.preset_art_resources,Art & Resources,Art & Resources,资源美术
 ui.preset_all,All tools,All tools,全部工具
+ui.section_connection,Connection,Connection,连接
+ui.connection_hint,"Copy a ready-to-use endpoint or client config for your local MCP server.","Copy a ready-to-use endpoint or client config for your local MCP server.",复制可直接使用的本地 MCP 服务器端点或客户端配置。
+ui.local_endpoint,Local endpoint,Local endpoint,本地地址
+ui.client_config,Client config,Client config,客户端配置
+ui.endpoint_stdio,stdio (command-based — no URL),stdio (command-based — no URL),stdio（命令行启动，无地址）
+ui.copy,Copy,Copy,复制
+ui.public_endpoint,Public MCP endpoint,Public MCP endpoint,公网 MCP 地址
+ui.public_endpoint_hint,Ready to use — paste this into any remote MCP client.,Ready to use — paste this into any remote MCP client.,可直接使用 —— 粘贴到任意远程 MCP 客户端即可。
 ui.section_remote,Remote / Cloud access,Remote / Cloud access,远程 / 云端访问
 ui.remote_hint,"Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","Expose this local server over the internet with a free tunnel (e.g. Cloudflare). Paste the public URL below to generate a remote client config. Enable an auth token first if the endpoint is reachable publicly.","用免费隧道（如 Cloudflare）把本地服务器暴露到公网。在下方粘贴公网地址即可生成远程客户端配置。若端点可公开访问，请先启用鉴权令牌。"
 ui.remote_url,Public URL,Public URL,公网地址

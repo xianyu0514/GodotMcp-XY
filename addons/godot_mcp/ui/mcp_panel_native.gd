@@ -37,11 +37,22 @@ var _language_label: Label = null
 var _refresh_tools_button: Button = null
 var _open_log_button: Button = null
 var _clear_log_button: Button = null
-var _copy_url_button: Button = null
 var _copy_config_button: MenuButton = null
 var _self_check_button: Button = null
 var _self_check_http: HTTPRequest = null
 var _self_check_dialog: AcceptDialog = null
+
+var _connection_title_label: Label = null
+var _connection_hint_label: Label = null
+var _local_endpoint_label: Label = null
+var _local_endpoint_edit: LineEdit = null
+var _local_endpoint_copy_button: Button = null
+var _client_config_label: Label = null
+var _public_endpoint_card: PanelContainer = null
+var _public_endpoint_title_label: Label = null
+var _public_endpoint_hint_label: Label = null
+var _public_endpoint_edit: LineEdit = null
+var _public_endpoint_copy_button: Button = null
 var _remote_title_label: Label = null
 var _remote_hint_label: Label = null
 var _remote_url_label: Label = null
@@ -58,6 +69,8 @@ var _tunnel_manager: MCPTunnelManager = null
 var _tunnel_http: HTTPRequest = null
 var _tunnel_poll_timer: Timer = null
 var _tunnel_platform_key: String = ""
+var _tunnel_download_urls: PackedStringArray = []
+var _tunnel_download_index: int = 0
 var _status_dot: Panel = null
 var _section_titles: Array = []
 
@@ -207,21 +220,6 @@ func _create_status_bar() -> Control:
 	_connection_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	bar.add_child(_connection_info_label)
 
-	_copy_url_button = Button.new()
-	_copy_url_button.text = _tr("ui.copy_url")
-	_copy_url_button.flat = true
-	_copy_url_button.pressed.connect(_on_copy_url_pressed)
-	bar.add_child(_copy_url_button)
-
-	_copy_config_button = MenuButton.new()
-	_copy_config_button.text = _tr("ui.copy_config")
-	_copy_config_button.flat = true
-	var config_popup: PopupMenu = _copy_config_button.get_popup()
-	config_popup.add_item(_tr("ui.copy_config_http"), 0)
-	config_popup.add_item(_tr("ui.copy_config_stdio"), 1)
-	config_popup.id_pressed.connect(_on_copy_config_id_pressed)
-	bar.add_child(_copy_config_button)
-
 	_self_check_button = Button.new()
 	_self_check_button.text = _tr("ui.self_check")
 	_self_check_button.flat = true
@@ -258,18 +256,9 @@ func _dot_style(color: Color) -> StyleBoxFlat:
 	style.set_corner_radius_all(5)
 	return style
 
-func _on_copy_url_pressed() -> void:
-	var port: int = 9080
-	if _plugin and _plugin.get("http_port") != null:
-		port = _plugin.http_port
-	elif _http_port_spin:
-		port = int(_http_port_spin.value)
-	DisplayServer.clipboard_set("http://127.0.0.1:%d/mcp" % port)
-	if _copy_url_button:
-		_copy_url_button.text = _tr("ui.copied")
-		await get_tree().create_timer(1.2).timeout
-		if is_instance_valid(_copy_url_button):
-			_copy_url_button.text = _tr("ui.copy_url")
+func _on_copy_local_endpoint_pressed() -> void:
+	DisplayServer.clipboard_set(MCPClientConfig.local_mcp_endpoint(_current_port()))
+	_flash_button(_local_endpoint_copy_button, "ui.copy")
 
 func _current_port() -> int:
 	var port: int = 9080
@@ -371,6 +360,7 @@ func _create_settings_tab() -> VBoxContainer:
 	margin.add_child(content)
 
 	_section_titles.clear()
+	_build_connection_card(content)
 	_build_transport_card(content)
 	_build_behavior_card(content)
 	_build_security_card(content)
@@ -378,6 +368,75 @@ func _create_settings_tab() -> VBoxContainer:
 	_build_general_card(content)
 
 	return tab
+
+func _build_connection_card(content: VBoxContainer) -> void:
+	_connection_title_label = Label.new()
+	_connection_title_label.text = _tr("ui.section_connection")
+	var body: VBoxContainer = _settings_card(content, _connection_title_label)
+	_register_section_title(_connection_title_label, "ui.section_connection")
+
+	_connection_hint_label = Label.new()
+	_connection_hint_label.text = _tr("ui.connection_hint")
+	_connection_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_connection_hint_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
+	body.add_child(_connection_hint_label)
+
+	_local_endpoint_label = Label.new()
+	_local_endpoint_label.text = _tr("ui.local_endpoint")
+	_local_endpoint_edit = _make_readonly_url_edit()
+	_local_endpoint_copy_button = Button.new()
+	_local_endpoint_copy_button.text = _tr("ui.copy")
+	_local_endpoint_copy_button.pressed.connect(_on_copy_local_endpoint_pressed)
+	_build_url_row(body, _local_endpoint_label, _local_endpoint_edit, _local_endpoint_copy_button)
+
+	_client_config_label = Label.new()
+	_client_config_label.text = _tr("ui.client_config")
+	_copy_config_button = MenuButton.new()
+	_copy_config_button.text = _tr("ui.copy_config")
+	_copy_config_button.flat = false
+	var config_popup: PopupMenu = _copy_config_button.get_popup()
+	config_popup.add_item(_tr("ui.copy_config_http"), 0)
+	config_popup.add_item(_tr("ui.copy_config_stdio"), 1)
+	config_popup.id_pressed.connect(_on_copy_config_id_pressed)
+	_settings_row(body, _client_config_label, _copy_config_button, false)
+
+	_update_local_endpoint()
+
+## Read-only LineEdit styled as a copyable address field (text stays selectable).
+func _make_readonly_url_edit() -> LineEdit:
+	var edit: LineEdit = LineEdit.new()
+	edit.editable = false
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	edit.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	edit.add_theme_color_override("font_uneditable_color", Color(0.85, 0.9, 1.0))
+	return edit
+
+## Row layout: label + read-only address field that expands + copy button.
+func _build_url_row(parent: VBoxContainer, label: Label, edit: LineEdit, copy_button: Button) -> void:
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	parent.add_child(row)
+
+	label.custom_minimum_size = Vector2(120, 0)
+	label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
+	row.add_child(label)
+
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(edit)
+	row.add_child(copy_button)
+
+## Sets the local endpoint field to the current HTTP URL, or a stdio note.
+func _update_local_endpoint() -> void:
+	if not _local_endpoint_edit:
+		return
+	if _current_transport() == "http":
+		_local_endpoint_edit.text = MCPClientConfig.local_mcp_endpoint(_current_port())
+		if _local_endpoint_copy_button:
+			_local_endpoint_copy_button.disabled = false
+	else:
+		_local_endpoint_edit.text = _tr("ui.endpoint_stdio")
+		if _local_endpoint_copy_button:
+			_local_endpoint_copy_button.disabled = true
 
 func _build_remote_card(content: VBoxContainer) -> void:
 	_remote_title_label = Label.new()
@@ -424,7 +483,10 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_remote_url_edit = LineEdit.new()
 	_remote_url_edit.placeholder_text = _tr("ui.remote_url_placeholder")
 	_remote_url_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_remote_url_edit.text_changed.connect(_on_remote_url_changed)
 	_settings_row(body, _remote_url_label, _remote_url_edit, true)
+
+	_build_public_endpoint_card(body)
 
 	var buttons: HBoxContainer = HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 8)
@@ -449,6 +511,76 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_remote_copy_tunnel_button.flat = true
 	_remote_copy_tunnel_button.pressed.connect(_on_remote_copy_tunnel_pressed)
 	buttons.add_child(_remote_copy_tunnel_button)
+
+## Highlighted, auto-revealed card showing the ready-to-use public MCP endpoint
+## (tunnel base + /mcp). Hidden until a public URL is available.
+func _build_public_endpoint_card(parent: VBoxContainer) -> void:
+	_public_endpoint_card = PanelContainer.new()
+	_public_endpoint_card.add_theme_stylebox_override("panel", _accent_card_style())
+	_public_endpoint_card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_public_endpoint_card.visible = false
+	parent.add_child(_public_endpoint_card)
+
+	var box: VBoxContainer = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	_public_endpoint_card.add_child(box)
+
+	_public_endpoint_title_label = Label.new()
+	_public_endpoint_title_label.text = _tr("ui.public_endpoint")
+	_public_endpoint_title_label.add_theme_font_size_override("font_size", 13)
+	_public_endpoint_title_label.add_theme_color_override("font_color", Color(0.5, 0.86, 0.55))
+	box.add_child(_public_endpoint_title_label)
+
+	var row: HBoxContainer = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	box.add_child(row)
+
+	_public_endpoint_edit = _make_readonly_url_edit()
+	_public_endpoint_edit.add_theme_color_override("font_color", Color(0.7, 0.96, 0.74))
+	_public_endpoint_edit.add_theme_color_override("font_uneditable_color", Color(0.7, 0.96, 0.74))
+	row.add_child(_public_endpoint_edit)
+
+	_public_endpoint_copy_button = Button.new()
+	_public_endpoint_copy_button.text = _tr("ui.copy")
+	_public_endpoint_copy_button.pressed.connect(_on_copy_public_endpoint_pressed)
+	row.add_child(_public_endpoint_copy_button)
+
+	_public_endpoint_hint_label = Label.new()
+	_public_endpoint_hint_label.text = _tr("ui.public_endpoint_hint")
+	_public_endpoint_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_public_endpoint_hint_label.add_theme_color_override("font_color", Color(0.62, 0.78, 0.64))
+	box.add_child(_public_endpoint_hint_label)
+
+func _accent_card_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.36, 0.78, 0.42, 0.12)
+	style.border_color = Color(0.36, 0.78, 0.42, 0.55)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 12
+	style.content_margin_bottom = 12
+	return style
+
+## Reveals/updates the public endpoint card from the current remote base URL.
+func _update_public_endpoint() -> void:
+	if not _public_endpoint_card:
+		return
+	var base: String = _remote_base_url().strip_edges()
+	if base.is_empty():
+		_public_endpoint_card.visible = false
+		return
+	_public_endpoint_card.visible = true
+	if _public_endpoint_edit:
+		_public_endpoint_edit.text = MCPClientConfig.public_mcp_endpoint(base)
+
+func _on_remote_url_changed(_text: String) -> void:
+	_update_public_endpoint()
+
+func _on_copy_public_endpoint_pressed() -> void:
+	DisplayServer.clipboard_set(MCPClientConfig.public_mcp_endpoint(_remote_base_url()))
+	_flash_button(_public_endpoint_copy_button, "ui.copy")
 
 func _flash_button(button: Button, restore_key: String) -> void:
 	if button == null:
@@ -515,10 +647,11 @@ func _on_tunnel_start_pressed() -> void:
 	_download_cloudflared(_tunnel_platform_key)
 
 func _download_cloudflared(key: String) -> void:
-	var url: String = MCPCloudflaredProvider.download_url(key)
-	if url.is_empty():
+	_tunnel_download_urls = MCPCloudflaredProvider.download_urls(key)
+	if _tunnel_download_urls.is_empty():
 		_set_tunnel_status("ui.tunnel_unsupported")
 		return
+	_tunnel_download_index = 0
 	DirAccess.make_dir_recursive_absolute(MCPCloudflaredProvider.INSTALL_DIR)
 	if _tunnel_http == null or not is_instance_valid(_tunnel_http):
 		_tunnel_http = HTTPRequest.new()
@@ -527,25 +660,38 @@ func _download_cloudflared(key: String) -> void:
 	_tunnel_http.download_file = MCPCloudflaredProvider.download_target(key)
 	if _tunnel_start_button:
 		_tunnel_start_button.disabled = true
-	_set_tunnel_status("ui.tunnel_downloading")
-	var err: int = _tunnel_http.request(url)
-	if err != OK:
-		if _tunnel_start_button:
-			_tunnel_start_button.disabled = false
-		_set_tunnel_status("ui.tunnel_download_failed")
+	_request_tunnel_download()
 
-func _on_tunnel_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+## Requests the current candidate URL (official first, then mirrors).
+func _request_tunnel_download() -> void:
+	_set_tunnel_status("ui.tunnel_downloading")
+	var err: int = _tunnel_http.request(_tunnel_download_urls[_tunnel_download_index])
+	if err != OK:
+		_advance_or_fail_download("ui.tunnel_download_failed")
+
+## Tries the next mirror; once candidates are exhausted, surfaces the last
+## failure reason and re-enables the start button.
+func _advance_or_fail_download(fail_status_key: String) -> void:
+	_tunnel_download_index += 1
+	if _tunnel_download_index < _tunnel_download_urls.size():
+		_request_tunnel_download()
+		return
 	if _tunnel_start_button:
 		_tunnel_start_button.disabled = false
+	_set_tunnel_status(fail_status_key)
+
+func _on_tunnel_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
-		_set_tunnel_status("ui.tunnel_download_failed")
+		_advance_or_fail_download("ui.tunnel_download_failed")
 		return
 	var key: String = _tunnel_platform_key
 	var target: String = MCPCloudflaredProvider.download_target(key)
 	if not MCPCloudflaredProvider.verify_checksum(target, key):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(target))
-		_set_tunnel_status("ui.tunnel_verify_failed")
+		_advance_or_fail_download("ui.tunnel_verify_failed")
 		return
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = false
 	var bin: String = _install_binary(key, target)
 	if bin.is_empty():
 		_set_tunnel_status("ui.tunnel_start_failed")
@@ -602,13 +748,14 @@ func _on_tunnel_poll_timeout() -> void:
 	if not _tunnel_manager.is_running():
 		_tunnel_poll_timer.stop()
 		_reset_tunnel_buttons()
-		if _tunnel_manager.get_public_url().is_empty():
-			_set_tunnel_status("ui.tunnel_exited")
+		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
+		_set_tunnel_status("ui.tunnel_exited")
 		return
 	var url: String = _tunnel_manager.poll()
 	if not url.is_empty():
 		if _remote_url_edit:
 			_remote_url_edit.text = url
+		_update_public_endpoint()
 		_set_tunnel_status_live(url)
 
 func _set_tunnel_status_live(url: String) -> void:
@@ -624,10 +771,22 @@ func _reset_tunnel_buttons() -> void:
 func _on_tunnel_stop_pressed() -> void:
 	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer.stop()
+	var tunnel_url: String = ""
 	if _tunnel_manager:
+		tunnel_url = _tunnel_manager.get_public_url()
 		_tunnel_manager.stop()
+	_clear_tunnel_url_if_owned(tunnel_url)
 	_reset_tunnel_buttons()
 	_set_tunnel_status("ui.tunnel_stopped")
+
+## Clears the remote URL field (and hides the public endpoint card) only when it
+## still holds the now-dead tunnel-provided URL; manual entries are left intact.
+func _clear_tunnel_url_if_owned(tunnel_url: String) -> void:
+	if tunnel_url.strip_edges().is_empty():
+		return
+	if _remote_url_edit and _remote_url_edit.text.strip_edges() == tunnel_url.strip_edges():
+		_remote_url_edit.text = ""
+		_update_public_endpoint()
 
 func _build_transport_card(content: VBoxContainer) -> void:
 	_transport_title_label = Label.new()
@@ -1079,11 +1238,7 @@ func _update_ui_state() -> void:
 		_start_button.disabled = is_running
 	if _stop_button:
 		_stop_button.disabled = not is_running
-	if _copy_url_button:
-		var mode: String = "stdio"
-		if _plugin and _plugin.get("transport_mode") != null:
-			mode = _plugin.transport_mode
-		_copy_url_button.visible = (mode == "http" and is_running)
+	_update_local_endpoint()
 
 	if _plugin:
 		if _auto_start_check:
@@ -1202,6 +1357,7 @@ func _on_transport_mode_selected(index: int) -> void:
 func _on_http_port_changed(value: float) -> void:
 	if _plugin:
 		_plugin.http_port = int(value)
+	_update_local_endpoint()
 	_debounce_save()
 
 func _on_auth_enabled_toggled(enabled: bool) -> void:
@@ -1738,14 +1894,26 @@ func _refresh_translations() -> void:
 		_open_log_button.text = _tr("ui.open_log")
 	if _clear_log_button:
 		_clear_log_button.text = _tr("ui.clear_log")
-	if _copy_url_button:
-		_copy_url_button.text = _tr("ui.copy_url")
+	if _connection_hint_label:
+		_connection_hint_label.text = _tr("ui.connection_hint")
+	if _local_endpoint_label:
+		_local_endpoint_label.text = _tr("ui.local_endpoint")
+	if _local_endpoint_copy_button:
+		_local_endpoint_copy_button.text = _tr("ui.copy")
+	if _client_config_label:
+		_client_config_label.text = _tr("ui.client_config")
 	if _copy_config_button:
 		_copy_config_button.text = _tr("ui.copy_config")
 		var config_popup: PopupMenu = _copy_config_button.get_popup()
 		if config_popup.item_count >= 2:
 			config_popup.set_item_text(0, _tr("ui.copy_config_http"))
 			config_popup.set_item_text(1, _tr("ui.copy_config_stdio"))
+	if _public_endpoint_title_label:
+		_public_endpoint_title_label.text = _tr("ui.public_endpoint")
+	if _public_endpoint_hint_label:
+		_public_endpoint_hint_label.text = _tr("ui.public_endpoint_hint")
+	if _public_endpoint_copy_button:
+		_public_endpoint_copy_button.text = _tr("ui.copy")
 	if _self_check_button:
 		_self_check_button.text = _tr("ui.self_check")
 	if _remote_title_label:

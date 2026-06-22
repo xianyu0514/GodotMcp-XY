@@ -89,6 +89,30 @@ static func download_url(key: String) -> String:
 		return ""
 	return "%s/%s/%s" % [RELEASE_BASE, VERSION, asset]
 
+## Mirror prefixes tried (in order) when the direct GitHub download fails. Each
+## prefix is prepended to the official release URL; an empty prefix means the
+## direct official URL. The SHA256 checksum is still verified after download, so
+## a tampered or wrong mirror payload is rejected. Mirrors help networks where
+## github.com release downloads are blocked or throttled (e.g. mainland China).
+const MIRROR_PREFIXES: Array = [
+	"",
+	"https://gh-proxy.com/",
+	"https://ghfast.top/",
+]
+
+## Ordered list of candidate download URLs for a platform key: the official
+## GitHub URL first, then each mirror prefix applied to it. Empty when the key
+## is unsupported.
+static func download_urls(key: String) -> PackedStringArray:
+	var urls: PackedStringArray = []
+	var official: String = download_url(key)
+	if official.is_empty():
+		return urls
+	for prefix in MIRROR_PREFIXES:
+		var p: String = String(prefix)
+		urls.append(official if p.is_empty() else p + official)
+	return urls
+
 ## True when the asset is a gzipped tarball that must be extracted (macOS).
 static func is_archive(key: String) -> bool:
 	return asset_name(key).ends_with(".tgz")
