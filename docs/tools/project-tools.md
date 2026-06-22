@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**53 tools** — 3 core, 50 advanced.
+**54 tools** — 3 core, 51 advanced.
 
 Project-level tools: project info and settings (read and write), resource creation and property editing, input map and autoload management, global-class / ClassDB metadata, the test runner, health and dependency audits, Godot 4.7 migration scanning/fixes, and asset authoring (themes, gradients, drawable textures, animations, TileSets, PCK packing).
 

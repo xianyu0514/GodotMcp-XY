@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**2 tools** — always on (a dedicated `meta` category, separate from the 30 core / 172 advanced split).
+**2 tools** — always on (a dedicated `meta` category, separate from the 30 core / 173 advanced split).
 
 These tools power **lazy tool loading**: the server exposes only a small default set (~30 core tools plus these 2 meta tools) so `tools/list` stays small and token-cheap, while the full toolset remains reachable on demand. The model discovers what it needs with `list_tool_catalog`, then switches it on with `enable_tools`.
 
