@@ -96,6 +96,22 @@ func test_remote_stdio_bridge_without_token_omits_header():
 	var args: Array = data["mcpServers"]["godot-mcp"]["args"]
 	assert_false("--header" in args, "No token should omit the --header flag")
 
+func test_public_mcp_endpoint_appends_mcp():
+	var url: String = MCPClientConfigScript.public_mcp_endpoint("https://abc.trycloudflare.com")
+	assert_eq(url, "https://abc.trycloudflare.com/mcp", "Public endpoint should be base + /mcp")
+
+func test_public_mcp_endpoint_trims_trailing_slash():
+	var url: String = MCPClientConfigScript.public_mcp_endpoint("https://abc.trycloudflare.com/")
+	assert_eq(url, "https://abc.trycloudflare.com/mcp", "Trailing slash should not double up before /mcp")
+
+func test_local_mcp_endpoint_uses_port():
+	var url: String = MCPClientConfigScript.local_mcp_endpoint(12345)
+	assert_eq(url, "http://127.0.0.1:12345/mcp", "Local endpoint should embed the given port and /mcp path")
+
+func test_local_mcp_endpoint_falls_back_to_default_port():
+	var url: String = MCPClientConfigScript.local_mcp_endpoint(0)
+	assert_eq(url, "http://127.0.0.1:9080/mcp", "Non-positive port should fall back to default 9080")
+
 func test_cloudflared_command_uses_port():
 	var cmd: String = MCPClientConfigScript.cloudflared_command(9080)
 	assert_eq(cmd, "cloudflared tunnel --url http://localhost:9080", "Command should expose the local HTTP port")
