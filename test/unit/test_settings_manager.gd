@@ -28,6 +28,16 @@ func test_load_settings_returns_defaults():
 	assert_eq(settings["rate_limit"], 1000, "Default rate_limit should be 1000")
 	assert_eq(settings["language"], "en", "Default language should be 'en'")
 
+func test_default_cloudflared_path_is_empty():
+	var settings: Dictionary = _sm.load_settings()
+	assert_true(settings.has("cloudflared_path"), "Default settings should contain 'cloudflared_path'")
+	assert_eq(settings["cloudflared_path"], "", "Default cloudflared_path should be empty")
+
+func test_cloudflared_path_persists():
+	_sm.save_settings({"cloudflared_path": "/opt/cloudflared"})
+	var loaded: Dictionary = _sm.load_settings()
+	assert_eq(loaded["cloudflared_path"], "/opt/cloudflared", "Saved cloudflared_path should round-trip")
+
 func test_save_and_load_settings():
 	var test_settings: Dictionary = {
 		"transport_mode": "stdio",

@@ -16,7 +16,8 @@ const DEFAULT_SETTINGS: Dictionary = {
 	"log_level": 2,
 	"security_level": 1,
 	"rate_limit": 1000,
-	"language": "en"
+	"language": "en",
+	"cloudflared_path": ""
 }
 
 func _init() -> void:

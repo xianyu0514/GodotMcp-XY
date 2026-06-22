@@ -486,6 +486,7 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_tunnel_binary_edit = LineEdit.new()
 	_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
 	_tunnel_binary_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tunnel_binary_edit.text_changed.connect(_on_tunnel_binary_changed)
 	_tunnel_binary_row.add_child(_tunnel_binary_edit)
 	_tunnel_binary_row.visible = MCPCloudflaredProvider.detect_platform_key().is_empty()
 
@@ -647,6 +648,9 @@ func _override_binary_path() -> String:
 	if _tunnel_binary_edit:
 		return _tunnel_binary_edit.text.strip_edges()
 	return ""
+
+func _on_tunnel_binary_changed(_text: String) -> void:
+	_debounce_save()
 
 func _on_tunnel_start_pressed() -> void:
 	if _tunnel_manager == null:
@@ -2042,6 +2046,8 @@ func _load_settings() -> void:
 	_log_level_option.select(s.log_level)
 	_security_level_option.select(s.security_level)
 	_rate_limit_spin.value = s.rate_limit
+	if _tunnel_binary_edit:
+		_tunnel_binary_edit.text = s.cloudflared_path
 	if _translation_manager and s.language != _translation_manager.get_locale():
 		_translation_manager.set_locale(s.language)
 		_refresh_translations()
@@ -2068,7 +2074,8 @@ func _save_settings() -> void:
 		"log_level": _log_level_option.selected if _log_level_option else 2,
 		"security_level": _security_level_option.selected if _security_level_option else 1,
 		"rate_limit": int(_rate_limit_spin.value) if _rate_limit_spin else 1000,
-		"language": _translation_manager.get_locale() if _translation_manager else "en"
+		"language": _translation_manager.get_locale() if _translation_manager else "en",
+		"cloudflared_path": _tunnel_binary_edit.text if _tunnel_binary_edit else ""
 	}
 	_settings_manager.save_settings(settings)
 
