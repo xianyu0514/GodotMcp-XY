@@ -17,7 +17,10 @@ const DEFAULT_SETTINGS: Dictionary = {
 	"security_level": 1,
 	"rate_limit": 1000,
 	"language": "en",
-	"cloudflared_path": ""
+	"cloudflared_path": "",
+	"asset_provider_preset": "",
+	"asset_provider_api_key_env": "",
+	"asset_provider_endpoint": ""
 }
 
 func _init() -> void:

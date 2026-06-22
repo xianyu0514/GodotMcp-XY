@@ -159,3 +159,11 @@ ui.tunnel_live,Tunnel live: %s,Tunnel live: %s,隧道已就绪：%s
 ui.tunnel_exited,Tunnel process exited.,Tunnel process exited.,隧道进程已退出。
 ui.tunnel_stopped,Tunnel stopped.,Tunnel stopped.,隧道已停止。
 ui.tunnel_already,Tunnel already running.,Tunnel already running.,隧道已在运行。
+ui.section_asset_provider,Asset Generation,Asset Generation,资产生成
+ui.asset_provider_hint,"Default external provider for generate_asset. The API key is read from the named OS environment variable at request time — only the variable name is stored here, never the key itself. Leave the provider as None to use offline placeholder assets.","Default external provider for generate_asset. The API key is read from the named OS environment variable at request time — only the variable name is stored here, never the key itself. Leave the provider as None to use offline placeholder assets.","generate_asset 默认使用的外部服务商。API 密钥在请求时从指定的系统环境变量读取——此处只保存变量名，绝不保存密钥本身。保持 None 则使用离线占位资产。"
+ui.asset_provider,Provider:,Provider:,服务商：
+ui.asset_provider_none,None (offline placeholder),None (offline placeholder),无（离线占位）
+ui.asset_key_env,API key env var:,API key env var:,API 密钥环境变量：
+ui.asset_key_env_placeholder,e.g. OPENAI_API_KEY (defaults to the preset's variable),e.g. OPENAI_API_KEY (defaults to the preset's variable),如 OPENAI_API_KEY（留空则用预设默认变量）
+ui.asset_endpoint,Endpoint override:,Endpoint override:,接口地址覆盖：
+ui.asset_endpoint_placeholder,Optional — overrides the preset endpoint,Optional — overrides the preset endpoint,可选——覆盖预设的接口地址

@@ -5295,7 +5295,7 @@ static func _asset_seed_color(seed: int, salt: int) -> Color:
 
 func _register_generate_asset(server_core: RefCounted) -> void:
 	var tool_name: String = "generate_asset"
-	var description: String = "Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes, and saves them (returns status 'unconfigured' when no endpoint is set so callers can fall back to placeholders). The result is reimported when an editor interface is available."
+	var description: String = "Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes, and saves them. With provider 'external' pass a 'preset' (openai_image, stability_image, elevenlabs_tts, local_sd_webui) to fill the endpoint/headers/body from a built-in template — the API key is read from an OS env var, never logged — or set endpoint/headers manually; a default preset and key env var can also be configured in the MCP panel. Returns status 'unconfigured' when no endpoint/preset is set so callers can fall back to placeholders. The result is reimported when an editor interface is available."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -5304,6 +5304,7 @@ func _register_generate_asset(server_core: RefCounted) -> void:
 			"prompt": {"type": "string", "description": "Text prompt describing the asset. Seeds deterministic placeholder generation and is sent to external providers."},
 			"resource_path": {"type": "string", "description": "Where to save (res:// or user://). Image: .png/.jpg/.webp. Audio: .tres/.wav."},
 			"provider": {"type": "string", "description": "Generation provider. Default 'placeholder' (offline procedural). 'external' calls an HTTP API.", "enum": ["placeholder", "external"], "default": "placeholder"},
+			"preset": {"type": "string", "description": "External provider preset (provider=external). Fills endpoint/headers/body/response_field from a built-in template; the API key is read from the preset's env var. Explicit endpoint/headers/etc. override the preset. When omitted, the default preset configured in the MCP panel is used.", "enum": ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui"]},
 			"width": {"type": "integer", "description": "Image width in pixels. Default 64.", "default": 64},
 			"height": {"type": "integer", "description": "Image height in pixels. Default 64.", "default": 64},
 			"pattern": {"type": "string", "description": "Image pattern. Default 'auto' (derived from prompt).", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise"], "default": "auto"},
@@ -5647,33 +5648,38 @@ static func _validate_asset_bytes(bytes: PackedByteArray, category: String) -> b
 	return false
 
 func _generate_asset_external(params: Dictionary, category: String) -> Dictionary:
-	var endpoint: String = str(params.get("endpoint", "")).strip_edges()
+	var cfg: Dictionary = _resolve_external_config(params, category)
+	if cfg.has("error"):
+		return cfg
+
+	var endpoint: String = str(cfg["endpoint"]).strip_edges()
 	if endpoint.is_empty():
 		return {
 			"status": "unconfigured",
-			"message": "provider 'external' requires an 'endpoint'. Set 'endpoint' (and optionally 'api_key_env' naming an OS env var) to call an image/audio/TTS API, or use provider 'placeholder' for offline procedural assets.",
+			"message": "provider 'external' requires an 'endpoint' or a 'preset'. Pick a preset (e.g. %s), set an 'endpoint' (and 'api_key_env' naming an OS env var), or configure a default in the MCP panel. Use provider 'placeholder' for offline procedural assets." % ", ".join(PackedStringArray(AssetProviderPresets.preset_ids())),
 			"category": category
 		}
 
 	var api_key: String = ""
-	var api_key_env: String = str(params.get("api_key_env", "")).strip_edges()
+	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()
 	if not api_key_env.is_empty():
 		api_key = OS.get_environment(api_key_env)
 		if api_key.is_empty():
 			return {"error": "Environment variable '%s' is not set or empty" % api_key_env}
 
 	var headers: PackedStringArray = PackedStringArray()
-	if not api_key.is_empty():
-		headers.append("Authorization: Bearer " + api_key)
-	var extra_headers: Variant = params.get("headers", {})
+	var auth_header: String = str(cfg["auth_header"]).strip_edges()
+	if not api_key.is_empty() and not auth_header.is_empty():
+		headers.append("%s: %s%s" % [auth_header, str(cfg["auth_prefix"]), api_key])
+	var extra_headers: Variant = cfg["headers"]
 	if extra_headers is Dictionary:
 		for key in extra_headers:
 			headers.append("%s: %s" % [str(key), str(extra_headers[key])])
 
-	var method: int = HTTPClient.METHOD_POST if str(params.get("http_method", "POST")).to_upper() == "POST" else HTTPClient.METHOD_GET
+	var method: int = HTTPClient.METHOD_POST if str(cfg["http_method"]).to_upper() == "POST" else HTTPClient.METHOD_GET
 	var body: String = ""
-	if params.has("request_body"):
-		var raw_body: Variant = params["request_body"]
+	if cfg["request_body"] != null:
+		var raw_body: Variant = cfg["request_body"]
 		if raw_body is String:
 			body = raw_body
 		else:
@@ -5692,7 +5698,7 @@ func _generate_asset_external(params: Dictionary, category: String) -> Dictionar
 		return fetched
 
 	var response_bytes: PackedByteArray = fetched["bytes"]
-	var response_field: String = str(params.get("response_field", "")).strip_edges()
+	var response_field: String = str(cfg["response_field"]).strip_edges()
 	if not response_field.is_empty():
 		var decoded: Dictionary = _extract_base64_field(response_bytes, response_field)
 		if decoded.has("error"):
@@ -5703,11 +5709,100 @@ func _generate_asset_external(params: Dictionary, category: String) -> Dictionar
 		"bytes": response_bytes,
 		"generator": {
 			"mode": "external_http",
+			"preset": str(cfg["preset"]),
 			"endpoint": endpoint,
 			"http_status": int(fetched.get("http_status", 0)),
 			"response_field": response_field
 		}
 	}
+
+# Resolve the effective external request config by layering, in priority order:
+# explicit params > selected preset template > persisted MCP panel defaults.
+# Performs {prompt}/{width}/{height} substitution. Never reads the API key here
+# (only its env-var name), so nothing secret is logged or returned.
+func _resolve_external_config(params: Dictionary, category: String) -> Dictionary:
+	var settings: Dictionary = _load_asset_provider_settings()
+	var preset_id: String = str(params.get("preset", "")).strip_edges()
+	if preset_id.is_empty():
+		preset_id = str(settings.get("asset_provider_preset", "")).strip_edges()
+
+	var cfg: Dictionary = {
+		"endpoint": "", "http_method": "POST", "headers": {}, "request_body": null,
+		"response_field": "", "api_key_env": "",
+		"auth_header": "Authorization", "auth_prefix": "Bearer ", "preset": ""
+	}
+
+	if not preset_id.is_empty():
+		if not AssetProviderPresets.has_preset(preset_id):
+			return {"error": "Unknown preset '%s'. Available: %s" % [preset_id, ", ".join(PackedStringArray(AssetProviderPresets.preset_ids()))]}
+		var preset: Dictionary = AssetProviderPresets.get_preset(preset_id)
+		var preset_category: String = str(preset.get("category", ""))
+		if preset_category != category:
+			return {"error": "Preset '%s' generates '%s' assets but the requested type is '%s'." % [preset_id, preset_category, category]}
+		cfg["endpoint"] = str(preset.get("endpoint", ""))
+		cfg["http_method"] = str(preset.get("http_method", "POST"))
+		cfg["headers"] = (preset.get("headers", {}) as Dictionary).duplicate(true)
+		cfg["request_body"] = preset.get("request_body", null)
+		cfg["response_field"] = str(preset.get("response_field", ""))
+		cfg["api_key_env"] = str(preset.get("api_key_env", ""))
+		cfg["auth_header"] = str(preset.get("auth_header", "Authorization"))
+		cfg["auth_prefix"] = str(preset.get("auth_prefix", "Bearer "))
+		cfg["preset"] = preset_id
+
+	if params.has("endpoint") and not str(params["endpoint"]).strip_edges().is_empty():
+		cfg["endpoint"] = str(params["endpoint"]).strip_edges()
+	if params.has("http_method"):
+		cfg["http_method"] = str(params["http_method"])
+	if params.has("headers") and params["headers"] is Dictionary:
+		for k in (params["headers"] as Dictionary):
+			(cfg["headers"] as Dictionary)[k] = params["headers"][k]
+	if params.has("request_body"):
+		cfg["request_body"] = params["request_body"]
+	if params.has("response_field"):
+		cfg["response_field"] = str(params["response_field"]).strip_edges()
+	if params.has("api_key_env") and not str(params["api_key_env"]).strip_edges().is_empty():
+		cfg["api_key_env"] = str(params["api_key_env"]).strip_edges()
+
+	if str(cfg["endpoint"]).is_empty():
+		cfg["endpoint"] = str(settings.get("asset_provider_endpoint", "")).strip_edges()
+	if str(cfg["api_key_env"]).is_empty():
+		cfg["api_key_env"] = str(settings.get("asset_provider_api_key_env", "")).strip_edges()
+
+	var prompt: String = str(params.get("prompt", ""))
+	var width: int = clampi(int(params.get("width", 64)), 1, 4096)
+	var height: int = clampi(int(params.get("height", 64)), 1, 4096)
+	cfg["endpoint"] = _subst_placeholders(cfg["endpoint"], prompt, width, height)
+	cfg["headers"] = _subst_placeholders(cfg["headers"], prompt, width, height)
+	if cfg["request_body"] != null:
+		cfg["request_body"] = _subst_placeholders(cfg["request_body"], prompt, width, height)
+	return cfg
+
+# Recursively substitute {prompt}/{width}/{height} in strings within a template
+# (string/dictionary/array). A value that is exactly "{width}"/"{height}" becomes
+# an int so numeric API fields stay numeric.
+func _subst_placeholders(value: Variant, prompt: String, width: int, height: int) -> Variant:
+	if value is String:
+		var s: String = value
+		if s == "{width}":
+			return width
+		if s == "{height}":
+			return height
+		return s.replace("{prompt}", prompt).replace("{width}", str(width)).replace("{height}", str(height))
+	if value is Dictionary:
+		var out: Dictionary = {}
+		for k in (value as Dictionary):
+			out[k] = _subst_placeholders(value[k], prompt, width, height)
+		return out
+	if value is Array:
+		var arr: Array = []
+		for e in (value as Array):
+			arr.append(_subst_placeholders(e, prompt, width, height))
+		return arr
+	return value
+
+func _load_asset_provider_settings() -> Dictionary:
+	var mgr: MCPSettingsManager = MCPSettingsManager.new()
+	return mgr.load_settings()
 
 # Blocking HTTPClient request usable from a RefCounted tool (no SceneTree node).
 func _http_blocking_request(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float) -> Dictionary:

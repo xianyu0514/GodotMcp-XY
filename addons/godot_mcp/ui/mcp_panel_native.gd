@@ -96,6 +96,13 @@ var _tool_detail_panel: MCPToolDetailPanel = null
 var _selected_tool_name: String = ""
 var _language_option: OptionButton = null
 
+var _asset_provider_label: Label = null
+var _asset_provider_option: OptionButton = null
+var _asset_key_env_label: Label = null
+var _asset_key_env_edit: LineEdit = null
+var _asset_endpoint_label: Label = null
+var _asset_endpoint_edit: LineEdit = null
+
 var _preset_manager = null
 var _preset_label: Label = null
 var _preset_option: OptionButton = null
@@ -366,6 +373,7 @@ func _create_settings_tab() -> VBoxContainer:
 	_build_behavior_card(content)
 	_build_security_card(content)
 	_build_remote_card(content)
+	_build_asset_provider_card(content)
 	_build_general_card(content)
 
 	return tab
@@ -945,6 +953,67 @@ func _build_security_card(content: VBoxContainer) -> void:
 	_clear_log_button.text = _tr("ui.clear_log")
 	_clear_log_button.pressed.connect(clear_log)
 	buttons.add_child(_clear_log_button)
+
+## Asset generation provider config: pick a built-in external provider preset and
+## name the OS env var that holds the API key (the key value is never stored).
+func _build_asset_provider_card(content: VBoxContainer) -> void:
+	var title: Label = Label.new()
+	title.text = _tr("ui.section_asset_provider")
+	var body: VBoxContainer = _settings_card(content, title)
+	_register_section_title(title, "ui.section_asset_provider")
+
+	var hint: Label = Label.new()
+	hint.text = _tr("ui.asset_provider_hint")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+	hint.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
+	body.add_child(hint)
+
+	_asset_provider_label = Label.new()
+	_asset_provider_label.text = _tr("ui.asset_provider")
+	_asset_provider_option = OptionButton.new()
+	_asset_provider_option.add_item(_tr("ui.asset_provider_none"), 0)
+	for preset_id in AssetProviderPresets.preset_ids():
+		_asset_provider_option.add_item(AssetProviderPresets.label_for(preset_id))
+	_asset_provider_option.item_selected.connect(_on_asset_provider_selected)
+	_settings_row(body, _asset_provider_label, _asset_provider_option, false)
+
+	_asset_key_env_label = Label.new()
+	_asset_key_env_label.text = _tr("ui.asset_key_env")
+	_asset_key_env_edit = LineEdit.new()
+	_asset_key_env_edit.placeholder_text = _tr("ui.asset_key_env_placeholder")
+	_asset_key_env_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_asset_key_env_edit.text_changed.connect(_on_asset_key_env_changed)
+	_settings_row(body, _asset_key_env_label, _asset_key_env_edit, true)
+
+	_asset_endpoint_label = Label.new()
+	_asset_endpoint_label.text = _tr("ui.asset_endpoint")
+	_asset_endpoint_edit = LineEdit.new()
+	_asset_endpoint_edit.placeholder_text = _tr("ui.asset_endpoint_placeholder")
+	_asset_endpoint_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_asset_endpoint_edit.text_changed.connect(_on_asset_endpoint_changed)
+	_settings_row(body, _asset_endpoint_label, _asset_endpoint_edit, true)
+
+func _on_asset_provider_selected(_index: int) -> void:
+	_debounce_save()
+
+func _on_asset_key_env_changed(_text: String) -> void:
+	_debounce_save()
+
+func _on_asset_endpoint_changed(_text: String) -> void:
+	_debounce_save()
+
+## Returns the configured preset id ("" when "none" is selected). Index 0 is the
+## "none" entry; subsequent indices map 1:1 to AssetProviderPresets.preset_ids().
+func _selected_asset_preset_id() -> String:
+	if not _asset_provider_option:
+		return ""
+	var idx: int = _asset_provider_option.selected
+	if idx <= 0:
+		return ""
+	var ids: Array = AssetProviderPresets.preset_ids()
+	if idx - 1 < ids.size():
+		return str(ids[idx - 1])
+	return ""
 
 func _build_general_card(content: VBoxContainer) -> void:
 	var title: Label = Label.new()
@@ -2048,6 +2117,16 @@ func _load_settings() -> void:
 	_rate_limit_spin.value = s.rate_limit
 	if _tunnel_binary_edit:
 		_tunnel_binary_edit.text = s.cloudflared_path
+	if _asset_provider_option:
+		var preset_ids: Array = AssetProviderPresets.preset_ids()
+		var preset_idx: int = preset_ids.find(s.get("asset_provider_preset", ""))
+		_asset_provider_option.set_block_signals(true)
+		_asset_provider_option.select(preset_idx + 1 if preset_idx >= 0 else 0)
+		_asset_provider_option.set_block_signals(false)
+	if _asset_key_env_edit:
+		_asset_key_env_edit.text = s.get("asset_provider_api_key_env", "")
+	if _asset_endpoint_edit:
+		_asset_endpoint_edit.text = s.get("asset_provider_endpoint", "")
 	if _translation_manager and s.language != _translation_manager.get_locale():
 		_translation_manager.set_locale(s.language)
 		_refresh_translations()
@@ -2075,7 +2154,10 @@ func _save_settings() -> void:
 		"security_level": _security_level_option.selected if _security_level_option else 1,
 		"rate_limit": int(_rate_limit_spin.value) if _rate_limit_spin else 1000,
 		"language": _translation_manager.get_locale() if _translation_manager else "en",
-		"cloudflared_path": _tunnel_binary_edit.text if _tunnel_binary_edit else ""
+		"cloudflared_path": _tunnel_binary_edit.text if _tunnel_binary_edit else "",
+		"asset_provider_preset": _selected_asset_preset_id(),
+		"asset_provider_api_key_env": _asset_key_env_edit.text if _asset_key_env_edit else "",
+		"asset_provider_endpoint": _asset_endpoint_edit.text if _asset_endpoint_edit else ""
 	}
 	_settings_manager.save_settings(settings)
 
