@@ -87,6 +87,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_set_tile_collision_polygon(server_core)
 	_register_set_tile_terrain(server_core)
 	_register_manage_task_plan(server_core)
+	_register_manage_localization(server_core)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -8704,3 +8705,437 @@ func _tool_manage_task_plan(params: Dictionary) -> Dictionary:
 	result["action"] = action
 	result["plan_path"] = plan_path
 	return result
+
+# ============================================================================
+# manage_localization - 本地化全流程（提取/导入/导出/列表）
+# ============================================================================
+# Godot 4.7 没有可在无头环境直接驱动的翻译流水线工具，AI 生成中文标题/角色描述
+# 后无法把这些文本纳入翻译表。本工具用单个 action 入口覆盖完整本地化闭环：
+#   - extract: 扫描场景(.tscn)的可翻译属性与脚本(.gd)中的 tr("...") → 提取唯一键，
+#              写入/合并标准 CSV（保留已有译文，仅补新键）
+#   - import:  读取 CSV → 每个 locale 生成 .translation → 注册到 ProjectSettings
+#   - export:  把已注册（或显式指定）的 .translation 回读成 CSV（round-trip/巡检）
+#   - list:    只读，列出已注册的 locale 与键数
+# CSV 采用 Godot 标准格式（首列 keys，其余列为各 locale），与编辑器导入器互通。
+
+const _I18N_DEFAULT_CSV: String = "res://localization/translations.csv"
+const _I18N_TRANSLATIONS_SETTING: String = "internationalization/locale/translations"
+# 与 Godot POT 提取一致的常见可翻译 Control/Window 属性。
+const _I18N_TRANSLATABLE_PROPERTIES: Array = [
+	"text", "tooltip_text", "placeholder_text", "title", "hint_tooltip"
+]
+
+func _register_manage_localization(server_core: RefCounted) -> void:
+	var tool_name: String = "manage_localization"
+	var description: String = "Localization workflow in one tool (Godot 4.7 has no headless-drivable translation pipeline). action='extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title) and tr(\"...\") calls in .gd scripts, then writes/merges a standard CSV (first column 'keys', one column per locale), preserving existing translations and only adding new keys. action='import' reads that CSV, builds one .translation resource per locale, and registers them under internationalization/locale/translations. action='export' reads the registered (or explicitly given) .translation files back into a CSV for round-tripping/inspection. action='list' is read-only and reports registered locales with their key counts. All write actions support dry_run."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"action": {"type": "string", "enum": ["list", "extract", "import", "export"], "description": "Which localization operation to run."},
+			"csv_path": {"type": "string", "description": "CSV path used by extract/import/export. Default res://localization/translations.csv.", "default": _I18N_DEFAULT_CSV},
+			"scan_dir": {"type": "string", "description": "extract: root directory to scan recursively. Default res://.", "default": "res://"},
+			"include_scripts": {"type": "boolean", "description": "extract: also scan .gd scripts for tr()/atr() calls. Default true.", "default": true},
+			"out_dir": {"type": "string", "description": "import: directory to write <locale>.translation files. Default: same directory as csv_path."},
+			"register": {"type": "boolean", "description": "import: register generated .translation files in ProjectSettings. Default true.", "default": true},
+			"translations_paths": {"type": "array", "items": {"type": "string"}, "description": "export: explicit list of .translation paths. Default: read from ProjectSettings."},
+			"dry_run": {"type": "boolean", "description": "Compute results without writing files or settings. Default false.", "default": false}
+		},
+		"required": ["action"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"success": {"type": "boolean"},
+			"action": {"type": "string"},
+			"csv_path": {"type": "string"},
+			"locales": {"type": "array"},
+			"key_count": {"type": "integer"},
+			"found_count": {"type": "integer"},
+			"new_count": {"type": "integer"},
+			"new_keys": {"type": "array"},
+			"written": {"type": "array"},
+			"registered": {"type": "boolean"},
+			"translations": {"type": "array"},
+			"count": {"type": "integer"},
+			"dry_run": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+											  Callable(self, "_tool_manage_localization"),
+											  output_schema, annotations,
+											  "supplementary", "Project-Advanced")
+
+func _tool_manage_localization(params: Dictionary) -> Dictionary:
+	var action: String = str(params.get("action", "")).strip_edges()
+	if action.is_empty():
+		return {"error": "action is required (list|extract|import|export)"}
+	match action:
+		"list":
+			return _i18n_list(params)
+		"extract":
+			return _i18n_extract(params)
+		"import":
+			return _i18n_import(params)
+		"export":
+			return _i18n_export(params)
+		_:
+			return {"error": "unknown action '%s' (expected list|extract|import|export)" % action}
+
+func _i18n_registered_paths() -> PackedStringArray:
+	var raw: Variant = ProjectSettings.get_setting(_I18N_TRANSLATIONS_SETTING, PackedStringArray())
+	var out: PackedStringArray = PackedStringArray()
+	if raw is PackedStringArray:
+		out = raw
+	elif raw is Array:
+		for item in raw:
+			out.append(str(item))
+	return out
+
+func _i18n_list(_params: Dictionary) -> Dictionary:
+	var paths: PackedStringArray = _i18n_registered_paths()
+	var entries: Array = []
+	for p in paths:
+		var entry: Dictionary = {"path": p, "locale": "", "key_count": 0, "loaded": false}
+		if ResourceLoader.exists(p):
+			var res: Resource = ResourceLoader.load(p)
+			if res is Translation:
+				entry["locale"] = res.locale
+				entry["key_count"] = res.get_message_list().size()
+				entry["loaded"] = true
+		entries.append(entry)
+	return {
+		"success": true,
+		"action": "list",
+		"translations": entries,
+		"count": entries.size()
+	}
+
+func _i18n_collect_files(root: String, extensions: PackedStringArray) -> PackedStringArray:
+	var results: PackedStringArray = PackedStringArray()
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var current: String = str(stack.pop_back())
+		var dir: DirAccess = DirAccess.open(current)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var name: String = dir.get_next()
+		while name != "":
+			if name.begins_with("."):
+				name = dir.get_next()
+				continue
+			var full: String = current.path_join(name)
+			if dir.current_is_dir():
+				stack.append(full)
+			else:
+				for ext in extensions:
+					if name.to_lower().ends_with(ext):
+						results.append(full)
+						break
+			name = dir.get_next()
+		dir.list_dir_end()
+	return results
+
+func _i18n_unescape(value: String) -> String:
+	# .tscn / GDScript 字符串字面量的常见转义还原。
+	# 单遍扫描：遇到反斜杠时按下一个字符决定替换，避免多遍 replace 把
+	# `\\n`（转义反斜杠 + 字母 n）误判成换行。
+	var out: String = ""
+	var i: int = 0
+	var n: int = value.length()
+	while i < n:
+		var c: String = value[i]
+		if c == "\\" and i + 1 < n:
+			var nxt: String = value[i + 1]
+			match nxt:
+				"n":
+					out += "\n"
+				"t":
+					out += "\t"
+				"\"":
+					out += "\""
+				"'":
+					out += "'"
+				"\\":
+					out += "\\"
+				_:
+					out += c + nxt
+			i += 2
+		else:
+			out += c
+			i += 1
+	return out
+
+func _i18n_extract(params: Dictionary) -> Dictionary:
+	var scan_dir: String = str(params.get("scan_dir", "res://")).strip_edges()
+	if scan_dir.is_empty():
+		scan_dir = "res://"
+	if not DirAccess.dir_exists_absolute(scan_dir):
+		return {"error": "scan_dir does not exist: " + scan_dir}
+
+	var csv_path: String = str(params.get("csv_path", _I18N_DEFAULT_CSV)).strip_edges()
+	if csv_path.is_empty():
+		csv_path = _I18N_DEFAULT_CSV
+	var include_scripts: bool = bool(params.get("include_scripts", true))
+	var dry_run: bool = bool(params.get("dry_run", false))
+
+	var found: Dictionary = {}  # key -> true，用作有序唯一集合
+
+	var prop_re: RegEx = RegEx.new()
+	# 匹配 .tscn 中形如  text = "..."  的可翻译属性赋值。
+	prop_re.compile("^\\s*(%s)\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"" % "|".join(PackedStringArray(_I18N_TRANSLATABLE_PROPERTIES)))
+	var scenes: PackedStringArray = _i18n_collect_files(scan_dir, PackedStringArray([".tscn"]))
+	for scene_path in scenes:
+		var f: FileAccess = FileAccess.open(scene_path, FileAccess.READ)
+		if f == null:
+			continue
+		while not f.eof_reached():
+			var line: String = f.get_line()
+			var m: RegExMatch = prop_re.search(line)
+			if m:
+				var val: String = _i18n_unescape(m.get_string(2))
+				if not val.strip_edges().is_empty():
+					found[val] = true
+		f.close()
+
+	if include_scripts:
+		var tr_re: RegEx = RegEx.new()
+		# 匹配 tr("...") / atr("...")（含转义引号）。
+		tr_re.compile("\\b(?:tr|atr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+		var scripts: PackedStringArray = _i18n_collect_files(scan_dir, PackedStringArray([".gd"]))
+		for script_path in scripts:
+			var sf: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+			if sf == null:
+				continue
+			var text: String = sf.get_as_text()
+			sf.close()
+			for tm in tr_re.search_all(text):
+				var key: String = _i18n_unescape(tm.get_string(1))
+				if not key.strip_edges().is_empty():
+					found[key] = true
+
+	# 读取已有 CSV，保留译文与已有键。
+	var header: PackedStringArray = PackedStringArray(["keys"])
+	var existing_rows: Array = []  # 每行是 PackedStringArray
+	var existing_keys: Dictionary = {}
+	if FileAccess.file_exists(csv_path):
+		var ef: FileAccess = FileAccess.open(csv_path, FileAccess.READ)
+		if ef:
+			var first: bool = true
+			while not ef.eof_reached():
+				var cols: PackedStringArray = ef.get_csv_line()
+				if cols.size() == 1 and cols[0] == "":
+					continue
+				if first:
+					if cols.size() >= 1 and cols[0] == "keys":
+						header = cols
+					first = false
+					continue
+				if cols.size() >= 1 and not cols[0].is_empty():
+					existing_rows.append(cols)
+					existing_keys[cols[0]] = true
+			ef.close()
+
+	var locale_cols: int = max(header.size() - 1, 0)
+	var new_keys: Array = []
+	for key in found.keys():
+		if not existing_keys.has(key):
+			new_keys.append(key)
+
+	var found_count: int = found.size()
+	var new_count: int = new_keys.size()
+	var total_count: int = existing_rows.size() + new_count
+
+	if not dry_run:
+		var base_dir: String = csv_path.get_base_dir()
+		if not base_dir.is_empty() and not DirAccess.dir_exists_absolute(base_dir):
+			DirAccess.make_dir_recursive_absolute(base_dir)
+		var wf: FileAccess = FileAccess.open(csv_path, FileAccess.WRITE)
+		if wf == null:
+			return {"error": "Failed to open CSV for writing: " + csv_path}
+		wf.store_csv_line(header)
+		for row in existing_rows:
+			wf.store_csv_line(row)
+		for key in new_keys:
+			var row: PackedStringArray = PackedStringArray([str(key)])
+			for i in range(locale_cols):
+				row.append("")
+			wf.store_csv_line(row)
+		wf.close()
+
+	return {
+		"success": true,
+		"action": "extract",
+		"csv_path": csv_path,
+		"found_count": found_count,
+		"new_count": new_count,
+		"key_count": total_count,
+		"new_keys": new_keys,
+		"dry_run": dry_run
+	}
+
+func _i18n_import(params: Dictionary) -> Dictionary:
+	var csv_path: String = str(params.get("csv_path", _I18N_DEFAULT_CSV)).strip_edges()
+	if csv_path.is_empty():
+		csv_path = _I18N_DEFAULT_CSV
+	if not FileAccess.file_exists(csv_path):
+		return {"error": "CSV not found: " + csv_path}
+
+	var dry_run: bool = bool(params.get("dry_run", false))
+	var do_register: bool = bool(params.get("register", true))
+	var out_dir: String = str(params.get("out_dir", "")).strip_edges()
+	if out_dir.is_empty():
+		out_dir = csv_path.get_base_dir()
+	if out_dir.is_empty():
+		out_dir = "res://"
+
+	var f: FileAccess = FileAccess.open(csv_path, FileAccess.READ)
+	if f == null:
+		return {"error": "Failed to open CSV: " + csv_path}
+
+	var header: PackedStringArray = PackedStringArray()
+	var rows: Array = []
+	var first: bool = true
+	while not f.eof_reached():
+		var cols: PackedStringArray = f.get_csv_line()
+		if cols.size() == 1 and cols[0] == "":
+			continue
+		if first:
+			header = cols
+			first = false
+			continue
+		if cols.size() >= 1 and not cols[0].is_empty():
+			rows.append(cols)
+	f.close()
+
+	if header.size() < 2:
+		return {"error": "CSV header must be 'keys,<locale>,...'; found " + str(header.size()) + " column(s)"}
+	if str(header[0]) != "keys":
+		return {"error": "CSV first column must be 'keys', got '" + str(header[0]) + "'"}
+
+	var locales: Array = []
+	for i in range(1, header.size()):
+		locales.append(str(header[i]))
+
+	var written: Array = []
+	var translation_paths: PackedStringArray = PackedStringArray()
+	var key_count: int = rows.size()
+
+	if not dry_run:
+		if not DirAccess.dir_exists_absolute(out_dir):
+			DirAccess.make_dir_recursive_absolute(out_dir)
+
+	for col_index in range(1, header.size()):
+		var locale: String = str(header[col_index])
+		var translation: Translation = Translation.new()
+		translation.locale = locale
+		for row in rows:
+			var key: String = str(row[0])
+			var value: String = str(row[col_index]) if col_index < row.size() else ""
+			translation.add_message(key, value)
+		var tpath: String = out_dir.path_join(locale + ".translation")
+		translation_paths.append(tpath)
+		if not dry_run:
+			var save_err: Error = ResourceSaver.save(translation, tpath)
+			if save_err != OK:
+				return {"error": "Failed to save translation for locale '%s': %s" % [locale, error_string(save_err)]}
+			written.append(tpath)
+
+	var registered: bool = false
+	if do_register and not dry_run:
+		var existing: PackedStringArray = _i18n_registered_paths()
+		for tp in translation_paths:
+			if not existing.has(tp):
+				existing.append(tp)
+		ProjectSettings.set_setting(_I18N_TRANSLATIONS_SETTING, existing)
+		var ps_err: Error = ProjectSettings.save()
+		if ps_err != OK:
+			return {"error": "Failed to save project.godot: " + error_string(ps_err)}
+		registered = true
+
+	return {
+		"success": true,
+		"action": "import",
+		"csv_path": csv_path,
+		"locales": locales,
+		"key_count": key_count,
+		"written": written,
+		"registered": registered,
+		"dry_run": dry_run
+	}
+
+func _i18n_export(params: Dictionary) -> Dictionary:
+	var csv_path: String = str(params.get("csv_path", _I18N_DEFAULT_CSV)).strip_edges()
+	if csv_path.is_empty():
+		csv_path = _I18N_DEFAULT_CSV
+	var dry_run: bool = bool(params.get("dry_run", false))
+
+	var paths: PackedStringArray = PackedStringArray()
+	if params.has("translations_paths") and params["translations_paths"] is Array:
+		for item in params["translations_paths"]:
+			paths.append(str(item))
+	else:
+		paths = _i18n_registered_paths()
+
+	if paths.is_empty():
+		return {"error": "no .translation paths to export (none registered and none provided)"}
+
+	var locales: Array = []
+	var messages: Dictionary = {}  # locale -> {key: value}
+	var key_order: Array = []
+	var key_seen: Dictionary = {}
+	for p in paths:
+		if not ResourceLoader.exists(p):
+			return {"error": "translation file not found: " + p}
+		var res: Resource = ResourceLoader.load(p)
+		if not (res is Translation):
+			return {"error": "not a Translation resource: " + p}
+		var locale: String = res.locale
+		if locale.is_empty():
+			locale = p.get_file().get_basename()
+		if not locales.has(locale):
+			locales.append(locale)
+			messages[locale] = {}
+		for key in res.get_message_list():
+			var ks: String = str(key)
+			messages[locale][ks] = res.get_message(key)
+			if not key_seen.has(ks):
+				key_seen[ks] = true
+				key_order.append(ks)
+
+	if not dry_run:
+		var base_dir: String = csv_path.get_base_dir()
+		if not base_dir.is_empty() and not DirAccess.dir_exists_absolute(base_dir):
+			DirAccess.make_dir_recursive_absolute(base_dir)
+		var wf: FileAccess = FileAccess.open(csv_path, FileAccess.WRITE)
+		if wf == null:
+			return {"error": "Failed to open CSV for writing: " + csv_path}
+		var header: PackedStringArray = PackedStringArray(["keys"])
+		for locale in locales:
+			header.append(str(locale))
+		wf.store_csv_line(header)
+		for key in key_order:
+			var row: PackedStringArray = PackedStringArray([str(key)])
+			for locale in locales:
+				row.append(str(messages[locale].get(key, "")))
+			wf.store_csv_line(row)
+		wf.close()
+
+	return {
+		"success": true,
+		"action": "export",
+		"csv_path": csv_path,
+		"locales": locales,
+		"key_count": key_order.size(),
+		"dry_run": dry_run
+	}
