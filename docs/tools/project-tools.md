@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**56 tools** — 3 core, 53 advanced.
+**58 tools** — 3 core, 55 advanced.
 
 Project-level tools: project info and settings (read and write), resource creation and property editing, input map and autoload management, global-class / ClassDB metadata, the test runner, health and dependency audits, Godot 4.7 migration scanning/fixes, and asset authoring (themes, gradients, drawable textures, animations, TileSets, PCK packing).
 
@@ -18,7 +18,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `get_project_settings` | Core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | Core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 
-### Project-Advanced (53)
+### Project-Advanced (55)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -62,6 +62,8 @@ Project-level tools: project info and settings (read and write), resource creati
 | `create_drawable_texture` | Advanced | Create and save a Godot 4.7 DrawableTexture2D (.tres) a GPU-backed texture you can draw onto at runtime initialized via setup(width height format fill_color use_mipmaps). Requires Godot 4.7 returns unsupported on older versions. |
 | `draw_on_texture` | Advanced | Draw onto an existing Godot 4.7 DrawableTexture2D by blitting source textures onto target rectangles (blit_rect) with an optional modulate color. Requires Godot 4.7 returns unsupported on older versions. |
 | `generate_asset` | Advanced | Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes (image: PNG/JPEG/WEBP; audio: WAV/OGG/MP3), and saves them. With provider 'external', pass a `preset` (openai_image, stability_image, elevenlabs_tts, local_sd_webui) to fill endpoint/headers/body from a built-in template (API key read from an OS env var, never logged), or set endpoint/headers manually; use `body_format: "multipart"` for APIs that require multipart/form-data (e.g. Stability v2beta). A default preset and key env var can also be configured in the MCP panel. Returns 'unconfigured' when no endpoint/preset is set so callers can fall back to placeholders. The result is reimported when an editor interface is available. |
+| `slice_sprite_sheet` | Advanced | Slice a sprite sheet texture into a SpriteFrames resource (.tres) so a generated/imported sheet becomes animation-ready in one step. Grid is given as `{h_frames, v_frames}` or `{cell_width, cell_height}` with optional `margin`/`spacing`; frames are indexed row-major from 0. Pass `animations` (`{name, frames OR start_frame+end_frame, fps, loop}`) for named clips, or omit for a single looping `default` clip. `create_scene=true` also saves an AnimatedSprite2D scene wired to the SpriteFrames with the first clip autoplaying. |
+| `inspect_gltf_asset` | Advanced | Import a glTF/GLB file with GLTFDocument and report a structural summary (mesh/material/animation/skin/camera/light/node counts plus names) and validation warnings (no meshes, meshes without materials, no animations). Read-only verification for generated/downloaded 3D assets before wiring them into a scene. |
 | `create_theme` | Advanced | Create and save a Theme resource (.tres/.theme) for styling Control-based UI such as card and HUD scenes, optionally setting default base scale, font size, and default font. Populate it afterwards with set_theme_item. |
 | `set_theme_item` | Advanced | Load an existing Theme, set one item (color, constant, font_size, font, icon, or stylebox) for a given Control type, and re-save it. Colors/constants/font sizes are given directly; fonts/icons/styleboxes are resource paths. |
 | `set_default_theme` | Advanced | Set or clear the project-wide default GUI theme (the gui/theme/custom project setting) and persist it to project.godot. Pass clear=true to fall back to the engine default. |

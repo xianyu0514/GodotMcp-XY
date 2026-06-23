@@ -70,6 +70,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_create_drawable_texture(server_core)
 	_register_draw_on_texture(server_core)
 	_register_generate_asset(server_core)
+	_register_slice_sprite_sheet(server_core)
+	_register_inspect_gltf_asset(server_core)
 	_register_create_theme(server_core)
 	_register_set_theme_item(server_core)
 	_register_set_default_theme(server_core)
@@ -6740,6 +6742,409 @@ func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
 		"removed_value": removed_value,
 		"persisted": persisted
 	}
+
+# ============================================================================
+# slice_sprite_sheet - Slice a sprite sheet texture into a SpriteFrames resource
+# (and optionally an AnimatedSprite2D scene) so generated/imported sheets become
+# animation-ready in one step. Closes the 2D asset loop.
+# ============================================================================
+
+# Pure helper: compute the per-frame atlas regions for a sheet of the given size.
+# grid accepts either {h_frames, v_frames} or {cell_width, cell_height}, plus
+# optional {margin, spacing}. Returns {error} or a layout dictionary.
+func _compute_sprite_frame_layout(sheet_w: int, sheet_h: int, grid: Dictionary) -> Dictionary:
+	if sheet_w <= 0 or sheet_h <= 0:
+		return {"error": "Sprite sheet has invalid dimensions"}
+	var margin: int = max(0, int(grid.get("margin", 0)))
+	var spacing: int = max(0, int(grid.get("spacing", 0)))
+	var columns: int = 0
+	var rows: int = 0
+	var cell_w: int = 0
+	var cell_h: int = 0
+	var has_cell: bool = int(grid.get("cell_width", 0)) > 0 and int(grid.get("cell_height", 0)) > 0
+	var has_frames: bool = int(grid.get("h_frames", 0)) > 0 and int(grid.get("v_frames", 0)) > 0
+	if has_cell:
+		cell_w = int(grid["cell_width"])
+		cell_h = int(grid["cell_height"])
+		columns = (sheet_w - 2 * margin + spacing) / (cell_w + spacing)
+		rows = (sheet_h - 2 * margin + spacing) / (cell_h + spacing)
+	elif has_frames:
+		columns = int(grid["h_frames"])
+		rows = int(grid["v_frames"])
+		cell_w = (sheet_w - 2 * margin - (columns - 1) * spacing) / columns
+		cell_h = (sheet_h - 2 * margin - (rows - 1) * spacing) / rows
+	else:
+		return {"error": "Provide a grid as either {h_frames, v_frames} or {cell_width, cell_height}"}
+	if columns <= 0 or rows <= 0 or cell_w <= 0 or cell_h <= 0:
+		return {"error": "Computed grid is empty; check cell size / frame counts against the sheet size"}
+	var regions: Array = []
+	for row in range(rows):
+		for col in range(columns):
+			var x: int = margin + col * (cell_w + spacing)
+			var y: int = margin + row * (cell_h + spacing)
+			if x + cell_w > sheet_w or y + cell_h > sheet_h:
+				return {"error": "Frame %d,%d exceeds sheet bounds; check margin/spacing/cell size" % [col, row]}
+			regions.append(Rect2(x, y, cell_w, cell_h))
+	return {"columns": columns, "rows": rows, "cell_width": cell_w, "cell_height": cell_h, "frame_count": regions.size(), "regions": regions}
+
+# Pure helper: normalize the requested animations against the available frame
+# count. Defaults to one looping "default" animation spanning every frame.
+func _resolve_sprite_animations(animations_param: Variant, frame_count: int) -> Dictionary:
+	var resolved: Array = []
+	var seen: Dictionary = {}
+	if animations_param == null or (animations_param is Array and (animations_param as Array).is_empty()):
+		var all_frames: Array = []
+		for i in range(frame_count):
+			all_frames.append(i)
+		resolved.append({"name": "default", "frames": all_frames, "fps": 10.0, "loop": true})
+		return {"animations": resolved}
+	if not (animations_param is Array):
+		return {"error": "Parameter 'animations' must be an array"}
+	for entry in (animations_param as Array):
+		if not (entry is Dictionary):
+			return {"error": "Each animation must be an object"}
+		var anim: Dictionary = entry
+		var clip_name: String = str(anim.get("name", "")).strip_edges()
+		if clip_name.is_empty():
+			return {"error": "Each animation requires a non-empty 'name'"}
+		if seen.has(clip_name):
+			return {"error": "Duplicate animation name: " + clip_name}
+		seen[clip_name] = true
+		var frames: Array = []
+		if anim.has("frames") and anim["frames"] is Array:
+			for f in (anim["frames"] as Array):
+				frames.append(int(f))
+		elif anim.has("start_frame") and anim.has("end_frame"):
+			var start_frame: int = int(anim["start_frame"])
+			var end_frame: int = int(anim["end_frame"])
+			if end_frame < start_frame:
+				return {"error": "Animation '%s' has end_frame < start_frame" % clip_name}
+			for i in range(start_frame, end_frame + 1):
+				frames.append(i)
+		else:
+			return {"error": "Animation '%s' needs either 'frames' or 'start_frame'+'end_frame'" % clip_name}
+		if frames.is_empty():
+			return {"error": "Animation '%s' has no frames" % clip_name}
+		for idx in frames:
+			if idx < 0 or idx >= frame_count:
+				return {"error": "Animation '%s' references frame %d out of range (0..%d)" % [clip_name, idx, frame_count - 1]}
+		var fps: float = float(anim.get("fps", 10.0))
+		if fps <= 0.0:
+			return {"error": "Animation '%s' fps must be > 0" % clip_name}
+		var loop: bool = bool(anim.get("loop", true))
+		resolved.append({"name": clip_name, "frames": frames, "fps": fps, "loop": loop})
+	return {"animations": resolved}
+
+func _register_slice_sprite_sheet(server_core: RefCounted) -> void:
+	var tool_name: String = "slice_sprite_sheet"
+	var description: String = "Slice a sprite sheet texture into a SpriteFrames resource (.tres) so a generated or imported sheet becomes animation-ready in one step. Provide a grid as either {h_frames, v_frames} or {cell_width, cell_height}, with optional margin (border) and spacing (gap between cells); frames are indexed row-major from 0. Pass 'animations' (array of {name, frames:[...] OR start_frame+end_frame, fps, loop}) to define named clips; when omitted a single looping 'default' clip spanning every frame is created. Set create_scene=true to also save an AnimatedSprite2D scene wired to the SpriteFrames with the first clip set to autoplay."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"texture_path": {"type": "string", "description": "Sprite sheet image path (res:// .png/.jpg/.webp/.bmp)."},
+			"output_path": {"type": "string", "description": "Save path for the SpriteFrames resource (.tres/.res)."},
+			"h_frames": {"type": "integer", "description": "Number of columns. Use with v_frames."},
+			"v_frames": {"type": "integer", "description": "Number of rows. Use with h_frames."},
+			"cell_width": {"type": "integer", "description": "Frame width in pixels. Use with cell_height (alternative to h_frames/v_frames)."},
+			"cell_height": {"type": "integer", "description": "Frame height in pixels. Use with cell_width."},
+			"margin": {"type": "integer", "description": "Border (px) around the sheet before the first cell. Default 0.", "default": 0},
+			"spacing": {"type": "integer", "description": "Gap (px) between adjacent cells. Default 0.", "default": 0},
+			"animations": {"type": "array", "description": "Named clips: {name, frames:[...] OR start_frame+end_frame, fps, loop}. Omit for a single looping 'default' clip."},
+			"create_scene": {"type": "boolean", "description": "Also save an AnimatedSprite2D scene wired to the SpriteFrames. Default false.", "default": false},
+			"scene_output_path": {"type": "string", "description": "Save path for the AnimatedSprite2D scene (.tscn). Required when create_scene=true."}
+		},
+		"required": ["texture_path", "output_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"output_path": {"type": "string"},
+			"frame_count": {"type": "integer"},
+			"columns": {"type": "integer"},
+			"rows": {"type": "integer"},
+			"cell_width": {"type": "integer"},
+			"cell_height": {"type": "integer"},
+			"animations": {"type": "array"},
+			"scene_output_path": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_slice_sprite_sheet"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_slice_sprite_sheet(params: Dictionary) -> Dictionary:
+	var texture_path: String = str(params.get("texture_path", "")).strip_edges()
+	if texture_path.is_empty():
+		return {"error": "Missing required parameter: texture_path"}
+	var output_path: String = str(params.get("output_path", "")).strip_edges()
+	if output_path.is_empty():
+		return {"error": "Missing required parameter: output_path"}
+
+	var tex_validation: Dictionary = PathValidator.validate_file_path(texture_path, [".png", ".jpg", ".jpeg", ".webp", ".bmp"])
+	if not tex_validation.get("valid", false):
+		return {"error": "Invalid texture_path: " + str(tex_validation.get("error", ""))}
+	texture_path = str(tex_validation.get("sanitized", texture_path))
+
+	var out_validation: Dictionary = PathValidator.validate_file_path(output_path, [".tres", ".res"])
+	if not out_validation.get("valid", false):
+		return {"error": "Invalid output_path: " + str(out_validation.get("error", ""))}
+	output_path = str(out_validation.get("sanitized", output_path))
+
+	var texture_abs: String = ProjectSettings.globalize_path(texture_path)
+	if not FileAccess.file_exists(texture_abs):
+		return {"error": "Texture not found: " + texture_path}
+
+	# Prefer the imported resource so the atlas reference round-trips cleanly;
+	# fall back to loading the raw image (headless / unimported assets).
+	var texture: Texture2D = null
+	if ResourceLoader.exists(texture_path):
+		var loaded: Resource = ResourceLoader.load(texture_path)
+		if loaded is Texture2D:
+			texture = loaded
+	if texture == null:
+		var image: Image = Image.load_from_file(texture_abs)
+		if image == null or image.is_empty():
+			return {"error": "Failed to load texture: " + texture_path}
+		texture = ImageTexture.create_from_image(image)
+
+	var grid: Dictionary = {
+		"h_frames": int(params.get("h_frames", 0)),
+		"v_frames": int(params.get("v_frames", 0)),
+		"cell_width": int(params.get("cell_width", 0)),
+		"cell_height": int(params.get("cell_height", 0)),
+		"margin": int(params.get("margin", 0)),
+		"spacing": int(params.get("spacing", 0))
+	}
+	var layout: Dictionary = _compute_sprite_frame_layout(texture.get_width(), texture.get_height(), grid)
+	if layout.has("error"):
+		return layout
+
+	var resolved: Dictionary = _resolve_sprite_animations(params.get("animations", null), int(layout["frame_count"]))
+	if resolved.has("error"):
+		return resolved
+	var animations: Array = resolved["animations"]
+
+	var regions: Array = layout["regions"]
+	var sprite_frames: SpriteFrames = SpriteFrames.new()
+	var keep_default: bool = false
+	for anim in animations:
+		if str(anim["name"]) == "default":
+			keep_default = true
+	if not keep_default and sprite_frames.has_animation("default"):
+		sprite_frames.remove_animation("default")
+
+	var anim_summary: Array = []
+	for anim in animations:
+		var anim_name: String = str(anim["name"])
+		if not sprite_frames.has_animation(anim_name):
+			sprite_frames.add_animation(anim_name)
+		sprite_frames.set_animation_speed(anim_name, float(anim["fps"]))
+		sprite_frames.set_animation_loop(anim_name, bool(anim["loop"]))
+		for frame_index in anim["frames"]:
+			var atlas: AtlasTexture = AtlasTexture.new()
+			atlas.atlas = texture
+			atlas.region = regions[int(frame_index)]
+			sprite_frames.add_frame(anim_name, atlas)
+		anim_summary.append({"name": anim_name, "frame_count": (anim["frames"] as Array).size(), "fps": float(anim["fps"]), "loop": bool(anim["loop"])})
+
+	var out_dir: String = output_path.get_base_dir()
+	if not out_dir.is_empty() and not DirAccess.dir_exists_absolute(out_dir):
+		if DirAccess.make_dir_recursive_absolute(out_dir) != OK:
+			return {"error": "Failed to create directory: " + out_dir}
+	var save_err: Error = ResourceSaver.save(sprite_frames, output_path)
+	if save_err != OK:
+		return {"error": "Failed to save SpriteFrames: " + error_string(save_err)}
+
+	var result: Dictionary = {
+		"status": "success",
+		"output_path": output_path,
+		"frame_count": int(layout["frame_count"]),
+		"columns": int(layout["columns"]),
+		"rows": int(layout["rows"]),
+		"cell_width": int(layout["cell_width"]),
+		"cell_height": int(layout["cell_height"]),
+		"animations": anim_summary
+	}
+
+	if bool(params.get("create_scene", false)):
+		var scene_path: String = str(params.get("scene_output_path", "")).strip_edges()
+		if scene_path.is_empty():
+			result["scene_error"] = "create_scene=true requires scene_output_path"
+			return result
+		var scene_validation: Dictionary = PathValidator.validate_file_path(scene_path, [".tscn", ".scn"])
+		if not scene_validation.get("valid", false):
+			result["scene_error"] = "Invalid scene_output_path: " + str(scene_validation.get("error", ""))
+			return result
+		scene_path = str(scene_validation.get("sanitized", scene_path))
+		var sprite_frames_disk: Resource = ResourceLoader.load(output_path)
+		var node: AnimatedSprite2D = AnimatedSprite2D.new()
+		node.name = "AnimatedSprite2D"
+		node.sprite_frames = sprite_frames_disk if sprite_frames_disk is SpriteFrames else sprite_frames
+		var first_anim: String = str((animations[0] as Dictionary)["name"])
+		node.animation = first_anim
+		node.autoplay = first_anim
+		var packed: PackedScene = PackedScene.new()
+		var pack_err: Error = packed.pack(node)
+		node.free()
+		if pack_err != OK:
+			result["scene_error"] = "Failed to pack scene: " + error_string(pack_err)
+			return result
+		var scene_dir: String = scene_path.get_base_dir()
+		if not scene_dir.is_empty() and not DirAccess.dir_exists_absolute(scene_dir):
+			if DirAccess.make_dir_recursive_absolute(scene_dir) != OK:
+				result["scene_error"] = "Failed to create directory: " + scene_dir
+				return result
+		var scene_err: Error = ResourceSaver.save(packed, scene_path)
+		if scene_err != OK:
+			result["scene_error"] = "Failed to save scene: " + error_string(scene_err)
+			return result
+		result["scene_output_path"] = scene_path
+
+	return result
+
+# ============================================================================
+# inspect_gltf_asset - Import a glTF/GLB file and report a structural summary
+# plus validation warnings, so generated/downloaded 3D assets can be verified
+# before use. Closes the 3D import side of the asset loop.
+# ============================================================================
+
+func _register_inspect_gltf_asset(server_core: RefCounted) -> void:
+	var tool_name: String = "inspect_gltf_asset"
+	var description: String = "Import a glTF/GLB file with GLTFDocument and report a structural summary (mesh, material, animation, skin, camera, light and node counts plus their names) together with validation warnings (no meshes, meshes without materials, no animations). Use to verify a generated or downloaded 3D asset is usable before wiring it into a scene. Read-only: it parses the file but does not modify the project."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"path": {"type": "string", "description": "Path to a .gltf or .glb file (res:// or user://)."},
+			"include_names": {"type": "boolean", "description": "Include the per-resource name lists (meshes/materials/animations). Default true.", "default": true}
+		},
+		"required": ["path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"path": {"type": "string"},
+			"mesh_count": {"type": "integer"},
+			"material_count": {"type": "integer"},
+			"animation_count": {"type": "integer"},
+			"skin_count": {"type": "integer"},
+			"node_count": {"type": "integer"},
+			"camera_count": {"type": "integer"},
+			"light_count": {"type": "integer"},
+			"meshes": {"type": "array"},
+			"materials": {"type": "array"},
+			"animations": {"type": "array"},
+			"warnings": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_inspect_gltf_asset"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+func _tool_inspect_gltf_asset(params: Dictionary) -> Dictionary:
+	var path: String = str(params.get("path", "")).strip_edges()
+	if path.is_empty():
+		return {"error": "Missing required parameter: path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(path, [".gltf", ".glb"])
+	if not validation.get("valid", false):
+		return {"error": "Invalid path: " + str(validation.get("error", ""))}
+	path = str(validation.get("sanitized", path))
+
+	var abs_path: String = ProjectSettings.globalize_path(path)
+	if not FileAccess.file_exists(abs_path):
+		return {"error": "File not found: " + path}
+
+	var doc: GLTFDocument = GLTFDocument.new()
+	var state: GLTFState = GLTFState.new()
+	var err: Error = doc.append_from_file(abs_path, state)
+	if err != OK:
+		return {"error": "Failed to parse glTF: " + error_string(err), "path": path}
+
+	var include_names: bool = bool(params.get("include_names", true))
+	var meshes: Array = state.get_meshes()
+	var materials: Array = state.get_materials()
+	var animations: Array = state.get_animations()
+	var skins: Array = state.get_skins()
+	var nodes: Array = state.get_nodes()
+	var cameras: Array = state.get_cameras()
+	var lights: Array = state.get_lights()
+
+	var mesh_names: Array = []
+	var meshes_without_material: int = 0
+	for gltf_mesh in meshes:
+		var mesh_name: String = ""
+		var surface_count: int = 0
+		var importer_mesh: ImporterMesh = null
+		if gltf_mesh != null:
+			importer_mesh = gltf_mesh.get_mesh()
+		if importer_mesh != null:
+			mesh_name = importer_mesh.resource_name
+			surface_count = importer_mesh.get_surface_count()
+		if include_names:
+			mesh_names.append({"name": mesh_name, "surface_count": surface_count})
+
+	var material_names: Array = []
+	for mat in materials:
+		if include_names and mat != null:
+			material_names.append(mat.resource_name)
+
+	var animation_names: Array = []
+	for anim in animations:
+		if include_names and anim != null:
+			animation_names.append(anim.get_original_name())
+
+	if materials.is_empty() and not meshes.is_empty():
+		meshes_without_material = meshes.size()
+
+	var warnings: Array = []
+	if meshes.is_empty():
+		warnings.append("No meshes found in the glTF asset")
+	if meshes_without_material > 0:
+		warnings.append("glTF has meshes but no materials; surfaces may render untextured")
+	if animations.is_empty():
+		warnings.append("No animations found in the glTF asset")
+
+	var result: Dictionary = {
+		"status": "success",
+		"path": path,
+		"mesh_count": meshes.size(),
+		"material_count": materials.size(),
+		"animation_count": animations.size(),
+		"skin_count": skins.size(),
+		"node_count": nodes.size(),
+		"camera_count": cameras.size(),
+		"light_count": lights.size(),
+		"warnings": warnings
+	}
+	if include_names:
+		result["meshes"] = mesh_names
+		result["materials"] = material_names
+		result["animations"] = animation_names
+	return result
 
 # ============================================================================
 # create_animation - Create and save an Animation resource for editor-phase

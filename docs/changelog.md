@@ -5,7 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **209 MCP tools** across 6 categories (30 core, 177 advanced) plus 2 always-on **meta**
+- **211 MCP tools** across 6 categories (30 core, 179 advanced) plus 2 always-on **meta**
   tools (`list_tool_catalog`, `enable_tools`) for on-demand tool discovery, classified by
   `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30. The MCP `initialize` response
   carries an `instructions` field describing the lazy-loading workflow, so compatible clients
@@ -70,6 +70,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   - **`assert_no_runtime_errors`** (Debug-Advanced): runtime-error hard gate. Scans the
     categorized debugger output and fails if any error events are present; `categories` and
     `since_sequence` let you gate a specific window of a run.
+- **Asset closure** — two tools that take generated/imported raw assets the rest of the way
+  to animation-ready, usable resources:
+  - **`slice_sprite_sheet`** (Project-Advanced): slices a sprite sheet texture into a
+    `SpriteFrames` resource (`.tres`). Grid is given as `{h_frames, v_frames}` or
+    `{cell_width, cell_height}` with optional `margin`/`spacing`; frames are indexed
+    row-major. Pass `animations` (`{name, frames OR start_frame+end_frame, fps, loop}`) for
+    named clips, or omit for a single looping `default` clip. `create_scene=true` also saves
+    an `AnimatedSprite2D` scene wired to the SpriteFrames with the first clip autoplaying.
+  - **`inspect_gltf_asset`** (Project-Advanced): imports a glTF/GLB with `GLTFDocument` and
+    reports a structural summary (mesh/material/animation/skin/camera/light/node counts plus
+    names) and validation warnings (no meshes, meshes without materials, no animations), so a
+    generated or downloaded 3D asset can be verified before use. Read-only.
 
 ## 1.0.6
 
