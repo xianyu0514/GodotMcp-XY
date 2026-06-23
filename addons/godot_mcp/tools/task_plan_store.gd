@@ -24,7 +24,17 @@ extends RefCounted
 #         "id": "t1", "title": "...", "description": "...",
 #         "status": "pending|in_progress|blocked|done",
 #         "depends_on": ["t0"],
-#         "dod": [{"criterion": "...", "met": false, "evidence": ""}],
+#         "dod": [
+#           {
+#             "criterion": "...", "met": false, "evidence": "",
+#             # Optional machine-checkable gate (see VALID_GATE_TYPES). When a
+#             # gate is present and 'observed' metrics are supplied to set_dod,
+#             # 'met'/'evidence' are computed objectively and the full verdict
+#             # ({met, checks, failures}) is recorded under 'last_evaluation'.
+#             "gate": {"type": "performance_budget", "budget": {"min_fps": 55}},
+#             "last_evaluation": {"met": true, "checks": [], "failures": []}
+#           }
+#         ],
 #         "tags": ["gameplay"],
 #         "journal": [{"at": "...", "note": "..."}],
 #         "created_at": "...", "updated_at": "..."
@@ -201,16 +211,25 @@ static func evaluate_gate(gate: Dictionary, observed: Dictionary) -> Dictionary:
 					failures.append(check)
 		"no_runtime_errors":
 			var max_errors: int = int(gate.get("max_errors", 0))
-			var error_count: int = 0
-			if observed.has("error_count"):
-				error_count = int(observed["error_count"])
-			elif observed.get("errors") is Array:
-				error_count = (observed["errors"] as Array).size()
-			var ok_errors: bool = error_count <= max_errors
-			var ec: Dictionary = {"metric": "error_count", "limit": max_errors, "observed": error_count, "comparator": "lte", "passed": ok_errors}
-			checks.append(ec)
-			if not ok_errors:
-				failures.append(ec)
+			# Require an actual measurement: an empty observed must not pass on a
+			# default of 0 ("can't prove no errors ⇒ not met"), matching how the
+			# other gate types treat missing metrics.
+			var has_measurement: bool = observed.has("error_count") or (observed.get("errors") is Array)
+			if not has_measurement:
+				var miss_ec: Dictionary = {"metric": "error_count", "limit": max_errors, "observed": null, "comparator": "lte", "passed": false, "reason": "missing"}
+				checks.append(miss_ec)
+				failures.append(miss_ec)
+			else:
+				var error_count: int = 0
+				if observed.has("error_count"):
+					error_count = int(observed["error_count"])
+				else:
+					error_count = (observed["errors"] as Array).size()
+				var ok_errors: bool = error_count <= max_errors
+				var ec: Dictionary = {"metric": "error_count", "limit": max_errors, "observed": error_count, "comparator": "lte", "passed": ok_errors}
+				checks.append(ec)
+				if not ok_errors:
+					failures.append(ec)
 		"visual_baseline":
 			if gate.has("max_diff_pixels"):
 				var limit_px: int = int(gate["max_diff_pixels"])
@@ -408,18 +427,18 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 				target = i
 				break
 		if target == -1:
-			# Append a brand-new criterion when it does not exist yet.
-			var fresh: Dictionary = {"criterion": wanted, "met": bool(args.get("met", false)), "evidence": str(args.get("evidence", ""))}
+			# Validate any gate up front so an invalid spec never leaves a
+			# half-created criterion behind.
 			if args.has("gate") and args["gate"] != null:
-				var gate_result: Dictionary = _normalize_gate(args["gate"])
-				if gate_result.has("error"):
-					return gate_result
-				fresh["gate"] = gate_result["gate"]
-			dod.append(fresh)
+				var pre_gate: Dictionary = _normalize_gate(args["gate"])
+				if pre_gate.has("error"):
+					return pre_gate
+			# Append a brand-new criterion, then fall through to the shared update
+			# logic below so gate / observed / met / evidence are all applied the
+			# same way as for an existing criterion (avoids ignoring 'observed').
+			dod.append({"criterion": wanted, "met": false, "evidence": ""})
 			task["dod"] = dod
-			task["updated_at"] = _now()
-			_touch()
-			return {"status": "ok", "task": task}
+			target = dod.size() - 1
 	else:
 		return {"error": "set_dod needs 'dod' (full list) or 'index'/'criterion' to update one entry"}
 

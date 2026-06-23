@@ -239,3 +239,30 @@ func test_set_status_done_respects_gate_met():
 	_store.set_dod(tid, {"index": 0, "observed": {"min_fps": 60}})
 	var okdone: Dictionary = _store.set_status(tid, "done", false, "")
 	assert_false(okdone.has("error"), "done allowed once gate satisfied")
+
+func test_set_dod_new_criterion_evaluates_gate_and_observed():
+	# Creating a brand-new criterion via criterion text while passing gate +
+	# observed together must evaluate the gate, not silently default met=false.
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "fps ok", "gate": {"type": "performance_budget", "budget": {"min_fps": 55}}, "observed": {"min_fps": 60}})
+	var dod: Array = r["task"]["dod"]
+	assert_eq(dod.size(), 2, "new gated criterion appended")
+	assert_true(bool(dod[1]["met"]), "observed evaluated against gate on new criterion")
+	assert_true(dod[1].has("gate"), "gate attached to new criterion")
+
+func test_set_dod_new_criterion_rejects_bad_gate_without_appending():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "bad", "gate": {"type": "not_a_gate"}})
+	assert_has(r, "error", "invalid gate type rejected")
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq((task["dod"] as Array).size(), 1, "no half-created criterion left behind")
+
+func test_evaluate_gate_no_runtime_errors_requires_measurement():
+	# An empty observed must NOT pass on a default of 0 ("can't prove ⇒ not met").
+	var gate: Dictionary = {"type": "no_runtime_errors", "max_errors": 0}
+	assert_false(TaskPlanStore.evaluate_gate(gate, {})["met"], "no measurement -> not met")
+	assert_true(TaskPlanStore.evaluate_gate(gate, {"error_count": 0})["met"], "measured 0 errors -> met")
