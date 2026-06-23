@@ -427,12 +427,19 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 				target = i
 				break
 		if target == -1:
-			# Validate any gate up front so an invalid spec never leaves a
-			# half-created criterion behind.
+			# Validate everything that could fail BEFORE mutating the task, so an
+			# error return never leaves a half-created criterion behind.
 			if args.has("gate") and args["gate"] != null:
 				var pre_gate: Dictionary = _normalize_gate(args["gate"])
 				if pre_gate.has("error"):
 					return pre_gate
+			if args.has("observed"):
+				# A brand-new criterion has no prior gate, so 'observed' can only be
+				# evaluated when a gate is supplied in this same call.
+				if not (args.has("gate") and args["gate"] != null):
+					return {"error": "criterion has no gate to evaluate 'observed' against"}
+				if not (args["observed"] is Dictionary):
+					return {"error": "observed must be an object of measured metrics"}
 			# Append a brand-new criterion, then fall through to the shared update
 			# logic below so gate / observed / met / evidence are all applied the
 			# same way as for an existing criterion (avoids ignoring 'observed').

@@ -266,3 +266,23 @@ func test_evaluate_gate_no_runtime_errors_requires_measurement():
 	var gate: Dictionary = {"type": "no_runtime_errors", "max_errors": 0}
 	assert_false(TaskPlanStore.evaluate_gate(gate, {})["met"], "no measurement -> not met")
 	assert_true(TaskPlanStore.evaluate_gate(gate, {"error_count": 0})["met"], "measured 0 errors -> met")
+
+func test_set_dod_new_criterion_observed_without_gate_does_not_mutate():
+	# observed but no gate on a new criterion must error WITHOUT leaving a
+	# half-created criterion behind (rollback contract).
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "x", "observed": {"min_fps": 60}})
+	assert_has(r, "error", "observed without a gate should error")
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq((task["dod"] as Array).size(), 1, "no half-created criterion left behind")
+
+func test_set_dod_new_criterion_non_dict_observed_does_not_mutate():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "x", "gate": {"type": "no_runtime_errors"}, "observed": 5})
+	assert_has(r, "error", "non-dict observed should error")
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq((task["dod"] as Array).size(), 1, "no half-created criterion left behind")
