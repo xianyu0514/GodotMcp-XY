@@ -72,6 +72,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_generate_asset(server_core)
 	_register_slice_sprite_sheet(server_core)
 	_register_inspect_gltf_asset(server_core)
+	_register_generate_3d_asset(server_core)
 	_register_create_theme(server_core)
 	_register_set_theme_item(server_core)
 	_register_set_default_theme(server_core)
@@ -7144,6 +7145,371 @@ func _tool_inspect_gltf_asset(params: Dictionary) -> Dictionary:
 		result["meshes"] = mesh_names
 		result["materials"] = material_names
 		result["animations"] = animation_names
+	return result
+
+# ============================================================================
+# generate_3d_asset - Generate a 3D model (glTF/GLB) from a text prompt via an
+# external text-to-3D provider (Meshy/Tripo) and land it into res://. The flow
+# is asynchronous: submit a job, poll its status endpoint until success/failure,
+# download the resulting glTF/GLB, validate the bytes, then optionally inspect.
+# Bring-your-own-key: the API key is read from an OS env var named by the preset
+# and never shipped, stored, or logged; the user pays their own provider quota.
+# ============================================================================
+
+func _register_generate_3d_asset(server_core: RefCounted) -> void:
+	var tool_name: String = "generate_3d_asset"
+	var description: String = "Generate a 3D model (glTF/GLB) from a text prompt via an external text-to-3D provider and land it into res://. Asynchronous flow: submits a job, polls the provider's status endpoint until it succeeds or fails, downloads the resulting glTF/GLB, validates the bytes, and (by default) inspects the asset structure (mesh/material/animation counts). Pick a 'preset' (meshy_text_to_3d, tripo_text_to_3d) to fill the submit/status endpoints, request body and status/model-url field paths from a built-in template, or set them manually. Bring-your-own-key: the API key is read from an OS env var named by the preset (e.g. MESHY_API_KEY / TRIPO_API_KEY), never logged or stored, and the user pays their own provider quota. Returns status 'unconfigured' when no preset/submit_endpoint is set so callers can skip or fall back. The result is reimported when an editor interface is available."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"prompt": {"type": "string", "description": "Text prompt describing the 3D model to generate. Sent to the external provider."},
+			"resource_path": {"type": "string", "description": "Where to save the model (res:// or user://): .glb (binary glTF) or .gltf."},
+			"preset": {"type": "string", "description": "Text-to-3D provider preset. Fills submit/status endpoints, request body and field paths from a built-in template; the API key is read from the preset's env var. When omitted, a model3d default preset configured in the MCP panel is used.", "enum": ["meshy_text_to_3d", "tripo_text_to_3d"]},
+			"api_key_env": {"type": "string", "description": "Name of an OS env var holding the provider API key. Overrides the preset's env var. The key value is never logged. Pass an empty string to send no auth header."},
+			"request_body": {"description": "Override the submit request body (object sent as JSON, or string sent verbatim). {prompt} is substituted."},
+			"headers": {"type": "object", "description": "Extra HTTP headers merged into both the submit and status requests."},
+			"submit_endpoint": {"type": "string", "description": "Override the job-submit URL (use with a custom provider instead of a preset)."},
+			"status_endpoint": {"type": "string", "description": "Override the status-poll URL template; must contain {task_id}."},
+			"task_id_field": {"type": "string", "description": "Dot path to the job id in the submit response (e.g. 'result' or 'data.task_id')."},
+			"status_field": {"type": "string", "description": "Dot path to the status string in the status response (e.g. 'status' or 'data.status')."},
+			"model_url_field": {"type": "string", "description": "Dot path to the downloadable model URL in the status response (e.g. 'model_urls.glb')."},
+			"poll_interval_sec": {"type": "number", "description": "Seconds between status polls. Default 5 (clamped 1..30).", "default": 5.0},
+			"max_wait_sec": {"type": "number", "description": "Total seconds to wait for the job before timing out. Default 300 (clamped 5..1800).", "default": 300.0},
+			"timeout_sec": {"type": "number", "description": "Per-request HTTP timeout in seconds. Default 30 (clamped 1..120).", "default": 30.0},
+			"record_prompt": {"type": "boolean", "description": "Write a '<resource_path>.gen.json' manifest with prompt + parameters for traceability. Default true.", "default": true},
+			"reimport": {"type": "boolean", "description": "Reimport the saved file via EditorFileSystem when available. Default true.", "default": true},
+			"inspect": {"type": "boolean", "description": "Run inspect_gltf_asset on the downloaded model and attach the structural summary. Default true.", "default": true}
+		},
+		"required": ["prompt", "resource_path"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"resource_path": {"type": "string"},
+			"category": {"type": "string"},
+			"provider": {"type": "string"},
+			"prompt": {"type": "string"},
+			"generator": {"type": "object"},
+			"size_bytes": {"type": "integer"},
+			"manifest_path": {"type": "string"},
+			"reimported": {"type": "boolean"},
+			"inspection": {"type": "object"},
+			"message": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": true
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_generate_3d_asset"),
+						  output_schema, annotations,
+						  "supplementary", "Project-Advanced")
+
+# Resolve the effective text-to-3D request config by layering, in priority
+# order: explicit params > selected preset template > a model3d default preset
+# from the MCP panel. Never reads the API key here (only its env-var name).
+func _resolve_3d_config(params: Dictionary) -> Dictionary:
+	var settings: Dictionary = _load_asset_provider_settings()
+	var preset_id: String = str(params.get("preset", "")).strip_edges()
+	if preset_id.is_empty():
+		var panel_preset: String = str(settings.get("asset_provider_preset", "")).strip_edges()
+		if not panel_preset.is_empty() and AssetProviderPresets.has_preset(panel_preset) and str(AssetProviderPresets.get_preset(panel_preset).get("category", "")) == "model3d":
+			preset_id = panel_preset
+
+	var cfg: Dictionary = {
+		"submit_endpoint": "", "submit_method": "POST", "headers": {}, "request_body": null,
+		"task_id_field": "", "status_endpoint": "", "status_method": "GET",
+		"status_field": "status", "progress_field": "", "success_values": [], "failure_values": [],
+		"model_url_fields": [], "api_key_env": "", "auth_header": "Authorization", "auth_prefix": "Bearer ",
+		"preset": ""
+	}
+
+	if not preset_id.is_empty():
+		if not AssetProviderPresets.has_preset(preset_id):
+			return {"error": "Unknown preset '%s'. Available 3D presets: %s" % [preset_id, ", ".join(PackedStringArray(AssetProviderPresets.preset_ids_for_category("model3d")))]}
+		var preset: Dictionary = AssetProviderPresets.get_preset(preset_id)
+		if str(preset.get("category", "")) != "model3d":
+			return {"error": "Preset '%s' is not a text-to-3D (model3d) preset." % preset_id}
+		for k in ["submit_endpoint", "submit_method", "task_id_field", "status_endpoint", "status_method", "status_field", "progress_field", "api_key_env", "auth_header", "auth_prefix"]:
+			if preset.has(k):
+				cfg[k] = preset[k]
+		cfg["headers"] = (preset.get("headers", {}) as Dictionary).duplicate(true)
+		cfg["request_body"] = preset.get("request_body", null)
+		cfg["success_values"] = (preset.get("success_values", []) as Array).duplicate()
+		cfg["failure_values"] = (preset.get("failure_values", []) as Array).duplicate()
+		cfg["model_url_fields"] = (preset.get("model_url_fields", []) as Array).duplicate()
+		cfg["preset"] = preset_id
+
+	if params.has("submit_endpoint") and not str(params["submit_endpoint"]).strip_edges().is_empty():
+		cfg["submit_endpoint"] = str(params["submit_endpoint"]).strip_edges()
+	if params.has("status_endpoint") and not str(params["status_endpoint"]).strip_edges().is_empty():
+		cfg["status_endpoint"] = str(params["status_endpoint"]).strip_edges()
+	if params.has("request_body"):
+		cfg["request_body"] = params["request_body"]
+	if params.has("headers") and params["headers"] is Dictionary:
+		for k in (params["headers"] as Dictionary):
+			(cfg["headers"] as Dictionary)[k] = params["headers"][k]
+	if params.has("task_id_field") and not str(params["task_id_field"]).strip_edges().is_empty():
+		cfg["task_id_field"] = str(params["task_id_field"]).strip_edges()
+	if params.has("status_field") and not str(params["status_field"]).strip_edges().is_empty():
+		cfg["status_field"] = str(params["status_field"]).strip_edges()
+	if params.has("model_url_field") and not str(params["model_url_field"]).strip_edges().is_empty():
+		cfg["model_url_fields"] = [str(params["model_url_field"]).strip_edges()]
+
+	var explicit_no_key: bool = params.has("api_key_env") and str(params["api_key_env"]).strip_edges().is_empty()
+	if params.has("api_key_env") and not str(params["api_key_env"]).strip_edges().is_empty():
+		cfg["api_key_env"] = str(params["api_key_env"]).strip_edges()
+	elif explicit_no_key:
+		cfg["api_key_env"] = ""
+	return cfg
+
+# Resolve a dot-path value out of a parsed JSON Variant. Returns {value} or {error}.
+func _json_path_value(root: Variant, field_path: String) -> Dictionary:
+	if field_path.strip_edges().is_empty():
+		return {"error": "empty field path"}
+	var node: Variant = root
+	for part in field_path.split("."):
+		if node is Dictionary and (node as Dictionary).has(part):
+			node = (node as Dictionary)[part]
+		elif node is Array and part.is_valid_int() and int(part) >= 0 and int(part) < (node as Array).size():
+			node = (node as Array)[int(part)]
+		else:
+			return {"error": "path '%s' not found in JSON" % field_path}
+	return {"value": node}
+
+# Case-insensitive membership test for a provider status string.
+static func _status_matches(status: String, values: Array) -> bool:
+	for v in values:
+		if status.to_lower() == str(v).to_lower():
+			return true
+	return false
+
+# Magic-byte sniffing so we never land a JSON error body as if it were a model.
+# Accepts binary glTF (GLB magic "glTF") or a JSON .gltf document.
+static func _validate_gltf_bytes(bytes: PackedByteArray) -> bool:
+	if bytes.size() < 4:
+		return false
+	if bytes[0] == 0x67 and bytes[1] == 0x6C and bytes[2] == 0x54 and bytes[3] == 0x46:
+		return true
+	for b in bytes:
+		if b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D or b == 0xEF or b == 0xBB or b == 0xBF:
+			continue
+		return b == 0x7B
+	return false
+
+static func _url_host(url: String) -> String:
+	var scheme_end: int = url.find("://")
+	if scheme_end == -1:
+		return ""
+	var rest: String = url.substr(scheme_end + 3)
+	var slash: int = rest.find("/")
+	return rest if slash == -1 else rest.substr(0, slash)
+
+func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
+	var prompt: String = str(params.get("prompt", "")).strip_edges()
+	if prompt.is_empty():
+		return {"error": "Missing required parameter: prompt"}
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty():
+		return {"error": "Missing required parameter: resource_path"}
+	var validation: Dictionary = PathValidator.validate_file_path(resource_path, [".glb", ".gltf"])
+	if not validation.get("valid", false):
+		return {"error": "Invalid resource_path: " + str(validation.get("error", ""))}
+	resource_path = str(validation.get("sanitized", resource_path))
+
+	var cfg: Dictionary = _resolve_3d_config(params)
+	if cfg.has("error"):
+		return cfg
+
+	var submit_endpoint: String = str(cfg["submit_endpoint"]).strip_edges()
+	if submit_endpoint.is_empty():
+		return {
+			"status": "unconfigured",
+			"message": "generate_3d_asset requires a 'preset' (e.g. %s) or an explicit 'submit_endpoint'+'status_endpoint'. The API key is read from an OS env var named by the preset (e.g. MESHY_API_KEY); set it before calling. The plugin never ships or stores a key — you supply your own and pay your own provider quota." % ", ".join(PackedStringArray(AssetProviderPresets.preset_ids_for_category("model3d"))),
+			"category": "model3d"
+		}
+	if str(cfg["status_endpoint"]).strip_edges().is_empty():
+		return {"error": "No status_endpoint configured for polling the 3D job"}
+	var task_id_field: String = str(cfg["task_id_field"]).strip_edges()
+	if task_id_field.is_empty():
+		return {"error": "No task_id_field configured to read the job id from the submit response"}
+
+	var api_key: String = ""
+	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()
+	if not api_key_env.is_empty():
+		api_key = OS.get_environment(api_key_env)
+		if api_key.is_empty():
+			return {"error": "Environment variable '%s' is not set or empty" % api_key_env}
+
+	var headers: PackedStringArray = PackedStringArray()
+	var auth_header: String = str(cfg["auth_header"]).strip_edges()
+	if not api_key.is_empty() and not auth_header.is_empty():
+		headers.append("%s: %s%s" % [auth_header, str(cfg["auth_prefix"]), api_key])
+	if cfg["headers"] is Dictionary:
+		for k in (cfg["headers"] as Dictionary):
+			headers.append("%s: %s" % [str(k), str((cfg["headers"] as Dictionary)[k])])
+
+	var timeout_sec: float = clampf(float(params.get("timeout_sec", 30.0)), 1.0, 120.0)
+	var poll_interval: float = clampf(float(params.get("poll_interval_sec", 5.0)), 1.0, 30.0)
+	var max_wait: float = clampf(float(params.get("max_wait_sec", 300.0)), 5.0, 1800.0)
+
+	# 1) Submit the generation job.
+	var submit_endpoint_final: String = _subst_placeholders(submit_endpoint, prompt, 0, 0)
+	var submit_method: int = HTTPClient.METHOD_POST if str(cfg["submit_method"]).to_upper() == "POST" else HTTPClient.METHOD_GET
+	var submit_headers: PackedStringArray = headers.duplicate()
+	var submit_body: String = ""
+	if cfg["request_body"] != null:
+		var raw_body: Variant = _subst_placeholders(cfg["request_body"], prompt, 0, 0)
+		if raw_body is String:
+			submit_body = raw_body
+		else:
+			submit_body = JSON.stringify(raw_body)
+			var has_ct: bool = false
+			for h in submit_headers:
+				if (h as String).to_lower().begins_with("content-type:"):
+					has_ct = true
+					break
+			if not has_ct:
+				submit_headers.append("Content-Type: application/json")
+	var submit_res: Dictionary = _http_blocking_request(submit_endpoint_final, submit_method, submit_headers, submit_body, timeout_sec)
+	if submit_res.has("error"):
+		return submit_res
+	var submit_json: Variant = JSON.parse_string((submit_res["bytes"] as PackedByteArray).get_string_from_utf8())
+	if submit_json == null:
+		return {"error": "Submit response was not valid JSON"}
+	var task_id_res: Dictionary = _json_path_value(submit_json, task_id_field)
+	if task_id_res.has("error"):
+		return {"error": "Could not read task id (field '%s'): %s" % [task_id_field, task_id_res["error"]]}
+	var task_id: String = str(task_id_res["value"]).strip_edges()
+	if task_id.is_empty():
+		return {"error": "Provider returned an empty task id"}
+
+	# 2) Poll the status endpoint until success / failure / timeout.
+	var status_field: String = str(cfg["status_field"]).strip_edges()
+	var progress_field: String = str(cfg["progress_field"]).strip_edges()
+	var success_values: Array = cfg["success_values"]
+	var failure_values: Array = cfg["failure_values"]
+	var status_endpoint: String = str(cfg["status_endpoint"]).strip_edges().replace("{task_id}", task_id)
+	var status_method: int = HTTPClient.METHOD_GET if str(cfg["status_method"]).to_upper() == "GET" else HTTPClient.METHOD_POST
+	var deadline: int = Time.get_ticks_msec() + int(max_wait * 1000.0)
+	var last_status: String = ""
+	var last_progress: int = -1
+	var status_json: Variant = null
+	var poll_count: int = 0
+	while true:
+		var st_res: Dictionary = _http_blocking_request(status_endpoint, status_method, headers, "", timeout_sec)
+		if st_res.has("error"):
+			return st_res
+		poll_count += 1
+		status_json = JSON.parse_string((st_res["bytes"] as PackedByteArray).get_string_from_utf8())
+		if status_json == null:
+			return {"error": "Status response was not valid JSON"}
+		var sv: Dictionary = _json_path_value(status_json, status_field)
+		if sv.has("error"):
+			return {"error": "Could not read job status (field '%s'): %s" % [status_field, sv["error"]]}
+		last_status = str(sv["value"])
+		if not progress_field.is_empty():
+			var pv: Dictionary = _json_path_value(status_json, progress_field)
+			if not pv.has("error") and (pv["value"] is float or pv["value"] is int):
+				last_progress = int(pv["value"])
+		if _status_matches(last_status, success_values):
+			break
+		if _status_matches(last_status, failure_values):
+			return {"error": "3D generation job %s failed (status '%s')" % [task_id, last_status], "status": "failed", "job_status": last_status, "task_id": task_id}
+		if Time.get_ticks_msec() > deadline:
+			return {"error": "Timed out after %.0fs waiting for 3D job %s (last status '%s', progress %d)" % [max_wait, task_id, last_status, last_progress], "status": "timeout", "task_id": task_id}
+		OS.delay_msec(int(poll_interval * 1000.0))
+
+	# 3) Resolve the model URL and download it.
+	var model_url: String = ""
+	for fld in (cfg["model_url_fields"] as Array):
+		var mv: Dictionary = _json_path_value(status_json, str(fld))
+		if not mv.has("error") and mv["value"] is String and not str(mv["value"]).strip_edges().is_empty():
+			model_url = str(mv["value"]).strip_edges()
+			break
+	if model_url.is_empty():
+		return {"error": "Job succeeded but no model URL found (tried: %s)" % ", ".join(PackedStringArray(cfg["model_url_fields"]))}
+	var dl: Dictionary = _http_blocking_request(model_url, HTTPClient.METHOD_GET, PackedStringArray(), "", clampf(timeout_sec * 2.0, 1.0, 120.0))
+	if dl.has("error"):
+		return dl
+	var model_bytes: PackedByteArray = dl["bytes"]
+	if model_bytes.is_empty():
+		return {"error": "Downloaded model is empty"}
+	if not _validate_gltf_bytes(model_bytes):
+		return {"error": "Downloaded payload is not a valid glTF/GLB asset"}
+
+	# 4) Land the bytes into res:// and write metadata.
+	var dir_path: String = resource_path.get_base_dir()
+	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
+		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
+			return {"error": "Failed to create directory: " + dir_path}
+	var f: FileAccess = FileAccess.open(resource_path, FileAccess.WRITE)
+	if not f:
+		return {"error": "Failed to open file for write: " + resource_path}
+	f.store_buffer(model_bytes)
+	f.close()
+
+	var generator: Dictionary = {
+		"mode": "external_text_to_3d",
+		"preset": str(cfg["preset"]),
+		"submit_endpoint": submit_endpoint,
+		"task_id": task_id,
+		"job_status": last_status,
+		"polls": poll_count,
+		"model_url_host": _url_host(model_url)
+	}
+	if last_progress >= 0:
+		generator["progress"] = last_progress
+
+	var result: Dictionary = {
+		"status": "success",
+		"resource_path": resource_path,
+		"category": "model3d",
+		"provider": "external",
+		"prompt": prompt,
+		"generator": generator,
+		"size_bytes": model_bytes.size()
+	}
+
+	if bool(params.get("record_prompt", true)):
+		var manifest_path: String = resource_path + ".gen.json"
+		var manifest: Dictionary = {
+			"prompt": prompt,
+			"category": "model3d",
+			"provider": "external",
+			"generator": generator,
+			"godot_version": str(Engine.get_version_info().get("string", ""))
+		}
+		var mf: FileAccess = FileAccess.open(manifest_path, FileAccess.WRITE)
+		if mf:
+			mf.store_string(JSON.stringify(manifest, "\t"))
+			mf.close()
+			result["manifest_path"] = manifest_path
+
+	if bool(params.get("reimport", true)):
+		var reimport: Dictionary = _reimport_asset(resource_path)
+		result["reimported"] = bool(reimport.get("reimported", false))
+		if reimport.has("reason"):
+			result["reimport_skipped_reason"] = reimport["reason"]
+	else:
+		result["reimported"] = false
+		result["reimport_skipped_reason"] = "reimport disabled by caller"
+
+	if bool(params.get("inspect", true)):
+		var inspection: Dictionary = _tool_inspect_gltf_asset({"path": resource_path, "include_names": true})
+		if inspection.has("error"):
+			result["inspect_error"] = inspection["error"]
+		else:
+			result["inspection"] = inspection
+
 	return result
 
 # ============================================================================

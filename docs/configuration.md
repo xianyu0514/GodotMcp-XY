@@ -165,7 +165,7 @@ in one click instead of toggling tools individually. Each preset enables the 30 
 | Debugging | `debugging` | core + runtime/debugger tools | Inspecting a running game |
 | QA Automation | `automation_qa` | core + debug + project (test runners) | Automated test and input flows |
 | Art & Resources | `art_resources` | core + resource/scene authoring | Themes, tilesets, materials, resources |
-| All tools | `all` | every registered tool (211) | Power users |
+| All tools | `all` | every registered tool (212) | Power users |
 
 The AI can also apply these presets itself without touching the panel by calling the
 `enable_tools` meta tool with a `preset` id (e.g. `enable_tools({preset: "debugging"})`), or

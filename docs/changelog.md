@@ -5,7 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **211 MCP tools** across 6 categories (30 core, 179 advanced) plus 2 always-on **meta**
+- **212 MCP tools** across 6 categories (30 core, 180 advanced) plus 2 always-on **meta**
   tools (`list_tool_catalog`, `enable_tools`) for on-demand tool discovery, classified by
   `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30. The MCP `initialize` response
   carries an `instructions` field describing the lazy-loading workflow, so compatible clients
@@ -82,6 +82,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
     reports a structural summary (mesh/material/animation/skin/camera/light/node counts plus
     names) and validation warnings (no meshes, meshes without materials, no animations), so a
     generated or downloaded 3D asset can be verified before use. Read-only.
+- **External generation** — bring-your-own-key text-to-3D:
+  - **`generate_3d_asset`** (Project-Advanced): generates a 3D model (glTF/GLB) from a text
+    prompt via an external text-to-3D provider and lands it into `res://`. Asynchronous flow:
+    submits a job, polls the provider's status endpoint until success/failure, downloads the
+    resulting glTF/GLB, validates the bytes (GLB magic / JSON glTF), saves it, and by default
+    runs `inspect_gltf_asset` on the result and writes a `.gen.json` manifest. Pick a `preset`
+    (`meshy_text_to_3d`, `tripo_text_to_3d`) to fill the submit/status endpoints, request body
+    and field paths from a built-in template, or set them manually. **Bring-your-own-key:** the
+    API key is read from an OS env var named by the preset (e.g. `MESHY_API_KEY` /
+    `TRIPO_API_KEY`), never logged or stored — the plugin ships only request templates and the
+    user supplies their own key and pays their own provider quota. Returns `unconfigured` when
+    no preset/`submit_endpoint` is set so callers can skip or fall back.
+  - New `model3d` provider presets (`meshy_text_to_3d`, `tripo_text_to_3d`) added to
+    `AssetProviderPresets`, alongside the existing image/audio presets.
 
 ## 1.0.6
 

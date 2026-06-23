@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**58 tools** — 3 core, 55 advanced.
+**59 tools** — 3 core, 56 advanced.
 
 Project-level tools: project info and settings (read and write), resource creation and property editing, input map and autoload management, global-class / ClassDB metadata, the test runner, health and dependency audits, Godot 4.7 migration scanning/fixes, and asset authoring (themes, gradients, drawable textures, animations, TileSets, PCK packing).
 
@@ -18,7 +18,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `get_project_settings` | Core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | Core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 
-### Project-Advanced (55)
+### Project-Advanced (56)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -64,6 +64,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `generate_asset` | Advanced | Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes (image: PNG/JPEG/WEBP; audio: WAV/OGG/MP3), and saves them. With provider 'external', pass a `preset` (openai_image, stability_image, elevenlabs_tts, local_sd_webui) to fill endpoint/headers/body from a built-in template (API key read from an OS env var, never logged), or set endpoint/headers manually; use `body_format: "multipart"` for APIs that require multipart/form-data (e.g. Stability v2beta). A default preset and key env var can also be configured in the MCP panel. Returns 'unconfigured' when no endpoint/preset is set so callers can fall back to placeholders. The result is reimported when an editor interface is available. |
 | `slice_sprite_sheet` | Advanced | Slice a sprite sheet texture into a SpriteFrames resource (.tres) so a generated/imported sheet becomes animation-ready in one step. Grid is given as `{h_frames, v_frames}` or `{cell_width, cell_height}` with optional `margin`/`spacing`; frames are indexed row-major from 0. Pass `animations` (`{name, frames OR start_frame+end_frame, fps, loop}`) for named clips, or omit for a single looping `default` clip. `create_scene=true` also saves an AnimatedSprite2D scene wired to the SpriteFrames with the first clip autoplaying. |
 | `inspect_gltf_asset` | Advanced | Import a glTF/GLB file with GLTFDocument and report a structural summary (mesh/material/animation/skin/camera/light/node counts plus names) and validation warnings (no meshes, meshes without materials, no animations). Read-only verification for generated/downloaded 3D assets before wiring them into a scene. |
+| `generate_3d_asset` | Advanced | Generate a 3D model (glTF/GLB) from a text prompt via an external text-to-3D provider and land it into res://. Asynchronous: submits a job, polls the provider's status endpoint until success/failure, downloads the resulting glTF/GLB, validates the bytes, and (by default) inspects the structure. Pick a `preset` (meshy_text_to_3d, tripo_text_to_3d) to fill the submit/status endpoints, body and field paths from a built-in template, or set them manually. Bring-your-own-key: the API key is read from an OS env var named by the preset (e.g. MESHY_API_KEY / TRIPO_API_KEY), never logged or stored, and the user pays their own provider quota. Returns 'unconfigured' when no preset/submit_endpoint is set. |
 | `create_theme` | Advanced | Create and save a Theme resource (.tres/.theme) for styling Control-based UI such as card and HUD scenes, optionally setting default base scale, font size, and default font. Populate it afterwards with set_theme_item. |
 | `set_theme_item` | Advanced | Load an existing Theme, set one item (color, constant, font_size, font, icon, or stylebox) for a given Control type, and re-save it. Colors/constants/font sizes are given directly; fonts/icons/styleboxes are resource paths. |
 | `set_default_theme` | Advanced | Set or clear the project-wide default GUI theme (the gui/theme/custom project setting) and persist it to project.godot. Pass clear=true to fall back to the engine default. |

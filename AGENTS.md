@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **211 个工具**（30 核心 + 179 补充 + 2 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **212 个工具**（30 核心 + 180 补充 + 2 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -64,7 +64,7 @@ addons/godot_mcp/
 │   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
 │   ├── editor_tools_native.gd  # 23 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态
 │   ├── debug_tools_native.gd   # 73 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制、play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
-│   ├── project_tools_native.gd # 58 个工具（3 核心 + 55 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、generate_asset 资产生成（占位程序化 + 外部 API 适配）、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）、manage_task_plan 持久任务图 + 完成定义（DoD）存储（编排 plan→execute→run→verify→fix 闭环，依赖/循环检测、可执行任务查询、进度统计，落盘到 res://.mcp/task_plan.json）、assert_visual_baseline 视觉回归门禁（截图与基线（黄金文件）差异比较 + 容差判定 + 可选差异热力图）、slice_sprite_sheet 精灵图切片（按网格切成 SpriteFrames 资源 + 命名动画 + 可选 AnimatedSprite2D 场景）、inspect_gltf_asset glTF/GLB 导入校验（结构摘要 + 校验警告，只读）
+│   ├── project_tools_native.gd # 59 个工具（3 核心 + 56 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、generate_asset 资产生成（占位程序化 + 外部 API 适配）、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）、manage_task_plan 持久任务图 + 完成定义（DoD）存储（编排 plan→execute→run→verify→fix 闭环，依赖/循环检测、可执行任务查询、进度统计，落盘到 res://.mcp/task_plan.json）、assert_visual_baseline 视觉回归门禁（截图与基线（黄金文件）差异比较 + 容差判定 + 可选差异热力图）、slice_sprite_sheet 精灵图切片（按网格切成 SpriteFrames 资源 + 命名动画 + 可选 AnimatedSprite2D 场景）、inspect_gltf_asset glTF/GLB 导入校验（结构摘要 + 校验警告，只读）、generate_3d_asset 文生3D 外部生成（异步提交→轮询→下载 glTF/GLB→校验→自动 inspect，BYO-key 自带密钥/自付额度，Meshy/Tripo 预设）
 │   └── meta_tools_native.gd    # 2 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
