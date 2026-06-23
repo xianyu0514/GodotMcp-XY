@@ -1355,7 +1355,7 @@ func _build_diff_image(baseline_image: Image, candidate_image: Image, per_pixel_
 
 func _register_assert_visual_baseline(server_core: RefCounted) -> void:
 	var tool_name: String = "assert_visual_baseline"
-	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return a pass/fail verdict against tolerances. If the baseline file does not exist (or update_baseline=true) the candidate is saved as the new baseline and the gate passes (golden-file bootstrap). Otherwise the images are diffed (a per-channel delta above per_pixel_threshold marks a pixel changed) and the gate passes only when diff_pixel_count <= max_diff_pixels AND (when > 0) diff_ratio <= max_diff_ratio AND (when > 0) rmse <= rmse_threshold. Optionally writes a diff heatmap PNG to diff_output_path. Dimension mismatches fail the gate."
+	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return a pass/fail verdict against tolerances. If the baseline file does not exist (or update_baseline=true) the candidate is saved as the new baseline and the gate passes (golden-file bootstrap). Otherwise the images are diffed (a per-channel delta above per_pixel_threshold marks a pixel changed) and the gate passes only when every configured tolerance holds: diff_pixel_count <= max_diff_pixels (enforced when max_diff_pixels is given, or when no other tolerance is set), diff_ratio <= max_diff_ratio (when > 0), and rmse <= rmse_threshold (when > 0). Optionally writes a diff heatmap PNG to diff_output_path. Dimension mismatches fail the gate."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1478,7 +1478,10 @@ func _tool_assert_visual_baseline(params: Dictionary) -> Dictionary:
 	var diff_ratio: float = float(diff["diff_ratio"])
 	var rmse: float = float(diff["rmse"])
 
-	var passed: bool = diff_pixel_count <= max_diff_pixels
+	var enforce_pixel_limit: bool = params.has("max_diff_pixels") or (max_diff_ratio <= 0.0 and rmse_threshold <= 0.0)
+	var passed: bool = true
+	if enforce_pixel_limit:
+		passed = passed and diff_pixel_count <= max_diff_pixels
 	if max_diff_ratio > 0.0:
 		passed = passed and diff_ratio <= max_diff_ratio
 	if rmse_threshold > 0.0:

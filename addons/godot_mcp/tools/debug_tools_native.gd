@@ -3351,6 +3351,8 @@ func _tool_assert_performance_budget(params: Dictionary) -> Dictionary:
 		snapshot = await _tool_get_runtime_performance_snapshot(params)
 		if snapshot.has("error"):
 			return snapshot
+		if not snapshot.has("fps"):
+			return {"error": "No runtime performance snapshot available (game not running or probe not ready)", "status": str(snapshot.get("status", "")), "snapshot": snapshot}
 
 	var evaluation: Dictionary = _evaluate_performance_budget(snapshot, budget)
 	return {

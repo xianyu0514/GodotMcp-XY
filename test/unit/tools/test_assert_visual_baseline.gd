@@ -136,6 +136,34 @@ func test_passes_within_max_diff_ratio():
 	})
 	assert_true(bool(result["passed"]), "1/100 = 0.01 <= max_diff_ratio 0.05 passes")
 
+func test_passes_within_rmse_threshold_only():
+	var baseline: Image = _make_image(10, 10, Color(0, 0, 0, 1))
+	var candidate: Image = _make_image(10, 10, Color(0, 0, 0, 1))
+	candidate.set_pixel(0, 0, Color(1, 1, 1, 1))
+	var baseline_path: String = _save(baseline, "baseline.png")
+	var candidate_path: String = _save(candidate, "candidate.png")
+	var result: Dictionary = _tools._tool_assert_visual_baseline({
+		"candidate_path": candidate_path,
+		"baseline_path": baseline_path,
+		"rmse_threshold": 0.5
+	})
+	assert_true(bool(result["passed"]), "Small RMSE within rmse_threshold passes despite a changed pixel")
+
+func test_explicit_max_diff_pixels_still_enforced_with_ratio():
+	var baseline: Image = _make_image(10, 10, Color(0, 0, 0, 1))
+	var candidate: Image = _make_image(10, 10, Color(0, 0, 0, 1))
+	candidate.set_pixel(0, 0, Color(1, 1, 1, 1))
+	candidate.set_pixel(1, 1, Color(1, 1, 1, 1))
+	var baseline_path: String = _save(baseline, "baseline.png")
+	var candidate_path: String = _save(candidate, "candidate.png")
+	var result: Dictionary = _tools._tool_assert_visual_baseline({
+		"candidate_path": candidate_path,
+		"baseline_path": baseline_path,
+		"max_diff_pixels": 1,
+		"max_diff_ratio": 0.9
+	})
+	assert_false(bool(result["passed"]), "Explicit max_diff_pixels is still ANDed with max_diff_ratio")
+
 func test_fails_on_dimension_mismatch():
 	var baseline_path: String = _save(_make_image(4, 4, Color(0, 0, 0, 1)), "baseline.png")
 	var candidate_path: String = _save(_make_image(8, 8, Color(0, 0, 0, 1)), "candidate.png")
