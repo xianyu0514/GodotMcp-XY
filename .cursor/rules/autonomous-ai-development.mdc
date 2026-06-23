@@ -90,6 +90,13 @@ alwaysApply: true
 - 用户声明应存在的前提被证伪（按"证伪即上报"处理）。
 - 某改动会与用户明确指令相矛盾。
 
+## 6b. 制作游戏时按固定 playbook 跑
+
+做"用 MCP 工具制作游戏"的任务时，每次按同一套可执行 playbook 推进，保证流程确定、可复跑：
+
+- 规划：[GDD → 任务图 playbook](../../docs/industrialization/playbook-gdd-to-task-graph.md) —— 用 `manage_task_plan` 把 GDD 落成带**可机检 DoD 门禁**（`gate`）的任务图。
+- 执行：[单切片 PLAN→EXECUTE→RUN→VERIFY→FIX playbook](../../docs/industrialization/playbook-single-slice.md) —— 取一个就绪任务跑完整闭环；VERIFY 阶段把实测值经 `set_dod` 的 `observed` 回填，由门禁客观判定 `met`，未过门禁不得 `set_status=done`（不要 `force`）。
+
 ## 7. 一句话总结
 
 在功能分支上小步自动提交；每次提交先过 L0 导入门禁、保持向后兼容与跨文件计数同步；用能证明改动的最便宜测试；持续推进直到完成，只有硬阻塞才停。
