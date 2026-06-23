@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**55 tools** — 3 core, 52 advanced.
+**56 tools** — 3 core, 53 advanced.
 
 Project-level tools: project info and settings (read and write), resource creation and property editing, input map and autoload management, global-class / ClassDB metadata, the test runner, health and dependency audits, Godot 4.7 migration scanning/fixes, and asset authoring (themes, gradients, drawable textures, animations, TileSets, PCK packing).
 
@@ -18,7 +18,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `get_project_settings` | Core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | Core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 
-### Project-Advanced (52)
+### Project-Advanced (53)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -39,6 +39,7 @@ Project-level tools: project info and settings (read and write), resource creati
 | `get_class_api_metadata` | Advanced | Get typed API metadata for an engine ClassDB class or a project global script class. |
 | `inspect_csharp_project_support` | Advanced | Inspect C# / Mono project support files such as .csproj and .sln, including target frameworks, assembly metadata, and references. |
 | `compare_render_screenshots` | Advanced | Compare two screenshot images and report pixel differences, RMSE, and threshold-based match status. |
+| `assert_visual_baseline` | Advanced | Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and pass/fail against tolerances. Bootstraps the baseline from the candidate when missing (or `update_baseline=true`); otherwise passes only when every configured tolerance holds: `diff_pixel_count <= max_diff_pixels` (enforced when `max_diff_pixels` is given, or when no other tolerance is set), `diff_ratio <= max_diff_ratio` (when > 0), and `rmse <= rmse_threshold` (when > 0). Can write a diff heatmap to `diff_output_path`. |
 | `inspect_tileset_resource` | Advanced | Inspect a TileSet resource and summarize its sources, atlas tiles, and scene tiles. |
 | `reimport_resources` | Advanced | Reimport project resources. |
 | `get_import_metadata` | Advanced | Get resource import metadata. |

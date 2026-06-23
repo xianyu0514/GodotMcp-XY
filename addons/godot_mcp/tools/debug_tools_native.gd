@@ -146,6 +146,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_await_runtime_condition(server_core)
 	_register_assert_runtime_condition(server_core)
 	_register_play_and_verify(server_core)
+	_register_assert_performance_budget(server_core)
+	_register_assert_no_runtime_errors(server_core)
 
 func _on_log_message(level: String, message: String) -> void:
 	var log_entry: String = "[%s] %s" % [level, message]
@@ -2905,7 +2907,7 @@ func _register_play_and_verify(server_core: RefCounted) -> void:
 			"properties": {
 				"steps": {
 					"type": "array",
-					"description": "Ordered input steps. Each step may set 'action' (InputMap action name) with optional 'pressed'/'strength', or 'event' (structured InputEvent payload). Optional per-step 'wait_ms' (wall-clock) or 'wait_frames' pauses after the input, and 'screenshot' captures a frame after the wait. When deterministic=true, 'wait_frames' advances exactly that many frames inside the game.",
+					"description": "Ordered input steps. Each step may set 'action' (InputMap action name) with optional 'pressed'/'strength', or 'event' (structured InputEvent payload). Optional per-step 'wait_ms' (wall-clock) or 'wait_frames' pauses after the input, and 'screenshot' captures a frame after the wait. When deterministic=true, 'wait_frames' advances exactly that many frames inside the game (and is sampled into the trajectory); if a step ALSO sets 'wait_ms' it is applied afterwards as an extra real-time settle that is not frame-stepped or sampled, so prefer using only one of the two per step.",
 					"items": {"type": "object"}
 				},
 				"assertions": {
@@ -3262,6 +3264,144 @@ func _filter_runtime_error_events(events: Array, baseline_sequence: int, categor
 			"function": str(entry.get("function", ""))
 		})
 	return out
+
+const _PERF_BUDGET_RULES: Array = [
+	{"key": "min_fps", "field": "fps", "comparator": "gte", "scale": 1.0},
+	{"key": "max_frame_time_ms", "field": "frame_time_sec", "comparator": "lte", "scale": 1000.0},
+	{"key": "max_physics_frame_time_ms", "field": "physics_frame_time_sec", "comparator": "lte", "scale": 1000.0},
+	{"key": "max_object_count", "field": "object_count", "comparator": "lte", "scale": 1.0},
+	{"key": "max_resource_count", "field": "resource_count", "comparator": "lte", "scale": 1.0},
+	{"key": "max_rendered_objects", "field": "rendered_objects_in_frame", "comparator": "lte", "scale": 1.0},
+	{"key": "max_memory_mb", "field": "memory_static_mb", "comparator": "lte", "scale": 1.0},
+	{"key": "max_node_count", "field": "node_count", "comparator": "lte", "scale": 1.0}
+]
+
+func _register_assert_performance_budget(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"assert_performance_budget",
+		"Performance budget gate: capture a runtime performance snapshot from the running game and check it against a budget, returning a pass/fail verdict plus a per-metric breakdown. Budget keys: min_fps, max_frame_time_ms, max_physics_frame_time_ms, max_object_count, max_resource_count, max_rendered_objects, max_memory_mb, max_node_count (define only the ones to enforce). min_* checks actual >= limit; max_* checks actual <= limit. Pass an explicit 'snapshot' object to evaluate a previously captured snapshot instead of querying the game. Requires the game to be running with the runtime probe installed (unless 'snapshot' is supplied).",
+		{
+			"type": "object",
+			"properties": {
+				"budget": {"type": "object", "description": "Threshold map; see tool description for valid keys."},
+				"snapshot": {"type": "object", "description": "Optional pre-captured performance snapshot to evaluate instead of querying the game."},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 1500}
+			},
+			"required": ["budget"]
+		},
+		Callable(self, "_tool_assert_performance_budget"),
+		{"type": "object", "properties": {"passed": {"type": "boolean"}, "checks": {"type": "array"}, "snapshot": {"type": "object"}, "budget": {"type": "object"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _evaluate_performance_budget(snapshot: Dictionary, budget: Dictionary) -> Dictionary:
+	var checks: Array = []
+	var all_passed: bool = true
+	for rule in _PERF_BUDGET_RULES:
+		var key: String = str(rule["key"])
+		if not budget.has(key):
+			continue
+		var field: String = str(rule["field"])
+		var comparator: String = str(rule["comparator"])
+		var scale: float = float(rule["scale"])
+		var limit: float = float(budget[key])
+		var check: Dictionary = {
+			"metric": key,
+			"field": field,
+			"comparator": comparator,
+			"limit": limit
+		}
+		if not snapshot.has(field):
+			check["passed"] = false
+			check["error"] = "Snapshot missing field: " + field
+			all_passed = false
+			checks.append(check)
+			continue
+		var actual: float = float(snapshot[field]) * scale
+		check["actual"] = actual
+		var ok: bool = (actual >= limit) if comparator == "gte" else (actual <= limit)
+		check["passed"] = ok
+		if not ok:
+			all_passed = false
+		checks.append(check)
+	return {"passed": all_passed, "checks": checks}
+
+func _tool_assert_performance_budget(params: Dictionary) -> Dictionary:
+	var budget_raw: Variant = params.get("budget", {})
+	if not (budget_raw is Dictionary):
+		return {"error": "Parameter 'budget' must be an object"}
+	var budget: Dictionary = budget_raw
+	if budget.is_empty():
+		return {"error": "Parameter 'budget' must define at least one threshold"}
+
+	var valid_keys: Array = []
+	for rule in _PERF_BUDGET_RULES:
+		valid_keys.append(str(rule["key"]))
+	for k in budget.keys():
+		if not valid_keys.has(str(k)):
+			return {"error": "Unknown budget key: " + str(k) + ". Valid keys: " + ", ".join(valid_keys)}
+
+	var snapshot: Dictionary = {}
+	var provided: Variant = params.get("snapshot", null)
+	if provided is Dictionary and not (provided as Dictionary).is_empty():
+		snapshot = provided
+	else:
+		snapshot = await _tool_get_runtime_performance_snapshot(params)
+		if snapshot.has("error"):
+			return snapshot
+		if not snapshot.has("fps"):
+			return {"error": "No runtime performance snapshot available (game not running or probe not ready)", "status": str(snapshot.get("status", "")), "snapshot": snapshot}
+
+	var evaluation: Dictionary = _evaluate_performance_budget(snapshot, budget)
+	return {
+		"passed": bool(evaluation["passed"]),
+		"checks": evaluation["checks"],
+		"snapshot": snapshot,
+		"budget": budget
+	}
+
+func _register_assert_no_runtime_errors(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"assert_no_runtime_errors",
+		"Runtime-error hard gate: scan the categorized debugger output captured from the running game and fail if any error events are present. By default it inspects the 'stderr' category; pass 'categories' to widen or narrow it, and 'since_sequence' to only consider events newer than a previously recorded sequence number (so you can gate a specific window of a run). Returns passed=false with the captured error events when any are found.",
+		{
+			"type": "object",
+			"properties": {
+				"categories": {"type": "array", "description": "Output categories treated as errors. Default ['stderr'].", "items": {"type": "string"}},
+				"since_sequence": {"type": "integer", "description": "Only consider events with sequence greater than this. Default 0.", "default": 0},
+				"count": {"type": "integer", "description": "Maximum number of recent output events to scan. Default 500.", "default": 500}
+			}
+		},
+		Callable(self, "_tool_assert_no_runtime_errors"),
+		{"type": "object", "properties": {"passed": {"type": "boolean"}, "error_count": {"type": "integer"}, "errors": {"type": "array"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_assert_no_runtime_errors(params: Dictionary) -> Dictionary:
+	var bridge: RefCounted = _get_debugger_bridge()
+	if not bridge:
+		return {"error": "Debugger bridge is not available"}
+	var categories: Array = []
+	var categories_raw: Variant = params.get("categories", ["stderr"])
+	if categories_raw is Array:
+		for c in categories_raw:
+			categories.append(str(c))
+	if categories.is_empty():
+		categories = ["stderr"]
+	var since_sequence: int = int(params.get("since_sequence", 0))
+	var count: int = maxi(int(params.get("count", 500)), 1)
+	var output_dump: Dictionary = bridge.get_output_events(count, 0, "asc", "")
+	var errors: Array = _filter_runtime_error_events(output_dump.get("events", []), since_sequence, categories)
+	return {
+		"passed": errors.is_empty(),
+		"error_count": errors.size(),
+		"errors": errors,
+		"categories": categories,
+		"since_sequence": since_sequence
+	}
 
 ## Awaits roughly `ms` of real time by yielding editor frames, letting the
 ## separately-running game process advance while we wait.

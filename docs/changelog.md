@@ -5,7 +5,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## 1.0.7-pre1 (current)
 
-- **206 MCP tools** across 6 categories (30 core, 174 advanced) plus 2 always-on **meta**
+- **209 MCP tools** across 6 categories (30 core, 177 advanced) plus 2 always-on **meta**
   tools (`list_tool_catalog`, `enable_tools`) for on-demand tool discovery, classified by
   `mcp_tool_classifier.gd` with a `CORE_MAX_COUNT` of 30. The MCP `initialize` response
   carries an `instructions` field describing the lazy-loading workflow, so compatible clients
@@ -54,6 +54,22 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
   `{metric, aggregate, operator, expected}`, and `include_trajectory=false` keeps responses
   compact on long runs. Backward compatible: defaults leave the original wall-clock behavior
   unchanged.
+- **Regression gates** — three pass/fail tools that turn a playtest into an automated
+  ratchet so changes can be checked for *no regression*:
+  - **`assert_visual_baseline`** (Project-Advanced): visual-regression gate. Compares a
+    candidate screenshot against a stored baseline (golden) image and passes only within
+    tolerances (`max_diff_pixels`, `max_diff_ratio`, `rmse_threshold`, with a per-pixel delta
+    threshold). Bootstraps the baseline from the candidate when missing (or
+    `update_baseline=true`), can emit a diff heatmap PNG to `diff_output_path`, and fails on
+    dimension mismatch.
+  - **`assert_performance_budget`** (Debug-Advanced): performance budget gate. Captures a
+    runtime performance snapshot and checks it against a `budget` (`min_fps`,
+    `max_frame_time_ms`, `max_physics_frame_time_ms`, `max_object_count`,
+    `max_resource_count`, `max_rendered_objects`, `max_memory_mb`, `max_node_count`),
+    returning a per-metric breakdown. Accepts an explicit `snapshot` to evaluate offline.
+  - **`assert_no_runtime_errors`** (Debug-Advanced): runtime-error hard gate. Scans the
+    categorized debugger output and fails if any error events are present; `categories` and
+    `since_sequence` let you gate a specific window of a run.
 
 ## 1.0.6
 
