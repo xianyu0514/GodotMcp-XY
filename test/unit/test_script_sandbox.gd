@@ -109,3 +109,39 @@ func test_allowlist_exempts_token():
 
 func test_empty_code_allowed():
 	assert_false(_scan("")["blocked"], "Empty code should pass")
+
+# ---------- 路径误杀回归（PR#76 review） ----------
+
+func test_allows_root_node_path():
+	assert_false(_scan("var n = get_node(\"/root/Main/Player\")")["blocked"], "Godot /root/ node path must not be blocked")
+
+func test_allows_root_node_path_in_get_tree():
+	assert_false(_scan("get_tree().root.get_node(\"/root/World\")")["blocked"], "/root/ node path is benign")
+
+func test_still_blocks_absolute_system_path():
+	var r: Dictionary = _scan("var f = FileAccess.open(\"/home/user/secret.txt\", FileAccess.READ)")
+	assert_true(r["blocked"], "absolute non-resource path still blocked")
+	assert_eq(r["category"], "filesystem")
+
+func test_still_blocks_etc_even_under_root_prefix():
+	assert_true(_scan("FileAccess.open(\"/etc/passwd\", FileAccess.READ)")["blocked"], "/etc/ still blocked")
+
+func test_tilde_in_plain_text_not_blocked():
+	assert_false(_scan("_custom_print(\"~5 enemies left\")")["blocked"], "tilde inside arbitrary text must not block")
+
+func test_tilde_version_specifier_not_blocked():
+	assert_false(_scan("var v = \"~1.0\"")["blocked"], "tilde version-like string must not block")
+
+func test_tilde_home_path_still_blocked():
+	var r: Dictionary = _scan("FileAccess.open(\"~/.ssh/id_rsa\", FileAccess.READ)")
+	assert_true(r["blocked"], "~/ home-dir path still blocked")
+	assert_eq(r["category"], "filesystem")
+
+# ---------- execute_script 单行旁路回归（PR#76 review） ----------
+# execute_script 的单行表达式路径与 execute_editor_script 共用同一 scan()，
+# 此处直接验证 scan() 对单行表达式同样拦截危险能力。
+
+func test_single_line_os_execute_blocked():
+	var r: Dictionary = _scan("OS.execute(\"rm\", [\"-rf\", \"/tmp/data\"])")
+	assert_true(r["blocked"], "single-line OS.execute must be blocked")
+	assert_eq(r["category"], "os_process")
