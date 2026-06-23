@@ -29,6 +29,7 @@ func _get_editor_interface() -> EditorInterface:
 func register_tools(server_core: RefCounted) -> void:
 	_register_get_project_info(server_core)
 	_register_get_project_settings(server_core)
+	_register_bump_version(server_core)
 	_register_list_project_tests(server_core)
 	_register_run_project_test(server_core)
 	_register_run_project_tests(server_core)
@@ -150,6 +151,156 @@ func _tool_get_project_info(params: Dictionary) -> Dictionary:
 		"main_scene": main_scene,
 		"project_path": project_path,
 		"godot_version": version_str
+	}
+
+# ============================================================================
+# bump_version - 语义化版本号自增 + changelog 自动追加（出货闭环 ⑦）
+# ============================================================================
+
+# 纯函数：对 MAJOR.MINOR.PATCH 做语义化自增，便于单测覆盖。
+static func _bump_semver(version: String, part: String) -> Dictionary:
+	var core: String = version.strip_edges()
+	var suffix: String = ""
+	for sep in ["-", "+"]:
+		var idx: int = core.find(sep)
+		if idx >= 0:
+			suffix = core.substr(idx)
+			core = core.substr(0, idx)
+			break
+	var bits: PackedStringArray = core.split(".")
+	while bits.size() < 3:
+		bits.append("0")
+	if bits.size() > 3:
+		return {"error": "Unsupported version format (expected MAJOR.MINOR.PATCH): " + version}
+	var nums: Array[int] = []
+	for b in bits:
+		if not b.is_valid_int():
+			return {"error": "Non-numeric version component in: " + version}
+		nums.append(int(b))
+	match part:
+		"major":
+			nums[0] += 1; nums[1] = 0; nums[2] = 0
+		"minor":
+			nums[1] += 1; nums[2] = 0
+		"patch":
+			nums[2] += 1
+		_:
+			return {"error": "Invalid bump part '%s' (expected major/minor/patch)" % part}
+	return {"version": "%d.%d.%d%s" % [nums[0], nums[1], nums[2], suffix]}
+
+# 纯函数：把新版本条目插入到 changelog 顶部（标题之后），返回完整新文本。
+static func _compose_changelog(existing: String, version: String, date: String, entry: String) -> String:
+	var bullet: String = entry.strip_edges()
+	if bullet.is_empty():
+		bullet = "Release %s" % version
+	var block: String = "## %s - %s\n\n- %s\n" % [version, date, bullet]
+	var text: String = existing
+	if text.strip_edges().is_empty():
+		return "# Changelog\n\n" + block
+	var lines: PackedStringArray = text.split("\n")
+	# 在首个一级标题（# ...）之后插入；找不到则置于顶部。
+	var insert_at: int = 0
+	for i in range(lines.size()):
+		if lines[i].strip_edges().begins_with("# "):
+			insert_at = i + 1
+			break
+	var head: PackedStringArray = lines.slice(0, insert_at)
+	var tail: PackedStringArray = lines.slice(insert_at)
+	var out: String = "\n".join(head)
+	out += "\n\n" + block + "\n" + "\n".join(tail)
+	return out
+
+func _register_bump_version(server_core: RefCounted) -> void:
+	var tool_name: String = "bump_version"
+	var description: String = "Automate version + changelog for the ship loop. Reads the current version from application/config/version, computes the next one (semantic 'bump' major/minor/patch, or an explicit 'version'), and — unless dry_run — writes it back to project.godot via ProjectSettings.save(). When 'changelog_path' is given (default res://CHANGELOG.md unless update_changelog=false), prepends a dated entry built from 'entry'. Returns previous_version, new_version, changelog_path and whether files were written, giving objective, reviewable release bookkeeping."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"bump": {"type": "string", "enum": ["major", "minor", "patch"], "description": "Semantic version part to increment. Ignored when 'version' is set.", "default": "patch"},
+			"version": {"type": "string", "description": "Explicit new version (overrides 'bump')."},
+			"entry": {"type": "string", "description": "Changelog bullet text for this release."},
+			"update_changelog": {"type": "boolean", "description": "Prepend a changelog entry. Default true.", "default": true},
+			"changelog_path": {"type": "string", "description": "Changelog file path. Default res://CHANGELOG.md.", "default": "res://CHANGELOG.md"},
+			"dry_run": {"type": "boolean", "description": "Compute the new version and changelog text without writing any file. Default false.", "default": false}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"success": {"type": "boolean"},
+			"previous_version": {"type": "string"},
+			"new_version": {"type": "string"},
+			"version_written": {"type": "boolean"},
+			"changelog_path": {"type": "string"},
+			"changelog_written": {"type": "boolean"},
+			"dry_run": {"type": "boolean"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+											  Callable(self, "_tool_bump_version"),
+											  output_schema, annotations,
+											  "supplementary", "Project-Advanced")
+
+func _tool_bump_version(params: Dictionary) -> Dictionary:
+	var previous_version: String = str(ProjectSettings.get_setting("application/config/version", "")).strip_edges()
+	if previous_version.is_empty():
+		previous_version = "0.0.0"
+
+	var new_version: String = str(params.get("version", "")).strip_edges()
+	if new_version.is_empty():
+		var bump_res: Dictionary = _bump_semver(previous_version, str(params.get("bump", "patch")))
+		if bump_res.has("error"):
+			return bump_res
+		new_version = str(bump_res["version"])
+
+	var dry_run: bool = bool(params.get("dry_run", false))
+	var version_written: bool = false
+	var changelog_written: bool = false
+	var update_changelog: bool = bool(params.get("update_changelog", true))
+	var changelog_path: String = str(params.get("changelog_path", "res://CHANGELOG.md")).strip_edges()
+
+	if not dry_run:
+		ProjectSettings.set_setting("application/config/version", new_version)
+		var save_err: Error = ProjectSettings.save()
+		if save_err != OK:
+			return {"error": "Failed to write project.godot: " + error_string(save_err)}
+		version_written = true
+
+	if update_changelog and not changelog_path.is_empty():
+		var date: String = Time.get_date_string_from_system()
+		var existing: String = ""
+		if FileAccess.file_exists(changelog_path):
+			var rf: FileAccess = FileAccess.open(changelog_path, FileAccess.READ)
+			if rf:
+				existing = rf.get_as_text()
+				rf.close()
+		var new_text: String = _compose_changelog(existing, new_version, date, str(params.get("entry", "")))
+		if not dry_run:
+			var wf: FileAccess = FileAccess.open(changelog_path, FileAccess.WRITE)
+			if wf == null:
+				return {"error": "Failed to open changelog for writing: " + changelog_path}
+			wf.store_string(new_text)
+			wf.close()
+			changelog_written = true
+
+	return {
+		"success": true,
+		"previous_version": previous_version,
+		"new_version": new_version,
+		"version_written": version_written,
+		"changelog_path": changelog_path if update_changelog else "",
+		"changelog_written": changelog_written,
+		"dry_run": dry_run
 	}
 
 # ============================================================================
@@ -5893,6 +6044,10 @@ func _generate_asset_external(params: Dictionary, category: String) -> Dictionar
 			"category": category
 		}
 
+	var budget_block: Dictionary = _enforce_generation_budget("generate_asset (%s)" % category)
+	if budget_block.has("error"):
+		return budget_block
+
 	var api_key: String = ""
 	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()
 	if not api_key_env.is_empty():
@@ -6065,6 +6220,27 @@ func _encode_multipart_form(fields: Dictionary) -> Dictionary:
 func _load_asset_provider_settings() -> Dictionary:
 	var mgr: MCPSettingsManager = MCPSettingsManager.new()
 	return mgr.load_settings()
+
+# 外部生成预算护栏：在真正发起付费外部调用前调用。
+# 从设置读取上限/窗口并配置滑动窗口计数器，超限时返回带 "error" 的字典（调用方应原样返回）。
+# 返回空字典表示放行。max_calls<=0（默认）时不限制，向后兼容。
+func _enforce_generation_budget(label: String) -> Dictionary:
+	var settings: Dictionary = _load_asset_provider_settings()
+	var max_calls: int = int(settings.get("external_gen_budget", 0))
+	var window_sec: int = int(settings.get("external_gen_budget_window_sec", 3600))
+	if max_calls <= 0:
+		return {}
+	MCPGenerationBudget.configure(max_calls, window_sec)
+	var verdict: Dictionary = MCPGenerationBudget.try_consume()
+	if not verdict.get("allowed", true):
+		return {
+			"error": "External generation budget exceeded for %s: limit %d call(s) per %ds. Retry in ~%ds, raise 'external_gen_budget' in the MCP panel, or use provider 'placeholder'." % [
+				label, int(verdict.get("max_calls", max_calls)), int(verdict.get("window_sec", window_sec)), int(verdict.get("reset_in_sec", 0))
+			],
+			"status": "budget_exceeded",
+			"budget": MCPGenerationBudget.snapshot(),
+		}
+	return {}
 
 # Blocking HTTPClient request usable from a RefCounted tool (no SceneTree node).
 func _http_blocking_request(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float) -> Dictionary:
@@ -7341,6 +7517,10 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	var task_id_field: String = str(cfg["task_id_field"]).strip_edges()
 	if task_id_field.is_empty():
 		return {"error": "No task_id_field configured to read the job id from the submit response"}
+
+	var budget_block: Dictionary = _enforce_generation_budget("generate_3d_asset")
+	if budget_block.has("error"):
+		return budget_block
 
 	var api_key: String = ""
 	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()

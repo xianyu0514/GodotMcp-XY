@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-212-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-214-blue.svg)](docs/tools/README.md)
 
 > English documentation: [README.md](README.md)。
 
@@ -15,7 +15,7 @@
 
 - **原生服务器：** MCP 服务运行在 Godot 编辑器进程内，随插件一起发布。
 - **双传输模式：** 默认 HTTP/SSE（`http://localhost:9080/mcp`），也支持面向本地进程客户端的 stdio。
-- **212 个工具且默认面精简：** 30 个核心工具默认启用，180 个高级工具按需启用，另有 2 个常驻元工具负责发现和启用工具。
+- **214 个工具且默认面精简：** 30 个核心工具默认启用，182 个高级工具按需启用，另有 2 个常驻元工具负责发现和启用工具。
 - **运行时自动化：** Runtime Probe 可以检查实时场景树、求值表达式、注入输入、控制动画/音频/Shader/TileMap、截图并采集性能指标。
 - **安全控制：** 支持 Bearer Token 鉴权、路径校验、限流和严格安全模式，优先使用 Godot API，避免任意系统命令执行。
 
@@ -62,11 +62,11 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 | [Node](docs/tools/node-tools.md) | 26 | 9 | 17 | 节点增删改查、层级编辑、信号、分组、锚点、批量编辑和场景审计 |
 | [Script](docs/tools/script-tools.md) | 17 | 7 | 10 | 读取/创建/修改/校验 GDScript 与 C#，Shader 校验、搜索、符号和引用 |
 | [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | 创建/打开/保存场景、结构检查、场景实例化和 TileMapLayer 单元格 |
-| [Editor](docs/tools/editor-tools.md) | 23 | 4 | 19 | 运行/停止、截图、选择、Inspector、导出模板和脚本缓冲区 |
+| [Editor](docs/tools/editor-tools.md) | 24 | 4 | 20 | 运行/停止、截图、选择、Inspector、导出模板和脚本缓冲区 |
 | [Debug & Runtime](docs/tools/debug-tools.md) | 73 | 3 | 70 | 日志、调试器、性能分析、运行时探针、确定性游玩验证和回归门禁 |
-| [Project](docs/tools/project-tools.md) | 59 | 3 | 56 | 设置、资源、输入映射、测试、迁移扫描、资产、TileSet、精灵表/glTF 和任务计划 |
+| [Project](docs/tools/project-tools.md) | 60 | 3 | 57 | 设置、资源、输入映射、测试、迁移扫描、资产、TileSet、精灵表/glTF 和任务计划 |
 | [Meta](docs/tools/meta-tools.md) | 2 | — | — | 常驻工具发现和按需启用 |
-| **总计** | **212** | **30** | **180** | |
+| **总计** | **214** | **30** | **182** | |
 
 启动时只有核心工具和元工具会出现在 `tools/list` 中。需要更多能力时，可在 MCP 面板中开启，也可以调用 `enable_tools` 按工具、分组或预设启用。详见 [Tools Reference](docs/tools/README.md)。
 

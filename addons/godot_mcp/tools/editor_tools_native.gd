@@ -117,6 +117,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_inspect_export_templates(server_core)
 	_register_validate_export_preset(server_core)
 	_register_run_export(server_core)
+	_register_smoke_test_export(server_core)
 	_register_manage_export_templates(server_core)
 	_register_configure_android_export(server_core)
 	_register_get_unsaved_changes(server_core)
@@ -1026,6 +1027,135 @@ func _tool_run_export(params: Dictionary) -> Dictionary:
 		"logs": sanitized_logs,
 		"errors": error_lines
 	}
+
+func _register_smoke_test_export(server_core: RefCounted) -> void:
+	var tool_name: String = "smoke_test_export"
+	var description: String = "Post-export smoke test: verify an exported product exists and (optionally) launches cleanly. Resolves the artifact from 'artifact_path' or the preset's export_path; when run_export=true it exports first via the same CLI as run_export. Asserts the artifact file exists and, when launch=true, runs it with 'launch_args' (default ['--quit-after','120']) capturing the exit code and comparing it to 'expected_exit_code' (default 0). Returns an objective pass/fail with reasons — the ship-loop gate that proves a build is actually runnable, not just produced."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"preset": {"type": "string", "description": "Export preset name (used to resolve export_path and to export when run_export=true)."},
+			"artifact_path": {"type": "string", "description": "Absolute or res:// path to the exported product. Overrides the preset export_path."},
+			"run_export": {"type": "boolean", "description": "Export the preset before smoke-testing (requires 'preset'). Default false.", "default": false},
+			"mode": {"type": "string", "enum": ["release", "debug", "pack", "patch"], "default": "release"},
+			"launch": {"type": "boolean", "description": "Launch the exported product and capture its exit code. Default true.", "default": true},
+			"launch_args": {"type": "array", "description": "CLI args passed to the launched product. Default ['--quit-after','120'] so the build self-exits.", "items": {"type": "string"}},
+			"expected_exit_code": {"type": "integer", "description": "Exit code that counts as success. Default 0.", "default": 0}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"success": {"type": "boolean"},
+			"artifact_path": {"type": "string"},
+			"artifact_exists": {"type": "boolean"},
+			"launched": {"type": "boolean"},
+			"exit_code": {"type": "integer"},
+			"expected_exit_code": {"type": "integer"},
+			"reasons": {"type": "array"},
+			"export": {"type": "object"},
+			"logs": {"type": "array"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+											  Callable(self, "_tool_smoke_test_export"),
+											  output_schema, annotations,
+											  "supplementary", "Editor-Advanced")
+
+# 纯函数：根据冒烟检查的事实给出客观通过/失败结论，便于单测覆盖。
+static func _evaluate_smoke_result(artifact_exists: bool, launched: bool, exit_code: int, expected_exit_code: int) -> Dictionary:
+	var reasons: Array[String] = []
+	if not artifact_exists:
+		reasons.append("Exported artifact not found")
+	if launched and exit_code != expected_exit_code:
+		reasons.append("Product exited with %d (expected %d)" % [exit_code, expected_exit_code])
+	return {"success": reasons.is_empty(), "reasons": reasons}
+
+func _tool_smoke_test_export(params: Dictionary) -> Dictionary:
+	var preset_name: String = str(params.get("preset", "")).strip_edges()
+	var artifact_path: String = str(params.get("artifact_path", "")).strip_edges()
+	var do_export: bool = bool(params.get("run_export", false))
+	var do_launch: bool = bool(params.get("launch", true))
+	var expected_exit_code: int = int(params.get("expected_exit_code", 0))
+
+	var export_result: Dictionary = {}
+	if do_export:
+		if preset_name.is_empty():
+			return {"error": "run_export=true requires a 'preset'"}
+		export_result = _tool_run_export({"preset": preset_name, "mode": params.get("mode", "release"), "output_path": artifact_path})
+		if export_result.has("error"):
+			return {"error": "Export step failed: " + str(export_result["error"]), "export": export_result}
+		if not bool(export_result.get("success", false)):
+			return {
+				"success": false,
+				"artifact_path": str(export_result.get("output_path", "")),
+				"artifact_exists": false,
+				"launched": false,
+				"exit_code": int(export_result.get("exit_code", -1)),
+				"expected_exit_code": expected_exit_code,
+				"reasons": ["Export step returned a non-zero exit code"],
+				"export": export_result,
+				"logs": export_result.get("logs", [])
+			}
+		if artifact_path.is_empty():
+			artifact_path = str(export_result.get("output_path", ""))
+
+	# 未导出时，从 preset 解析产物路径。
+	if artifact_path.is_empty() and not preset_name.is_empty():
+		var preset_data: Dictionary = _load_export_presets()
+		if preset_data.has("error"):
+			return preset_data
+		var preset: Dictionary = _find_export_preset(preset_data["presets"], preset_name)
+		if preset.is_empty():
+			return {"error": "Export preset not found: " + preset_name}
+		artifact_path = str(preset.get("export_path", "")).strip_edges()
+
+	if artifact_path.is_empty():
+		return {"error": "No artifact_path provided and could not resolve one from a preset"}
+	if artifact_path.begins_with("res://"):
+		artifact_path = ProjectSettings.globalize_path(artifact_path)
+
+	var artifact_exists: bool = FileAccess.file_exists(artifact_path)
+	var launched: bool = false
+	var exit_code: int = -1
+	var logs: Array[String] = []
+
+	if do_launch and artifact_exists:
+		var launch_args: Array[String] = []
+		var raw_args: Variant = params.get("launch_args", ["--quit-after", "120"])
+		if raw_args is Array:
+			for a in (raw_args as Array):
+				launch_args.append(str(a))
+		var raw_logs: Array = []
+		exit_code = OS.execute(artifact_path, launch_args, raw_logs, true)
+		launched = true
+		for line in raw_logs:
+			logs.append(_sanitize_cli_output(str(line)))
+
+	var verdict: Dictionary = _evaluate_smoke_result(artifact_exists, launched, exit_code, expected_exit_code)
+	var result: Dictionary = {
+		"success": verdict["success"],
+		"artifact_path": artifact_path,
+		"artifact_exists": artifact_exists,
+		"launched": launched,
+		"exit_code": exit_code,
+		"expected_exit_code": expected_exit_code,
+		"reasons": verdict["reasons"],
+		"logs": logs
+	}
+	if not export_result.is_empty():
+		result["export"] = export_result
+	return result
 
 func _load_export_presets() -> Dictionary:
 	var config_path: String = "res://export_presets.cfg"

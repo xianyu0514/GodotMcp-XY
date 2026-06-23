@@ -4,7 +4,7 @@
 
 **2 tools** — always-on meta tools.
 
-Always-on discovery and enablement tools. They keep the default tool list small while preserving access to the full 212-tool catalog.
+Always-on discovery and enablement tools. They keep the default tool list small while preserving access to the full 214-tool catalog.
 
 ## Recommended workflow
 

@@ -58,7 +58,7 @@ func test_debugging_includes_core_plus_debug_advanced():
 
 func test_level_design_enables_authoring_groups():
 	var states: Dictionary = _manager.resolve_preset_states("level_design", _all_names)
-	assert_eq(_count_enabled(states), 76, "level_design = 30 core + 2 meta + 8 + 9 + 8 + 19 advanced authoring tools")
+	assert_eq(_count_enabled(states), 77, "level_design = 30 core + 2 meta + 8 + 9 + 8 + 20 advanced authoring tools")
 	assert_true(states["connect_signal"], "Node-Write-Advanced tool should be enabled")
 	assert_false(states["get_runtime_info"], "Debug-Advanced tool should be disabled for level design")
 

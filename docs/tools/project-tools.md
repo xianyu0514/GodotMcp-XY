@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**59 tools** — 3 core, 56 advanced.
+**60 tools** — 3 core, 57 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 
-### Project-Advanced (56 advanced)
+### Project-Advanced (57 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -83,3 +83,4 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `set_tile_terrain` | advanced | Assign a terrain set and terrain to a tile in a TileSet atlas source, and optionally set terrain peering bits for autotiling. The terrain set and terrain must already exist (configure_tileset_layers). peering_bits maps neighbor names (right_side, bottom_side, left_side, top_side, and the four corners) to a terrain index. Saves the TileSet. |
 | `manage_task_plan` | advanced | Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default res://.mcp/task_plan.json) so the plan -> execute -> run -> verify -> fix loop survives across sessions. action='init' creates/resets the plan with a goal (with reset=false it returns an error rather than overwriting an existing plan whose JSON is corrupt; use reset=true to discard it); 'add_task' appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; 'update_task' edits fields; 'set_status' sets pending/in_progress/blocked/done (refuses 'done' unless every DoD criterion is met, unless force=true); 'set_dod' replaces the criteria list or updates one criterion's met/evidence; 'get' returns the whole graph (or one task) plus progress; 'next' returns dependency-ready tasks, blocked tasks and progress; 'remove_task' deletes a task and strips dangling dependency references. |
 | `generate_3d_asset` | advanced | Generate a 3D model (glTF/GLB) from a text prompt via an external text-to-3D provider and land it into res://. Asynchronous: submits a job, polls the provider's status endpoint until success/failure, downloads the resulting glTF/GLB, validates the bytes, and (by default) inspects the structure. Pick a `preset` (meshy_text_to_3d, tripo_text_to_3d) to fill the submit/status endpoints, body and field paths from a built-in template, or set them manually. Bring-your-own-key: the API key is read from an OS env var named by the preset (e.g. MESHY_API_KEY / TRIPO_API_KEY), never logged or stored, and the user pays their own provider quota. Returns 'unconfigured' when no preset/submit_endpoint is set. |
+| `bump_version` | advanced | Automate version + changelog for the ship loop: read the current version from `application/config/version`, compute the next one (semantic `bump` major/minor/patch or an explicit `version`), and unless `dry_run` write it back to project.godot. When `update_changelog` is on, prepend a dated entry to `changelog_path` (default res://CHANGELOG.md). Returns previous/new version and whether files were written. |

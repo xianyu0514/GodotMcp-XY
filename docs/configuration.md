@@ -201,5 +201,5 @@ Typical model workflow:
 - Keep the server on localhost unless remote access is required.
 - Enable auth before using Cloudflare, Tailscale, ngrok or any public tunnel.
 - Leave `security_level = 1` unless you are diagnosing a specific local issue.
-- Prefer enabling advanced tools by group/task rather than exposing all 212 tools all the time.
+- Prefer enabling advanced tools by group/task rather than exposing all 214 tools all the time.
 - Review tool calls that modify scenes, resources, project settings or exports.

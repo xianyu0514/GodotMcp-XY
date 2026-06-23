@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Minimal ship-loop CI (⑦): headless project import gate + GUT unit tests.
+# Pinned to the same Godot version the addon targets (project.godot ->
+# config/features "4.7"); bump GODOT_VERSION here when the project's required
+# engine version changes. GUT (the test runner) is not vendored in this repo,
+# so CI fetches it at the pinned tag.
+#
+# The GUT step runs a curated, currently-green subset that fully covers the
+# ship-loop / budget tools plus tool-count integrity. The repo's full unit
+# suite still has unrelated pre-existing failures (stale counts, missing
+# Meta-group translations, a couple of parse issues in mcp_runtime_probe.gd /
+# test_script_tools.gd) that are tracked separately; do not widen this list
+# until those are green so CI stays a trustworthy gate.
+env:
+  GODOT_VERSION: "4.7"
+  GUT_VERSION: "9.4.0"
+
+jobs:
+  gut-tests:
+    name: Headless import + GUT unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot ${{ env.GODOT_VERSION }} (headless)
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          ZIP="Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fL --retry 3 -o godot.zip "${BASE}/${ZIP}"
+          unzip -o godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+          godot --version
+
+      - name: Fetch GUT ${{ env.GUT_VERSION }} test runner
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "v${GUT_VERSION}" https://github.com/bitwes/Gut.git /tmp/gut
+          rm -rf addons/gut
+          cp -r /tmp/gut/addons/gut addons/gut
+          test -f addons/gut/gut_cmdln.gd
+
+      - name: Headless import gate (project must import cleanly)
+        run: |
+          set -euo pipefail
+          # Import assets / build the resource cache, then fail the build if any
+          # production script failed to parse or load. A clean import under the
+          # target engine is the cheapest, most objective "is it buildable" gate.
+          godot --headless --path . --import 2>&1 | tee import.log
+          if grep -E "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" import.log; then
+            echo "::error::Project failed to import cleanly (script parse/load errors above)."
+            exit 1
+          fi
+
+      - name: Run GUT unit tests (ship-loop + budget + tool-count integrity)
+        run: |
+          set -euo pipefail
+          godot --headless --path . -s addons/gut/gut_cmdln.gd \
+            -gtest=res://test/unit/tools/test_generation_budget.gd \
+            -gtest=res://test/unit/tools/test_smoke_test_export.gd \
+            -gtest=res://test/unit/tools/test_bump_version.gd \
+            -gtest=res://test/unit/test_mcp_tool_classifier.gd \
+            -gexit

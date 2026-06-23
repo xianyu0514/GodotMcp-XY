@@ -20,7 +20,9 @@ const DEFAULT_SETTINGS: Dictionary = {
 	"cloudflared_path": "",
 	"asset_provider_preset": "",
 	"asset_provider_api_key_env": "",
-	"asset_provider_endpoint": ""
+	"asset_provider_endpoint": "",
+	"external_gen_budget": 0,
+	"external_gen_budget_window_sec": 3600
 }
 
 func _init() -> void:

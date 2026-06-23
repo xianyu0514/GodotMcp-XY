@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**23 tools** — 4 core, 19 advanced.
+**24 tools** — 4 core, 20 advanced.
 
 Drive the Godot editor itself: run/stop the project, inspect editor state, select files/nodes, manage open scripts, export builds and capture screenshots.
 
@@ -24,7 +24,7 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `stop_project` | core | Stop the currently running project and return to editor mode. |
 | `execute_editor_script` | core | Execute a script in the editor with access to editor APIs. |
 
-### Editor-Advanced (19 advanced)
+### Editor-Advanced (20 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -40,6 +40,7 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `inspect_export_templates` | advanced | Inspect locally installed Godot export templates for the current editor version. |
 | `validate_export_preset` | advanced | Validate an export preset against export_presets.cfg and local template availability. |
 | `run_export` | advanced | Run a Godot CLI export for a configured preset. |
+| `smoke_test_export` | advanced | Post-export smoke test: confirm an exported product exists and (optionally) launches cleanly. Resolves the artifact from `artifact_path` or the preset export_path, optionally exports first (`run_export`), asserts the file exists, and when `launch=true` runs it with `launch_args` (default `--quit-after 120`) to capture and check the exit code against `expected_exit_code`. Returns an objective pass/fail with reasons. |
 | `manage_export_templates` | advanced | Manage locally installed Godot export templates: report status (templates dir installed versions and the official download URL/.tpz filename) install a .tpz/.zip archive or remove an installed version directory. Works on Godot 4.6+. |
 | `configure_android_export` | advanced | Configure Android-specific options on an existing Android export preset in export_presets.cfg such as package name version code/name Gradle build APK/AAB format SDK levels target architectures and keystore file paths. Keystore passwords are not written here. Works on Godot 4.6+. |
 | `get_unsaved_changes` | advanced | List scenes and scripts with unsaved edits in the editor buffers (Godot 4.7 APIs; *_supported flags report availability). |
