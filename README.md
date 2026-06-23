@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-211-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-215-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 

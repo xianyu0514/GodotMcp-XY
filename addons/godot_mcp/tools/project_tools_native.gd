@@ -8848,9 +8848,32 @@ func _i18n_collect_files(root: String, extensions: PackedStringArray) -> PackedS
 
 func _i18n_unescape(value: String) -> String:
 	# .tscn / GDScript 字符串字面量的常见转义还原。
-	var out: String = value.replace("\\\"", "\"").replace("\\'", "'")
-	out = out.replace("\\n", "\n").replace("\\t", "\t")
-	out = out.replace("\\\\", "\\")
+	# 单遍扫描：遇到反斜杠时按下一个字符决定替换，避免多遍 replace 把
+	# `\\n`（转义反斜杠 + 字母 n）误判成换行。
+	var out: String = ""
+	var i: int = 0
+	var n: int = value.length()
+	while i < n:
+		var c: String = value[i]
+		if c == "\\" and i + 1 < n:
+			var nxt: String = value[i + 1]
+			match nxt:
+				"n":
+					out += "\n"
+				"t":
+					out += "\t"
+				"\"":
+					out += "\""
+				"'":
+					out += "'"
+				"\\":
+					out += "\\"
+				_:
+					out += c + nxt
+			i += 2
+		else:
+			out += c
+			i += 1
 	return out
 
 func _i18n_extract(params: Dictionary) -> Dictionary:

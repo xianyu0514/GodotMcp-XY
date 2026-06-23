@@ -116,6 +116,26 @@ func test_extract_dry_run_does_not_write():
 func test_extract_missing_dir_errors():
 	assert_true(_tools._tool_manage_localization({"action": "extract", "scan_dir": "user://does_not_exist_dir_xyz"}).has("error"), "missing scan_dir errors")
 
+# --- unescape (string-literal decoding) ------------------------------------
+
+func test_unescape_basic_escapes():
+	assert_eq(_tools._i18n_unescape("a\\nb"), "a\nb", "\\n -> newline")
+	assert_eq(_tools._i18n_unescape("a\\tb"), "a\tb", "\\t -> tab")
+	assert_eq(_tools._i18n_unescape("say \\\"hi\\\""), "say \"hi\"", "\\\" -> quote")
+	assert_eq(_tools._i18n_unescape("it\\'s"), "it's", "\\' -> apostrophe")
+
+func test_unescape_escaped_backslash_before_n():
+	# `\\n` is an escaped backslash followed by the letter n; it must stay a
+	# literal backslash + n, NOT collapse into a newline.
+	assert_eq(_tools._i18n_unescape("C:\\\\new_folder"), "C:\\new_folder", "escaped backslash + n stays literal")
+	assert_eq(_tools._i18n_unescape("\\\\t"), "\\t", "escaped backslash + t stays literal")
+
+func test_unescape_unknown_escape_is_preserved():
+	assert_eq(_tools._i18n_unescape("a\\xb"), "a\\xb", "unknown escape kept verbatim")
+
+func test_unescape_trailing_backslash():
+	assert_eq(_tools._i18n_unescape("end\\"), "end\\", "trailing lone backslash kept")
+
 # --- import ----------------------------------------------------------------
 
 func test_import_builds_translation_files():
