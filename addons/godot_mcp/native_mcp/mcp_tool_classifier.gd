@@ -222,6 +222,7 @@ func _build_classifications() -> void:
 		{"name": "set_tile_collision_polygon", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "set_tile_terrain", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "manage_task_plan", "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "manage_localization", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "list_tool_catalog", "category": "meta", "group": "Meta"},
 		{"name": "enable_tools", "category": "meta", "group": "Meta"},
 	]
