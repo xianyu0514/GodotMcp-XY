@@ -68,12 +68,64 @@ const PRESETS: Dictionary = {
 		"headers": {"Content-Type": "application/json"},
 		"request_body": {"prompt": "{prompt}", "width": "{width}", "height": "{height}", "steps": 20},
 		"response_field": "images.0"
+	},
+	# --- Text-to-3D providers (category "model3d") ------------------------------
+	# These are asynchronous: generate_3d_asset submits a job, polls the status
+	# endpoint until success/failure, then downloads the resulting glTF/GLB. The
+	# user supplies their own API key via the named env var (BYO-key); the plugin
+	# never ships or stores a key. {prompt} is substituted into the submit body
+	# and {task_id} into the status endpoint at request time.
+	"meshy_text_to_3d": {
+		"label": "Meshy Text-to-3D (preview)",
+		"category": "model3d",
+		"api_key_env": "MESHY_API_KEY",
+		"auth_header": "Authorization",
+		"auth_prefix": "Bearer ",
+		"submit_endpoint": "https://api.meshy.ai/openapi/v2/text-to-3d",
+		"submit_method": "POST",
+		"headers": {"Content-Type": "application/json"},
+		"request_body": {"mode": "preview", "prompt": "{prompt}", "art_style": "realistic", "should_remesh": true},
+		"task_id_field": "result",
+		"status_endpoint": "https://api.meshy.ai/openapi/v2/text-to-3d/{task_id}",
+		"status_method": "GET",
+		"status_field": "status",
+		"progress_field": "progress",
+		"success_values": ["SUCCEEDED"],
+		"failure_values": ["FAILED", "CANCELED", "EXPIRED"],
+		"model_url_fields": ["model_urls.glb"]
+	},
+	"tripo_text_to_3d": {
+		"label": "Tripo Text-to-3D",
+		"category": "model3d",
+		"api_key_env": "TRIPO_API_KEY",
+		"auth_header": "Authorization",
+		"auth_prefix": "Bearer ",
+		"submit_endpoint": "https://api.tripo3d.ai/v2/openapi/task",
+		"submit_method": "POST",
+		"headers": {"Content-Type": "application/json"},
+		"request_body": {"type": "text_to_model", "prompt": "{prompt}"},
+		"task_id_field": "data.task_id",
+		"status_endpoint": "https://api.tripo3d.ai/v2/openapi/task/{task_id}",
+		"status_method": "GET",
+		"status_field": "data.status",
+		"progress_field": "data.progress",
+		"success_values": ["success"],
+		"failure_values": ["failed", "cancelled", "unknown", "banned", "expired"],
+		"model_url_fields": ["data.output.pbr_model", "data.output.model"]
 	}
 }
 
 # Stable, display-ordered list of preset ids for UI dropdowns.
 static func preset_ids() -> Array:
-	return ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui"]
+	return ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui", "meshy_text_to_3d", "tripo_text_to_3d"]
+
+# Preset ids whose category matches, for category-scoped dropdowns/enums.
+static func preset_ids_for_category(category: String) -> Array:
+	var ids: Array = []
+	for id in preset_ids():
+		if str((PRESETS[id] as Dictionary).get("category", "")) == category:
+			ids.append(id)
+	return ids
 
 static func has_preset(preset_id: String) -> bool:
 	return PRESETS.has(preset_id)

@@ -11,6 +11,7 @@ All notable user-facing changes are tracked here.
 ## 1.0.7-pre1 (current)
 
 - Expanded the MCP tool catalog to 212 tools.
+- Added `generate_3d_asset` (Project-Advanced): bring-your-own-key text-to-3D generation that submits a job to an external provider (meshy/tripo presets), polls until completion, downloads and validates the glTF/GLB into `res://`, and inspects the result by default.
 - Added asset-closure workflows including sprite-sheet slicing and glTF/GLB inspection.
 - Added deterministic `play_and_verify` workflows for frame-stepped playtesting and game-feel metrics.
 - Added regression gates for visual baselines, performance budgets and runtime errors.

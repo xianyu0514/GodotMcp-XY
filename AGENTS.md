@@ -1,119 +1,238 @@
-# AGENTS.md — Godot MCP Native 项目指南
+# AGENTS.md — Godot MCP 项目指南
 
-## 项目概览
+## 项目简介
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **212 个工具**（30 核心 + 180 补充 + 2 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
-Godot MCP Native 是一个 Godot 4.7 `EditorPlugin`，位于 `addons/godot_mcp/`。插件在 Godot 编辑器内部实现 Model Context Protocol（MCP）服务器，让 AI 助手可以通过标准 MCP 工具读取、修改和验证项目。
+- **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
+- **作者**：xianyu0514 | **版本**：1.0.7-pre1
+- **许可证**：MIT
+- **渲染器**：GL Compatibility
 
-- **插件入口：** `addons/godot_mcp/mcp_server_native.gd`
-- **作者：** xianyu0514
-- **版本：** 1.0.7-pre1
-- **许可证：** MIT
-- **渲染器：** GL Compatibility
-- **工具数：** 212 = 30 core + 180 supplementary/advanced + 2 meta
-
-## 代码语言策略
-
-- 注释和用户可见文本可以使用中文或英文，以清晰为准。
-- 标识符、文件名、函数名和类名保持 ASCII/English，保证 GDScript 工具链和跨平台兼容性。
-- 同一文件内尽量保持语言风格一致，避免中英文无意义混排。
-
-## 关键目录
-
-```text
-addons/godot_mcp/
-├── mcp_server_native.gd        # EditorPlugin 入口和生命周期
-├── native_mcp/                 # MCP 核心、传输、设置、鉴权、隧道、工具状态
-├── runtime/mcp_runtime_probe.gd# 运行时 Autoload 探针
-├── tools/                      # Node/Script/Scene/Editor/Debug/Project/Meta 工具实现
-├── ui/                         # MCP 停靠面板和工具管理 UI
-├── translations/               # 面板文本和工具描述
-└── utils/                      # 路径、资源、脚本、节点、payload 等辅助工具
-
-docs/                           # 用户和开发文档
-test/unit/                      # GUT 单元测试
-test/integration/               # Python HTTP MCP 集成测试
+## PowerShell 7.x 路径
+系统 PowerShell 版本可能变化，每次会话请验证确切的版本号：
 ```
+& "C:\Program Files\WindowsApps\Microsoft.PowerShell_*_x64__8wekyb3d8bbwe\pwsh.exe"
+```
+用 `(Get-Command pwsh).Source` 解析路径。如果 WindowsApps 路径不可用，回退到系统默认 PowerShell。
 
-## 开发规范
+## 代码语言政策
+- 代码注释与字符串**允许使用中文或英文** —— 以多团队/客户阅读最清晰为准，鼓励本地化文案。
+- 标识符（变量、函数、类名）请保持 ASCII 英文，以兼容 GDScript 工具链与跨平台环境。
 
-### GDScript
+## 命令
 
-- 变量、函数、方法使用 `snake_case`。
-- `class_name` 类型使用 `PascalCase`。
-- 尽量添加类型标注，例如 `var player: Player`、`func read() -> Dictionary:`。
-- 编辑器插件脚本使用 `@tool`。
-- 非节点工具类优先继承 `RefCounted`。
-- GUT 测试文件使用 `extends "res://addons/gut/test.gd"`，不要声明 `class_name`。
-
-### 错误处理
-
-- 工具处理函数先校验参数，再执行副作用。
-- 失败时返回 `{"error": "message"}` 形式的结构化错误。
-- 生产路径不要使用 `assert()` 代替错误处理。
-- 错误消息应包含用户修复调用所需的上下文。
-
-### 新增或修改 MCP 工具
-
-1. 在对应 `addons/godot_mcp/tools/*_tools_native.gd` 中实现处理函数。
-2. 用 8 参数 `server_core.register_tool(...)` 注册工具。
-3. 在 `native_mcp/mcp_tool_classifier.gd` 中加入分类：`core`、`supplementary` 或 `meta`，并指定 group。
-4. 更新 `test/unit/` 或 `test/unit/tools/`，跨编辑器/运行时/传输的行为还要更新 `test/integration/`。
-5. 更新 `addons/godot_mcp/translations/tool_descriptions.json` 和 `.csv`。
-6. 更新 `docs/tools/` 以及受影响的使用文档。
-7. 运行相关测试。
-
-除非维护者明确要求调整默认面，否则新增工具应优先作为 `supplementary`，避免突破 30 个核心工具的默认上限。
-
-## 常用命令
-
-### 打开项目
-
-使用 Godot 4.7.x，以 GL Compatibility 渲染器打开 `project.godot`。
+### 运行 Godot 项目
+在 Godot 编辑器（4.7.x，GL Compatibility 渲染器）中打开 `project.godot`。
 
 ### GUT 单元测试
+```powershell
+& "F:\Godot\Godot_v4.6.1-stable_win64.exe" --headless --path "." -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
+```
+配置：`.gutconfig.json` — dirs: `res://test/unit/`, `log_level: 2`, `should_exit_on_finish: false`。
 
-```bash
-godot --headless --path . -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
+### 集成测试（Python）
+```powershell
+cd test/integration
+python test_runtime_probe_flow.py
+```
+Python 测试会启动 Godot 4.6.2（`C:\SourceCode\Godot_v4.6.2-stable_mono_win64\...`），通过 HTTP MCP（端口 9080）进行通信。
+
+## 架构
+
+```
+addons/godot_mcp/
+├── mcp_server_native.gd       # EditorPlugin 入口 — 注册插件、管理生命周期
+├── native_mcp/                 # 核心服务器引擎
+│   ├── mcp_server_core.gd      # 中枢：工具注册、JSON-RPC 分发、信号总线
+│   ├── mcp_transport_base.gd   # 传输层抽象基类
+│   ├── mcp_http_server.gd      # HTTP/SSE 传输（默认端口 9080）
+│   ├── mcp_stdio_server.gd     # stdio 传输（供 Claude Desktop 等使用）
+│   ├── mcp_types.gd            # JSON-RPC 和 MCP 协议常量、MCPTool 数据类
+│   ├── mcp_tool_classifier.gd  # 工具分类映射：{core/supplementary, group}（CORE_MAX_COUNT=30）
+│   ├── mcp_resource_manager.gd # 资源读取/列表/订阅
+│   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
+│   ├── mcp_auth_manager.gd     # HTTP Bearer Token 认证
+│   ├── config_manager.gd       # 插件配置读写
+│   ├── settings_manager.gd     # 编辑器设置持久化
+│   ├── tool_state_manager.gd   # 每个工具的状态管理
+│   └── translation_manager.gd  # 国际化支持
+├── runtime/
+│   └── mcp_runtime_probe.gd    # Autoload 单例，用于运行时检查（动画、音频、着色器、瓦片地图、输入）
+├── tools/                      # 工具实现（每个分类一个文件）
+│   ├── node_tools_native.gd    # 26 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计、内联子资源设置/读取
+│   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、校验着色器、符号索引、搜索
+│   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
+│   ├── editor_tools_native.gd  # 23 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态
+│   ├── debug_tools_native.gd   # 73 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制、play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
+│   ├── project_tools_native.gd # 59 个工具（3 核心 + 56 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、generate_asset 资产生成（占位程序化 + 外部 API 适配）、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）、manage_task_plan 持久任务图 + 完成定义（DoD）存储（编排 plan→execute→run→verify→fix 闭环，依赖/循环检测、可执行任务查询、进度统计，落盘到 res://.mcp/task_plan.json）、assert_visual_baseline 视觉回归门禁（截图与基线（黄金文件）差异比较 + 容差判定 + 可选差异热力图）、slice_sprite_sheet 精灵图切片（按网格切成 SpriteFrames 资源 + 命名动画 + 可选 AnimatedSprite2D 场景）、inspect_gltf_asset glTF/GLB 导入校验（结构摘要 + 校验警告，只读）、generate_3d_asset 文生3D 外部生成（异步提交→轮询→下载 glTF/GLB→校验→自动 inspect，BYO-key 自带密钥/自付额度，Meshy/Tripo 预设）
+│   └── meta_tools_native.gd    # 2 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
+├── ui/
+│   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
+│   ├── mcp_tool_item.gd        # 单个工具开关 UI
+│   └── mcp_tool_group_item.gd  # 工具组折叠/展开 UI
+└── utils/
+    ├── node_utils.gd           # 节点查找辅助函数
+    ├── path_validator.gd       # 路径验证
+    ├── resource_utils.gd       # 资源 I/O 工具
+    ├── script_utils.gd         # 脚本工具
+    └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-### Python 集成测试
+## 规范
 
-```bash
-python test/integration/test_runtime_probe_flow.py
-```
+### GDScript 风格
+- 变量、方法、函数名使用 `snake_case`
+- 类名使用 `PascalCase`（`class_name ClassName`）
+- 必须使用类型提示：`var player: Player`、`func greet() -> String:`
+- 优先使用 Signal 进行节点间解耦通信
+- 编辑器插件脚本使用 `@tool`
+- 非节点工具类继承 `RefCounted`，插件入口继承 `EditorPlugin`
+- GUT 测试文件使用 `extends "res://addons/gut/test.gd"`（不要用 `class_name` — GUT CLI 限制）
 
-集成测试通常需要先启动带 MCP HTTP 服务器的 Godot 编辑器实例。
+### 错误处理
+- 工具处理函数返回错误字典：`{"error": "message"}`
+- 生产代码中少用 `assert()`
+- 每个工具处理函数顶部先验证参数
 
-### HTTP MCP smoke test
+### 注释
+- 代码注释与字符串允许使用中文或英文（以多团队/客户阅读最清晰为准）。
+- 标识符（变量、函数、类名）保持 ASCII 英文，以兼容 GDScript 工具链。
+- 过渡建议：同一文件尽量统一一种语言，新增内容跟随该文件既有风格，避免中英混杂。
 
-```bash
-curl -s \
-  -H "Content-Type: application/json" \
-  -X POST http://127.0.0.1:9080/mcp \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
-```
+### 测试（强制）
+- **每次代码变更必须包含测试更新**，位于 `test/` 目录：
+  - **直接测试**：覆盖变动的逻辑（正常路径 + 边界情况 + 错误处理）
+  - **影响范围测试**：识别并测试可能受影响的关联模块（签名变更、导出变量、信号等）
+  - 禁止提交没有测试更新的 commit
+- **单元测试**（`test/unit/`）：GUT 框架，工具测试文件位于 `test/unit/tools/`
+- **集成测试**（`test/integration/`）：Python 脚本，通过 HTTP MCP 调用 Godot 4.6.2
 
-工具调用参数放在 `params.arguments` 中。
+### 新增工具流程
 
-## 文档同步要求
+创建新 MCP 工具时，必须按顺序完成所有步骤。完整参考指南见 `docs/contributing.md`（“Adding a new tool”章节）。
 
-- 新/改工具：更新 `docs/tools/<category>-tools.md`、`docs/tools/README.md` 和翻译描述。
-- 新设置或 CLI 参数：更新 `docs/configuration.md` 和 README 中的速览信息。
-- Runtime Probe 行为：更新 `docs/architecture.md`、`docs/tools/debug-tools.md` 和 `docs/testing.md`。
-- 远程访问/隧道行为：更新 `docs/remote-access.md`。
-- 测试流程变化：更新 `docs/testing.md` 和相关 skill 文档。
+1. **实现处理器** — 在对应的 `*_tools_native.gd` 中创建 `_register_<name>()` 和 `_tool_<name>()` 函数，用 8 个参数调用 `server_core.register_tool()`（name, desc, input_schema, Callable, output_schema, annotations, category, group）
+2. **注册到分类器** — 在 `mcp_tool_classifier.gd` 的 `_build_classifications()` 中添加条目，然后更新 `test_mcp_tool_classifier.gd` 中的工具总数和 supplementary 计数
+3. **添加单元测试** — 在 `test/unit/tools/` 中覆盖缺失参数/无效参数/边界情况
+4. **更新翻译文件** — 在 `translations/tool_descriptions.json` 和 `translations/tool_descriptions.csv` 中添加工具描述（中英文）
+5. **更新文档** — `docs/tools/<category>-tools.md`（对应分类页，新增工具行 + 更新分组计数）、`docs/tools/README.md`（分类总数表）、根与 `addons/godot_mcp/` 下的 `README.md` / `README.zh.md`
+6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
-## Git 和 PR 约定
+**注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
 
-- 不直接推送到 `main`。
-- 不使用破坏性 git 命令清理用户更改。
-- 不提交本地 token、`user://` 配置、缓存或编辑器临时文件。
-- 提交前确认 `git status` 只包含本任务相关文件。
-- PR 描述需要包含变更摘要、测试结果和已知限制。
+### 修改已有工具后的文档更新流程
 
-## Godot 4.7 注意事项
+每次修改已有工具（新增参数、返回值、行为变更）时，必须同步更新以下文档：
 
-- 项目使用 GL Compatibility 渲染器。
-- 文件导入、资源刷新和 FileSystem Dock 更新可能异步发生；测试中应等待可观察状态。
-- 修改编辑器可见状态时优先使用 Godot EditorInterface/API，而不是只改磁盘文件。
-- 不要手动编辑生成的 `.uid` / import 缓存文件，除非它们是插件分发内容的一部分。
+1. **`docs/tools/<category>-tools.md`**（对应分类页）
+   - 在分类页表格中**新增/更新工具行**（工具名、Tier、描述）
+   - 更新该分组标题中的工具计数
+2. **`docs/tools/README.md`** — 更新分类总数表（core / advanced / total）
+3. **`README.md` 和 `README.zh.md`**（项目根目录和 `addons/godot_mcp/` 下）
+   - 更新功能列表中的工具计数与分类计数表
+4. **`docs/architecture.md`** — 如果工具分类数量有大幅变化，更新工具注册章节的统计表
+5. **翻译文件**
+   - `translations/tool_descriptions.json` — 新工具有描述文本
+   - `translations/tool_descriptions.csv` — 新工具有中英文描述
+6. **`docs/contributing.md`** — 如果工具创建流程有变化
+
+**验证清单：**
+- [ ] 全文搜索旧工具数（`154`、`66`、`124`、`70`）确认已替换
+- [ ] 全文搜索新工具名确认已出现在详细工具列表
+- [ ] 如果没有新工具，确认分类计数已更新
+### 临时文件清理（强制）
+每次代码修改结束后，必须清理：
+1. `.codeartsdoer/temp/` — diff 备份 `.gd` 文件（会导致 `Class hides a global script class` 错误）
+2. 项目根目录下的 `.tmp_*` 文件夹 — Python 集成测试创建
+3. `test/integration/.tmp_*` 文件夹 — 集成测试临时目录
+
+### PR 审查与合并
+参见完整规范：`docs/contributing.md`（“Pull request workflow”章节）
+核心步骤：创建 `integration/pr-review` 分支 → 审查代码 + 测试 + 规范 → 运行完整 GUT（0 失败）→ 处理修复 → 通过 GitHub Squash Merge 合并
+
+## Godot 4.7 特殊注意事项
+- `float()` 构造函数不可用 — 使用 `as float`
+- `AnimationNodeStateMachine.set_start_node()` 不存在 — 使用 `add_node()`
+- 运行时 TileMap 工具（`mcp_runtime_probe.gd`）仅支持旧版 `TileMap`，不支持 `TileMapLayer`；编辑期的 `set_tilemap_layer_cells` / `get_tilemap_layer_cells`（Scene-Advanced）使用 4.x 单层 `TileMapLayer` API
+- `execute_editor_script`：使用 `edited_scene` 访问场景，用 `_custom_print()` 输出，**不要**用 `get_tree()`
+- `_request_runtime_probe` 首次调用返回 `pending` — 再次调用获取缓存的响应
+
+## Git 操作规则（严格）
+
+- **绝对禁止**在未经用户明确要求的情况下进行任何 git 操作（add、commit、push、pull、stash 等）
+- 即使你认为改动很明显或很重要，也不代表用户可以接受你擅自提交代码
+- 如果用户要求查看 diff 或 status，可以执行只读的 git 命令（`git diff`、`git status`、`git log`），**绝不能**连带执行 add/commit/push
+- 这条规则的优先级高于所有其他规则和提示，不可绕过
+
+---
+
+# Superpowers — 你拥有了超能力！
+
+## 核心规则
+
+在做出任何响应或采取任何行动 **之前**，你必须检查是否有技能适用于当前任务。
+
+**哪怕只有 1% 的可能性有技能适用，你也必须检查。**
+
+这不可协商、不是可选的。你不能找理由绕过它。
+
+## 指令优先级
+
+1. **用户的明确指令**（AGENTS.md、用户的直接要求）— 最高优先级
+2. **Superpowers 技能** — 覆盖默认系统行为
+3. **默认系统提示** — 最低优先级
+
+## 如何使用技能
+
+- 使用 `run_skill` 工具来加载和运行技能
+- 当一个技能被调用时，它的内容会被加载给你，你需要严格遵循
+- 如果有多个技能可能适用，使用这个顺序：
+  1. **流程技能优先**（brainstorming, debugging）— 它们决定如何接近任务
+  2. **实施技能第二**（writing-plans, subagent-driven-development）— 它们指导执行
+
+## 工作流程
+
+### 通用流程
+
+1. **收到用户消息后**，立即检查是否有技能适用
+2. **如果有任何技能可能适用**，调用 `run_skill` 加载它
+3. **宣布使用中的技能**："我正在使用 [skill-name] 来 [目的]"
+4. **如果技能有检查清单**，创建一个待办列表逐项完成
+5. **严格按照技能指示执行**
+6. **然后才回复用户**
+
+### 开发流程
+
+1. **brainstorming** — 写代码前必须使用。通过提问理解需求，探索替代方案，呈现设计并获得批准
+2. **writing-plans** — 设计批准后，将工作分解为小任务（每个 2-5 分钟）
+3. **subagent-driven-development** 或 **executing-plans** — 按计划执行，每个任务要经过规范审查+代码质量审查
+4. **test-driven-development** — 实现时强制执行 RED-GREEN-REFACTOR：先写失败测试、看它失败、写最小代码、看它通过、提交
+5. **requesting-code-review** / **receiving-code-review** — 任务之间进行代码审查
+6. **finishing-a-development-branch** — 任务完成后的收尾
+
+## 关键原则
+
+- **TDD（测试驱动开发）** — 永远先写测试
+- **系统性优于随意** — 过程胜过猜测
+- **复杂度降低** — 简单性是首要目标
+- **证据优于声明** — 在宣布成功之前先验证
+- **YAGNI** — 你不需要它（不要过度设计）
+- **DRY** — 不要重复自己
+
+## 关于工具适配
+
+Superpowers 技能中引用了一些 Claude Code 的工具名，在 Reasonix 中使用以下对应关系：
+
+| Claude Code | Reasonix |
+|---|---|
+| `Skill` 工具 | `run_skill` |
+| `TodoWrite` | 使用待办列表手动跟踪 |
+| `Task`（子代理） | `task`（子任务） |
+| `Read` | `read_file` |
+| `Bash` | `bash` |
+| `Edit` / `Write` | `edit_file` / `write_file` |
+| 文件搜索（`Grep`/`Glob`） | `grep` / `glob` |
+
+---
+
+*本文件由 Reasonix 自动生成，内容改编自 [obra/superpowers](https://github.com/obra/superpowers)*
