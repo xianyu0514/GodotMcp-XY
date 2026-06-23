@@ -25,7 +25,7 @@ Read, create, modify, validate and search project scripts. The category supports
 | `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
 | `attach_script` | core | Attach a script to a node. |
-| `execute_script` | core | Execute a script in the editor context. |
+| `execute_script` | core | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
 
 ### Script-Advanced (10 advanced)
 
