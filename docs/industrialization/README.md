@@ -33,6 +33,13 @@ Start with core tools. Enable advanced groups only for the current loop:
 
 ## Read next
 
+Concepts:
+
 - [Planner Playbook: GDD → Executable Task List](gdd-to-tasks.md)
 - [Gameplay Spec Template](gameplay-spec-template.md)
 - [Autonomous Iteration Harness](autonomous-iteration-harness.md)
+
+Executable playbooks (exact `manage_task_plan` calls + machine-checkable DoD gates):
+
+- [Playbook: GDD → Task Graph](playbook-gdd-to-task-graph.md)
+- [Playbook: Single Slice — PLAN → EXECUTE → RUN → VERIFY → FIX](playbook-single-slice.md)
