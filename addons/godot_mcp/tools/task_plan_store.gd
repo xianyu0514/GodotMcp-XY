@@ -427,12 +427,19 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 				target = i
 				break
 		if target == -1:
-			# Validate any gate up front so an invalid spec never leaves a
-			# half-created criterion behind.
+			# Validate everything that could fail BEFORE mutating the task, so an
+			# error return never leaves a half-created criterion behind.
 			if args.has("gate") and args["gate"] != null:
 				var pre_gate: Dictionary = _normalize_gate(args["gate"])
 				if pre_gate.has("error"):
 					return pre_gate
+			if args.has("observed"):
+				# A brand-new criterion has no prior gate, so 'observed' can only be
+				# evaluated when a gate is supplied in this same call.
+				if not (args.has("gate") and args["gate"] != null):
+					return {"error": "criterion has no gate to evaluate 'observed' against"}
+				if not (args["observed"] is Dictionary):
+					return {"error": "observed must be an object of measured metrics"}
 			# Append a brand-new criterion, then fall through to the shared update
 			# logic below so gate / observed / met / evidence are all applied the
 			# same way as for an existing criterion (avoids ignoring 'observed').
@@ -444,7 +451,10 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 
 	if target < 0 or target >= dod.size():
 		return {"error": "dod index %d out of range (task has %d criteria)" % [target, dod.size()]}
-	var entry: Dictionary = dod[target]
+	# Work on a copy and only commit it back once every validation has passed,
+	# so an error return never leaves a criterion partially mutated (e.g. a gate
+	# attached but the subsequent 'observed' evaluation rejected).
+	var entry: Dictionary = (dod[target] as Dictionary).duplicate(true)
 	# Allow attaching/replacing a gate on this criterion.
 	if args.has("gate"):
 		if args["gate"] == null:
@@ -471,6 +481,9 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 			entry["evidence"] = str(args["evidence"])
 	if args.has("criterion"):
 		entry["criterion"] = str(args["criterion"])
+	# All validations passed — commit the mutated copy back.
+	dod[target] = entry
+	task["dod"] = dod
 	task["updated_at"] = _now()
 	_touch()
 	return {"status": "ok", "task": task}
