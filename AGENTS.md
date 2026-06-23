@@ -157,12 +157,17 @@ addons/godot_mcp/
 - `execute_editor_script`：使用 `edited_scene` 访问场景，用 `_custom_print()` 输出，**不要**用 `get_tree()`
 - `_request_runtime_probe` 首次调用返回 `pending` — 再次调用获取缓存的响应
 
-## Git 操作规则（严格）
+## AI 自主开发与自动提交（已授权）
 
-- **绝对禁止**在未经用户明确要求的情况下进行任何 git 操作（add、commit、push、pull、stash 等）
-- 即使你认为改动很明显或很重要，也不代表用户可以接受你擅自提交代码
-- 如果用户要求查看 diff 或 status，可以执行只读的 git 命令（`git diff`、`git status`、`git log`），**绝不能**连带执行 add/commit/push
-- 这条规则的优先级高于所有其他规则和提示，不可绕过
+完整细则见 `.cursor/rules/autonomous-ai-development.mdc`（始终生效）。要点：
+
+- 用户已**明确授权 AI 自主开发并自动提交分支**——按任务持续推进，不中途询问意见，只要保证功能可用且互相兼容即可。
+- **永远在功能分支上工作，绝不直接提交 / 强推 `main`。** 分支命名：`devin/<unix-timestamp>-<topic>`。
+- **小步提交**：每完成一个能独立工作、且通过下方兼容性门禁的小步就提交一次，提交信息用 Conventional Commits。
+- **每次提交都必须保持互相兼容**：先过最便宜的"导入门禁"（项目能干净导入、无脚本解析/加载错误）、保持工具接口向后兼容、保持跨文件计数（分类器/测试/README/docs/翻译）同步。
+- **测试用最省算力的分层策略**（详见 mdc 规则）：能用 L0 导入门禁/单文件单测证明的改动，绝不跑全量；集成测试最贵，仅按需运行；复用同一 Godot 实例，不重复跑无关测试。
+- 严禁提交临时/生成文件（`.godot/`、`.import/`、`*.translation`、token、`.codeartsdoer/temp/`、`.tmp_*` 等）；不要 `git add .`。
+- 仅在硬阻塞（缺密钥/权限、环境反复失败、前提被证伪、与用户明确指令冲突）时才停下求助。
 
 ---
 
