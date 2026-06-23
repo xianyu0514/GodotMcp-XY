@@ -3766,7 +3766,14 @@ func _tool_execute_script(params: Dictionary) -> Dictionary:
 	
 	if code.is_empty():
 		return {"error": "Missing required parameter: code"}
-	
+
+	# Guard the single-line Expression path too: it binds OS/ClassDB/Engine etc.,
+	# so without this scan execute_script would be a sandbox bypass for
+	# execute_editor_script. The multi-line branch below re-scans via delegation.
+	var guard: Dictionary = MCPScriptSandbox.scan(code, _sandbox_config())
+	if guard.get("blocked", false):
+		return {"status": "error", "error": guard.get("error", "blocked by script sandbox"), "blocked": true, "reason": guard.get("reason", ""), "category": guard.get("category", "")}
+
 	# Auto-detect multi-line code and delegate to execute_editor_script path.
 	# Capture the last output item as "result" so the response format is
 	# consistent with the single-line Expression path.

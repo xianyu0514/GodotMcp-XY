@@ -175,8 +175,14 @@ static func _path_violation(literal: String) -> String:
 	if literal.is_empty():
 		return ""
 
-	# 复用 PathValidator 的危险模式（/etc/、/var/、~、X:\ 等）
+	# 家目录引用按"路径形态"判定，避免误杀任意含 '~' 的文本（如 "~5 enemies"、"~1.0"）。
+	if literal == "~" or literal.begins_with("~/"):
+		return "~"
+
+	# 复用 PathValidator 的危险模式（/etc/、/var/、X:\ 等）；'~' 上面已按路径形态单独处理。
 	for pattern in PathValidator.DANGEROUS_PATTERNS:
+		if pattern == "~":
+			continue
 		if literal.contains(pattern):
 			return pattern
 
@@ -184,8 +190,10 @@ static func _path_violation(literal: String) -> String:
 	if (literal.begins_with("res://") or literal.begins_with("user://")) and literal.contains(".."):
 		return ".."
 
-	# 绝对 Unix 路径（排除资源 scheme），如 "/home/...", "/root/..."
-	if literal.begins_with("/"):
+	# 绝对 Unix 路径（排除资源 scheme）。/root/ 是 Godot 场景树节点路径前缀
+	# （get_node("/root/Main") 很常见），按"防误操作"取向放行，避免误杀合法节点路径；
+	# 越界到系统目录的写法（/etc/、/var/ 等）已被上面的危险模式拦截。
+	if literal.begins_with("/") and not literal.begins_with("/root/"):
 		return literal
 
 	# Windows 盘符 X:\ 或 X:/

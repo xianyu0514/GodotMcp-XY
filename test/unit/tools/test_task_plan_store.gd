@@ -165,3 +165,77 @@ func test_save_and_load_round_trip():
 func test_load_missing_plan_errors():
 	var loaded = TaskPlanStore.load_plan("user://does_not_exist_%d.json" % Time.get_ticks_usec())
 	assert_has(loaded, "error", "Loading a missing plan should error")
+
+# --- DoD gates (objective verification) -------------------------------------
+
+func test_normalize_dod_stores_valid_gate():
+	_store.init_plan("g", true)
+	var r: Dictionary = _store.add_task({"title": "perf", "dod": [{"criterion": "fps ok", "gate": {"type": "performance_budget", "budget": {"min_fps": 55}}}]})
+	assert_false(r.has("error"))
+	var gate: Dictionary = r["task"]["dod"][0]["gate"]
+	assert_eq(gate["type"], "performance_budget")
+	assert_eq(float(gate["budget"]["min_fps"]), 55.0)
+
+func test_normalize_dod_rejects_bad_gate_type():
+	_store.init_plan("g", true)
+	var r: Dictionary = _store.add_task({"title": "x", "dod": [{"criterion": "c", "gate": {"type": "bogus"}}]})
+	assert_has(r, "error")
+
+func test_normalize_dod_rejects_unknown_budget_key():
+	_store.init_plan("g", true)
+	var r: Dictionary = _store.add_task({"title": "x", "dod": [{"criterion": "c", "gate": {"type": "performance_budget", "budget": {"max_warp": 1}}}]})
+	assert_has(r, "error")
+
+func test_evaluate_gate_perf_pass_and_fail():
+	var gate: Dictionary = {"type": "performance_budget", "budget": {"min_fps": 55.0, "max_memory_mb": 200.0}}
+	assert_true(TaskPlanStore.evaluate_gate(gate, {"min_fps": 60, "max_memory_mb": 180})["met"], "within budget -> met")
+	assert_false(TaskPlanStore.evaluate_gate(gate, {"min_fps": 40, "max_memory_mb": 180})["met"], "fps below floor -> not met")
+	assert_false(TaskPlanStore.evaluate_gate(gate, {"min_fps": 60})["met"], "missing metric -> not met")
+
+func test_evaluate_gate_no_runtime_errors():
+	var gate: Dictionary = {"type": "no_runtime_errors", "max_errors": 0}
+	assert_true(TaskPlanStore.evaluate_gate(gate, {"error_count": 0})["met"])
+	assert_false(TaskPlanStore.evaluate_gate(gate, {"error_count": 2})["met"])
+	assert_true(TaskPlanStore.evaluate_gate(gate, {"errors": []})["met"])
+	assert_false(TaskPlanStore.evaluate_gate(gate, {"errors": ["boom"]})["met"])
+
+func test_evaluate_gate_visual_baseline():
+	var gate: Dictionary = {"type": "visual_baseline", "max_diff_pixels": 10}
+	assert_true(TaskPlanStore.evaluate_gate(gate, {"diff_pixels": 5})["met"])
+	assert_false(TaskPlanStore.evaluate_gate(gate, {"diff_pixels": 50})["met"])
+	assert_false(TaskPlanStore.evaluate_gate(gate, {})["met"], "missing observation -> not met")
+
+func test_set_dod_observed_sets_met_objectively():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "perf", "dod": [{"criterion": "fps ok", "gate": {"type": "performance_budget", "budget": {"min_fps": 55}}}]})
+	var tid: String = add["task"]["id"]
+	var pass_res: Dictionary = _store.set_dod(tid, {"index": 0, "observed": {"min_fps": 60}})
+	assert_true(pass_res["task"]["dod"][0]["met"], "observed within budget -> met")
+	assert_true(str(pass_res["task"]["dod"][0]["evidence"]).length() > 0, "evidence auto-filled")
+	var fail_res: Dictionary = _store.set_dod(tid, {"index": 0, "observed": {"min_fps": 30}})
+	assert_false(fail_res["task"]["dod"][0]["met"], "observed below budget -> not met")
+
+func test_set_dod_observed_without_gate_errors():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["manual"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"index": 0, "observed": {"min_fps": 60}})
+	assert_has(r, "error", "observed without a gate should error")
+
+func test_set_dod_can_attach_gate_then_evaluate():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["no errors"]})
+	var tid: String = add["task"]["id"]
+	_store.set_dod(tid, {"index": 0, "gate": {"type": "no_runtime_errors"}})
+	var r: Dictionary = _store.set_dod(tid, {"index": 0, "observed": {"error_count": 0}})
+	assert_true(r["task"]["dod"][0]["met"])
+
+func test_set_status_done_respects_gate_met():
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": [{"criterion": "fps", "gate": {"type": "performance_budget", "budget": {"min_fps": 55}}}]})
+	var tid: String = add["task"]["id"]
+	var blocked: Dictionary = _store.set_status(tid, "done", false, "")
+	assert_has(blocked, "error", "cannot mark done while gated DoD unmet")
+	_store.set_dod(tid, {"index": 0, "observed": {"min_fps": 60}})
+	var okdone: Dictionary = _store.set_status(tid, "done", false, "")
+	assert_false(okdone.has("error"), "done allowed once gate satisfied")

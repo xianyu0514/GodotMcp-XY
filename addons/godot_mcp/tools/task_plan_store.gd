@@ -36,6 +36,24 @@ const SCHEMA_VERSION: int = 1
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const VALID_STATUSES: Array = ["pending", "in_progress", "blocked", "done"]
 
+# A DoD criterion may carry an optional 'gate' so the VERIFY phase can decide
+# 'met' objectively from observed metrics instead of a self-asserted boolean.
+# Gate types mirror the three verification tools.
+const VALID_GATE_TYPES: Array = ["performance_budget", "no_runtime_errors", "visual_baseline"]
+
+# performance_budget keys -> comparator (mirrors assert_performance_budget).
+# Observed values are supplied under the same key as the budget threshold.
+const PERF_BUDGET_COMPARATORS: Dictionary = {
+	"min_fps": "gte",
+	"max_frame_time_ms": "lte",
+	"max_physics_frame_time_ms": "lte",
+	"max_object_count": "lte",
+	"max_resource_count": "lte",
+	"max_rendered_objects": "lte",
+	"max_memory_mb": "lte",
+	"max_node_count": "lte"
+}
+
 var plan: Dictionary
 
 func _init(initial: Dictionary = {}) -> void:
@@ -109,14 +127,111 @@ static func _normalize_dod(raw) -> Dictionary:
 			var criterion: String = str(entry.get("criterion", "")).strip_edges()
 			if criterion.is_empty():
 				return {"error": "each dod entry needs a non-empty 'criterion'"}
-			out.append({
+			var normalized: Dictionary = {
 				"criterion": criterion,
 				"met": bool(entry.get("met", false)),
 				"evidence": str(entry.get("evidence", ""))
-			})
+			}
+			if entry.has("gate") and entry["gate"] != null:
+				var gate_result: Dictionary = _normalize_gate(entry["gate"])
+				if gate_result.has("error"):
+					return gate_result
+				normalized["gate"] = gate_result["gate"]
+			out.append(normalized)
 		else:
 			return {"error": "dod entries must be strings or objects"}
 	return {"dod": out}
+
+# Validate and normalize a DoD gate spec. Returns {"gate": {...}} or {"error": ...}.
+static func _normalize_gate(raw) -> Dictionary:
+	if not (raw is Dictionary):
+		return {"error": "gate must be an object"}
+	var gate_type: String = str(raw.get("type", "")).strip_edges()
+	if not (gate_type in VALID_GATE_TYPES):
+		return {"error": "gate.type must be one of: %s" % ", ".join(VALID_GATE_TYPES)}
+	var gate: Dictionary = {"type": gate_type}
+	match gate_type:
+		"performance_budget":
+			if not (raw.get("budget") is Dictionary) or (raw["budget"] as Dictionary).is_empty():
+				return {"error": "performance_budget gate needs a non-empty 'budget' object"}
+			var budget: Dictionary = {}
+			for key in (raw["budget"] as Dictionary).keys():
+				if not PERF_BUDGET_COMPARATORS.has(str(key)):
+					return {"error": "unknown budget key '%s'. Valid: %s" % [key, ", ".join(PERF_BUDGET_COMPARATORS.keys())]}
+				budget[str(key)] = float(raw["budget"][key])
+			gate["budget"] = budget
+		"no_runtime_errors":
+			gate["max_errors"] = max(0, int(raw.get("max_errors", 0)))
+		"visual_baseline":
+			var has_threshold: bool = false
+			if raw.has("max_diff_pixels"):
+				gate["max_diff_pixels"] = max(0, int(raw["max_diff_pixels"]))
+				has_threshold = true
+			if raw.has("max_diff_ratio"):
+				gate["max_diff_ratio"] = float(raw["max_diff_ratio"])
+				has_threshold = true
+			if not has_threshold:
+				return {"error": "visual_baseline gate needs 'max_diff_pixels' and/or 'max_diff_ratio'"}
+	return {"gate": gate}
+
+# Objectively evaluate a normalized gate against observed metrics.
+# observed is a flat map keyed the same way as the gate's thresholds
+# (e.g. {"min_fps": 58, "max_memory_mb": 180} or {"error_count": 0}).
+# Returns {"met": bool, "checks": [...], "failures": [...]}.
+static func evaluate_gate(gate: Dictionary, observed: Dictionary) -> Dictionary:
+	var checks: Array = []
+	var failures: Array = []
+	var gate_type: String = str(gate.get("type", ""))
+	match gate_type:
+		"performance_budget":
+			var budget: Dictionary = gate.get("budget", {})
+			for key in budget.keys():
+				var limit: float = float(budget[key])
+				var comparator: String = str(PERF_BUDGET_COMPARATORS.get(key, "lte"))
+				if not observed.has(key):
+					var miss: Dictionary = {"metric": key, "limit": limit, "observed": null, "passed": false, "reason": "missing"}
+					checks.append(miss)
+					failures.append(miss)
+					continue
+				var actual: float = float(observed[key])
+				var passed: bool = (actual >= limit) if comparator == "gte" else (actual <= limit)
+				var check: Dictionary = {"metric": key, "limit": limit, "observed": actual, "comparator": comparator, "passed": passed}
+				checks.append(check)
+				if not passed:
+					failures.append(check)
+		"no_runtime_errors":
+			var max_errors: int = int(gate.get("max_errors", 0))
+			var error_count: int = 0
+			if observed.has("error_count"):
+				error_count = int(observed["error_count"])
+			elif observed.get("errors") is Array:
+				error_count = (observed["errors"] as Array).size()
+			var ok_errors: bool = error_count <= max_errors
+			var ec: Dictionary = {"metric": "error_count", "limit": max_errors, "observed": error_count, "comparator": "lte", "passed": ok_errors}
+			checks.append(ec)
+			if not ok_errors:
+				failures.append(ec)
+		"visual_baseline":
+			if gate.has("max_diff_pixels"):
+				var limit_px: int = int(gate["max_diff_pixels"])
+				var actual_px: int = int(observed.get("diff_pixels", -1))
+				var ok_px: bool = actual_px >= 0 and actual_px <= limit_px
+				var cpx: Dictionary = {"metric": "diff_pixels", "limit": limit_px, "observed": actual_px, "comparator": "lte", "passed": ok_px}
+				checks.append(cpx)
+				if not ok_px:
+					failures.append(cpx)
+			if gate.has("max_diff_ratio"):
+				var limit_ratio: float = float(gate["max_diff_ratio"])
+				var has_ratio: bool = observed.has("diff_ratio")
+				var actual_ratio: float = float(observed.get("diff_ratio", -1.0))
+				var ok_ratio: bool = has_ratio and actual_ratio >= 0.0 and actual_ratio <= limit_ratio
+				var cr: Dictionary = {"metric": "diff_ratio", "limit": limit_ratio, "observed": actual_ratio if has_ratio else null, "comparator": "lte", "passed": ok_ratio}
+				checks.append(cr)
+				if not ok_ratio:
+					failures.append(cr)
+		_:
+			return {"met": false, "checks": [], "failures": [{"reason": "unknown gate type '%s'" % gate_type}]}
+	return {"met": failures.is_empty(), "checks": checks, "failures": failures}
 
 static func dod_all_met(task: Dictionary) -> bool:
 	var dod = task.get("dod", [])
@@ -294,7 +409,13 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 				break
 		if target == -1:
 			# Append a brand-new criterion when it does not exist yet.
-			dod.append({"criterion": wanted, "met": bool(args.get("met", false)), "evidence": str(args.get("evidence", ""))})
+			var fresh: Dictionary = {"criterion": wanted, "met": bool(args.get("met", false)), "evidence": str(args.get("evidence", ""))}
+			if args.has("gate") and args["gate"] != null:
+				var gate_result: Dictionary = _normalize_gate(args["gate"])
+				if gate_result.has("error"):
+					return gate_result
+				fresh["gate"] = gate_result["gate"]
+			dod.append(fresh)
 			task["dod"] = dod
 			task["updated_at"] = _now()
 			_touch()
@@ -305,10 +426,30 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 	if target < 0 or target >= dod.size():
 		return {"error": "dod index %d out of range (task has %d criteria)" % [target, dod.size()]}
 	var entry: Dictionary = dod[target]
-	if args.has("met"):
-		entry["met"] = bool(args["met"])
-	if args.has("evidence"):
-		entry["evidence"] = str(args["evidence"])
+	# Allow attaching/replacing a gate on this criterion.
+	if args.has("gate"):
+		if args["gate"] == null:
+			entry.erase("gate")
+		else:
+			var gate_result: Dictionary = _normalize_gate(args["gate"])
+			if gate_result.has("error"):
+				return gate_result
+			entry["gate"] = gate_result["gate"]
+	# Objective path: given observed metrics, compute 'met' from the gate.
+	if args.has("observed"):
+		if not (entry.get("gate") is Dictionary):
+			return {"error": "criterion has no gate to evaluate 'observed' against"}
+		if not (args["observed"] is Dictionary):
+			return {"error": "observed must be an object of measured metrics"}
+		var verdict: Dictionary = evaluate_gate(entry["gate"], args["observed"])
+		entry["met"] = bool(verdict["met"])
+		entry["evidence"] = JSON.stringify({"gate": entry["gate"]["type"], "met": verdict["met"], "checks": verdict["checks"]})
+		entry["last_evaluation"] = verdict
+	else:
+		if args.has("met"):
+			entry["met"] = bool(args["met"])
+		if args.has("evidence"):
+			entry["evidence"] = str(args["evidence"])
 	if args.has("criterion"):
 		entry["criterion"] = str(args["criterion"])
 	task["updated_at"] = _now()
