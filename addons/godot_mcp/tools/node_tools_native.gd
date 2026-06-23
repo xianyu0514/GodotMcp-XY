@@ -1285,9 +1285,7 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 		TYPE_OBJECT:
 			if value is String:
 				if value.begins_with("res://"):
-					var loaded_resource: Resource = load(value)
-					if loaded_resource:
-						return loaded_resource
+					return load(value) if ResourceLoader.exists(value) else null
 				if ClassDB.class_exists(value) and ClassDB.is_parent_class(value, "Resource"):
 					return ClassDB.instantiate(value)
 	

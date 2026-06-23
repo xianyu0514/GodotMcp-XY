@@ -91,7 +91,7 @@ func test_validate_core_tool_limit():
 	assert_has(result, "enabled_core_count", "Result should have enabled_core_count")
 	assert_has(result, "core_limit", "Result should have core_limit")
 	assert_has(result, "message", "Result should have message")
-	assert_eq(result["core_limit"], 40, "Core limit should be 40")
+	assert_eq(result["core_limit"], 30, "Core limit should be 30 (CORE_MAX_COUNT)")
 
 func test_get_storage_path():
 	var path: String = _state_manager.get_storage_path()

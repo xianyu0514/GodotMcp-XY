@@ -3426,7 +3426,7 @@ func _merge_runtime_params(params: Dictionary, extra: Dictionary) -> Dictionary:
 		out[key] = extra[key]
 	return out
 
-func _request_runtime_probe(command: String, payload: Array, response_messages: Array, params: Dictionary, match_fields: Dictionary = {}) -> Dictionary:
+func _request_runtime_probe(command: String, payload: Array, response_messages: Array, params: Dictionary, match_fields: Dictionary = {}, allow_send: bool = true) -> Dictionary:
 	var bridge: RefCounted = _get_debugger_bridge()
 	if not bridge:
 		return {"error": "Debugger bridge is not available"}
@@ -3436,7 +3436,13 @@ func _request_runtime_probe(command: String, payload: Array, response_messages: 
 	var now_ms: int = Time.get_ticks_msec()
 	var pending_entry: Dictionary = _pending_runtime_probe_requests.get(request_key, {})
 
-	if pending_entry.is_empty() or now_ms > int(pending_entry.get("expires_at_ms", 0)):
+	var needs_send: bool = pending_entry.is_empty() or now_ms > int(pending_entry.get("expires_at_ms", 0))
+	if needs_send and not allow_send:
+		# Polling mode: do not dispatch a fresh probe. Reuse the existing pending
+		# entry (if any) to extract a response, otherwise report still-pending.
+		if pending_entry.is_empty():
+			return {"status": "pending", "response_messages": response_messages}
+	elif needs_send:
 		if not pending_entry.is_empty():
 			_pending_runtime_probe_requests.erase(request_key)
 		var baseline_sequence: int = bridge.get_message_sequence() if bridge.has_method("get_message_sequence") else 0
@@ -3540,7 +3546,12 @@ func _request_runtime_probe_poll(
 				await tree.process_frame
 			else:
 				OS.delay_msec(16)
-			result = _request_runtime_probe(command, payload, response_messages, params, match_fields)
+			# Poll the in-flight request without re-sending. The single probe was
+			# already dispatched above; re-sending here would burn extra debugger
+			# messages each frame (and once more when the pending entry expires a
+			# few ms before this loop's deadline). A fresh probe is only sent on
+			# the next top-level call.
+			result = _request_runtime_probe(command, payload, response_messages, params, match_fields, false)
 			if result.get("status") not in ["pending", "stale"]:
 				break
 	# Timeout expired without a fresh response. Fall back to the latest cached
@@ -4329,7 +4340,8 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 	var result_lines: Array[Dictionary] = []
 	for i in range(start, end): result_lines.append(parsed_lines[i])
 	return {"logs": result_lines, "count": result_lines.size(), "total_available": total_available, "source": "editor_panel"}
-func _infer_log_type_from_line(line: String) -> String:
+func _infer_log_type_from_line(raw_line: String) -> String:
+	var line: String = raw_line.strip_edges()
 	if line.begins_with("ERROR:") or line.begins_with("SCRIPT ERROR:") or line.begins_with("PARSE ERROR:") or line.begins_with("ERROR at") or line.find("error") == 0:
 		return "Error"
 	if line.begins_with("WARNING:") or line.begins_with("WARN ") or line.find("warning") == 0:

@@ -48,6 +48,7 @@ group.Debug,Debug,Debug,调试 · 日志
 group.Debug-Advanced,Debug - Advanced,Debug - Advanced,调试 · 断点
 group.Project,Project,Project,项目 · 信息
 group.Project-Advanced,Project - Advanced,Project - Advanced,项目 · 资源创建
+group.Meta,Meta,Meta,元工具
 groupdesc.Node-Read,Inspect scene nodes properties and the scene tree (read-only),Inspect scene nodes properties and the scene tree (read-only),查看节点、属性与场景树（只读）
 groupdesc.Node-Write,Create delete duplicate move and rename nodes,Create delete duplicate move and rename nodes,增删、复制、移动、重命名节点
 groupdesc.Node-Advanced,Batch node edits groups and scene audits,Batch node edits groups and scene audits,批量改节点、分组与场景体检
@@ -62,6 +63,7 @@ groupdesc.Debug,Editor logs and debug output,Editor logs and debug output,编辑
 groupdesc.Debug-Advanced,Breakpoints stack frames profiler and runtime probe,Breakpoints stack frames profiler and runtime probe,断点、调用栈、性能分析与运行时探针
 groupdesc.Project,Project info settings and resource listing,Project info settings and resource listing,项目信息、设置与资源清单
 groupdesc.Project-Advanced,Resource creation input map themes and TileSet,Resource creation input map themes and TileSet,资源创建、输入映射、主题与 TileSet
+groupdesc.Meta,Always-on meta tools tool catalog and on-demand enablement,Always-on meta tools tool catalog and on-demand enablement,始终在线的元工具：工具目录查询与按需启用
 ui.categories,Categories,Categories,分类
 ui.recommended,Recommended,Recommended,常用推荐
 ui.recommended_desc,"Essential tools, enabled by default","Essential tools, enabled by default",核心常用工具，开箱即用

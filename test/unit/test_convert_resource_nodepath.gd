@@ -15,13 +15,13 @@ func test_convert_node_path_from_string():
 	assert_eq(result, "TestName", "name property returns string")
 
 func test_convert_resource_type_from_res_path():
-	var node: Node3D = Node3D.new()
+	var node: MeshInstance3D = MeshInstance3D.new()
 	add_child_autofree(node)
 	var result: Variant = _node_tools._convert_value_for_property(node, "material_override", "res://nonexistent.tres")
 	assert_eq(result, null, "Invalid resource path returns null from load")
 
 func test_convert_resource_type_from_class_name():
-	var node: Node3D = Node3D.new()
+	var node: MeshInstance3D = MeshInstance3D.new()
 	add_child_autofree(node)
 	var result: Variant = _node_tools._convert_value_for_property(node, "material_override", "StandardMaterial3D")
 	assert_true(result is Material, "Class name string creates Material instance")

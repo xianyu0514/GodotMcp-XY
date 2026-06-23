@@ -252,3 +252,33 @@ func test_terrain_assignment_roundtrip():
 	assert_eq(td.terrain_set, 0, "terrain_set persisted")
 	assert_eq(td.terrain, 0, "terrain persisted")
 	assert_eq(td.get_terrain_peering_bit(TileSet.CELL_NEIGHBOR_TOP_SIDE), 0, "Peering bit persisted")
+
+# --- _is_terrain_peering_bit_valid ------------------------------------------
+# Godot 4.7 has no TileSet.is_valid_terrain_peering_bit(); this helper derives
+# validity from the terrain set's match mode. Build an in-memory TileSet with
+# one terrain set per mode and assert side/corner keys directly.
+
+func _make_terrain_set(mode: int) -> TileSet:
+	var ts: TileSet = TileSet.new()
+	ts.add_terrain_set()
+	ts.set_terrain_set_mode(0, mode)
+	return ts
+
+func test_peering_bit_valid_corners_and_sides_accepts_both():
+	var ts: TileSet = _make_terrain_set(TileSet.TERRAIN_MODE_MATCH_CORNERS_AND_SIDES)
+	assert_true(_project_tools._is_terrain_peering_bit_valid(ts, 0, "right_side"), "side valid in corners_and_sides")
+	assert_true(_project_tools._is_terrain_peering_bit_valid(ts, 0, "top_left_corner"), "corner valid in corners_and_sides")
+
+func test_peering_bit_valid_sides_only():
+	var ts: TileSet = _make_terrain_set(TileSet.TERRAIN_MODE_MATCH_SIDES)
+	assert_true(_project_tools._is_terrain_peering_bit_valid(ts, 0, "left_side"), "side valid in sides mode")
+	assert_false(_project_tools._is_terrain_peering_bit_valid(ts, 0, "top_left_corner"), "corner invalid in sides mode")
+
+func test_peering_bit_valid_corners_only():
+	var ts: TileSet = _make_terrain_set(TileSet.TERRAIN_MODE_MATCH_CORNERS)
+	assert_true(_project_tools._is_terrain_peering_bit_valid(ts, 0, "bottom_right_corner"), "corner valid in corners mode")
+	assert_false(_project_tools._is_terrain_peering_bit_valid(ts, 0, "bottom_side"), "side invalid in corners mode")
+
+func test_peering_bit_valid_unknown_key_is_false():
+	var ts: TileSet = _make_terrain_set(TileSet.TERRAIN_MODE_MATCH_CORNERS_AND_SIDES)
+	assert_false(_project_tools._is_terrain_peering_bit_valid(ts, 0, "not_a_neighbor"), "non side/corner key is invalid")

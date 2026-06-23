@@ -1115,9 +1115,9 @@ func _serialize_animation_tree_state(animation_tree: AnimationTree) -> Dictionar
 		"anim_player": str(animation_tree.get("anim_player")),
 		"tree_root_type": tree_root.get_class() if tree_root else "",
 		"has_playback": playback != null,
-		"current_length": animation_tree.get("parameters/current_length") as float,
-		"current_position": animation_tree.get("parameters/current_position") as float,
-		"current_delta": animation_tree.get("parameters/current_delta") as float
+		"current_length": _variant_to_float(animation_tree.get("parameters/current_length")),
+		"current_position": _variant_to_float(animation_tree.get("parameters/current_position")),
+		"current_delta": _variant_to_float(animation_tree.get("parameters/current_delta"))
 	}
 	if playback != null:
 		result["playback_class"] = playback.get_class() if playback.has_method("get_class") else ""
@@ -1132,6 +1132,18 @@ func _serialize_animation_tree_state(animation_tree: AnimationTree) -> Dictionar
 		if playback.has_method("get_travel_path"):
 			result["travel_path"] = PackedStringArray(playback.get_travel_path())
 	return result
+
+# Safely coerce an AnimationTree parameter value to float. Parameters such as
+# "parameters/current_length" return null when the tree has no tree_root, and
+# `null as float` raises "Invalid cast" under Godot 4.7, so guard explicitly.
+func _variant_to_float(value: Variant) -> float:
+	if value == null:
+		return 0.0
+	if value is float or value is int:
+		return float(value)
+	if value is String and (value as String).is_valid_float():
+		return float(value)
+	return 0.0
 
 func _serialize_material_state(resolution: Dictionary) -> Dictionary:
 	var material: Material = resolution.get("material")

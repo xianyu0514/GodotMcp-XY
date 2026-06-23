@@ -121,7 +121,13 @@ func test_add_autoload_path_not_found():
 	assert_has(result, "error", "Nonexistent path should return an error")
 
 func test_add_autoload_existing_without_overwrite():
-	# MCPRuntimeProbe is declared in project.godot, so it already exists.
+	# MCPRuntimeProbe is declared in project.godot, so it already exists. The full
+	# suite runs 1000+ tests in one engine process and earlier tests can mutate
+	# in-memory ProjectSettings, so we assert the "already exists" precondition
+	# explicitly instead of relying on the global autoload surviving intact.
+	var probe_key: String = "autoload/MCPRuntimeProbe"
+	if not ProjectSettings.has_setting(probe_key):
+		ProjectSettings.set_setting(probe_key, "*" + EXISTING_SCRIPT)
 	var result: Dictionary = _tools._tool_add_project_autoload({
 		"name": "MCPRuntimeProbe",
 		"path": EXISTING_SCRIPT,

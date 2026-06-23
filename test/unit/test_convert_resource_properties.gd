@@ -34,7 +34,7 @@ func test_convert_value_for_resource_float():
 
 func test_convert_value_for_resource_bool():
 	var res: StandardMaterial3D = StandardMaterial3D.new()
-	var result: Variant = _project_tools._convert_value_for_resource(res, "roughness_filter", "true")
+	var result: Variant = _project_tools._convert_value_for_resource(res, "vertex_color_use_as_albedo", "true")
 	assert_eq(result, true, "String to bool for resource")
 	res.free()
 
@@ -76,10 +76,8 @@ func test_convert_value_for_resource_vector3_key_value_string():
 	res.free()
 
 func test_convert_value_for_resource_vector2_key_value_string():
-	var res: Curve2D = Curve2D.new()
-	var point_count_before: int = res.get_point_count()
-	res.add_point(Vector2.ZERO)
-	var result: Variant = _project_tools._convert_value_for_resource(res, "point_0:left_tangent", "{x:1,y:2}")
+	var res: PlaceholderTexture2D = PlaceholderTexture2D.new()
+	var result: Variant = _project_tools._convert_value_for_resource(res, "size", "{x:1,y:2}")
 	assert_eq(result, Vector2(1.0, 2.0), "{x:y:} string to Vector2 for resource")
 	res.free()
 

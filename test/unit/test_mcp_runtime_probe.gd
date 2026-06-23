@@ -133,3 +133,30 @@ func test_serialize_animation_state_not_playing():
 	assert_eq(result["current_animation"], "", "current_animation should be empty")
 	remove_child(anim_player)
 	anim_player.queue_free()
+
+# --- _variant_to_float ------------------------------------------------------
+# AnimationTree params (e.g. "parameters/current_length") return null when the
+# tree has no tree_root; `null as float` raises "Invalid cast" under Godot 4.7,
+# so _variant_to_float guards every input type explicitly.
+
+func test_variant_to_float_null_returns_zero():
+	assert_eq(_probe._variant_to_float(null), 0.0, "null should coerce to 0.0")
+
+func test_variant_to_float_float_passthrough():
+	var out: float = _probe._variant_to_float(3.5)
+	assert_eq(out, 3.5, "float should pass through unchanged")
+	assert_eq(typeof(out), TYPE_FLOAT, "result should be float type")
+
+func test_variant_to_float_int_to_float():
+	var out: float = _probe._variant_to_float(4)
+	assert_eq(out, 4.0, "int should coerce to float value")
+	assert_eq(typeof(out), TYPE_FLOAT, "result should be float type")
+
+func test_variant_to_float_valid_float_string():
+	assert_eq(_probe._variant_to_float("3.14"), 3.14, "valid float string should parse")
+
+func test_variant_to_float_invalid_string_returns_zero():
+	assert_eq(_probe._variant_to_float("not a number"), 0.0, "non-numeric string should return 0.0")
+
+func test_variant_to_float_unsupported_type_returns_zero():
+	assert_eq(_probe._variant_to_float(Vector2(1, 2)), 0.0, "unsupported type should return 0.0")

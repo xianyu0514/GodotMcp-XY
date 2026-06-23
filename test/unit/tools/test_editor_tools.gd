@@ -129,11 +129,14 @@ func test_editor_screenshot_uses_engine_main_loop():
 func test_stop_project_waits_for_exit():
 	"""stop_project should call stop_playing_scene and wait for exit"""
 	var result: Dictionary = _editor_tools._tool_stop_project({"allow_window": true})
-	# In headless mode without editor interface, this returns error
-	assert_has(result, "status", "stop_project should return a status field")
-	# When successful, stopped_after_ms should be present
-	if result.get("status") == "success":
-		assert_has(result, "stopped_after_ms", "Successful stop should report stopped_after_ms")
+	# In headless mode the editor interface is unavailable, so the tool guards
+	# with an error. With an editor it reports success and stopped_after_ms.
+	if result.has("error"):
+		assert_eq(result.get("error"), "Editor interface not available", "Headless stop should guard on missing editor interface")
+	else:
+		assert_has(result, "status", "stop_project should return a status field")
+		if result.get("status") == "success":
+			assert_has(result, "stopped_after_ms", "Successful stop should report stopped_after_ms")
 
 func test_stop_project_output_schema_includes_stopped_after_ms():
 	"""check _register_stop_project output_schema includes stopped_after_ms"""

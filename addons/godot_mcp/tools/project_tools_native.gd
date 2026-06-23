@@ -3740,6 +3740,15 @@ func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
 	]
 	var owners: Array[String] = []
 	_collect_resources("res://", owner_extensions, owners)
+	# Also scan the requested search_path subtree directly so owners living
+	# inside it are counted even when it is a hidden dir (DirAccess skips
+	# hidden directories during the recursive res:// walk).
+	if search_path != "res://":
+		var extra_owners: Array[String] = []
+		_collect_resources(search_path, owner_extensions, extra_owners)
+		for extra_owner in extra_owners:
+			if not owners.has(extra_owner):
+				owners.append(extra_owner)
 
 	var referenced: Dictionary = {}
 	for owner_path in owners:
@@ -8113,6 +8122,24 @@ const _TILESET_TERRAIN_MODES: Dictionary = {
 	"corners_and_sides": TileSet.TERRAIN_MODE_MATCH_CORNERS_AND_SIDES
 }
 
+# Whether a peering-bit neighbor is valid for a terrain set's match mode.
+# Godot 4.7 exposes no TileSet.is_valid_terrain_peering_bit(), so derive it
+# from the terrain mode: CORNERS_AND_SIDES uses both side and corner bits,
+# SIDES uses only side bits, CORNERS uses only corner bits. The neighbor map
+# only contains square-tile neighbors (4 sides + 4 corners).
+func _is_terrain_peering_bit_valid(tile_set: TileSet, terrain_set: int, neighbor_key: String) -> bool:
+	var mode: int = tile_set.get_terrain_set_mode(terrain_set)
+	var is_side: bool = neighbor_key.ends_with("_side")
+	var is_corner: bool = neighbor_key.ends_with("_corner")
+	match mode:
+		TileSet.TERRAIN_MODE_MATCH_CORNERS_AND_SIDES:
+			return is_side or is_corner
+		TileSet.TERRAIN_MODE_MATCH_SIDES:
+			return is_side
+		TileSet.TERRAIN_MODE_MATCH_CORNERS:
+			return is_corner
+	return false
+
 func _load_tileset_for_edit(tileset_path: String) -> Dictionary:
 	var validation: Dictionary = PathValidator.validate_file_path(tileset_path, [".tres", ".res"])
 	if not validation["valid"]:
@@ -8492,7 +8519,7 @@ func _tool_set_tile_terrain(params: Dictionary) -> Dictionary:
 			var key: String = str(neighbor_name).strip_edges().to_lower()
 			if not _TILESET_CELL_NEIGHBORS.has(key):
 				return {"error": "Unknown peering neighbor '%s'" % str(neighbor_name)}
-			if not tile_set.is_valid_terrain_peering_bit(terrain_set, _TILESET_CELL_NEIGHBORS[key]):
+			if not _is_terrain_peering_bit_valid(tile_set, terrain_set, key):
 				return {"error": "peering neighbor '%s' is not valid for terrain set %d (check its match mode and tile shape)" % [key, terrain_set]}
 			var peer_terrain: int = int(params["peering_bits"][neighbor_name])
 			if peer_terrain < 0 or peer_terrain >= tile_set.get_terrains_count(terrain_set):

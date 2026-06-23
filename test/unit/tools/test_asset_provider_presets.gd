@@ -19,7 +19,7 @@ func after_each():
 
 func test_preset_ids_are_known():
 	var ids: Array = AssetProviderPresets.preset_ids()
-	assert_eq(ids.size(), 4, "Four built-in presets are exposed")
+	assert_eq(ids.size(), 6, "Six built-in presets are exposed")
 	for preset_id in ids:
 		assert_true(AssetProviderPresets.has_preset(preset_id), "preset_ids() entry should exist: " + str(preset_id))
 
