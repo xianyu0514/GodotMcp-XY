@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**71 tools** — 3 core, 68 advanced.
+**73 tools** — 3 core, 70 advanced.
 
 The largest category. Edit-time debugging (logs, debugger sessions, breakpoints, stack frames and variables, profilers) plus a rich **runtime probe** API that inspects and drives a *running* game: live scene tree, node inspection/mutation, expression evaluation, input injection, and animation / audio / shader / theme / tilemap control.
 
@@ -18,7 +18,7 @@ The largest category. Edit-time debugging (logs, debugger sessions, breakpoints,
 | `debug_print` | Core | Print debug messages to the editor console. |
 | `clear_output` | Core | Clear the editor output panel. |
 
-### Debug-Advanced (68)
+### Debug-Advanced (70)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -44,7 +44,9 @@ The largest category. Edit-time debugging (logs, debugger sessions, breakpoints,
 | `evaluate_runtime_expression` | Advanced | Evaluate an expression in the running game context. |
 | `await_runtime_condition` | Advanced | Wait for a condition to be true in the running game. |
 | `assert_runtime_condition` | Advanced | Assert a condition in the running game. |
-| `play_and_verify` | Advanced | Drive the running game through scripted input steps (with waits/screenshots), then evaluate a batch of runtime assertions and return a single pass/fail report. Set `deterministic=true` to make per-step `wait_frames` advance an exact number of physics frames inside the game (frame-stepped, fps-independent, reproducible) instead of a wall-clock approximation; combine with `sample` to record a frame-indexed `trajectory` and per-label `metrics` (min/max/first/last/delta/peak frame+time) for measuring game feel, and assert on them via `{metric, aggregate, operator, expected}`. Runtime errors emitted during the run are captured via the debugger bridge and (by default) fail the report. |
+| `play_and_verify` | Advanced | Drive the running game through scripted input steps (with waits/screenshots), then evaluate a batch of runtime assertions and return a single pass/fail report. Set `deterministic=true` to make per-step `wait_frames` advance an exact number of physics frames inside the game (frame-stepped, fps-independent, reproducible) instead of a wall-clock approximation; combine with `sample` to record a frame-indexed `trajectory` and per-label `metrics` (min/max/first/last/delta/peak frame+time) for measuring game feel, and assert on them via `{metric, aggregate, operator, expected}`. Runtime errors emitted during the run are captured via the debugger bridge and (by default) fail the report. In `deterministic` mode, a step's optional wall-clock `wait_ms` (if set alongside `wait_frames`) is applied afterwards as an extra real-time settle and is not frame-stepped or sampled. |
+| `assert_performance_budget` | Advanced | Performance budget gate: capture a runtime performance snapshot from the running game and check it against a `budget` (`min_fps`, `max_frame_time_ms`, `max_physics_frame_time_ms`, `max_object_count`, `max_resource_count`, `max_rendered_objects`, `max_memory_mb`, `max_node_count` — define only the ones to enforce), returning a pass/fail verdict with a per-metric breakdown. Pass an explicit `snapshot` to evaluate a previously captured one instead of querying the game. |
+| `assert_no_runtime_errors` | Advanced | Runtime-error hard gate: scan the categorized debugger output and fail if any error events are present. Inspects the `stderr` category by default; use `categories` to widen/narrow and `since_sequence` to gate only a window of a run. |
 | `get_debug_threads` | Advanced | Return DAP-style debugger threads visible from the active Godot debug session. |
 | `get_debug_state_events` | Advanced | Read recorded debugger break/resume/stop state transitions from the bridge. |
 | `get_debug_output` | Advanced | Read categorized runtime debugger output captured by the editor bridge. |

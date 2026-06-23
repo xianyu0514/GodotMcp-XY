@@ -64,6 +64,17 @@ Check the task's `done_when` using assertions:
 - Tests → `run_project_tests` (expect 0 failures).
 - Visuals → `get_editor_screenshot` + `compare_render_screenshots`.
 
+**Regression gates** turn VERIFY into an automated *no-regression* ratchet — each
+returns a single `passed` verdict the loop can branch on:
+- Visual → `assert_visual_baseline(candidate_path, baseline_path, max_diff_ratio=...)`.
+  First run bootstraps the golden image and passes; later runs fail when the frame
+  drifts beyond tolerance (optionally writing a diff heatmap to `diff_output_path`).
+  Approve an intended visual change with `update_baseline=true`.
+- Performance → `assert_performance_budget(budget={min_fps: 55, max_frame_time_ms: 18, max_memory_mb: 256})`
+  fails the slice if the running game breaches the budget.
+- Errors → `assert_no_runtime_errors()` is a hard gate: any captured `stderr` event
+  fails the run, so a silent runtime error can never pass as "done".
+
 ### 5. DoD gate
 If every `done_when` passes, mark the task done and record results in memory.
 If not, go to FIX. With `manage_task_plan`, record each criterion via
