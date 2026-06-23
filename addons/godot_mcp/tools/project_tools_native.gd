@@ -8563,7 +8563,7 @@ const _TASK_PLAN_ACTIONS: Array = ["init", "add_task", "update_task", "set_statu
 
 func _register_manage_task_plan(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_task_plan"
-	var description: String = "Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default res://.mcp/task_plan.json) so plan -> execute -> run -> verify -> fix survives across sessions. action='init' creates/resets the plan with a goal (with reset=false it returns an error rather than overwriting an existing plan whose JSON is corrupt; use reset=true to discard it); 'add_task' appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; 'update_task' edits fields; 'set_status' sets pending/in_progress/blocked/done (refuses 'done' unless every DoD criterion is met, unless force=true); 'set_dod' replaces the criteria list or updates one criterion's met/evidence; 'get' returns the whole graph (or one task) plus progress; 'next' returns dependency-ready tasks, blocked tasks and progress; 'remove_task' deletes a task and strips dangling dependency references."
+	var description: String = "Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default res://.mcp/task_plan.json) so plan -> execute -> run -> verify -> fix survives across sessions. action='init' creates/resets the plan with a goal (with reset=false it returns an error rather than overwriting an existing plan whose JSON is corrupt; use reset=true to discard it); 'add_task' appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; 'update_task' edits fields; 'set_status' sets pending/in_progress/blocked/done (refuses 'done' unless every DoD criterion is met, unless force=true); 'set_dod' replaces the criteria list or updates one criterion's met/evidence/gate; 'get' returns the whole graph (or one task) plus progress; 'next' returns dependency-ready tasks, blocked tasks and progress; 'remove_task' deletes a task and strips dangling dependency references. A DoD criterion may carry a 'gate' {type, ...thresholds} so VERIFY decides 'met' objectively: type 'performance_budget' with a 'budget' (min_fps/max_frame_time_ms/max_physics_frame_time_ms/max_object_count/max_resource_count/max_rendered_objects/max_memory_mb/max_node_count), 'no_runtime_errors' with optional 'max_errors' (default 0), or 'visual_baseline' with 'max_diff_pixels' and/or 'max_diff_ratio'. On set_dod, pass 'observed' (a flat map of measured values keyed the same way, e.g. {min_fps:58} or {error_count:0} or {diff_pixels:12}) to auto-compute 'met' from the gate and record the verdict as evidence."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -8577,14 +8577,16 @@ func _register_manage_task_plan(server_core: RefCounted) -> void:
 			"description": {"type": "string", "description": "Task description / the action to perform."},
 			"status": {"type": "string", "enum": TaskPlanStore.VALID_STATUSES, "description": "Task status for add_task/update_task/set_status."},
 			"depends_on": {"type": "array", "items": {"type": "string"}, "description": "Ids this task depends on. Validated for existence and cycles."},
-			"dod": {"type": "array", "description": "Definition-of-Done criteria: strings, or objects {criterion, met, evidence}. For set_dod this replaces the whole list."},
+			"dod": {"type": "array", "description": "Definition-of-Done criteria: strings, or objects {criterion, met, evidence, gate}. The optional 'gate' makes a criterion machine-checkable (see tool description). For set_dod this replaces the whole list."},
 			"tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags."},
 			"journal": {"type": "string", "description": "A note to append to the task's journal (update_task / set_status)."},
 			"force": {"type": "boolean", "description": "action='set_status': allow marking 'done' even when DoD criteria are unmet. Default false.", "default": false},
 			"index": {"type": "integer", "description": "action='set_dod': index of the criterion to update."},
 			"criterion": {"type": "string", "description": "action='set_dod': criterion text to match (or add) when not using index."},
-			"met": {"type": "boolean", "description": "action='set_dod': whether the targeted criterion is met."},
-			"evidence": {"type": "string", "description": "action='set_dod': evidence string for the targeted criterion."}
+			"met": {"type": "boolean", "description": "action='set_dod': whether the targeted criterion is met (ignored when 'observed' is supplied)."},
+			"evidence": {"type": "string", "description": "action='set_dod': evidence string for the targeted criterion (auto-filled when 'observed' is supplied)."},
+			"gate": {"type": "object", "description": "action='set_dod': attach/replace the gate on the targeted criterion (null clears it). Gate {type, ...thresholds}; see tool description."},
+			"observed": {"type": "object", "description": "action='set_dod': measured metrics to evaluate the criterion's gate, auto-setting 'met' objectively. Keyed like the gate thresholds, e.g. {min_fps:58, max_memory_mb:180} / {error_count:0} / {diff_pixels:12, diff_ratio:0.001}."}
 		},
 		"required": ["action"]
 	}
