@@ -211,7 +211,8 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	
 	# 记录收到的消息
 	message_received.emit(message)
-	_log_debug("Received message: " + JSON.stringify(message))
+	if _debug_enabled():
+		_log_debug("Received message: " + JSON.stringify(message))
 	
 	# Only requests/notifications (carrying "method") are processed; ignore responses.
 	if not message.has("method"):
@@ -446,7 +447,8 @@ func _handle_initialize(message: Dictionary) -> Dictionary:
 	var client_protocol_version: String = params.get("protocolVersion", PROTOCOL_VERSION)
 	
 	_log_info("Initialize request from client. Protocol: " + client_protocol_version)
-	_log_debug("Client capabilities: " + JSON.stringify(client_capabilities))
+	if _debug_enabled():
+		_log_debug("Client capabilities: " + JSON.stringify(client_capabilities))
 	
 	var negotiated_version: String = _negotiate_protocol_version(client_protocol_version)
 	
@@ -461,7 +463,8 @@ func _handle_initialize(message: Dictionary) -> Dictionary:
 	}
 	
 	var response: Dictionary = MCPTypes.create_response(id, result)
-	_log_debug("Initialize response: " + JSON.stringify(response))
+	if _debug_enabled():
+		_log_debug("Initialize response: " + JSON.stringify(response))
 	
 	return response
 
@@ -503,7 +506,8 @@ func _handle_tools_list(message: Dictionary) -> Dictionary:
 
 	_log_info("Tools list requested. Available tools: " + str(tools_list.size()) + " (registered: " + str(_tools.size()) + ")")
 
-	_log_debug("Tools list response: " + JSON.stringify(response))
+	if _debug_enabled():
+		_log_debug("Tools list response: " + JSON.stringify(response))
 
 	return response
 
@@ -514,7 +518,8 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var arguments: Dictionary = params.get("arguments", {})
 	
 	_log_info("Tool call: " + tool_name)
-	_log_debug("Tool arguments: " + JSON.stringify(arguments))
+	if _debug_enabled():
+		_log_debug("Tool arguments: " + JSON.stringify(arguments))
 	
 	# 检查工具是否存在
 	if not _tools.has(tool_name):
@@ -637,7 +642,8 @@ func _handle_resources_list(message: Dictionary) -> Dictionary:
 	var result: Dictionary = {"resources": resources_list}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 	
-	_log_debug("Resources list response: " + JSON.stringify(response))
+	if _debug_enabled():
+		_log_debug("Resources list response: " + JSON.stringify(response))
 	
 	return response
 
@@ -1134,6 +1140,12 @@ func _log_info(message: String) -> void:
 func _log_debug(message: String) -> void:
 	if _log_level >= MCPTypes.LogLevel.DEBUG:
 		call_deferred("emit_signal", "log_message", "DEBUG", message)
+
+## True when DEBUG logging is active. Guard expensive log-message construction
+## (e.g. JSON.stringify of whole requests/responses) with this so it is skipped
+## entirely at the default INFO level instead of being built then discarded.
+func _debug_enabled() -> bool:
+	return _log_level >= MCPTypes.LogLevel.DEBUG
 
 # ============================================================================
 # 清理

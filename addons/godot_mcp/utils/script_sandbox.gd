@@ -13,6 +13,12 @@ extends RefCounted
 
 const REASON: String = "script_sandbox"
 
+# Process-lifetime cache of compiled RegEx keyed by pattern string. The denylist
+# is constant, so each pattern only needs to be compiled once instead of on every
+# scan() call (a scan would otherwise compile ~26 identifier regexes per call).
+# A failed compile is cached as null so we never retry it.
+static var _regex_cache: Dictionary = {}
+
 # 默认拒绝清单：按类别组织。键为类别名，值为"标识符"数组（按词边界匹配）。
 const DEFAULT_DENYLIST: Dictionary = {
 	"os_process": [
@@ -152,10 +158,23 @@ static func _matches_identifier(text: String, token: String) -> bool:
 
 
 static func _matches_regex(text: String, pattern: String) -> bool:
-	var re: RegEx = RegEx.new()
-	if re.compile(pattern) != OK:
+	var re: RegEx = _compiled_regex(pattern)
+	if re == null:
 		return false
 	return re.search(text) != null
+
+
+# Return a compiled RegEx for 'pattern', reusing a cached instance when possible.
+# Returns null (cached) when the pattern fails to compile.
+static func _compiled_regex(pattern: String) -> RegEx:
+	if _regex_cache.has(pattern):
+		return _regex_cache[pattern]
+	var re: RegEx = RegEx.new()
+	if re.compile(pattern) != OK:
+		_regex_cache[pattern] = null
+		return null
+	_regex_cache[pattern] = re
+	return re
 
 
 static func _escape_regex(s: String) -> String:
@@ -197,8 +216,8 @@ static func _path_violation(literal: String) -> String:
 		return literal
 
 	# Windows 盘符 X:\ 或 X:/
-	var drive: RegEx = RegEx.new()
-	if drive.compile("^[A-Za-z]:[\\\\/]") == OK and drive.search(literal) != null:
+	var drive: RegEx = _compiled_regex("^[A-Za-z]:[\\\\/]")
+	if drive != null and drive.search(literal) != null:
 		return literal
 
 	return ""
@@ -209,7 +228,10 @@ static func _path_violation(literal: String) -> String:
 # code: 字符串内容替换为空、注释删除后的代码（保留结构供标识符匹配）
 # literals: 提取出的字符串字面量内容（供路径检查）
 static func _strip_strings_and_comments(code: String) -> Dictionary:
-	var out: String = ""
+	# Accumulate into a PackedStringArray and join once at the end; building the
+	# result with `out += c` per character is O(n^2) on long scripts because each
+	# concatenation reallocates the whole string.
+	var out_parts: PackedStringArray = PackedStringArray()
 	var literals: Array = []
 	var i: int = 0
 	var n: int = code.length()
@@ -238,7 +260,7 @@ static func _strip_strings_and_comments(code: String) -> Dictionary:
 				buf3 += code[i]
 				i += 1
 			literals.append(buf3)
-			out += " "
+			out_parts.append(" ")
 			continue
 
 		# 单/双引号字符串
@@ -255,10 +277,10 @@ static func _strip_strings_and_comments(code: String) -> Dictionary:
 				i += 1
 			i += 1  # 跳过结束引号
 			literals.append(buf)
-			out += " "
+			out_parts.append(" ")
 			continue
 
-		out += c
+		out_parts.append(c)
 		i += 1
 
-	return {"code": out, "literals": literals}
+	return {"code": "".join(out_parts), "literals": literals}
