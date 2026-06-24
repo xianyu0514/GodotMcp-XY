@@ -297,3 +297,19 @@ func test_set_dod_existing_criterion_error_rolls_back_gate():
 	assert_has(r, "error", "non-dict observed should error")
 	var task: Dictionary = _store.get_task(tid)
 	assert_false((task["dod"][0] as Dictionary).has("gate"), "gate not committed when call errors")
+
+func test_set_dod_stores_trimmed_criterion_text():
+	# A criterion is matched/created by its trimmed text, so it must also be
+	# stored trimmed instead of persisting whitespace-padded input.
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "  fps ok  "})
+	assert_eq(r.get("status", ""), "ok", "set_dod should succeed")
+	# New criterion stored trimmed, and a follow-up call with the same padded text
+	# updates that same entry (no duplicate created).
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq(str((task["dod"][1] as Dictionary)["criterion"]), "fps ok", "criterion stored trimmed")
+	_store.set_dod(tid, {"criterion": "fps ok", "met": true})
+	task = _store.get_task(tid)
+	assert_eq((task["dod"] as Array).size(), 2, "no duplicate criterion created")

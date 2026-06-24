@@ -480,7 +480,9 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 		if args.has("evidence"):
 			entry["evidence"] = str(args["evidence"])
 	if args.has("criterion"):
-		entry["criterion"] = str(args["criterion"])
+		# Store the trimmed text so it matches how criteria are matched/created
+		# above (line 424), instead of persisting whitespace-padded input.
+		entry["criterion"] = str(args["criterion"]).strip_edges()
 	# All validations passed — commit the mutated copy back.
 	dod[target] = entry
 	task["dod"] = dod
