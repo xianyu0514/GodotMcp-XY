@@ -145,3 +145,19 @@ func test_single_line_os_execute_blocked():
 	var r: Dictionary = _scan("OS.execute(\"rm\", [\"-rf\", \"/tmp/data\"])")
 	assert_true(r["blocked"], "single-line OS.execute must be blocked")
 	assert_eq(r["category"], "os_process")
+
+# ---------- 性能优化回归（regex 缓存）----------
+# denylist 是常量，编译后的 RegEx 按模式缓存复用，避免每次 scan 重复编译。
+# 行为必须与未缓存时完全一致（确定性）。
+
+func test_repeated_scans_are_deterministic():
+	var code: String = "OS.execute(\"ls\", [])"
+	var first: Dictionary = _scan(code)
+	var second: Dictionary = _scan(code)
+	assert_eq(first["blocked"], second["blocked"], "重复扫描结果必须一致")
+	assert_eq(first["category"], second["category"], "重复扫描分类必须一致")
+
+func test_identifier_regex_cache_is_populated_after_scan():
+	# 扫描一段会逐一匹配 denylist 标识符的安全代码后，模式缓存应被填充。
+	_scan("var x = 1")
+	assert_true(MCPScriptSandbox._regex_cache.size() > 0, "扫描后应缓存已编译的 RegEx")
