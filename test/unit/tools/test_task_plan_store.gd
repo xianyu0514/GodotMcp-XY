@@ -329,3 +329,25 @@ func test_normalize_dod_rejects_whitespace_only_string_entry():
 	_store.init_plan("g", true)
 	var add: Dictionary = _store.add_task({"title": "t", "dod": ["   "]})
 	assert_has(add, "error", "whitespace-only criterion should be rejected")
+
+func test_set_dod_rejects_whitespace_only_new_criterion():
+	# Creating a criterion by whitespace-only text must error, consistent with
+	# the full-list path, instead of persisting an empty-text criterion.
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"criterion": "   "})
+	assert_has(r, "error", "whitespace-only new criterion should be rejected")
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq((task["dod"] as Array).size(), 1, "no empty criterion appended")
+
+func test_set_dod_rejects_rename_to_whitespace_only():
+	# Renaming an existing criterion (by index) to whitespace-only text must error
+	# and leave the original text untouched.
+	_store.init_plan("g", true)
+	var add: Dictionary = _store.add_task({"title": "t", "dod": ["seed"]})
+	var tid: String = add["task"]["id"]
+	var r: Dictionary = _store.set_dod(tid, {"index": 0, "criterion": "   "})
+	assert_has(r, "error", "renaming to whitespace-only should be rejected")
+	var task: Dictionary = _store.get_task(tid)
+	assert_eq(str((task["dod"][0] as Dictionary)["criterion"]), "seed", "original text unchanged")

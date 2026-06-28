@@ -424,6 +424,11 @@ func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 	# Mode B: update a single criterion's met/evidence, by index or criterion text.
 	var dod: Array = task.get("dod", [])
 	var target: int = -1
+	# Reject whitespace-only criterion text up front so neither creating a new
+	# criterion by text nor renaming an existing one can persist an empty string,
+	# matching the non-empty rule enforced on the full-list path (_normalize_dod).
+	if args.has("criterion") and str(args["criterion"]).strip_edges().is_empty():
+		return {"error": "criterion text must be non-empty"}
 	if args.has("index"):
 		target = int(args["index"])
 	elif args.has("criterion"):
