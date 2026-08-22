@@ -493,11 +493,12 @@ func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 	if not scene_root:
 		return {"error": "No scene is currently open"}
 	
-	# 构建场景结构
+	# 构建场景结构（一次遍历同时得到树与节点总数，避免二次 _count_nodes 遍历）
+	var built: Dictionary = _build_node_tree_with_count(scene_root, 0, max_depth, scene_root)
 	var scene_structure: Dictionary = {
 		"scene_name": scene_root.name,
-		"root_node": _build_node_tree(scene_root, 0, max_depth, scene_root),
-		"total_nodes": _count_nodes(scene_root)
+		"root_node": built["tree"],
+		"total_nodes": built["count"]
 	}
 	
 	return scene_structure
@@ -515,25 +516,31 @@ static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 	return node_path
 
 static func _build_node_tree(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
+	return _build_node_tree_with_count(node, current_depth, max_depth, scene_root)["tree"]
+
+## 单次遍历构建节点树并统计节点总数。返回 {"tree": Dictionary, "count": int}。
+static func _build_node_tree_with_count(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
 	var node_info: Dictionary = {
 		"name": node.name,
 		"type": node.get_class(),
 		"path": _make_friendly_path(node, scene_root),
 		"children": []
 	}
+	var count: int = 1  # 当前节点
 	
 	# 检查是否达到最大深�?
 	if max_depth >= 0 and current_depth >= max_depth:
 		node_info["children_truncated"] = true
-		return node_info
+		return {"tree": node_info, "count": count}
 	
 	# 递归处理子节�?
 	for child_index in range(node.get_child_count()):
 		var child: Node = node.get_child(child_index)
-		var child_tree: Dictionary = _build_node_tree(child, current_depth + 1, max_depth, scene_root)
-		node_info["children"].append(child_tree)
+		var child_result: Dictionary = _build_node_tree_with_count(child, current_depth + 1, max_depth, scene_root)
+		node_info["children"].append(child_result["tree"])
+		count += int(child_result["count"])
 	
-	return node_info
+	return {"tree": node_info, "count": count}
 
 # 辅助函数：计算节点总数
 static func _count_nodes(node: Node) -> int:
