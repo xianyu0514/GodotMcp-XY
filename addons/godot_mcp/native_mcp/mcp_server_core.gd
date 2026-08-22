@@ -726,14 +726,22 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var cache_generation_at_start: int = _cache_generation
 	if is_cacheable_read:
 		cache_key = tool_name + ":" + _canonical_json(arguments)
+		var cached_formatted: Variant = _result_cache_get_formatted(cache_key)
+		if cached_formatted is Dictionary:
+			_log_info("Serving cached result for: " + tool_name)
+			return MCPTypes.create_response(id, cached_formatted)
 		var cached: Variant = _result_cache_get(cache_key)
 		if cached != null:
-			_log_info("Serving cached result for: " + tool_name)
+			_log_info("Serving cached result (legacy entry) for: " + tool_name)
 			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
 		if _cache_inflight.has(cache_key):
 			var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
 			if main_loop:
 				await main_loop.process_frame
+			var retried_formatted: Variant = _result_cache_get_formatted(cache_key)
+			if retried_formatted is Dictionary:
+				_log_info("Serving result from in-flight twin for: " + tool_name)
+				return MCPTypes.create_response(id, retried_formatted)
 			var retried: Variant = _result_cache_get(cache_key)
 			if retried != null:
 				_log_info("Serving result from in-flight twin for: " + tool_name)
@@ -789,21 +797,21 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		return MCPTypes.create_response(id, error_result)
 	
 	var has_error: bool = result is Dictionary and result.has("error")
+	var response_result: Dictionary = _format_tool_result(result, tool)
 
-	# Keep the result cache coherent: store successful cacheable reads, and drop
-	# the whole cache when a mutating tool runs (readOnlyHint == false) so
-	# subsequent reads never serve a stale tree. A read that started before a
-	# mutation invalidated the cache (cache_generation bumped) must not cache its
-	# now-stale result.
+	# Keep the result cache coherent: store successful cacheable reads together
+	# with their already-formatted payload (so repeat calls skip JSON.stringify +
+	# spill checks), and drop the whole cache when a mutating tool runs
+	# (readOnlyHint == false) so subsequent reads never serve a stale tree. A read
+	# that started before a mutation invalidated the cache (cache_generation
+	# bumped) must not cache its now-stale result.
 	if is_cacheable_read:
 		if not has_error and result is Dictionary and cache_generation_at_start == _cache_generation:
-			_result_cache_put(cache_key, result)
+			_result_cache_put(cache_key, result, response_result)
 		else:
 			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)):
 		_invalidate_result_cache()
-
-	var response_result: Dictionary = _format_tool_result(result, tool)
 
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
 	
@@ -1379,28 +1387,50 @@ static func _canonical_json(data: Variant) -> String:
 				encoded = JSON.stringify(str(data))
 			return encoded
 
-## Read a cache entry by key. Returns null on miss, on TTL expiry (the entry is
-## dropped), or for entries evicted by the LRU policy. On a hit the access time
-## is refreshed and the key is moved to the MRU position.
-func _result_cache_get(key: String) -> Variant:
+## Fetch (and LRU-touch) a cache entry. Returns {} on miss or TTL expiry
+## (expired entries are dropped immediately).
+func _result_cache_get_entry(key: String) -> Dictionary:
 	if not _result_cache.has(key):
-		return null
+		return {}
 	var entry: Dictionary = _result_cache[key]
 	if Time.get_ticks_msec() - int(entry.get("last_access", 0)) > RESULT_CACHE_TTL_MS:
 		_result_cache.erase(key)
 		_result_cache_order.erase(key)
-		return null
+		return {}
 	entry["last_access"] = Time.get_ticks_msec()
 	_result_cache_touch(key)
+	return entry
+
+## Read the raw cached tool result. Returns null on miss, on TTL expiry (the
+## entry is dropped), or for entries evicted by the LRU policy.
+func _result_cache_get(key: String) -> Variant:
+	var entry: Dictionary = _result_cache_get_entry(key)
+	if entry.is_empty():
+		return null
 	return entry.get("value", null)
 
+## Read the cached, already-formatted MCP tool-call result payload. Returns
+## null when the key is missing/expired or when the entry was stored by a legacy
+## caller without a formatted payload.
+func _result_cache_get_formatted(key: String) -> Variant:
+	var entry: Dictionary = _result_cache_get_entry(key)
+	if entry.is_empty():
+		return null
+	return entry.get("formatted", null)
+
 ## Store a result under key, refresh recency, and enforce the LRU capacity:
-## beyond RESULT_CACHE_MAX the least recently used entry is evicted.
-func _result_cache_put(key: String, value: Variant) -> void:
+## beyond RESULT_CACHE_MAX the least recently used entry is evicted. The optional
+## `formatted` payload is the exact response result produced by
+## `_format_tool_result`; storing it lets cache hits skip JSON.stringify and
+## spill re-checks.
+func _result_cache_put(key: String, value: Variant, formatted: Variant = null) -> void:
 	if _result_cache.has(key):
 		_result_cache.erase(key)
 		_result_cache_order.erase(key)
-	_result_cache[key] = {"value": value, "last_access": Time.get_ticks_msec()}
+	var entry: Dictionary = {"value": value, "last_access": Time.get_ticks_msec()}
+	if formatted != null:
+		entry["formatted"] = formatted
+	_result_cache[key] = entry
 	_cache_inflight.erase(key)
 	_result_cache_order.push_front(key)
 	while _result_cache_order.size() > RESULT_CACHE_MAX:
