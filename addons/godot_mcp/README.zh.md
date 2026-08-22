@@ -36,6 +36,8 @@
 - 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 4 个常驻元工具：`list_tool_catalog`、`search_tools`、`get_tool_details` 与 `enable_tools`。
 
+高频节点/属性写操作返回实时读回证据，`modify_script` 修改 GDScript 后默认执行一次编译验证。
+
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。
 
 ## 配置

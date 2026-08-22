@@ -17,6 +17,7 @@ No Node.js bridge, no Python daemon and no separate server process are required.
 - **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
 - **221 tools with a small default surface:** 28 core tools are enabled immediately, 189 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
 - **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
+- **Verified edits:** high-frequency node/property writes return live read-back evidence, and changed GDScript is compiled once by default after `modify_script`.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
 
 ## Install

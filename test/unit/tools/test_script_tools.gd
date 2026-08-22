@@ -48,6 +48,88 @@ func test_modify_script_line_number():
 	assert_eq(lines.size(), 3, "Should have 3 lines")
 	assert_eq(lines[1], "line2", "Line 2 should be 'line2'")
 
+func test_modify_script_verifies_changed_gdscript_by_default():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var script_path: String = "user://modify_script_verify_test.gd"
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+	file.store_string("extends Node\n")
+	file.close()
+
+	var result: Dictionary = tool._tool_modify_script({
+		"script_path": script_path,
+		"content": "extends Node\n\nfunc _ready() -> void:\n\tpass\n"
+	})
+
+	assert_eq(result.get("status"), "success", "Write succeeds")
+	assert_eq(result.get("changed"), true, "Changed content is reported")
+	var verification: Dictionary = result.get("verification", {})
+	assert_eq(verification.get("performed"), true, "GDScript is verified by default")
+	assert_eq(verification.get("passed"), true, "Valid GDScript passes verification")
+	assert_eq(verification.get("errors", []).size(), 0, "No compile errors are returned")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(script_path))
+
+func test_modify_script_unchanged_content_skips_write_and_compile():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var script_path: String = "user://modify_script_unchanged_test.gd"
+	var content: String = "extends Node\n"
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+	file.store_string(content)
+	file.close()
+
+	var result: Dictionary = tool._tool_modify_script({
+		"script_path": script_path,
+		"content": content
+	})
+
+	assert_eq(result.get("status"), "success", "No-op remains a successful call")
+	assert_eq(result.get("changed"), false, "No-op is reported explicitly")
+	var verification: Dictionary = result.get("verification", {})
+	assert_eq(verification.get("performed"), false, "No-op avoids redundant compilation")
+	assert_eq(verification.get("reason"), "unchanged", "Skip reason is machine-readable")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(script_path))
+
+func test_modify_script_can_disable_post_write_verification():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var script_path: String = "user://modify_script_no_verify_test.gd"
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+	file.store_string("extends Node\n")
+	file.close()
+
+	var result: Dictionary = tool._tool_modify_script({
+		"script_path": script_path,
+		"content": "extends Node2D\n",
+		"verify_after_write": false
+	})
+
+	assert_eq(result.get("changed"), true, "Changed content is reported")
+	var verification: Dictionary = result.get("verification", {})
+	assert_eq(verification.get("performed"), false, "Explicit opt-out skips compilation")
+	assert_eq(verification.get("reason"), "disabled", "Skip reason is machine-readable")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(script_path))
+
+func test_modify_script_returns_failed_verification_for_broken_gdscript():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var script_path: String = "user://modify_script_broken_test.gd"
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+	file.store_string("extends Node\n")
+	file.close()
+
+	var result: Dictionary = tool._tool_modify_script({
+		"script_path": script_path,
+		"content": "extends Node\n\nfunc _ready() -> void:\n\tprint(\"broken\"\n"
+	})
+	for e in get_errors():
+		e.handled = true
+
+	assert_eq(result.get("status"), "success", "The completed write remains explicit")
+	assert_eq(result.get("changed"), true, "Broken content was written")
+	var verification: Dictionary = result.get("verification", {})
+	assert_eq(verification.get("performed"), true, "Post-write compilation ran")
+	assert_eq(verification.get("passed"), false, "Broken GDScript fails verification")
+	assert_true(int(verification.get("error_count", 0)) > 0, "Structured compile errors are returned")
+	assert_true(verification.get("errors", [])[0].has("message"), "Compile error includes a message")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(script_path))
+
 func test_create_script_template():
 	var content: String = "extends Node\n\nfunc _ready() -> void:\n\tpass\n"
 	var line_count: int = content.split("\n").size()

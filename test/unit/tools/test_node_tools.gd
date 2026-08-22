@@ -43,6 +43,35 @@ func test_update_node_property_schema():
 	}
 	assert_eq(tool.name, "update_node_property", "update_node_property schema should exist")
 
+func test_node_creation_evidence_reads_back_live_node_state():
+	var parent := Node.new()
+	parent.name = "Parent"
+	var child := Node2D.new()
+	child.name = "Player"
+	parent.add_child(child)
+	var evidence: Dictionary = NodeToolsNative._build_node_creation_evidence(
+		child, parent, "Player", "Node2D", "/root/Main/Player"
+	)
+	assert_eq(evidence.get("type"), "read_back", "Evidence identifies its verification mode")
+	assert_eq(evidence.get("verified"), true, "Attached node with expected name/type verifies")
+	assert_eq(evidence.get("expected", {}).get("node_type"), "Node2D", "Expected type is retained")
+	assert_eq(evidence.get("actual", {}).get("node_path"), "/root/Main/Player", "Actual friendly path is retained")
+	assert_eq(evidence.get("actual", {}).get("exists"), true, "Live parent attachment is read back")
+	parent.free()
+
+func test_property_readback_evidence_preserves_typed_values():
+	var evidence: Dictionary = NodeToolsNative._build_property_readback_evidence(
+		Vector2(10, 20), Vector2(10, 20)
+	)
+	assert_eq(evidence.get("type"), "read_back", "Evidence identifies its verification mode")
+	assert_eq(evidence.get("verified"), true, "Matching values verify")
+	assert_eq(evidence.get("expected"), {"x": 10.0, "y": 20.0}, "Expected value is structured")
+	assert_eq(evidence.get("actual"), {"x": 10.0, "y": 20.0}, "Actual value is structured")
+
+func test_property_readback_evidence_detects_mismatch():
+	var evidence: Dictionary = NodeToolsNative._build_property_readback_evidence(1, 2)
+	assert_eq(evidence.get("verified"), false, "Mismatched values do not verify")
+
 func test_property_value_json_string_parsing():
 	var json_str: String = '{"x": 10, "y": 5, "z": 3}'
 	var parsed: Variant = JSON.parse_string(json_str)

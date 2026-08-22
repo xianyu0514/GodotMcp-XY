@@ -36,6 +36,8 @@ The addon registers 221 tools:
 - 189 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 4 always-on meta tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 
+High-frequency node/property writes return live read-back evidence, and changed GDScript is compiled once by default after `modify_script`.
+
 See the project-level [Tools Reference](../../docs/tools/README.md).
 
 ## Configuration

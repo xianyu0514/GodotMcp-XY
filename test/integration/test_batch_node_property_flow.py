@@ -124,6 +124,40 @@ def main() -> int:
         )
         if mover.get("status") != "success" or pivot.get("status") != "success":
             raise AssertionError(f"create_node failed: {mover} / {pivot}")
+        for created in (mover, pivot):
+            if created.get("changed") is not True:
+                raise AssertionError(f"create_node should report a real change: {created}")
+            evidence = created.get("evidence", {})
+            if evidence.get("type") != "read_back" or evidence.get("verified") is not True:
+                raise AssertionError(f"create_node read-back evidence failed: {created}")
+
+        property_result = tool_call(
+            "update_node_property",
+            {
+                "node_path": "/root/temp_batch_scene/Mover",
+                "property_name": "rotation",
+                "property_value": 0.25,
+            },
+            request_id=51,
+        )
+        if property_result.get("changed") is not True:
+            raise AssertionError(f"Expected rotation to change: {property_result}")
+        if property_result.get("evidence", {}).get("verified") is not True:
+            raise AssertionError(f"Property read-back evidence failed: {property_result}")
+
+        no_op_result = tool_call(
+            "update_node_property",
+            {
+                "node_path": "/root/temp_batch_scene/Mover",
+                "property_name": "rotation",
+                "property_value": 0.25,
+            },
+            request_id=52,
+        )
+        if no_op_result.get("changed") is not False:
+            raise AssertionError(f"Unchanged property should use the no-op path: {no_op_result}")
+        if no_op_result.get("evidence", {}).get("verified") is not True:
+            raise AssertionError(f"No-op read-back evidence failed: {no_op_result}")
 
         batch_result = tool_call(
             "batch_update_node_properties",

@@ -1607,7 +1607,7 @@ func _get_csharp_script_template(template_name: String, script_class_name: Strin
 
 func _register_modify_script(server_core: RefCounted) -> void:
 	var tool_name: String = "modify_script"
-	var description: String = "Modify the content of an existing GDScript (.gd) or C# (.cs) script file. Can replace entire content or specific lines."
+	var description: String = "Modify an existing GDScript (.gd) or C# (.cs) file by replacing its full content or one line. Unchanged content skips the write. Changed GDScript is compiled once by default and returns structured post-write verification; set verify_after_write=false to skip it. C# writes are not compiled by this tool."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -1624,6 +1624,14 @@ func _register_modify_script(server_core: RefCounted) -> void:
 			"line_number": {
 				"type": "integer",
 				"description": "Optional line number to replace (1-indexed). If provided with 'content', replaces that line only."
+			},
+			"verify_after_write": {
+				"type": "boolean",
+				"description": "Compile changed GDScript after writing and return structured errors/warnings. Default is true. C# is not compiled by this tool."
+			},
+			"check_warnings": {
+				"type": "boolean",
+				"description": "Include lightweight GDScript warnings in post-write verification. Default is true."
 			}
 		},
 		"required": ["script_path", "content"]
@@ -1635,7 +1643,21 @@ func _register_modify_script(server_core: RefCounted) -> void:
 		"properties": {
 			"status": {"type": "string"},
 			"script_path": {"type": "string"},
-			"line_count": {"type": "integer"}
+			"line_count": {"type": "integer"},
+			"changed": {"type": "boolean"},
+			"verification": {
+				"type": "object",
+				"properties": {
+					"performed": {"type": "boolean"},
+					"passed": {"type": "boolean"},
+					"reason": {"type": "string"},
+					"errors": {"type": "array"},
+					"warnings": {"type": "array"},
+					"error_count": {"type": "integer"},
+					"warning_count": {"type": "integer"},
+					"autoload_aware": {"type": "boolean"}
+				}
+			}
 		}
 	}
 	
@@ -1658,6 +1680,8 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	var script_path: String = params.get("script_path", "")
 	var new_content: String = params.get("content", "")
 	var line_number: int = params.get("line_number", 0)
+	var verify_after_write: bool = bool(params.get("verify_after_write", true))
+	var check_warnings: bool = bool(params.get("check_warnings", true))
 	
 	# 参数验证
 	if script_path.is_empty():
@@ -1682,10 +1706,9 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	if not file:
 		return {"error": "Failed to open file for reading: " + script_path}
 	
-	var existing_lines: Array = []
-	while not file.eof_reached():
-		existing_lines.append(file.get_line())
+	var existing_content: String = file.get_as_text()
 	file.close()
+	var existing_lines: PackedStringArray = existing_content.split("\n", true)
 	
 	# 修改内容
 	var final_content: String
@@ -1697,6 +1720,24 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	else:
 		# 全量替换
 		final_content = new_content
+
+	var line_count: int = final_content.split("\n").size()
+	if final_content == existing_content:
+		return {
+			"status": "success",
+			"script_path": script_path,
+			"line_count": line_count,
+			"changed": false,
+			"verification": {
+				"performed": false,
+				"passed": true,
+				"reason": "unchanged",
+				"errors": [],
+				"warnings": [],
+				"error_count": 0,
+				"warning_count": 0
+			}
+		}
 	
 	# 写入文件
 	file = FileAccess.open(script_path, FileAccess.WRITE)
@@ -1706,13 +1747,37 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	file.store_string(final_content)
 	file.close()
 	
-	# 计算行数
-	var line_count: int = final_content.split("\n").size()
+	var verification: Dictionary = {
+		"performed": false,
+		"passed": false,
+		"reason": "disabled" if not verify_after_write else "unsupported_language",
+		"errors": [],
+		"warnings": [],
+		"error_count": 0,
+		"warning_count": 0
+	}
+	if verify_after_write and script_path.get_extension().to_lower() == "gd":
+		var compile_result: Dictionary = _tool_validate_script({
+			"content": final_content,
+			"check_warnings": check_warnings
+		})
+		verification = {
+			"performed": true,
+			"passed": bool(compile_result.get("valid", false)),
+			"reason": "compiled",
+			"errors": compile_result.get("errors", []),
+			"warnings": compile_result.get("warnings", []),
+			"error_count": int(compile_result.get("error_count", 0)),
+			"warning_count": int(compile_result.get("warning_count", 0)),
+			"autoload_aware": bool(compile_result.get("autoload_aware", false))
+		}
 	
 	return {
 		"status": "success",
 		"script_path": script_path,
-		"line_count": line_count
+		"line_count": line_count,
+		"changed": true,
+		"verification": verification
 	}
 
 # ============================================================================

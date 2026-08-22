@@ -40,7 +40,7 @@ func register_tools(server_core: RefCounted) -> void:
 func _register_create_node(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"create_node",
-		"Create a new node in the Godot scene tree. Returns the node path and type.",
+		"Create a node and return structured read-back evidence for its live path, name, type, owner and parent attachment.",
 		{
 			"type": "object",
 			"properties": {
@@ -71,7 +71,9 @@ func _register_create_node(server_core: RefCounted) -> void:
 			"properties": {
 				"status": {"type": "string"},
 				"node_path": {"type": "string"},
-				"node_type": {"type": "string"}
+				"node_type": {"type": "string"},
+				"changed": {"type": "boolean"},
+				"evidence": {"type": "object"}
 			}
 		},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
@@ -196,10 +198,37 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 		if node_friendly.begins_with(root_full):
 			node_friendly = "/root/" + scene_root.name + node_friendly.substr(root_full.length())
 	
+	var expected_created_name: String = String(node.name) if on_name_conflict == "auto" else node_name
 	return {
 		"status": "success",
 		"node_path": node_friendly,
-		"node_type": node.get_class()
+		"node_type": node.get_class(),
+		"changed": true,
+		"evidence": _build_node_creation_evidence(node, parent, expected_created_name, node_type, node_friendly)
+	}
+
+static func _build_node_creation_evidence(node: Node, parent: Node,
+		expected_name: String, expected_type: String, friendly_path: String) -> Dictionary:
+	var exists: bool = is_instance_valid(node) and node.get_parent() == parent
+	var actual_name: String = String(node.name) if is_instance_valid(node) else ""
+	var actual_type: String = node.get_class() if is_instance_valid(node) else ""
+	var owner_path: String = ""
+	if is_instance_valid(node) and node.owner:
+		owner_path = str(node.owner.get_path())
+	return {
+		"type": "read_back",
+		"verified": exists and actual_name == expected_name and actual_type == expected_type,
+		"expected": {
+			"node_name": expected_name,
+			"node_type": expected_type
+		},
+		"actual": {
+			"exists": exists,
+			"node_path": friendly_path,
+			"node_name": actual_name,
+			"node_type": actual_type,
+			"owner_path": owner_path
+		}
 	}
 
 func _register_delete_node(server_core: RefCounted) -> void:
@@ -259,7 +288,7 @@ func _tool_delete_node(params: Dictionary) -> Dictionary:
 func _register_update_node_property(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"update_node_property",
-		"Update a property of a specific node. Supports common property types with automatic type conversion.",
+		"Update a node property with automatic type conversion, skip unchanged values, and return typed expected/actual read-back evidence.",
 		{
 			"type": "object",
 			"properties": {
@@ -285,7 +314,9 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 				"node_path": {"type": "string"},
 				"property_name": {"type": "string"},
 				"old_value": {"type": "string"},
-				"new_value": {"type": "string"}
+				"new_value": {"type": "string"},
+				"changed": {"type": "boolean"},
+				"evidence": {"type": "object"}
 			}
 		},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
@@ -328,6 +359,17 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 	if actual_value is String and (actual_value as String).begins_with("res://"):
 		if not ResourceLoader.exists(actual_value):
 			return {"error": "Resource path does not exist: " + actual_value}
+
+	if converted_value == old_value:
+		return {
+			"status": "success",
+			"node_path": node_path,
+			"property_name": property_name,
+			"old_value": str(old_value),
+			"new_value": str(old_value),
+			"changed": false,
+			"evidence": _build_property_readback_evidence(converted_value, old_value)
+		}
 	
 	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
 	if undo_redo:
@@ -347,7 +389,17 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 		"node_path": node_path,
 		"property_name": property_name,
 		"old_value": str(old_value),
-		"new_value": str(new_value)
+		"new_value": str(new_value),
+		"changed": true,
+		"evidence": _build_property_readback_evidence(converted_value, new_value)
+	}
+
+static func _build_property_readback_evidence(expected_value: Variant, actual_value: Variant) -> Dictionary:
+	return {
+		"type": "read_back",
+		"verified": expected_value == actual_value,
+		"expected": _serialize_value(expected_value),
+		"actual": _serialize_value(actual_value)
 	}
 
 func _register_batch_update_node_properties(server_core: RefCounted) -> void:

@@ -27,9 +27,9 @@ Create, inspect, reorganize and audit nodes in the edited scene. Core tools cove
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `create_node` | core | Create a new node in the Godot scene tree. Returns the node path and type. |
+| `create_node` | core | Create a node and return structured read-back evidence for its live path, name, type, owner and parent attachment. |
 | `delete_node` | core | Delete a node from the Godot scene tree. This operation is destructive and cannot be undone. |
-| `update_node_property` | core | Update a property of a specific node. Supports common property types with automatic type conversion. |
+| `update_node_property` | core | Update a node property with automatic type conversion, skip unchanged values, and return typed expected/actual read-back evidence. |
 | `duplicate_node` | core | Duplicate a node and its children in the scene tree. Returns the new node path. |
 | `move_node` | core | Move a node to a new parent in the scene tree. Optionally preserves global transform. |
 | `rename_node` | core | Rename a node in the scene tree. The new name must be unique among siblings. |

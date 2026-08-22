@@ -46,9 +46,9 @@ list_open_scenes,,List scene tabs currently open in the Godot editor.,列出 God
 close_scene_tab,,"Close the active scene tab, or activate a specified scene tab and close it.",关闭当前活动的场景标签页，或激活指定的场景标签页然后关闭它。
 instantiate_scene,,Instance an existing scene file (.tscn) as a child of a node in the currently edited scene. Useful for placing prefabs such as card UIs or enemy instances into the scene tree.,将已有场景文件（.tscn）实例化为当前编辑场景中某个节点的子节点。适合把卡牌 UI、敌人等预制体放入场景树。
 save_branch_as_scene,,Save a node and all of its descendants from the currently edited scene as a reusable scene file (.tscn). Useful for extracting a designed UI branch into a prefab. Does not modify the source scene tree.,将当前编辑场景中的某个节点及其全部子节点保存为可复用的场景文件（.tscn）。适合把设计好的 UI 分支提取为预制体。不会修改源场景树。
-create_node,,Create a new node in the Godot scene tree. Returns the node path and type.,在 Godot 场景树中创建新节点。返回节点路径和类型。
+create_node,,"Create a node and return structured read-back evidence for its live path, name, type, owner and parent attachment.",创建节点并返回其实时路径、名称、类型、所有者和父级挂接状态的结构化读回证据。
 delete_node,,Delete a node from the Godot scene tree. This operation is destructive and cannot be undone.,从 Godot 场景树中删除节点。此操作是破坏性的，无法撤销。
-update_node_property,,Update a property of a specific node. Supports common property types with automatic type conversion.,更新特定节点的属性。支持常见属性类型并自动进行类型转换。
+update_node_property,,"Update a node property with automatic type conversion, skip unchanged values, and return typed expected/actual read-back evidence.",更新节点属性并自动转换类型；跳过未变化值，并返回带类型的预期值/实际值读回证据。
 batch_update_node_properties,,Update multiple node properties inside one editor UndoRedo action. Useful for transaction-style scene edits that should undo in a single step.,在一个编辑器 UndoRedo 操作中更新多个节点属性。适用于需要在单步中撤销的事务式场景编辑。
 batch_scene_node_edits,,Apply multiple create/delete scene node edits inside one editor UndoRedo action so the full structure change undoes in a single step.,在单个编辑器 UndoRedo 操作中应用多个创建/删除场景节点编辑，使整个结构变更可在单步中撤销。
 batch_get_node_properties,,"Read the properties of multiple nodes in a single call. Returns one result entry per requested node path, reducing round trips when inspecting several nodes.",在一次调用中读取多个节点的属性。每个请求的节点路径返回一个结果项，减少检查多个节点时的往返次数。
@@ -76,7 +76,7 @@ rename_script_symbol,,Rename a script symbol across project files using identifi
 read_script,,Read the content of a GDScript file (.gd). Returns the complete script source code.,读取 GDScript 文件（.gd）的内容。返回完整的脚本源代码。
 batch_read_scripts,,"Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts.",在一次调用中读取多个 GDScript（.gd）或 C#（.cs）脚本文件的内容。每个请求的路径返回一个结果项，减少读取多个脚本时的往返次数。
 create_script,,"Create a new GDScript file with optional template. GDScript files are complete programs, not resource files.",创建新的 GDScript 文件，可选模板。GDScript 文件是完整程序，不是资源文件。
-modify_script,,Modify the content of an existing GDScript file. Can replace entire content or specific lines.,修改现有 GDScript 文件的内容。可以替换整个内容或特定行。
+modify_script,,Modify GDScript or C# content. Unchanged content skips the write; changed GDScript is compiled once by default and returns structured verification (verify_after_write=false disables it).,修改 GDScript 或 C# 内容。内容未变化时跳过写入；变化后的 GDScript 默认编译一次并返回结构化验证结果（可用 verify_after_write=false 关闭）。
 analyze_script,,Analyze a GDScript file and report code quality issues.,分析 GDScript 文件并报告代码质量问题。
 get_current_script,,Get the currently edited script in the Godot editor.,获取 Godot 编辑器中当前正在编辑的脚本。
 open_script_at_line,,Open a script file at a specific line number in the Godot editor.,在 Godot 编辑器中的指定行号打开脚本文件。

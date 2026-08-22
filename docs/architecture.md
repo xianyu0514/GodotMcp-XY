@@ -111,6 +111,8 @@ Runtime probe capabilities include:
 - Screenshot, performance and memory snapshots.
 - Deterministic play verification workflows.
 
+High-frequency edit tools close the cheapest verification loop in-process: `create_node` and `update_node_property` return structured read-back evidence from the live node/property, while `modify_script` skips unchanged writes and compiles changed GDScript once by default. This avoids a project rescan or game launch while preventing successful transport responses from being mistaken for verified edits.
+
 ## UI
 
 The MCP dock is implemented under `addons/godot_mcp/ui/`.
