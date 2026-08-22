@@ -12,6 +12,51 @@ func test_project_info_format():
 	assert_has(result, "project_path", "Should have project_path")
 	assert_has(result, "main_scene", "Should have main_scene")
 
+func test_project_context_filters_sections_and_returns_revision():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_get_project_context({"sections": ["project"]})
+	assert_eq(result.get("changed"), true, "Initial context call returns content")
+	assert_eq(str(result.get("revision", "")).length(), 64, "Revision is a SHA-256 hex digest")
+	var context: Dictionary = result.get("context", {})
+	assert_has(context, "project", "Requested project section is present")
+	assert_false(context.has("editor"), "Unrequested editor section is omitted")
+	assert_eq(result.get("sections"), ["project"], "Response reports normalized sections")
+
+func test_project_context_known_revision_uses_unchanged_fast_response():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var first: Dictionary = project_tools._tool_get_project_context({"sections": ["project", "editor"]})
+	var second: Dictionary = project_tools._tool_get_project_context({
+		"sections": ["editor", "project"],
+		"known_revision": first.get("revision", "")
+	})
+	assert_eq(second.get("changed"), false, "Matching revision avoids returning the context again")
+	assert_false(second.has("context"), "Unchanged response stays compact")
+	assert_eq(second.get("revision"), first.get("revision"), "Revision remains stable across section order")
+	assert_eq(second.get("sections"), ["project", "editor"], "Sections use canonical order")
+
+func test_project_context_rejects_unknown_section():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_get_project_context({"sections": ["project", "expensive_scan"]})
+	assert_has(result, "error", "Unknown sections fail fast")
+	assert_true(str(result.get("error", "")).contains("expensive_scan"), "Error names the invalid section")
+
+func test_project_context_task_plan_summary_is_compact():
+	var plan: Dictionary = {
+		"goal": "Playable vertical slice",
+		"tasks": [
+			{"id": "a", "status": "done", "dod": [{"met": true}]},
+			{"id": "b", "status": "in_progress", "dod": [{"met": false}, {"met": true}]},
+			{"id": "c", "status": "pending", "dod": []}
+		]
+	}
+	var summary: Dictionary = ProjectToolsNative._summarize_task_plan(plan)
+	assert_eq(summary.get("goal"), "Playable vertical slice", "Goal is retained")
+	assert_eq(summary.get("total"), 3, "Task count is summarized")
+	assert_eq(summary.get("status_counts", {}).get("done"), 1, "Status counts are aggregated")
+	assert_eq(summary.get("dod", {}).get("met"), 2, "DoD results are aggregated")
+	assert_eq(summary.get("dod", {}).get("total"), 3, "DoD total is aggregated")
+	assert_false(summary.has("tasks"), "Full task payload is not copied into context")
+
 func test_project_settings_filter():
 	var settings: Dictionary = {
 		"application/config/name": "Godot MCP Native",

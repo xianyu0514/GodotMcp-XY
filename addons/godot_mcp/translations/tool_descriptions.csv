@@ -1,4 +1,5 @@
 key,source,en,zh
+get_project_context,,Get a compact revisioned project orientation snapshot. Select sections and pass a known revision to avoid repeating unchanged context.,获取带版本标识的紧凑项目上下文快照。可选择区段并传入已知版本，以免重复返回未变化的上下文。
 get_project_info,,"Get general information about the Godot project, including name, version, and description.",获取 Godot 项目的总体信息，包括名称、版本和描述。
 get_project_settings,,Get project settings. Optionally filter by a prefix.,获取项目设置。可选择按前缀过滤。
 list_project_tests,,"Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable.",发现 Godot 项目测试目录下的可运行项目测试。报告 Python 集成测试和 GUT 单元测试，包括每个测试当前是否可运行。

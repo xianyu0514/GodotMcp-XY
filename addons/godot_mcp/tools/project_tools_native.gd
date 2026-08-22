@@ -5,6 +5,16 @@ class_name ProjectToolsNative
 extends RefCounted
 
 const MAX_CONCURRENT_TEST_JOBS: int = 4
+const PROJECT_CONTEXT_SECTIONS: Array[String] = [
+	"project",
+	"editor",
+	"autoloads",
+	"input_actions",
+	"global_classes",
+	"task_plan",
+	"tools"
+]
+const PROJECT_CONTEXT_TASK_PLAN_PATH: String = "res://.mcp/task_plan.json"
 
 var _editor_interface: EditorInterface = null
 # 统一异步 job 框架（AsyncJobManager，基于 WorkerThreadPool）：单测与批次测试
@@ -37,6 +47,7 @@ func _get_editor_interface() -> EditorInterface:
 func register_tools(server_core: RefCounted) -> void:
 	_server_core = server_core
 	_register_get_project_info(server_core)
+	_register_get_project_context(server_core)
 	_register_get_project_settings(server_core)
 	_register_list_project_input_actions(server_core)
 	_register_upsert_project_input_action(server_core)
@@ -174,6 +185,230 @@ static func _parse_vector3(value: Variant) -> Variant:
 	if value is Array and value.size() >= 3:
 		return Vector3(float(value[0]), float(value[1]), float(value[2]))
 	return null
+
+# ============================================================================
+# get_project_context - 紧凑项目上下文（不扫描完整场景树/脚本内容）
+# ============================================================================
+
+func _register_get_project_context(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_project_context",
+		"Get a compact, revisioned project orientation snapshot without scanning full scene trees or script contents. Sections: project, editor, autoloads, input_actions, global_classes, task_plan, tools. Pass known_revision to receive a minimal changed=false response when the selected context is unchanged.",
+		{
+			"type": "object",
+			"properties": {
+				"sections": {
+					"type": "array",
+					"items": {"type": "string", "enum": PROJECT_CONTEXT_SECTIONS},
+					"description": "Optional sections to include. Empty or omitted selects all sections. Input order does not affect the revision."
+				},
+				"known_revision": {
+					"type": "string",
+					"description": "Revision from a previous call. Matching content returns changed=false without repeating context."
+				}
+			}
+		},
+		Callable(self, "_tool_get_project_context"),
+		{
+			"type": "object",
+			"properties": {
+				"changed": {"type": "boolean"},
+				"revision": {"type": "string"},
+				"sections": {"type": "array", "items": {"type": "string"}},
+				"section_count": {"type": "integer"},
+				"context": {"type": "object"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"core", "Project"
+	)
+
+func _tool_get_project_context(params: Dictionary) -> Dictionary:
+	var normalized: Dictionary = _normalize_project_context_sections(params.get("sections", []))
+	if normalized.has("error"):
+		return normalized
+	var sections: Array[String] = normalized["sections"]
+	var context: Dictionary = {}
+	for section in sections:
+		match section:
+			"project":
+				context[section] = _build_project_context_project()
+			"editor":
+				context[section] = _build_project_context_editor()
+			"autoloads":
+				context[section] = _build_project_context_autoloads()
+			"input_actions":
+				context[section] = _build_project_context_input_actions()
+			"global_classes":
+				context[section] = _build_project_context_global_classes()
+			"task_plan":
+				context[section] = _read_project_context_task_plan()
+			"tools":
+				context[section] = _build_project_context_tools()
+
+	var revision: String = _project_context_revision(context)
+	var known_revision: String = str(params.get("known_revision", "")).strip_edges()
+	if not known_revision.is_empty() and known_revision == revision:
+		return {
+			"changed": false,
+			"revision": revision,
+			"sections": sections,
+			"section_count": sections.size()
+		}
+	return {
+		"changed": true,
+		"revision": revision,
+		"sections": sections,
+		"section_count": sections.size(),
+		"context": context
+	}
+
+func _normalize_project_context_sections(raw_sections: Variant) -> Dictionary:
+	if not (raw_sections is Array):
+		return {"error": "sections must be an array"}
+	var requested: Dictionary = {}
+	for raw_section in raw_sections:
+		var section: String = str(raw_section).strip_edges()
+		if not (section in PROJECT_CONTEXT_SECTIONS):
+			return {"error": "Unknown project context section '%s'. Expected one of: %s" % [section, ", ".join(PROJECT_CONTEXT_SECTIONS)]}
+		requested[section] = true
+	var sections: Array[String] = []
+	if requested.is_empty():
+		sections.assign(PROJECT_CONTEXT_SECTIONS)
+	else:
+		for section in PROJECT_CONTEXT_SECTIONS:
+			if requested.has(section):
+				sections.append(section)
+	return {"sections": sections}
+
+func _build_project_context_project() -> Dictionary:
+	var info: Dictionary = _tool_get_project_info({})
+	info["renderer"] = str(ProjectSettings.get_setting("rendering/renderer/rendering_method", ""))
+	info["features"] = ProjectSettings.get_setting("application/config/features", PackedStringArray())
+	return info
+
+func _build_project_context_editor() -> Dictionary:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"available": false, "is_playing": false, "current_scene": "", "selected_nodes": []}
+	var current_scene: String = ""
+	var scene_root: Node = editor_interface.get_edited_scene_root()
+	if scene_root:
+		current_scene = scene_root.scene_file_path
+	var selected_nodes: Array[String] = []
+	var selection: EditorSelection = editor_interface.get_selection()
+	if selection:
+		for node in selection.get_selected_nodes():
+			selected_nodes.append(str(node.get_path()))
+	selected_nodes.sort()
+	return {
+		"available": true,
+		"is_playing": editor_interface.is_playing_scene(),
+		"current_scene": current_scene,
+		"selected_nodes": selected_nodes
+	}
+
+func _build_project_context_autoloads() -> Dictionary:
+	var entries: Array = _tool_list_project_autoloads({}).get("autoloads", [])
+	var compact: Array = []
+	for entry in entries:
+		compact.append({
+			"name": str(entry.get("name", "")),
+			"path": str(entry.get("path", "")),
+			"is_singleton": bool(entry.get("is_singleton", false))
+		})
+	return {"count": compact.size(), "items": compact}
+
+func _build_project_context_input_actions() -> Dictionary:
+	var compact: Array = []
+	for action in _collect_project_input_actions():
+		compact.append({
+			"name": str(action.get("action_name", "")),
+			"deadzone": float(action.get("deadzone", 0.5)),
+			"event_count": int(action.get("event_count", 0))
+		})
+	return {"count": compact.size(), "items": compact}
+
+func _build_project_context_global_classes() -> Dictionary:
+	var entries: Array = []
+	if ProjectSettings.has_method("get_global_class_list"):
+		entries = _normalize_global_class_entries(ProjectSettings.get_global_class_list())
+	var compact: Array = []
+	for entry in entries:
+		compact.append({
+			"name": str(entry.get("name", "")),
+			"base": str(entry.get("base", "")),
+			"path": str(entry.get("path", "")),
+			"language": str(entry.get("language", ""))
+		})
+	return {"count": compact.size(), "items": compact}
+
+func _read_project_context_task_plan() -> Dictionary:
+	if not FileAccess.file_exists(PROJECT_CONTEXT_TASK_PLAN_PATH):
+		return {"exists": false, "path": PROJECT_CONTEXT_TASK_PLAN_PATH}
+	var file: FileAccess = FileAccess.open(PROJECT_CONTEXT_TASK_PLAN_PATH, FileAccess.READ)
+	if file == null:
+		return {"exists": true, "path": PROJECT_CONTEXT_TASK_PLAN_PATH, "error": "unreadable"}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not (parsed is Dictionary):
+		return {"exists": true, "path": PROJECT_CONTEXT_TASK_PLAN_PATH, "error": "invalid_json"}
+	var summary: Dictionary = _summarize_task_plan(parsed)
+	summary["exists"] = true
+	summary["path"] = PROJECT_CONTEXT_TASK_PLAN_PATH
+	return summary
+
+static func _summarize_task_plan(plan: Dictionary) -> Dictionary:
+	var status_counts: Dictionary = {"pending": 0, "in_progress": 0, "blocked": 0, "done": 0}
+	var dod_total: int = 0
+	var dod_met: int = 0
+	var tasks: Array = plan.get("tasks", []) if plan.get("tasks", []) is Array else []
+	for raw_task in tasks:
+		if not (raw_task is Dictionary):
+			continue
+		var status: String = str(raw_task.get("status", "pending"))
+		status_counts[status] = int(status_counts.get(status, 0)) + 1
+		var dod: Array = raw_task.get("dod", []) if raw_task.get("dod", []) is Array else []
+		for raw_criterion in dod:
+			if raw_criterion is Dictionary:
+				dod_total += 1
+				if bool(raw_criterion.get("met", false)):
+					dod_met += 1
+	return {
+		"goal": str(plan.get("goal", "")),
+		"total": tasks.size(),
+		"status_counts": status_counts,
+		"dod": {"met": dod_met, "total": dod_total}
+	}
+
+func _build_project_context_tools() -> Dictionary:
+	if _server_core == null or not _server_core.has_method("get_registered_tools"):
+		return {"registered": 0, "enabled": 0, "enabled_supplementary_groups": []}
+	var registered: int = 0
+	var enabled: int = 0
+	var groups: Dictionary = {}
+	for info in _server_core.get_registered_tools():
+		registered += 1
+		if bool(info.get("enabled", false)):
+			enabled += 1
+			if str(info.get("category", "")) == "supplementary":
+				groups[str(info.get("group", ""))] = true
+	var enabled_groups: Array[String] = []
+	for group_name in groups.keys():
+		if not str(group_name).is_empty():
+			enabled_groups.append(str(group_name))
+	enabled_groups.sort()
+	return {
+		"registered": registered,
+		"enabled": enabled,
+		"enabled_supplementary_groups": enabled_groups
+	}
+
+static func _project_context_revision(context: Dictionary) -> String:
+	var hashing_context: HashingContext = HashingContext.new()
+	hashing_context.start(HashingContext.HASH_SHA256)
+	hashing_context.update(JSON.stringify(context).to_utf8_buffer())
+	return hashing_context.finish().hex_encode()
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -2063,4 +2298,3 @@ func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
 		"removed_value": removed_value,
 		"persisted": persisted
 	}
-

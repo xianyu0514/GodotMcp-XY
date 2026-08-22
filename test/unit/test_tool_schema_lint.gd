@@ -11,7 +11,7 @@ extends "res://addons/gut/test.gd"
 #
 # 基线（首次诊断快照，Godot 4.7.2 headless；数字随 schema 演进变化，
 # 本测试不锁定具体出现次数，只锁定“关键字集合 ⊆ 白名单”）：
-#   - 218+ 个工具全部注册成功（7 个工具模块；当前仓库 221 个）
+#   - 218+ 个工具全部注册成功（当前仓库 222 个）
 #   - 实际用到的关键字只有 7 个：
 #       type properties description required default items enum
 #   - 全部 input_schema 均为 {type:"object", properties:{...}}（含 17 个无参工具
@@ -113,7 +113,7 @@ const KNOWN_RISKY_KEYWORD_EXEMPTIONS: Dictionary = {
 ## 不强制 100% 覆盖。
 const MIN_DESCRIPTION_COVERAGE: float = 0.70
 
-## 工具数下限（历史基线 218；仓库演进中，当前为 221 = 28 核心 + 189 补充 +
+## 工具数下限（历史基线 218；仓库演进中，当前为 222 = 29 核心 + 189 补充 +
 ## 4 元）。不锁定具体总数，另行校验 server_core 与分类器注册数一致。
 const MIN_TOOL_COUNT: int = 218
 
@@ -121,8 +121,8 @@ const MIN_TOOL_COUNT: int = 218
 ## tokens ≈ 字符数 / 4，工具定义按 name+description+inputSchema 计费；
 ## outputSchema 模型不可见，不计入）。工具 schema 每轮全额计费，三档预算：
 ##   - 单工具 ≤ TOOL_TOKEN_BUDGET（400 token ≈ 1600 字符）；
-##   - 默认启用集（28 core + 4 meta）≤ DEFAULT_SET_TOKEN_BUDGET（15k token）；
-##   - 全量 221 工具 ≤ FULL_SET_TOKEN_BUDGET（60k token）。
+##   - 默认启用集（29 core + 4 meta）≤ DEFAULT_SET_TOKEN_BUDGET（15k token）；
+##   - 全量 222 工具 ≤ FULL_SET_TOKEN_BUDGET（60k token）。
 ## 预算值基于实测数据设定（见 test_tool_definitions_within_token_budget 的运行
 ## 输出）。若未来新增工具描述过长导致超限，须先登记进 KNOWN_OVER_BUDGET_TOOLS
 ## （注明原因），并将描述精简列为单独工作项；禁止直接放宽预算。
@@ -434,7 +434,7 @@ func test_tool_definitions_within_token_budget() -> void:
 	print("[TokenBudget] 全量 %d 工具：总估算 %d token（预算 %d）；per-tool 最大 %d (%s)、平均 %.1f" % [tool_names.size(), full_total, FULL_SET_TOKEN_BUDGET, max_est, max_name, avg_est])
 	print("[TokenBudget] 默认启用集（core+meta）%d 工具：总估算 %d token（预算 %d）" % [default_count, default_total, DEFAULT_SET_TOKEN_BUDGET])
 	print("[TokenBudget] 估算最大的 10 个工具：" + str(_top_n_tools(per_tool, 10)))
-	assert_eq(default_count, 32, "默认启用集应为 28 core + 4 meta = 32，实际 %d（分类器口径变化需同步本断言）" % default_count)
+	assert_eq(default_count, 33, "默认启用集应为 29 core + 4 meta = 33，实际 %d（分类器口径变化需同步本断言）" % default_count)
 	assert_eq(over_budget.size(), 0, "超单工具预算（%d token）的工具 %d 个（登记 KNOWN_OVER_BUDGET_TOOLS 或精简描述）：%s" % [TOOL_TOKEN_BUDGET, over_budget.size(), str(over_budget)])
 	assert_true(default_total <= DEFAULT_SET_TOKEN_BUDGET, "默认启用集总估算 %d 超预算 %d" % [default_total, DEFAULT_SET_TOKEN_BUDGET])
 	assert_true(full_total <= FULL_SET_TOKEN_BUDGET, "全量总估算 %d 超预算 %d" % [full_total, FULL_SET_TOKEN_BUDGET])

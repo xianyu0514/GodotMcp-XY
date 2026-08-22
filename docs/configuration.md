@@ -180,7 +180,7 @@ Use the same auth header pattern if `auth_enabled` is on.
 
 ## Tool presets
 
-The default surface is intentionally small: 28 core tools and 2 meta tools. Advanced tools are available but hidden until enabled.
+The default surface is intentionally small: 29 core tools and 4 meta tools. Advanced tools are available but hidden until enabled.
 
 | Preset/workflow | Use when |
 | --- | --- |

@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **221 个工具**（28 核心 + 189 补充 + 4 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **222 个工具**（29 核心 + 189 补充 + 4 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -49,7 +49,7 @@ addons/godot_mcp/
 │   ├── mcp_stdio_server.gd     # stdio 传输（供 Claude Desktop 等使用）
 │   ├── mcp_types.gd            # JSON-RPC 和 MCP 协议常量、MCPTool 数据类
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：221 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：222 个工具 name → {category, group}
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_auth_manager.gd     # HTTP Bearer Token 认证
 │   ├── config_manager.gd       # 插件配置读写
@@ -67,7 +67,7 @@ addons/godot_mcp/
 │   ├── debug_bridge_tools.gd   # 28 个工具 — 调试器桥接（断点/线程/栈帧/变量/作用域/求值）、执行控制（单步/继续/等待、runtime probe 安装/移除、debugger 状态等待）
 │   ├── debug_runtime_tools.gd  # 38 个工具 — 运行时探针（场景树/节点 CRUD/表达式/输入模拟/动画/音频/着色器/瓦片地图/截图/条件断言）
 │   ├── debug_verify_tools.gd   # 3 个工具 — play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
-│   ├── project_tools_native.gd  # 16 个工具（主类，保留共享辅助）— 项目信息/设置、项目设置写入、输入映射、自动加载（读取/增删）、全局类、类元数据、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
+│   ├── project_tools_native.gd  # 17 个工具（主类，保留共享辅助）— 紧凑项目上下文、项目信息/设置、项目设置写入、输入映射、自动加载（读取/增删）、全局类、类元数据、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
 │   ├── project_resources_tools.gd # 21 个工具 — 资源创建/读取/更新/批量、依赖扫描（缺失/循环）、迁移检查/修复、弃用 API 扫描、GDExtension 检测、UID 查询/修复、反向依赖、未使用资源、脚本诊断、健康审计
 │   ├── project_assets_tools.gd  # 9 个工具 — 渐变/可绘制纹理、PCK 打包、渲染输出、generate_asset（占位程序化 + 外部 API 适配 + SSRF 护栏）、slice_sprite_sheet、inspect_gltf_asset、generate_3d_asset（文生3D 异步提交→轮询→下载→校验）
 │   ├── project_tileset_tools.gd # 5 个工具 — TileSet 创建/检查、图层配置（物理/导航/自定义数据/地形）、逐图块碰撞多边形、地形与 peering bits

@@ -717,6 +717,15 @@ func _register_script_resources() -> void:
 	)
 
 func _register_project_resources() -> void:
+	# godot://project/context
+	_native_server.register_resource(
+		"godot://project/context",
+		"Compact Project Context",
+		"application/json",
+		Callable(self, "_resource_project_context"),
+		"Compact revisioned project, editor, autoload, input, class, task-plan and tool state"
+	)
+
 	# godot://project/info
 	_native_server.register_resource(
 		"godot://project/info",
@@ -839,6 +848,24 @@ func _resource_project_info(params: Dictionary) -> Dictionary:
 			"uri": "godot://project/info",
 			"mimeType": "application/json",
 			"text": JSON.stringify(project_info, "\t", true)
+		}]
+	}
+
+func _resource_project_context(params: Dictionary) -> Dictionary:
+	var result: Dictionary = {"error": "Project tools are not available"}
+	var project_tools: Variant = _tool_instances.get("ProjectToolsNative")
+	if project_tools != null and project_tools.has_method("_tool_get_project_context"):
+		var context_params: Dictionary = {}
+		if params.get("sections") is Array:
+			context_params["sections"] = params["sections"]
+		if params.has("known_revision"):
+			context_params["known_revision"] = params["known_revision"]
+		result = project_tools._tool_get_project_context(context_params)
+	return {
+		"contents": [{
+			"uri": "godot://project/context",
+			"mimeType": "application/json",
+			"text": JSON.stringify(result)
 		}]
 	}
 

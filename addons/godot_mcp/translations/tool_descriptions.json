@@ -1,4 +1,5 @@
 {
+  "get_project_context": "Get a compact revisioned project orientation snapshot. Select sections and pass a known revision to avoid repeating unchanged context.",
   "get_project_info": "Get general information about the Godot project, including name, version, and description.",
   "get_project_settings": "Get project settings. Optionally filter by a prefix.",
   "list_project_tests": "Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable.",

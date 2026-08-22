@@ -148,6 +148,51 @@ func test_notify_resource_updated_skips_when_not_subscribed():
 	assert_false(sent, "Should not notify when not subscribed")
 	assert_eq(fake.sent.size(), 0, "No notification should be sent")
 
+func test_mutating_tool_notifies_subscribed_resources():
+	_register_dummy_resource("godot://project/context")
+	_core._handle_resource_subscribe({"id": 1, "params": {"uri": "godot://project/context"}})
+	var fake: FakeTransport = FakeTransport.new()
+	_core._transport = fake
+	_core.register_tool(
+		"mutate_project",
+		"Mutate project",
+		{"type": "object", "properties": {}},
+		func(_args): return {"status": "success"},
+		{"type": "object", "properties": {}},
+		{"readOnlyHint": false},
+		"core",
+		"Project"
+	)
+	var response: Dictionary = await _core._handle_tool_call({
+		"id": 2,
+		"params": {"name": "mutate_project", "arguments": {}}
+	})
+	assert_false(response.get("result", {}).get("isError", true), "Mutation tool succeeds")
+	assert_eq(fake.sent.size(), 1, "Mutation emits one resource update")
+	assert_eq(fake.sent[0].get("method"), MCPTypes.NOTIFICATION_RESOURCES_UPDATED, "Uses resources/updated")
+	assert_eq(fake.sent[0].get("params", {}).get("uri"), "godot://project/context", "Context subscription is refreshed")
+
+func test_noop_mutation_does_not_notify_subscribed_resources():
+	_register_dummy_resource("godot://project/context")
+	_core._handle_resource_subscribe({"id": 1, "params": {"uri": "godot://project/context"}})
+	var fake: FakeTransport = FakeTransport.new()
+	_core._transport = fake
+	_core.register_tool(
+		"noop_mutation",
+		"No-op mutation",
+		{"type": "object", "properties": {}},
+		func(_args): return {"status": "success", "changed": false},
+		{"type": "object", "properties": {}},
+		{"readOnlyHint": false},
+		"core",
+		"Project"
+	)
+	await _core._handle_tool_call({
+		"id": 2,
+		"params": {"name": "noop_mutation", "arguments": {}}
+	})
+	assert_eq(fake.sent.size(), 0, "Explicit changed=false avoids a redundant refresh notification")
+
 # ---------------------------------------------------------------------------
 # Real workflow prompts (native_mcp/prompt_workflows.gd)
 # ---------------------------------------------------------------------------

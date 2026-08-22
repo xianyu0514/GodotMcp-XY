@@ -813,6 +813,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)):
 		_invalidate_result_cache()
+		var reports_no_change: bool = result is Dictionary and result.has("changed") and not bool(result.get("changed", true))
+		if not has_error and not reports_no_change:
+			_notify_subscribed_resources_updated()
 
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
 	
@@ -977,6 +980,15 @@ func notify_resource_updated(uri: String) -> bool:
 		_log_debug("Sent resources/updated notification: " + uri)
 		return true
 	return false
+
+## Notify every resource subscribed by the current client after a successful
+## mutating tool call. Resource loaders compute fresh snapshots on the next read.
+func _notify_subscribed_resources_updated() -> int:
+	var sent_count: int = 0
+	for uri in _resource_subscriptions.keys():
+		if notify_resource_updated(str(uri)):
+			sent_count += 1
+	return sent_count
 
 # ============================================================================
 # Progress 通知与取消支持（2025-03-26+ MCP 规范）

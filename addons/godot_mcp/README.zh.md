@@ -6,7 +6,7 @@
 
 - `plugin.cfg` 与 `mcp_server_native.gd` — 编辑器插件入口。
 - `native_mcp/` — JSON-RPC/MCP 核心、HTTP/SSE 与 stdio 传输、鉴权、设置、隧道和工具状态管理。
-- `tools/` — 221 个 MCP 工具的实现。
+- `tools/` — 222 个 MCP 工具的实现。
 - `runtime/mcp_runtime_probe.gd` — 可选 Autoload，用于检查和驱动运行中的游戏。
 - `ui/` — MCP 停靠面板、工具管理器和详情视图。
 - `translations/` — 面板文本和工具描述。
@@ -30,13 +30,14 @@
 
 ## 工具模型
 
-插件注册 221 个工具：
+插件注册 222 个工具：
 
-- 28 个核心工具默认启用。
+- 29 个核心工具默认启用。
 - 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 4 个常驻元工具：`list_tool_catalog`、`search_tools`、`get_tool_details` 与 `enable_tools`。
 
 高频节点/属性写操作返回实时读回证据，`modify_script` 修改 GDScript 后默认执行一次编译验证。
+`get_project_context` 与可订阅的 `godot://project/context` 资源提供带版本的紧凑定向快照；成功的写工具会通知已订阅资源刷新。
 
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。
 

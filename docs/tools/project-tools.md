@@ -2,24 +2,25 @@
 
 [← Tools reference](README.md)
 
-**61 tools** — 3 core, 58 advanced.
+**62 tools** — 4 core, 58 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
 ## Recommended workflow
 
-1. Read project facts with `get_project_info`, `get_project_settings` and `list_project_resources`.
+1. Start with `get_project_context`; pass its `revision` back as `known_revision` on later turns, then use focused readers only when a section needs detail.
 2. Use advanced resource tools for imports, dependency analysis and usage audits.
 3. Run project tests through `list_project_tests`, `run_project_test` and `run_project_tests`.
 4. Enable production helpers such as `generate_asset`, `slice_sprite_sheet`, `inspect_gltf_asset`, `assert_visual_baseline` and `manage_task_plan` only for the workflows that need them.
 
 ## Tool list
 
-### Project (3 core)
+### Project (4 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_project_info` | core | Get general information about the Godot project, including name, version, and description. |
+| `get_project_context` | core | Return a compact, revisioned orientation snapshot with selectable project, editor, autoload, input-action, global-class, task-plan and enabled-tool sections. It does not scan full scene trees or script contents. A matching `known_revision` returns `changed=false` without repeating `context`. The same snapshot is available as the subscribable `godot://project/context` resource. |
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 

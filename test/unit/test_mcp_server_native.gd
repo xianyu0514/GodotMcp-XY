@@ -34,6 +34,12 @@ func test_plugin_has_get_server_status():
 	var method_names: Array = methods.map(func(m): return m["name"])
 	assert_true(method_names.has("get_server_status"), "Should have get_server_status method")
 
+func test_plugin_registers_project_context_resource():
+	var methods: Array = _plugin_script.get_script_method_list()
+	var method_names: Array = methods.map(func(m): return m["name"])
+	assert_true(method_names.has("_resource_project_context"), "Plugin should expose the compact project context resource loader")
+	assert_true(_plugin_script.source_code.contains("godot://project/context"), "Project context resource URI should be registered")
+
 func test_find_files_recursive():
 	var result: Array = []
 	var dir: DirAccess = DirAccess.open("res://")

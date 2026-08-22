@@ -1,5 +1,7 @@
 # Changelog
 
+- Added a high-ROI project-orientation loop: the core `get_project_context` tool returns selectable compact summaries with a stable SHA-256 revision, and a matching `known_revision` suppresses unchanged payloads. The same builder backs the subscribable `godot://project/context` resource; successful mutating tool calls now emit resource update notifications. Catalog: 222 tools = 29 core + 189 advanced + 4 meta.
+
 All notable user-facing changes are tracked here.
 
 ## Unreleased

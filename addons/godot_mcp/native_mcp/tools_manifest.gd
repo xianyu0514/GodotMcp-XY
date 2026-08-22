@@ -10,9 +10,8 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 内容来源：与重构前 mcp_tool_classifier.gd 手写列表逐条一致（221 个工具，
-# 28 core + 189 supplementary + 4 meta，分类/分组不变 —— 本次仅“单一真相”
-# 重构，不是行为变更）。
+# 内容来源：与工具注册实现逐条一致（222 个工具：29 core + 189
+# supplementary + 4 meta）。
 #
 # 注意：
 #   - TOOLS 是分类/分组的唯一权威来源；tools/*.gd 的 register_tool 调用仍然
@@ -119,6 +118,7 @@ const TOOLS: Dictionary = {
 	"get_node_properties": {"category": "core", "group": "Node-Read"},
 	"get_node_subresource": {"category": "supplementary", "group": "Node-Advanced"},
 	"get_performance_metrics": {"category": "supplementary", "group": "Debug-Advanced"},
+	"get_project_context": {"category": "core", "group": "Project"},
 	"get_project_info": {"category": "core", "group": "Project"},
 	"get_project_settings": {"category": "core", "group": "Project"},
 	"get_project_structure": {"category": "supplementary", "group": "Project-Advanced"},

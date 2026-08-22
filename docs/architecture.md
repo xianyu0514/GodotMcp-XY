@@ -69,7 +69,7 @@ runtime-probe and verify domains moved into three dedicated modules:
 | `debug_bridge_tools.gd` | Debug (bridge + execution control) | 28 |
 | `debug_runtime_tools.gd` | Debug (runtime probe) | 38 |
 | `debug_verify_tools.gd` | Debug (verify gates: play_and_verify/perf budget/runtime errors) | 3 |
-| `project_tools_native.gd` | Project (main: info/config/input/autoload/class metadata/tests) | 16 |
+| `project_tools_native.gd` | Project (main: compact context/info/config/input/autoload/class metadata/tests) | 17 |
 | `project_resources_tools.gd` | Project (resources: create/read/update/deps/migration/UID) | 21 |
 | `project_assets_tools.gd` | Project (assets: generate/3D/slice/glTF/gradient/drawable/PCK/render) | 9 |
 | `project_tileset_tools.gd` | Project (TileSet: create/layers/collision/terrain/inspect) | 5 |
@@ -91,11 +91,13 @@ These hints flow to three places that agents already consume:
 
 ## Core, advanced and meta tiers
 
-- **Core:** 28 high-value tools enabled by default.
+- **Core:** 29 high-value tools enabled by default.
 - **Advanced:** 189 tools registered but hidden from `tools/list` until enabled.
 - **Meta:** 4 always-on discovery tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 
 This design keeps the default client context small without making specialized capabilities unavailable.
+
+The compact context loop exposes the same snapshot through the core `get_project_context` tool and the subscribable `godot://project/context` resource. The payload uses canonical section ordering and a SHA-256 content revision; clients can pass `known_revision` to suppress unchanged context. After any successful tool marked `readOnlyHint=false`, the server emits `notifications/resources/updated` for currently subscribed resources.
 
 ## Runtime probe
 
