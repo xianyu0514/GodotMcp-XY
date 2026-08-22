@@ -112,6 +112,38 @@ func test_mcp_tool_annotations():
 	assert_has(d, "annotations", "Dict should have annotations when set")
 	assert_eq(d["annotations"]["readOnlyHint"], true, "readOnlyHint should be true")
 
+func test_infer_annotations_read_tool():
+	var annotations: Dictionary = MCPTypes.infer_tool_annotations("get_scene_structure")
+	assert_eq(annotations["readOnlyHint"], true, "get_* tools should infer readOnlyHint=true")
+	assert_eq(annotations["destructiveHint"], false, "get_* tools should infer destructiveHint=false")
+	assert_eq(annotations["idempotentHint"], true, "read-only inference should also be idempotent")
+	assert_eq(annotations["openWorldHint"], false, "read-only inference should default to closed world")
+
+func test_infer_annotations_destructive_tool():
+	var annotations: Dictionary = MCPTypes.infer_tool_annotations("remove_node")
+	assert_eq(annotations["readOnlyHint"], false, "remove_* tools should not infer read-only")
+	assert_eq(annotations["destructiveHint"], true, "remove_* tools should infer destructive")
+
+func test_infer_annotations_unknown_tool():
+	var annotations: Dictionary = MCPTypes.infer_tool_annotations("frobnicate_widget")
+	assert_eq(annotations["readOnlyHint"], false, "Unknown tools must be conservative (not read-only)")
+	assert_eq(annotations["destructiveHint"], false, "Unknown tools must be conservative (not destructive)")
+
+func test_normalize_tool_annotations_preserves_explicit_values():
+	var normalized: Dictionary = MCPTypes.normalize_tool_annotations({"readOnlyHint": true}, "create_node")
+	assert_eq(normalized["readOnlyHint"], true, "Explicit readOnlyHint must win over name inference")
+	assert_has(normalized, "destructiveHint", "Missing destructiveHint should be filled")
+	assert_has(normalized, "idempotentHint", "Missing idempotentHint should be filled")
+	assert_has(normalized, "openWorldHint", "Missing openWorldHint should be filled")
+
+func test_normalize_tool_annotations_fills_all_keys():
+	var normalized: Dictionary = MCPTypes.normalize_tool_annotations({}, "list_project_scenes")
+	assert_has(normalized, "readOnlyHint", "readOnlyHint should always be present")
+	assert_has(normalized, "destructiveHint", "destructiveHint should always be present")
+	assert_has(normalized, "idempotentHint", "idempotentHint should always be present")
+	assert_has(normalized, "openWorldHint", "openWorldHint should always be present")
+	assert_eq(normalized["readOnlyHint"], true, "list_* inference should be read-only")
+
 func test_mcp_resource_valid():
 	var res: MCPTypes.MCPResource = MCPTypes.MCPResource.new()
 	res.uri = "godot://scene/list"

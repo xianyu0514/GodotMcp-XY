@@ -31,12 +31,17 @@ class FakeServerCore:
 	func get_registered_tools() -> Array:
 		var out: Array = []
 		for n in tools:
+			var annotations: Dictionary = tools[n].get("annotations", {})
 			out.append({
 				"name": n,
 				"enabled": tools[n]["enabled"],
 				"category": tools[n]["category"],
 				"group": tools[n]["group"],
-				"description": tools[n]["description"]
+				"description": tools[n]["description"],
+				"readOnlyHint": bool(annotations.get("readOnlyHint", false)),
+				"destructiveHint": bool(annotations.get("destructiveHint", false)),
+				"idempotentHint": bool(annotations.get("idempotentHint", false)),
+				"openWorldHint": bool(annotations.get("openWorldHint", false))
 			})
 		return out
 
@@ -95,6 +100,14 @@ func test_catalog_group_filter():
 	assert_eq(result.get("total_matched", -1), 1, "Only one tool is in Debug-Advanced")
 	assert_true(result["groups"].has("Debug-Advanced"), "Filtered group should be present")
 	assert_false(result["groups"].has("Node-Write"), "Non-matching group should be excluded")
+
+func test_catalog_entries_carry_annotation_flags():
+	var result: Dictionary = _tool._tool_list_tool_catalog({"group": "Debug-Advanced"})
+	var entry: Dictionary = result["groups"]["Debug-Advanced"]["tools"][0]
+	assert_eq(entry.get("readOnlyHint", false), true, "Catalog entry should carry readOnlyHint")
+	assert_eq(entry.get("destructiveHint", true), false, "Catalog entry should carry destructiveHint")
+	assert_eq(entry.get("idempotentHint", false), true, "Catalog entry should carry idempotentHint")
+	assert_has(entry, "openWorldHint", "Catalog entry should carry openWorldHint")
 
 func test_catalog_enabled_only_filter():
 	var result: Dictionary = _tool._tool_list_tool_catalog({"enabled_only": true})
@@ -173,6 +186,15 @@ func test_search_tools_multi_keyword_and():
 	assert_eq(tools[0].get("enabled"), false, "Match carries its enabled state")
 	assert_true(tools[0].has("description"), "Description included by default")
 
+
+func test_search_tools_results_carry_annotation_flags():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime info"})
+	var tools: Array = result.get("tools", [])
+	assert_eq(tools.size(), 1, "Expected exactly one match")
+	assert_eq(tools[0].get("readOnlyHint", false), true, "Search result should carry readOnlyHint")
+	assert_eq(tools[0].get("destructiveHint", true), false, "Search result should carry destructiveHint")
+	assert_eq(tools[0].get("idempotentHint", false), true, "Search result should carry idempotentHint")
+	assert_has(tools[0], "openWorldHint", "Search result should carry openWorldHint")
 func test_search_tools_and_requires_all_keywords():
 	var result: Dictionary = _tool._tool_search_tools({"query": "runtime export"})
 	assert_eq(result.get("total_matched", -1), 0, "No single tool contains both keywords")

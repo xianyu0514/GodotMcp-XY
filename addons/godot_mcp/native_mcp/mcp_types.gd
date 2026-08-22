@@ -116,6 +116,86 @@ class MCPTool:
 		}
 
 # ============================================================================
+# 工具注解工具函数
+# ============================================================================
+
+## 只读工具名称前缀。没有显式 annotations 的工具注册会先用这些前缀做保守推断，
+## 让 MCP 客户端（Claude/Cursor/Claude Code 等）可以在不修改用户审批策略的
+## 情况下自动放行安全的只读调用。
+const READ_ONLY_TOOL_PREFIXES: PackedStringArray = [
+	"get_",
+	"list_",
+	"read_",
+	"find_",
+	"search_",
+	"inspect_",
+	"scan_",
+	"detect_",
+	"audit_",
+	"validate_",
+	"verify_",
+	"analyze_",
+	"compare_",
+	"evaluate_",
+	"expand_",
+	"assert_",
+	"query_",
+	"has_",
+	"is_",
+	"check_",
+	"preview_",
+	"describe_",
+	"count_"
+]
+
+## 明确的破坏性前缀。仅用于缺少显式 annotations 的兜底推断；
+## 所有已注册工具都显式声明 annotations 时不受影响。
+const DESTRUCTIVE_TOOL_PREFIXES: PackedStringArray = [
+	"delete_",
+	"remove_",
+	"clear_",
+	"execute_",
+	"apply_",
+	"fix_",
+	"undo",
+	"redo"
+]
+
+## 根据工具名做保守的 MCP 工具注解推断。无法判定时全部为 false，
+## 由客户端按其默认审批策略处理，绝不高估工具的安全性。
+static func infer_tool_annotations(tool_name: String) -> Dictionary:
+	var read_only: bool = false
+	for prefix in READ_ONLY_TOOL_PREFIXES:
+		if tool_name.begins_with(prefix):
+			read_only = true
+			break
+
+	var destructive: bool = false
+	for prefix in DESTRUCTIVE_TOOL_PREFIXES:
+		if tool_name.begins_with(prefix):
+			destructive = true
+			break
+
+	return {
+		"readOnlyHint": read_only,
+		"destructiveHint": destructive,
+		"idempotentHint": read_only,
+		"openWorldHint": false
+	}
+
+## 补全工具注解的四项布尔值。注册时显式传入的值优先；
+## 缺失的键才用名称推断值填充，因此不会覆盖工具作者的明确声明。
+static func normalize_tool_annotations(annotations: Dictionary, tool_name: String) -> Dictionary:
+	var inferred: Dictionary = infer_tool_annotations(tool_name)
+	var normalized: Dictionary = annotations.duplicate()
+	for key in inferred:
+		if not normalized.has(key):
+			normalized[key] = inferred[key]
+		else:
+			normalized[key] = bool(normalized[key])
+	return normalized
+
+# ============================================================================
 # MCPResource类 - 资源元数据（根据mcp-builder添加description）
 # ============================================================================
 

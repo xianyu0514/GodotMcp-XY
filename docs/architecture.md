@@ -79,6 +79,16 @@ runtime-probe and verify domains moved into three dedicated modules:
 
 Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The category/group come from the single manifest (`native_mcp/tools_manifest.gd`), which the classifier reads to answer whether a tool is core, advanced or meta. `test_mcp_tool_classifier.gd` enforces that the manifest, the classifier and the runtime registry never drift (tool-name sets and per-tool category/group must match).
 
+### Tool annotations
+
+Every registered tool is normalized to a complete MCP `annotations` object with `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint`. Explicit annotations declared by a tool always win; if a registration omits any key, `MCPTypes.normalize_tool_annotations()` fills the missing key from a conservative, name-based inference (`get_*`, `list_*`, `search_*`, etc. are read-only, while `delete_*`, `remove_*`, `clear_*`, etc. are destructive). Unknown tool names default to all-false so safety is never overestimated.
+
+These hints flow to three places that agents already consume:
+
+- `tools/list` exposes the standard `annotations` object so MCP clients can apply their own auto-approval policies.
+- `list_tool_catalog` and `search_tools` return the same four flags per entry, letting an agent choose safe read-only discovery calls before switching on mutating tools.
+- `get_registered_tools()` carries the normalized flags so the dock UI and internal discovery paths share one source of truth.
+
 ## Core, advanced and meta tiers
 
 - **Core:** 28 high-value tools enabled by default.

@@ -308,6 +308,17 @@ func test_all_tool_modules_load_and_register() -> void:
 	assert_eq(missing.size(), 0, "分类器已知但未注册的工具: " + str(missing))
 	assert_eq(_tools.size(), classifier_tools.size(), "server_core 与分类器工具数应一致（core=%d, classifier=%d）" % [_tools.size(), classifier_tools.size()])
 
+## 每个已注册工具都必须下发完整四项 MCP annotations，客户端才能据此执行自动审批策略。
+func test_all_tools_have_complete_annotations() -> void:
+	var required_keys: Array[String] = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]
+	var incomplete: Array[String] = []
+	for tool_name in _tools:
+		var tool = _tools[tool_name]
+		for key in required_keys:
+			if not tool.annotations.has(key) or typeof(tool.annotations[key]) != TYPE_BOOL:
+				incomplete.append("%s.%s" % [tool_name, key])
+	assert_eq(incomplete.size(), 0, "工具 annotations 不完整（缺失或非 bool）: " + str(incomplete))
+
 
 ## 核心断言：全部工具 schema 中出现的所有关键字都在允许白名单内。
 func test_all_tool_schemas_only_use_allowed_keywords() -> void:

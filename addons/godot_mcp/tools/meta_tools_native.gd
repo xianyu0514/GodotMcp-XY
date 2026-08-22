@@ -51,7 +51,7 @@ func _short_description(description: String, max_len: int = 140) -> String:
 func _register_list_tool_catalog(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"list_tool_catalog",
-		"List the registered MCP tools grouped by category, with a one-line description and whether each is currently enabled (visible in tools/list). Use this to discover capabilities WITHOUT loading every full tool schema, then call enable_tools to switch on just what you need. Filter by group/query to keep the response small.",
+		"List the registered MCP tools grouped by category, with a one-line description, whether each is currently enabled (visible in tools/list), and the readOnlyHint/destructiveHint/idempotentHint/openWorldHint flags from each tool's MCP annotations. Use this to discover capabilities WITHOUT loading every full tool schema, then call enable_tools to switch on just what you need. Filter by group/query to keep the response small.",
 		{
 			"type": "object",
 			"properties": {
@@ -99,7 +99,15 @@ func _tool_list_tool_catalog(params: Dictionary) -> Dictionary:
 		var group_key: String = group if not group.is_empty() else "(ungrouped)"
 		if not groups.has(group_key):
 			groups[group_key] = {"total": 0, "enabled": 0, "tools": []}
-		var entry: Dictionary = {"name": name, "enabled": enabled, "category": category}
+		var entry: Dictionary = {
+			"name": name,
+			"enabled": enabled,
+			"category": category,
+			"readOnlyHint": bool(info.get("readOnlyHint", false)),
+			"destructiveHint": bool(info.get("destructiveHint", false)),
+			"idempotentHint": bool(info.get("idempotentHint", false)),
+			"openWorldHint": bool(info.get("openWorldHint", false))
+		}
 		if include_descriptions:
 			entry["description"] = _short_description(description)
 		groups[group_key]["tools"].append(entry)
@@ -128,7 +136,7 @@ func _tool_list_tool_catalog(params: Dictionary) -> Dictionary:
 func _register_search_tools(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"search_tools",
-		"Search the registered MCP tool catalog by keywords and/or group, returning each matching tool's name, group, category, enabled state and a one-line description. More focused than list_tool_catalog: supports multiple space-separated keywords with AND semantics (every keyword must appear in the tool name or description, case-insensitive). Use it to pinpoint the right tools for a task, then call get_tool_details for the exact schema or enable_tools to activate them.",
+		"Search the registered MCP tool catalog by keywords and/or group, returning each matching tool's name, group, category, enabled state, a one-line description, and the readOnlyHint/destructiveHint/idempotentHint/openWorldHint flags from its MCP annotations. More focused than list_tool_catalog: supports multiple space-separated keywords with AND semantics (every keyword must appear in the tool name or description, case-insensitive). Use it to pinpoint the right tools for a task, then call get_tool_details for the exact schema or enable_tools to activate them.",
 		{
 			"type": "object",
 			"properties": {
@@ -192,7 +200,11 @@ func _tool_search_tools(params: Dictionary) -> Dictionary:
 			"name": name,
 			"group": String(info.get("group", "")),
 			"category": String(info.get("category", "")),
-			"enabled": bool(info.get("enabled", false))
+			"enabled": bool(info.get("enabled", false)),
+			"readOnlyHint": bool(info.get("readOnlyHint", false)),
+			"destructiveHint": bool(info.get("destructiveHint", false)),
+			"idempotentHint": bool(info.get("idempotentHint", false)),
+			"openWorldHint": bool(info.get("openWorldHint", false))
 		}
 		if include_descriptions:
 			entry["description"] = _short_description(description)

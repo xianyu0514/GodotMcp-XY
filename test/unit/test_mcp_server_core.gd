@@ -30,6 +30,33 @@ func test_register_tool():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	assert_true(_core.has_tool("test_tool"), "Should have registered tool")
 
+func test_register_tool_normalizes_missing_annotations():
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"}, func(args): return {})
+	var tool: MCPTypes.MCPTool = _core.get_tool("get_scene_structure")
+	assert_true(tool != null, "Tool should be registered")
+	assert_eq(tool.annotations.get("readOnlyHint", false), true, "get_* should infer readOnlyHint=true")
+	assert_eq(tool.annotations.get("destructiveHint", true), false, "get_* should infer destructiveHint=false")
+	assert_eq(tool.annotations.get("idempotentHint", false), true, "read-only inference should be idempotent")
+	assert_has(tool.annotations, "openWorldHint", "openWorldHint should always be present")
+
+func test_register_tool_preserves_explicit_annotations():
+	_core.register_tool("create_node", "Create node", {"type": "object"}, func(args): return {}, {}, {"readOnlyHint": false})
+	var tool: MCPTypes.MCPTool = _core.get_tool("create_node")
+	assert_eq(tool.annotations.get("readOnlyHint", true), false, "Explicit readOnlyHint=false must be preserved")
+	assert_has(tool.annotations, "destructiveHint", "Missing keys should be normalized to complete annotations")
+
+func test_get_registered_tools_exposes_annotation_flags():
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"}, func(args): return {}, {}, {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false})
+	var found: bool = false
+	for info in _core.get_registered_tools():
+		if info.get("name") == "get_scene_structure":
+			found = true
+			assert_eq(info.get("readOnlyHint", false), true, "Catalog info should carry readOnlyHint")
+			assert_eq(info.get("destructiveHint", true), false, "Catalog info should carry destructiveHint")
+			assert_eq(info.get("idempotentHint", false), true, "Catalog info should carry idempotentHint")
+			assert_has(info, "openWorldHint", "Catalog info should carry openWorldHint")
+	assert_true(found, "Registered tool should appear in get_registered_tools")
+
 func test_meta_tool_cannot_be_disabled_via_set_tool_enabled():
 	_core.register_tool("list_tool_catalog", "meta", {"type": "object"}, func(args): return {}, {}, {}, "meta", "Meta")
 	_core.set_tool_enabled("list_tool_catalog", false)

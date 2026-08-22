@@ -40,7 +40,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a preset (minimal_core, level_design, debugging, automation_qa, art_resources, all). After enabling, the new tools appear in tools/list and you can call them directly. This keeps context small and saves compute."
+const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a preset (minimal_core, level_design, debugging, automation_qa, art_resources, all). After enabling, the new tools appear in tools/list and you can call them directly. Catalog and search results carry readOnlyHint/destructiveHint/idempotentHint from each tool's MCP annotations: prefer read-only discovery and inspection tools first, and reserve mutating or destructive tools for the concrete edit step. This keeps context small and saves compute."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -1109,7 +1109,9 @@ func register_tool(name: String, description: String,
 	tool.description = description
 	tool.input_schema = input_schema
 	tool.output_schema = output_schema
-	tool.annotations = annotations
+	# 始终向 MCP 客户端下发完整的四项 annotations。显式声明优先，
+	# 缺失键由工具名保守推断补全，避免客户端把未知工具全部当作需审批对象。
+	tool.annotations = MCPTypes.normalize_tool_annotations(annotations, name)
 	tool.callable = callable
 	tool.category = category
 	tool.group = group
@@ -1161,7 +1163,11 @@ func get_registered_tools() -> Array:
 				"description": tool.description,
 				"enabled": tool.enabled,
 				"category": tool.category,
-				"group": tool.group
+				"group": tool.group,
+				"readOnlyHint": bool(tool.annotations.get("readOnlyHint", false)),
+				"destructiveHint": bool(tool.annotations.get("destructiveHint", false)),
+				"idempotentHint": bool(tool.annotations.get("idempotentHint", false)),
+				"openWorldHint": bool(tool.annotations.get("openWorldHint", false))
 			})
 	return tools_info
 
