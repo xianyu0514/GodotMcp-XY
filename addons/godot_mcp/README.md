@@ -32,8 +32,8 @@ This directory is the distributable Godot addon. Copy `addons/godot_mcp` into an
 
 The addon registers 215 tools:
 
-- 30 core tools enabled by default.
-- 183 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
+- 28 core tools enabled by default.
+- 185 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 2 always-on meta tools: `list_tool_catalog` and `enable_tools`.
 
 See the project-level [Tools Reference](../../docs/tools/README.md).

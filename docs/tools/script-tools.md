@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**17 tools** — 7 core, 10 advanced.
+**17 tools** — 6 core, 11 advanced.
 
 Read, create, modify, validate and search project scripts. The category supports GDScript, C# project inspection, shader validation and symbol/reference workflows.
 
@@ -15,7 +15,7 @@ Read, create, modify, validate and search project scripts. The category supports
 
 ## Tool list
 
-### Script (7 core)
+### Script (6 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -25,15 +25,15 @@ Read, create, modify, validate and search project scripts. The category supports
 | `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
 | `attach_script` | core | Attach a script to a node. |
-| `execute_script` | core | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
+| `execute_script` | advanced | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
 
-### Script-Advanced (10 advanced)
+### Script-Advanced (11 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `batch_read_scripts` | advanced | Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts. |
 | `analyze_script` | advanced | Analyze a GDScript file and report code quality issues. |
-| `validate_script` | advanced | Validate a script file for syntax errors. |
+| `validate_script` | advanced | Validate a script file for syntax errors. Returns structured compile errors with line numbers. |
 | `validate_shader` | advanced | Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether it parses plus shader_type render_modes and uniforms and structural issues (missing/invalid shader_type unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+. |
 | `search_in_files` | advanced | Search for text in project files. |
 | `list_project_script_symbols` | advanced | Index script symbols across project GDScript and C# files. Returns class, extends, functions, signals, properties, and constants. |

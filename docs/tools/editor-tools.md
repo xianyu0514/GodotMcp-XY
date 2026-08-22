@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**24 tools** — 4 core, 20 advanced.
+**24 tools** — 3 core, 21 advanced.
 
 Drive the Godot editor itself: run/stop the project, inspect editor state, select files/nodes, manage open scripts, export builds and capture screenshots.
 
@@ -15,18 +15,18 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 
 ## Tool list
 
-### Editor (4 core)
+### Editor (3 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_editor_state` | core | Get the current state of the Godot editor, including active scene and selection info. |
 | `run_project` | core | Run the current project or a specific scene. Launches the game in play mode. |
 | `stop_project` | core | Stop the currently running project and return to editor mode. |
-| `execute_editor_script` | core | Execute a script in the editor with access to editor APIs. Guarded by the script sandbox (see note below). |
+| `execute_editor_script` | advanced | Execute a script in the editor with access to editor APIs. Guarded by the script sandbox (see note below). |
 
 > **Script sandbox guard:** when `security_level` is `1` (STRICT, the default), `execute_editor_script` is scanned by a capability denylist before it runs. Scripts that reference OS process execution (`OS.execute`, `OS.create_process`, …), out-of-project filesystem paths, networking (`HTTPRequest`, `TCPServer`, …) or other dangerous APIs are rejected with `{"blocked": true, "reason": "script_sandbox", "category": …}` instead of being executed. Set `security_level = 0` (PERMISSIVE) to disable the guard. This is an anti-footgun guard, not an adversarial sandbox. The same guard applies to `execute_script` (including its single-line expression path), `evaluate_debug_expression` and `evaluate_runtime_expression`.
 
-### Editor-Advanced (20 advanced)
+### Editor-Advanced (21 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |

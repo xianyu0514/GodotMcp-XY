@@ -32,8 +32,8 @@
 
 插件注册 215 个工具：
 
-- 30 个核心工具默认启用。
-- 183 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
+- 28 个核心工具默认启用。
+- 185 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 2 个常驻元工具：`list_tool_catalog` 与 `enable_tools`。
 
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。

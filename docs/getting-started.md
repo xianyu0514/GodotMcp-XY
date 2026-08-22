@@ -147,7 +147,7 @@ List the current scene tree and summarize the top-level nodes.
 
 ## 7. Enable advanced tools only when needed
 
-At startup, the client sees the 30 core tools plus 2 meta tools. For specialized workflows:
+At startup, the client sees the 28 core tools plus 2 meta tools. For specialized workflows:
 
 - In the editor, open the tool manager in the MCP panel and toggle a group.
 - From the client, call `list_tool_catalog` to discover tools and `enable_tools` to enable names, groups or presets.

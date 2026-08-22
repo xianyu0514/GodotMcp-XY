@@ -2080,7 +2080,7 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 
 func _register_validate_script(server_core: RefCounted) -> void:
 	var tool_name: String = "validate_script"
-	var description: String = "Validate GDScript syntax without executing it. Checks for errors and warnings."
+	var description: String = "Validate GDScript syntax without executing it. Checks for errors and warnings; returns structured compile errors with line numbers."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -2174,26 +2174,7 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 					"message": "Script validates successfully with Autoload/global class awareness. Original validation failed due to unresolved Autoload or global class names."
 				})
 		if not autoload_aware:
-			var error_msg: String = test_script.get_meta("_error_text", "") if test_script.has_meta("_error_text") else ""
-			if error_msg.is_empty():
-				var err_lines: PackedStringArray = content.split("\n")
-				for i in range(err_lines.size()):
-					var line: String = err_lines[i].strip_edges()
-					if line.is_empty():
-						continue
-					if _is_syntax_error_line(line):
-						errors.append({
-							"line": i + 1,
-							"column": 0,
-							"message": "Syntax error near: " + line
-						})
-						break
-				if errors.is_empty():
-					errors.append({
-						"line": 0,
-						"column": 0,
-						"message": "Script has syntax errors"
-					})
+			errors.append(_collect_validation_error(test_script, content))
 
 	if check_warnings and reload_err == OK:
 		var source_lines: PackedStringArray = content.split("\n")
@@ -2222,6 +2203,75 @@ func _is_syntax_error_line(line: String) -> bool:
 		if keyword in line_lower:
 			return true
 	return false
+
+# 从 Godot 编译错误文本中提取行号。
+# 支持 "Parse Error: Expected ')' at line 12 (script.gd)" / "Line 12: ..." 等格式；
+# 提取不到返回 0（中文或其他语言格式不匹配时也不会崩溃）。
+static func _extract_error_line(error_text: String) -> int:
+	if error_text.is_empty():
+		return 0
+	var line_regex := RegEx.new()
+	if line_regex.compile("(?:line|Line)\\s*(\\d+)") != OK:
+		return 0
+	var match: RegExMatch = line_regex.search(error_text)
+	if match:
+		return int(match.get_string(1))
+	return 0
+
+# 提取错误类型前缀（Parse Error / Compile Error / ERROR 等），未识别返回空字符串。
+static func _extract_error_type_prefix(error_text: String) -> String:
+	var lower: String = error_text.to_lower()
+	var prefixes: Array[String] = ["parse error", "compile error", "parser error", "error"]
+	for prefix in prefixes:
+		if lower.begins_with(prefix):
+			return error_text.substr(0, prefix.length()).capitalize()
+	return ""
+
+# 收集 validate_script 的单个编译错误（带行号的结构化错误）：
+# 1. 优先读取 _error_text meta（现有行为）；
+# 2. 为空则探测 _error_script / _error_line 等其他 meta（Godot 4.x reload 失败时部分版本会写入）；
+# 3. 仍为空则回退到 _is_syntax_error_line 逐行启发式（保留）。
+func _collect_validation_error(test_script: GDScript, content: String) -> Dictionary:
+	var error_msg: String = ""
+	if test_script.has_meta("_error_text"):
+		error_msg = str(test_script.get_meta("_error_text", ""))
+	if error_msg.is_empty():
+		for meta_key in test_script.get_meta_list():
+			if meta_key == "_error_text":
+				continue
+			var meta_val: Variant = test_script.get_meta(meta_key)
+			if meta_val is String and not str(meta_val).is_empty():
+				error_msg = str(meta_val)
+				break
+	if not error_msg.is_empty():
+		var error_line: int = _extract_error_line(error_msg)
+		if error_line == 0 and test_script.has_meta("_error_line"):
+			error_line = int(test_script.get_meta("_error_line", 0))
+		var error_prefix: String = _extract_error_type_prefix(error_msg)
+		var display_msg: String = error_msg
+		if not error_prefix.is_empty() and not error_msg.to_lower().begins_with(error_prefix.to_lower()):
+			display_msg = "%s: %s" % [error_prefix, error_msg]
+		return {
+			"line": error_line,
+			"column": 0,
+			"message": display_msg
+		}
+	var err_lines: PackedStringArray = content.split("\n")
+	for i in range(err_lines.size()):
+		var line: String = err_lines[i].strip_edges()
+		if line.is_empty():
+			continue
+		if _is_syntax_error_line(line):
+			return {
+				"line": i + 1,
+				"column": 0,
+				"message": "Syntax error near: " + line
+			}
+	return {
+		"line": 0,
+		"column": 0,
+		"message": "Script has syntax errors"
+	}
 
 func _strip_class_names(source: String) -> String:
 	var lines: PackedStringArray = source.split("\n")

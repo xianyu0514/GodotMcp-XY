@@ -65,11 +65,11 @@ func test_generate_3d_asset_is_supplementary_project_advanced():
 
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
-	assert_eq(core_tools.size(), 30, "Should have exactly 30 core tools")
+	assert_eq(core_tools.size(), 28, "Should have exactly 28 core tools")
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 183, "Should have 183 supplementary tools")
+	assert_eq(supp_tools.size(), 185, "Should have 185 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -77,7 +77,17 @@ func test_get_tool_category_create_node():
 
 func test_get_tool_category_execute_editor_script():
 	var cat: String = _classifier.get_tool_category("execute_editor_script")
-	assert_eq(cat, "core", "execute_editor_script should be core")
+	assert_eq(cat, "supplementary", "execute_editor_script should be supplementary")
+
+func test_execute_script_now_supplementary():
+	assert_true(_classifier.is_supplementary_tool("execute_script"), "execute_script should be supplementary after security downgrade")
+	assert_false(_classifier.is_core_tool("execute_script"), "execute_script should not be core after security downgrade")
+	assert_eq(_classifier.get_tool_group("execute_script"), "Script", "execute_script should stay in Script group")
+
+func test_execute_editor_script_now_supplementary():
+	assert_true(_classifier.is_supplementary_tool("execute_editor_script"), "execute_editor_script should be supplementary after security downgrade")
+	assert_false(_classifier.is_core_tool("execute_editor_script"), "execute_editor_script should not be core after security downgrade")
+	assert_eq(_classifier.get_tool_group("execute_editor_script"), "Editor", "execute_editor_script should stay in Editor group")
 
 func test_get_tool_category_unknown():
 	var cat: String = _classifier.get_tool_category("non_existent_tool")
@@ -133,8 +143,8 @@ func test_get_group_tools_script():
 
 func test_is_core_tool():
 	assert_true(_classifier.is_core_tool("create_node"), "create_node should be core")
-	assert_true(_classifier.is_core_tool("execute_editor_script"), "execute_editor_script should be core")
-	assert_true(_classifier.is_core_tool("execute_script"), "execute_script should be core")
+	assert_true(_classifier.is_core_tool("list_project_scripts"), "list_project_scripts should be core")
+	assert_true(_classifier.is_core_tool("read_script"), "read_script should be core")
 
 func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("reload_project"), "reload_project should be supplementary")

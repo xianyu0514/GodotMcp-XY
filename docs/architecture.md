@@ -66,8 +66,8 @@ Tool registration uses `server_core.register_tool(...)` with name, description, 
 
 ## Core, advanced and meta tiers
 
-- **Core:** 30 high-value tools enabled by default.
-- **Advanced:** 183 tools registered but hidden from `tools/list` until enabled.
+- **Core:** 28 high-value tools enabled by default.
+- **Advanced:** 185 tools registered but hidden from `tools/list` until enabled.
 - **Meta:** 2 always-on discovery tools: `list_tool_catalog` and `enable_tools`.
 
 This design keeps the default client context small without making specialized capabilities unavailable.

@@ -251,3 +251,34 @@ func test_validate_shader_ignores_commented_render_mode():
 	var modes: Array = result.get("render_modes", [])
 	assert_true(modes.has("unshaded"), "The real render_mode is parsed")
 	assert_false(modes.has("blend_add"), "The commented-out render_mode is ignored")
+
+# ============================================================================
+# validate_script 错误提取增强测试
+# ============================================================================
+
+func test_extract_error_line_from_text():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	assert_eq(tool._extract_error_line("Parse Error: Expected ')' at line 12"), 12, "Extracts line from 'at line N' parse error text")
+	assert_eq(tool._extract_error_line("Line 7: Variable lacks type hint"), 7, "Extracts line from 'Line N:' format")
+	assert_eq(tool._extract_error_line("Parse Error: Expected end of statement (script.gd)"), 0, "No line number returns 0")
+	assert_eq(tool._extract_error_line("解析错误：第 12 行"), 0, "Chinese error text without 'line' keyword returns 0 without crashing")
+	assert_eq(tool._extract_error_line(""), 0, "Empty text returns 0")
+
+func test_validate_script_error_has_line():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# Deliberately broken GDScript: the print statement is missing its closing parenthesis.
+	var broken_code: String = "extends Node\n\nfunc _ready() -> void:\n\tprint(\"hello\"\n"
+	var result: Dictionary = tool._tool_validate_script({"content": broken_code})
+	# The engine prints the expected parse error to the console; mark it handled
+	# so GUT does not treat the expected SCRIPT ERROR as an unexpected failure.
+	for e in get_errors():
+		e.handled = true
+	assert_false(result.get("valid", true), "Broken script is reported as invalid")
+	var errors: Array = result.get("errors", [])
+	assert_true(errors.size() > 0, "At least one error is reported for the broken script")
+	assert_true(errors[0].has("line"), "Error entry carries a line field")
+	assert_true(errors[0].has("column"), "Error entry carries a column field")
+	assert_true(errors[0].has("message"), "Error entry carries a message field")
+	# Headless compilation may not expose a reliable error text in every build;
+	# only require the message to be non-empty (line may be 0 in fallback mode).
+	assert_true(str(errors[0].get("message", "")).length() > 0, "Error message is non-empty")
