@@ -287,27 +287,22 @@ func _http_server_loop() -> void:
 				if _log_callback.is_valid():
 					_log_callback.call("INFO", "New connection: " + str(peer.get_status()))
 		
-		# 处理所有活跃连接（复制一份避免并发修改）
-		var disconnected: Array[StreamPeerTCP] = []
-		var current_connections: Array[StreamPeerTCP] = _connections.duplicate()
-		
-		for p in current_connections:
+		# 倒序处理所有活跃连接：断开的连接就地移除，不需要每轮
+		# `_connections.duplicate()` 复制整张连接表（服务端线程是唯一写入方）。
+		var index: int = _connections.size() - 1
+		while index >= 0:
 			if not _active:
 				break
+			var p: StreamPeerTCP = _connections[index]
 			if p.get_status() != StreamPeerTCP.STATUS_CONNECTED:
-				disconnected.append(p)
-				if _sse_connections.has(p):
-					_close_sse_connection(p)
-				if _post_response_formats.has(p):
-					_post_response_formats.erase(p)
+				_remove_connection_at(index)
+				index -= 1
 				continue
 			
 			if p.get_available_bytes() > 0:
 				_handle_http_request(p)
-		
-		# 移除已断开的连接
-		for d in disconnected:
-			_connections.erase(d)
+			
+			index -= 1
 		
 		# 处理 SSE 连接的心跳
 		var current_time: int = Time.get_ticks_msec()
@@ -323,6 +318,18 @@ func _http_server_loop() -> void:
 	
 	if _log_callback.is_valid():
 		_log_callback.call("INFO", "Server loop stopped")
+
+## 移除指定下标的连接，并清理其关联的 SSE 会话与 POST 响应格式。
+## 仅供服务器线程在倒序扫描 _connections 时调用；调用后下标整体前移。
+func _remove_connection_at(index: int) -> void:
+	if index < 0 or index >= _connections.size():
+		return
+	var p: StreamPeerTCP = _connections[index]
+	if _sse_connections.has(p):
+		_close_sse_connection(p)
+	if _post_response_formats.has(p):
+		_post_response_formats.erase(p)
+	_connections.remove_at(index)
 
 ## 发送 SSE 心跳
 func _send_sse_keepalive() -> void:
@@ -698,7 +705,9 @@ func _close_sse_connection(peer: StreamPeerTCP) -> void:
 		if _log_callback.is_valid():
 			_log_callback.call("INFO", "SSE connection closed: " + session_id)
 	
-	peer.disconnect_from_host()
+
+	if peer.get_status() == StreamPeerTCP.STATUS_CONNECTED:
+		peer.disconnect_from_host()
 
 ## 生成会话 ID
 ## @returns: String - 唯一会话 ID

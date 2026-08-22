@@ -215,6 +215,26 @@ func test_read_plugin_version_matches_cfg():
 func test_max_connections_constant():
 	assert_eq(_http_server.MAX_CONNECTIONS, 64, "MAX_CONNECTIONS should be 64")
 
+func test_remove_connection_at_cleans_peer_state():
+	# 服务器线程倒序扫描时，断开的 peer 必须从连接表、SSE 会话表和
+	# POST 响应格式表中一起移除；未连接的 StreamPeerTCP 不应触发 disconnect。
+	var peer: StreamPeerTCP = StreamPeerTCP.new()
+	_http_server._connections.append(peer)
+	_http_server._sse_connections[peer] = "sess-remove"
+	_http_server._sessions["sess-remove"] = {"created": true}
+	_http_server._post_response_formats[peer] = "sse"
+	_http_server._remove_connection_at(0)
+
+	assert_eq(_http_server._connections.size(), 0, "Peer should be removed from the connection table")
+	assert_false(_http_server._sse_connections.has(peer), "SSE connection mapping should be removed")
+	assert_false(_http_server._post_response_formats.has(peer), "POST response format mapping should be removed")
+	assert_false(_http_server._sessions.has("sess-remove"), "SSE session data should be removed")
+
+func test_remove_connection_at_invalid_index_is_noop():
+	_http_server._remove_connection_at(-1)
+	_http_server._remove_connection_at(0)
+	assert_eq(_http_server._connections.size(), 0, "Invalid indexes should not crash or mutate the connection table")
+
 func test_start_stop_lifecycle():
 	# 实际监听 + 线程启停，覆盖 listen(port, bind_address) 代码路径。
 	# 精确验证 127.0.0.1 绑定结果与连接数拒绝行为需要真实多 TCP 客户端，
