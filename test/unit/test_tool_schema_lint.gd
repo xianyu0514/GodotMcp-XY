@@ -109,6 +109,36 @@ const MIN_DESCRIPTION_COVERAGE: float = 0.70
 ## 4 元）。不锁定具体总数，另行校验 server_core 与分类器注册数一致。
 const MIN_TOOL_COUNT: int = 218
 
+## token 预算门禁（口径：MCPTokenEstimator —— DSH token-meter 启发式，
+## tokens ≈ 字符数 / 4，工具定义按 name+description+inputSchema 计费；
+## outputSchema 模型不可见，不计入）。工具 schema 每轮全额计费，三档预算：
+##   - 单工具 ≤ TOOL_TOKEN_BUDGET（400 token ≈ 1600 字符）；
+##   - 默认启用集（28 core + 4 meta）≤ DEFAULT_SET_TOKEN_BUDGET（15k token）；
+##   - 全量 221 工具 ≤ FULL_SET_TOKEN_BUDGET（60k token）。
+## 预算值基于实测数据设定（见 test_tool_definitions_within_token_budget 的运行
+## 输出）。若未来新增工具描述过长导致超限，须先登记进 KNOWN_OVER_BUDGET_TOOLS
+## （注明原因），并将描述精简列为单独工作项；禁止直接放宽预算。
+const TOOL_TOKEN_BUDGET: int = 400
+const DEFAULT_SET_TOKEN_BUDGET: int = 15000
+const FULL_SET_TOKEN_BUDGET: int = 60000
+
+## 超限豁免清单（应尽量保持为空；见 TOOL_TOKEN_BUDGET 注释）。
+## 登记格式：{"tool_name": "超限原因（仍须单独安排描述精简）"}
+## 当前 8 个：均为预算门禁建立前已存在的复杂编排/生成/导出工具（长描述 +
+## 富参数 schema，实测 458–1191 token）。400 是 DSH 研究（docs/research/
+## dsh-tool-token-economy-study.md §3.1 建议 B）建议的单工具预算，保留作为
+## 回归线；这 8 个的描述/参数精简是独立工作项，禁止通过放宽预算来掩盖。
+const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
+	"play_and_verify": "编排工具：~2.2KB 描述 + 17 参数（历史基线，待精简）",
+	"generate_asset": "资产生成：~1.6KB 描述 + 20 参数（历史基线，待精简）",
+	"manage_task_plan": "任务图编排：~1.8KB 描述 + 富参数（历史基线，待精简）",
+	"generate_3d_asset": "文生 3D：~1.4KB 描述 + 富参数（历史基线，待精简）",
+	"slice_sprite_sheet": "精灵图切片：富参数 schema（历史基线，待精简）",
+	"manage_localization": "本地化工作流：长描述 + 富参数（历史基线，待精简）",
+	"configure_android_export": "Android 导出配置：富参数 schema（历史基线，待精简）",
+	"assert_visual_baseline": "视觉回归门禁：富参数 schema（历史基线，待精简）",
+}
+
 ## 值为“名称 -> 子 schema”映射的容器关键字。
 const SCHEMA_MAP_KEYWORDS: Array[String] = [
 	"properties", "patternProperties", "$defs", "definitions",
@@ -345,6 +375,53 @@ func test_all_properties_have_description() -> void:
 	assert_true(coverage >= MIN_DESCRIPTION_COVERAGE, "description 覆盖率 %.1f%% 低于阈值 %.0f%%" % [coverage * 100.0, MIN_DESCRIPTION_COVERAGE * 100.0])
 
 
+## token 预算门禁：工具定义的上下文体积不失控（DSH token-meter 口径，
+## 工具 schema 每轮全额计费）。三档预算：单工具 / 默认启用集 / 全量。
+## 每次运行都打印实测数据（per-tool 最大/平均、默认集、全量、顶部最肥工具），
+## 作为回归对照表；预算调整须基于这些实测值，并优先保持豁免清单为空。
+func test_tool_definitions_within_token_budget() -> void:
+	var estimator: GDScript = load("res://addons/godot_mcp/utils/token_estimator.gd")
+	assert_true(estimator != null, "MCPTokenEstimator 应可加载")
+	var classifier = load("res://addons/godot_mcp/native_mcp/mcp_tool_classifier.gd").new()
+	var per_tool: Dictionary = {}          # tool_name -> 估算 token
+	var over_budget: Array[String] = []
+	var default_total: int = 0
+	var default_count: int = 0
+	var full_total: int = 0
+	var tool_names: Array = _tools.keys()
+	tool_names.sort()
+	for tool_name in tool_names:
+		var tool = _tools[tool_name]
+		var est: int = estimator.estimate_tool_definition(tool.name, tool.description, tool.input_schema)
+		per_tool[tool_name] = est
+		full_total += est
+		var category: String = classifier.get_tool_category(str(tool_name))
+		if category == "core" or category == "meta":
+			default_total += est
+			default_count += 1
+		if est > TOOL_TOKEN_BUDGET and not KNOWN_OVER_BUDGET_TOOLS.has(tool_name):
+			over_budget.append("%s=%d" % [tool_name, est])
+	over_budget.sort()
+	# 诊断：per-tool 最大/平均、默认集、全量、顶部最肥工具。
+	var max_est: int = 0
+	var max_name: String = ""
+	var sum_est: int = 0
+	for tool_name in tool_names:
+		var e: int = per_tool[tool_name]
+		sum_est += e
+		if e > max_est:
+			max_est = e
+			max_name = str(tool_name)
+	var avg_est: float = float(sum_est) / float(maxi(1, tool_names.size()))
+	print("[TokenBudget] 全量 %d 工具：总估算 %d token（预算 %d）；per-tool 最大 %d (%s)、平均 %.1f" % [tool_names.size(), full_total, FULL_SET_TOKEN_BUDGET, max_est, max_name, avg_est])
+	print("[TokenBudget] 默认启用集（core+meta）%d 工具：总估算 %d token（预算 %d）" % [default_count, default_total, DEFAULT_SET_TOKEN_BUDGET])
+	print("[TokenBudget] 估算最大的 10 个工具：" + str(_top_n_tools(per_tool, 10)))
+	assert_eq(default_count, 32, "默认启用集应为 28 core + 4 meta = 32，实际 %d（分类器口径变化需同步本断言）" % default_count)
+	assert_eq(over_budget.size(), 0, "超单工具预算（%d token）的工具 %d 个（登记 KNOWN_OVER_BUDGET_TOOLS 或精简描述）：%s" % [TOOL_TOKEN_BUDGET, over_budget.size(), str(over_budget)])
+	assert_true(default_total <= DEFAULT_SET_TOKEN_BUDGET, "默认启用集总估算 %d 超预算 %d" % [default_total, DEFAULT_SET_TOKEN_BUDGET])
+	assert_true(full_total <= FULL_SET_TOKEN_BUDGET, "全量总估算 %d 超预算 %d" % [full_total, FULL_SET_TOKEN_BUDGET])
+
+
 # ----------------------------------------------------------------------------
 # 辅助
 # ----------------------------------------------------------------------------
@@ -354,3 +431,15 @@ func _risky_usage_summary() -> String:
 	for kw in RISKY_FOR_STRICT_CLIENTS:
 		parts.append("%s=%d" % [kw, _keyword_counts.get(kw, 0)])
 	return ", ".join(parts)
+
+
+## 返回 per_tool（tool_name -> token 估算）中估算最大的前 n 个，格式 ["name=est"]。
+func _top_n_tools(per_tool: Dictionary, n: int) -> Array:
+	var pairs: Array = []
+	for tool_name in per_tool:
+		pairs.append({"name": str(tool_name), "est": per_tool[tool_name]})
+	pairs.sort_custom(func(a, b): return a["est"] > b["est"])
+	var result: Array = []
+	for i in mini(n, pairs.size()):
+		result.append("%s=%d" % [pairs[i]["name"], pairs[i]["est"]])
+	return result
