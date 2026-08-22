@@ -83,7 +83,7 @@ extends EditorPlugin
 		allow_remote = value
 		notify_property_list_changed()
 
-@export var cors_origin: String = "*":
+@export var cors_origin: String = "":
 	set(value):
 		cors_origin = value
 		notify_property_list_changed()
@@ -159,13 +159,9 @@ func _enter_tree() -> void:
 	_native_server.set_http_port(http_port)
 	_log_info("HTTP port set to: " + str(http_port))
 	
-	# 如果启用了认证，创建认证管理器
-	if auth_enabled and transport_mode == "http":
-		var auth_manager: McpAuthManager = McpAuthManager.new()
-		auth_manager.set_token(auth_token)
-		auth_manager.set_enabled(true)
-		_native_server.set_auth_manager(auth_manager)
-		_log_info("Auth manager created and enabled")
+	# 按当前配置应用认证（创建或移除认证管理器）。
+	# S2 修复：认证配置在服务器启动时重新评估，启动前在面板中开启认证也能生效。
+	_apply_auth_config()
 	
 	# 配置 SSE 和远程访问（仅 HTTP 模式）
 	if transport_mode == "http":
@@ -315,6 +311,34 @@ func _apply_cmdline_overrides() -> void:
 	if transport_override != "":
 		transport_mode = transport_override
 		_log_info("MCP transport overridden via command line: " + transport_mode)
+
+
+## 判定认证配置是否应生效（纯逻辑，便于单元测试）。
+## @param enabled: bool - 面板/配置中的认证开关
+## @param transport: String - 当前传输模式（"http" / "stdio"）
+## @returns: bool - 需要创建并挂载认证管理器
+static func should_enable_auth(enabled: bool, transport: String) -> bool:
+	return enabled and transport == "http"
+
+
+## 按当前配置重建认证管理器（S2 修复）。
+## 在服务器真正 start() 之前调用：若启用认证且为 HTTP 传输，则创建新的
+## McpAuthManager（带上当前 token）并挂到服务器 core；否则置空，确保关闭认证
+## 或切换传输后移除旧的认证管理器。必须在 _apply_cmdline_overrides() 之后调用，
+## 以保证 transport_mode 已包含命令行覆盖（--mcp-transport）。
+func _apply_auth_config() -> void:
+	if not _native_server:
+		return
+	
+	if should_enable_auth(auth_enabled, transport_mode):
+		var auth_manager: McpAuthManager = McpAuthManager.new()
+		auth_manager.set_token(auth_token)
+		auth_manager.set_enabled(true)
+		_native_server.set_auth_manager(auth_manager)
+		_log_info("Auth manager created and enabled")
+	else:
+		_native_server.set_auth_manager(null)
+		_log_info("Auth manager disabled or not applicable (transport=" + transport_mode + ")")
 
 # ============================================================================
 # 插件配置（根据godot-dev-guide优化）
@@ -493,6 +517,11 @@ func _start_native_server() -> bool:
 	# distinct ports regardless of mcp_settings.cfg. A pure no-op without
 	# overrides (parse_mcp_overrides returns -1 / "").
 	_apply_cmdline_overrides()
+
+	# 在真正 start() 前按当前配置重建认证管理器（S2 修复）。
+	# 必须在 _apply_cmdline_overrides() 之后执行，确保 transport_mode 已包含
+	# 命令行覆盖。覆盖面板 Start 按钮与 --mcp-server / auto_start 两条启动路径。
+	_apply_auth_config()
 
 	_log_info("Starting native MCP server...")
 	var success: bool = _native_server.start()

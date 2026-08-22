@@ -6,6 +6,15 @@ extends McpTransportBase
 # 继承自 McpTransportBase，实现传输层统一接口
 
 # ==============================================================================
+# 常量
+# ==============================================================================
+
+## 停止时等待 stdin 读线程退出的最大毫秒数。
+## 读线程可能阻塞在 OS.read_string_from_stdin() 上（无输入时永不返回），
+## 超过该时限后放弃等待，避免 stop()/退出死锁（P9 修复）。
+const STDIO_STOP_TIMEOUT_MS: int = 2000
+
+# ==============================================================================
 # 状态变量（带类型提示 - 根据 godot-dev-guide）
 # ==============================================================================
 
@@ -60,10 +69,15 @@ func stop() -> void:
 	
 	_active = false
 	
-	# 等待线程结束
+	# 有界等待线程结束（P9 修复）：stdin 读线程可能阻塞在
+	# OS.read_string_from_stdin() 上，无输入时永不返回；无限期 wait_to_finish()
+	# 会导致编辑器停服/退出卡死。超时后放弃线程引用，交由进程退出时自然清理。
 	if _thread and _thread.is_alive():
-		_thread.wait_to_finish()
-		_thread = null
+		if _wait_for_thread_exit(_thread, STDIO_STOP_TIMEOUT_MS):
+			_thread.wait_to_finish()
+		elif _log_callback.is_valid():
+			_log_callback.call("WARN", "stdio reader thread did not exit; abandoning wait to avoid deadlock")
+	_thread = null
 	
 	# 清空队列
 	_mutex.lock()
@@ -74,6 +88,16 @@ func stop() -> void:
 	server_stopped.emit()
 	if _log_callback.is_valid():
 		_log_callback.call("INFO", "Server stopped")
+
+## 有界等待线程退出：在 timeout_ms 毫秒内轮询线程状态。
+## @param thread: Thread - 要等待的线程
+## @param timeout_ms: int - 最大等待毫秒数
+## @returns: bool - 线程已退出返回 true；超时仍未退出返回 false
+func _wait_for_thread_exit(thread: Thread, timeout_ms: int) -> bool:
+	var deadline: int = Time.get_ticks_msec() + timeout_ms
+	while thread.is_alive() and Time.get_ticks_msec() < deadline:
+		OS.delay_msec(10)
+	return not thread.is_alive()
 
 ## 检查传输层是否正在运行
 ## @returns: bool - 运行中返回 true，否则返回 false

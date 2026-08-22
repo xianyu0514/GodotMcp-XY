@@ -70,3 +70,35 @@ func test_generate_token_custom_length():
 
 func test_header_name_lowercase():
 	assert_eq(McpAuthManager.HEADER_NAME, "authorization", "Header name should be lowercase")
+
+func test_set_token_too_short_keeps_old_token():
+	_auth.set_token("short")
+	assert_push_error_count(1, "set_token with a short token should push exactly one error")
+	assert_eq(_auth._token, "1234567890abcdef", "Rejected short token should keep the previous token")
+
+func test_default_enabled_state():
+	var fresh: McpAuthManager = McpAuthManager.new()
+	assert_true(fresh._enabled, "New auth manager should default to enabled")
+	fresh = null
+
+func test_enabled_toggle_revalidates():
+	var headers: Dictionary = {"authorization": "Bearer 1234567890abcdef"}
+	_auth.set_enabled(false)
+	assert_true(_auth.validate_request({}), "Disabled auth should allow any request")
+	_auth.set_enabled(true)
+	assert_true(_auth.validate_request(headers), "Re-enabled auth should validate the correct token")
+	assert_false(_auth.validate_request({}), "Re-enabled auth should reject a missing header")
+
+func test_generate_token_varies():
+	var t1: String = McpAuthManager.generate_token(32)
+	var t2: String = McpAuthManager.generate_token(32)
+	assert_ne(t1, t2, "Two generated tokens should differ")
+
+func test_generate_token_uses_valid_chars():
+	var token: String = McpAuthManager.generate_token(64)
+	var allowed: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	var invalid_count: int = 0
+	for i in token.length():
+		if not allowed.contains(token[i]):
+			invalid_count += 1
+	assert_eq(invalid_count, 0, "All generated chars should come from the allowed alphabet")

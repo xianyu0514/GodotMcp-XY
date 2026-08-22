@@ -887,7 +887,8 @@ func _build_transport_card(content: VBoxContainer) -> void:
 	_cors_origin_label = Label.new()
 	_cors_origin_label.text = _tr("ui.cors_origin")
 	_cors_origin_edit = LineEdit.new()
-	_cors_origin_edit.text = "*"
+	_cors_origin_edit.text = ""
+	_cors_origin_edit.placeholder_text = _tr("ui.cors_origin_placeholder")
 	_cors_origin_edit.text_changed.connect(_on_cors_origin_changed)
 	_settings_row(_http_config_container, _cors_origin_label, _cors_origin_edit, true)
 
@@ -1378,7 +1379,7 @@ func _update_ui_state() -> void:
 			_allow_remote_check.button_pressed = _plugin.allow_remote if _plugin.get("allow_remote") != null else false
 
 		if _cors_origin_edit:
-			_cors_origin_edit.text = _plugin.cors_origin if _plugin.get("cors_origin") != null else "*"
+			_cors_origin_edit.text = _plugin.cors_origin if _plugin.get("cors_origin") != null else ""
 
 		if _rate_limit_spin:
 			_rate_limit_spin.value = _plugin.rate_limit if _plugin.get("rate_limit") != null else 1000
