@@ -30,6 +30,9 @@ const AUTH_HEADER: String = "authorization"
 ## Bearer 认证方案
 const AUTH_SCHEME: String = "Bearer"
 
+## 最大并发连接数（防止连接数过多导致资源耗尽）
+const MAX_CONNECTIONS: int = 64
+
 
 # ==============================================================================
 # 状态变量（带类型提示 - 根据 godot-dev-guide）
@@ -61,7 +64,8 @@ var _sessions: Dictionary = {}  # session_id -> session_data
 
 ## 远程访问配置
 var _allow_remote: bool = false
-var _cors_origin: String = "*"
+## CORS 允许的源；空串表示不发送 CORS 头（浏览器跨域默认拒绝）
+var _cors_origin: String = ""
 
 
 ## 日志回调函数（由 McpServerCore 设置，用于替代 printerr）
@@ -104,7 +108,9 @@ func start() -> bool:
 	
 	_tcp_server = TCPServer.new()
 	
-	var error: Error = _tcp_server.listen(_port)
+	# 默认只绑定回环地址（127.0.0.1），仅当显式开启 allow_remote 时才绑定所有网卡（0.0.0.0）
+	var bind_address: String = "0.0.0.0" if _allow_remote else "127.0.0.1"
+	var error: Error = _tcp_server.listen(_port, bind_address)
 	if error != OK:
 		var error_msg: String = "Failed to listen on port " + str(_port) + ": " + str(error)
 		server_error.emit(error_msg)
@@ -118,7 +124,7 @@ func start() -> bool:
 	
 	server_started.emit()
 	if _log_callback.is_valid():
-		_log_callback.call("INFO", "Server started on port " + str(_port))
+		_log_callback.call("INFO", "Server started on port " + str(_port) + " (bind: " + bind_address + ")")
 	
 	return true
 
@@ -261,9 +267,14 @@ func _http_server_loop() -> void:
 		if _tcp_server.is_connection_available():
 			peer = _tcp_server.take_connection()
 		if peer:
-			_connections.append(peer)
-			if _log_callback.is_valid():
-				_log_callback.call("INFO", "New connection: " + str(peer.get_status()))
+			if _connections.size() >= MAX_CONNECTIONS:
+				peer.disconnect_from_host()
+				if _log_callback.is_valid():
+					_log_callback.call("WARN", "Connection rejected: maximum connections reached (" + str(MAX_CONNECTIONS) + ")")
+			else:
+				_connections.append(peer)
+				if _log_callback.is_valid():
+					_log_callback.call("INFO", "New connection: " + str(peer.get_status()))
 		
 		# 处理所有活跃连接（复制一份避免并发修改）
 		var disconnected: Array[StreamPeerTCP] = []
@@ -466,6 +477,24 @@ func _parse_http_request(raw: String) -> Dictionary:
 		"body": body
 	}
 
+## 判断 JSON-RPC 载荷是否为批处理（JSON 数组）或非对象类型
+## @param data: Variant - JSON.parse 得到的载荷
+## @returns: bool - 非 Dictionary（如批处理数组）返回 true
+static func is_batch_payload(data: Variant) -> bool:
+	return not (data is Dictionary)
+
+## 构造 JSON-RPC -32600 Invalid Request 错误载荷
+## @returns: Dictionary - JSON-RPC 错误响应体
+static func batch_error_payload() -> Dictionary:
+	return {
+		"jsonrpc": "2.0",
+		"id": null,
+		"error": {
+			"code": -32600,
+			"message": "Invalid Request"
+		}
+	}
+
 ## 处理 POST 请求（JSON-RPC over HTTP）
 ## @param peer: StreamPeerTCP - 客户端连接
 ## @param parsed: Dictionary - 解析后的 HTTP 请求
@@ -493,7 +522,15 @@ func _handle_post_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 		_send_http_error(peer, 400, "Invalid JSON: " + json.get_error_message())
 		return
 	
-	var message: Dictionary = json.get_data()
+	var data: Variant = json.get_data()
+	
+	# 批处理（JSON 数组）或其他非对象载荷不符合本服务器单消息约定，
+	# 返回 JSON-RPC -32600 Invalid Request 错误响应（HTTP 200），避免类型断言崩溃。
+	if is_batch_payload(data):
+		_send_http_response(peer, batch_error_payload())
+		return
+	
+	var message: Dictionary = data
 	
 	var is_notification: bool = not message.has("id")
 	
@@ -501,6 +538,16 @@ func _handle_post_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	
 	if is_notification:
 		_send_http_accepted(peer)
+
+## 从插件配置文件读取版本号
+## @returns: String - 插件版本号；读取失败时回退 "0.0.0"
+static func read_plugin_version() -> String:
+	var config: ConfigFile = ConfigFile.new()
+	var err: Error = config.load("res://addons/godot_mcp/plugin.cfg")
+	if err != OK:
+		return "0.0.0"
+	var version: Variant = config.get_value("plugin", "version", "0.0.0")
+	return str(version)
 
 ## 处理 GET 请求（SSE 或健康检查）
 ## @param peer: StreamPeerTCP - 客户端连接
@@ -514,9 +561,9 @@ func _handle_get_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	# 普通 GET 请求，返回服务器信息
 	var info: Dictionary = {
 		"name": "Godot MCP Native",
-		"version": "1.0.0",
+		"version": read_plugin_version(),
 		"transport": "http",
-		"protocol": "MCP 2025-03-26",
+		"protocol": "MCP 2025-11-25",
 		"endpoints": {
 			"mcp": "/mcp (POST)",
 			"sse": "/mcp (GET, SSE)"
@@ -530,7 +577,7 @@ func _handle_get_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 ## @param parsed: Dictionary - 解析后的 HTTP 请求
 func _handle_options_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	var response: String = "HTTP/1.1 204 No Content\r\n"
-	response += "Access-Control-Allow-Origin: *\r\n"
+	response += _cors_header()
 	response += "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
 	response += "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
 	response += "Access-Control-Max-Age: 86400\r\n"
@@ -556,7 +603,7 @@ func _handle_sse_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	response_header += "Content-Type: text/event-stream\r\n"
 	response_header += "Cache-Control: no-cache\r\n"
 	response_header += "Connection: keep-alive\r\n"
-	response_header += "Access-Control-Allow-Origin: " + _cors_origin + "\r\n"
+	response_header += _cors_header()
 	response_header += "\r\n"
 	
 	peer.put_data(response_header.to_utf8_buffer())
@@ -629,13 +676,26 @@ func _generate_session_id() -> String:
 
 ## 设置远程访问配置
 ## @param allow_remote: bool - 是否允许远程访问
-## @param cors_origin: String - CORS 允许的源
-func set_remote_config(allow_remote: bool, cors_origin: String = "*") -> void:
+## @param cors_origin: String - CORS 允许的源（空串 = 不发送 CORS 头）
+func set_remote_config(allow_remote: bool, cors_origin: String = "") -> void:
+	if _active:
+		var warn_msg: String = "Remote access config changed while server is running; restart to apply the new bind address."
+		if _log_callback.is_valid():
+			_log_callback.call("WARN", warn_msg)
+		push_warning(warn_msg)
 	_allow_remote = allow_remote
 	_cors_origin = cors_origin
 	
 	if _log_callback.is_valid():
 		_log_callback.call("INFO", "Remote access config: allow_remote=" + str(allow_remote) + ", cors=" + cors_origin)
+
+## 构建 CORS 响应头（白名单模式）
+## _cors_origin 为空串时返回空串（不发送 CORS 头，浏览器跨域默认拒绝）
+## @returns: String - 单行 CORS 响应头（含 \r\n），或空串
+func _cors_header() -> String:
+	if _cors_origin.is_empty():
+		return ""
+	return "Access-Control-Allow-Origin: " + _cors_origin + "\r\n"
 
 
 # ==============================================================================
@@ -674,7 +734,7 @@ func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 	var http_response: String = "HTTP/1.1 200 OK\r\n"
 	http_response += "Content-Type: application/json; charset=utf-8\r\n"
 	http_response += "Content-Length: " + str(json_bytes.size()) + "\r\n"
-	http_response += "Access-Control-Allow-Origin: *\r\n"
+	http_response += _cors_header()
 	http_response += "\r\n"
 	
 	var header_bytes: PackedByteArray = http_response.to_utf8_buffer()
@@ -695,7 +755,7 @@ func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 func _send_http_accepted(peer: StreamPeerTCP) -> void:
 	var response: String = "HTTP/1.1 202 Accepted\r\n"
 	response += "Content-Length: 0\r\n"
-	response += "Access-Control-Allow-Origin: *\r\n"
+	response += _cors_header()
 	response += "\r\n"
 	peer.put_data(response.to_utf8_buffer())
 	peer.disconnect_from_host()
@@ -717,7 +777,7 @@ func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) ->
 	var response_header: String = "HTTP/1.1 " + str(status_code) + " " + status_text + "\r\n"
 	response_header += "Content-Type: text/plain; charset=utf-8\r\n"
 	response_header += "Content-Length: " + str(message.to_utf8_buffer().size()) + "\r\n"
-	response_header += "Access-Control-Allow-Origin: *\r\n"
+	response_header += _cors_header()
 	response_header += "\r\n"
 	
 	peer.put_data(response_header.to_utf8_buffer() + message.to_utf8_buffer())

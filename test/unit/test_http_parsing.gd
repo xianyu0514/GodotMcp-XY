@@ -78,3 +78,40 @@ func test_utf8_buffer_round_trip():
 	var buffer: PackedByteArray = original.to_utf8_buffer()
 	var restored: String = buffer.get_string_from_utf8()
 	assert_eq(restored, original, "UTF-8 buffer should round-trip correctly")
+
+# ==============================================================================
+# JSON-RPC 批处理载荷识别（McpHttpServer.is_batch_payload / batch_error_payload）
+# ==============================================================================
+
+var _http_server: RefCounted = null
+
+func before_each():
+	_http_server = load("res://addons/godot_mcp/native_mcp/mcp_http_server.gd").new()
+
+func after_each():
+	_http_server = null
+
+func test_batch_json_parses_to_array():
+	var parsed: Variant = JSON.parse_string('[{"jsonrpc":"2.0","id":1}]')
+	assert_true(parsed is Array, "Batch request should parse to Array")
+
+func test_single_json_parses_to_dict():
+	var parsed: Variant = JSON.parse_string('{"jsonrpc":"2.0","id":1,"method":"ping"}')
+	assert_true(parsed is Dictionary, "Single request should parse to Dictionary")
+
+func test_single_object_is_not_batch_payload():
+	var parsed: Variant = JSON.parse_string('{"jsonrpc":"2.0","id":1,"method":"ping"}')
+	assert_false(_http_server.is_batch_payload(parsed), "Single object should not be treated as batch")
+
+func test_batch_array_is_batch_payload():
+	var parsed: Variant = JSON.parse_string('[{"jsonrpc":"2.0","id":1}]')
+	assert_true(_http_server.is_batch_payload(parsed), "Array should be treated as batch")
+
+func test_batch_error_payload_round_trips_json():
+	var payload: Dictionary = _http_server.batch_error_payload()
+	var json_string: String = JSON.stringify(payload)
+	var reparsed: Variant = JSON.parse_string(json_string)
+	assert_true(reparsed is Dictionary, "Error payload should round-trip through JSON")
+	var error_obj: Dictionary = reparsed.get("error", {})
+	assert_eq(error_obj.get("code"), -32600.0, "Round-tripped error code should be -32600")
+	assert_eq(error_obj.get("message"), "Invalid Request", "Round-tripped error message should be Invalid Request")

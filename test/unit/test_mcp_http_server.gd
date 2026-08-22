@@ -144,3 +144,85 @@ func test_http_server_send_raw_message_logs():
 	var test_message: Dictionary = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed", "params": {}}
 	_http_server.send_raw_message(test_message)
 	assert_true(true, "send_raw_message should not crash when no SSE connections")
+
+# ==============================================================================
+# CORS 白名单化（安全默认：空 origin = 不发送 CORS 头）
+# ==============================================================================
+
+func test_cors_header_default_empty():
+	assert_eq(_http_server._cors_origin, "", "Default CORS origin should be empty (no CORS header)")
+	assert_eq(_http_server._cors_header(), "", "Default _cors_header() should return empty string")
+
+func test_cors_header_specific_origin():
+	_http_server.set_remote_config(false, "http://localhost:3000")
+	assert_eq(_http_server._cors_header(), "Access-Control-Allow-Origin: http://localhost:3000\r\n", "Should emit single-origin CORS header")
+
+func test_cors_header_wildcard():
+	_http_server.set_remote_config(false, "*")
+	assert_eq(_http_server._cors_header(), "Access-Control-Allow-Origin: *\r\n", "Explicit '*' should emit wildcard CORS header")
+
+func test_set_remote_config_default_cors_empty():
+	_http_server.set_remote_config(true)
+	assert_eq(_http_server._cors_origin, "", "Default cors_origin parameter should be empty string")
+	assert_eq(_http_server._allow_remote, true, "allow_remote should be set")
+
+# ==============================================================================
+# JSON-RPC 批处理（-32600 Invalid Request）
+# ==============================================================================
+
+func test_is_batch_payload_object():
+	var parsed: Variant = JSON.parse_string('{"jsonrpc":"2.0","id":1,"method":"ping"}')
+	assert_true(parsed is Dictionary, "Object payload should parse to Dictionary")
+	assert_false(_http_server.is_batch_payload(parsed), "Object payload is not a batch")
+
+func test_is_batch_payload_array():
+	var parsed: Variant = JSON.parse_string('[{"jsonrpc":"2.0","id":1}]')
+	assert_true(parsed is Array, "Batch payload should parse to Array")
+	assert_true(_http_server.is_batch_payload(parsed), "Array payload is a batch")
+
+func test_is_batch_payload_non_object():
+	assert_true(_http_server.is_batch_payload("plain string"), "String payload should be treated as invalid")
+	assert_true(_http_server.is_batch_payload(42), "Numeric payload should be treated as invalid")
+
+func test_batch_error_payload_shape():
+	var payload: Dictionary = _http_server.batch_error_payload()
+	assert_eq(payload.get("jsonrpc"), "2.0", "Error payload should be JSON-RPC 2.0")
+	assert_eq(payload.get("id"), null, "Error payload id should be null")
+	var error_obj: Dictionary = payload.get("error", {})
+	assert_eq(error_obj.get("code"), -32600, "Error code should be -32600")
+	assert_eq(error_obj.get("message"), "Invalid Request", "Error message should be Invalid Request")
+
+# ==============================================================================
+# GET / 版本信息（从 plugin.cfg 读取）
+# ==============================================================================
+
+func test_read_plugin_version_non_empty():
+	var version: String = _http_server.read_plugin_version()
+	assert_false(version.is_empty(), "Plugin version should be non-empty")
+	assert_ne(version, "0.0.0", "Plugin version should not be the fallback")
+
+func test_read_plugin_version_matches_cfg():
+	var config: ConfigFile = ConfigFile.new()
+	var err: Error = config.load("res://addons/godot_mcp/plugin.cfg")
+	assert_eq(err, OK, "plugin.cfg should load")
+	var expected: String = str(config.get_value("plugin", "version", "0.0.0"))
+	assert_eq(_http_server.read_plugin_version(), expected, "Version should match plugin.cfg")
+
+# ==============================================================================
+# 连接数上限（防 DoS）
+# ==============================================================================
+
+func test_max_connections_constant():
+	assert_eq(_http_server.MAX_CONNECTIONS, 64, "MAX_CONNECTIONS should be 64")
+
+func test_start_stop_lifecycle():
+	# 实际监听 + 线程启停，覆盖 listen(port, bind_address) 代码路径。
+	# 精确验证 127.0.0.1 绑定结果与连接数拒绝行为需要真实多 TCP 客户端，
+	# 超出 GUT 单测范围（依赖 TCPServer 真实监听）。
+	_http_server.set_port(23141)
+	var started: bool = _http_server.start()
+	assert_true(started, "Server should start on a free port")
+	if started:
+		assert_true(_http_server.is_running(), "Server should be running after start")
+		_http_server.stop()
+		assert_false(_http_server.is_running(), "Server should stop cleanly")
