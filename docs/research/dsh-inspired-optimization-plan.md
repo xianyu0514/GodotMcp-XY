@@ -78,8 +78,10 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 
 ## 3. 落地顺序
 
-| 阶段 | 内容 | 验证 |
+| 阶段 | 内容 | 状态 / 验证 |
 | --- | --- | --- |
-| 本轮 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（结果缓存）+ M4（spill） | 全量 GUT 0 失败 + token 预算断言 |
-| 下轮 | M5（读工具规范）+ M6（巨型文件拆分/死代码/单数据表） | 导入门禁 + 计数一致 |
+| 已完成 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（LRU 结果缓存）+ M4（spill） | ✅ 全量 GUT 0 失败 + token 预算断言（4be1fd3 / cec0714） |
+| 已完成 | M6（巨型文件拆分 / 死代码 / 单一数据表 tools_manifest） | ✅ 导入门禁 + 计数一致（381e472 / dd0ecd5 / f26fdde） |
+| 已追加 | tools/list 服务端缓存 + 确定性排序；结果缓存同时保存 formatted payload（命中跳过 JSON.stringify/spill 检查）；meta 发现工具（list_tool_catalog/search_tools/get_tool_details）纳入只读结果缓存；HTTP 轮询去除每轮 `_connections.duplicate()` | ✅ 全量 GUT 0 失败（678006f / f630cc9 / 3530489 / 7c67f8e） |
+| 下轮 | M5（读工具 limit/offset/summary 规范补缺） | 按高返回工具逐个审计 |
 | 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |
