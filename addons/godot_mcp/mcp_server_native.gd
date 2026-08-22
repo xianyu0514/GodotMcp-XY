@@ -98,6 +98,7 @@ var _editor_interface: EditorInterface = null
 var _mcp_server_mode: bool = false
 var _tool_instances: Dictionary = {}
 var _debugger_bridge: MCPDebuggerBridge = null
+var _prompt_workflows: RefCounted = null  # prompt_workflows.gd 实例（MCP prompts 工作流模板）
 
 const TOOL_SCRIPT_PATHS: Dictionary = {
 	"NodeToolsNative": "res://addons/godot_mcp/tools/node_tools_native.gd",
@@ -196,6 +197,9 @@ func _enter_tree() -> void:
 	
 	# 注册所有资源
 	_register_all_resources()
+	
+	# 注册所有 prompts（真实工作流模板）
+	_register_all_prompts()
 	
 	# 在UI创建前加载已保存的工具状态（确保UI显示正确的启用状态）
 	if _native_server.has_method("load_tool_states"):
@@ -642,6 +646,27 @@ func _register_all_resources() -> void:
 	_register_editor_resources()
 	
 	_log_info("All MCP resources registered successfully")
+
+# ============================================================================
+# 私有方法 - Prompt 注册（真实工作流模板）
+# ============================================================================
+
+func _register_all_prompts() -> void:
+	_log_info("Registering all MCP prompts...")
+	
+	if not _native_server:
+		_log_error("MCP Server instance not available")
+		return
+	
+	_prompt_workflows = _instantiate_script("res://addons/godot_mcp/native_mcp/prompt_workflows.gd")
+	if not _prompt_workflows:
+		_log_error("Failed to instantiate prompt workflows module")
+		return
+	
+	var count: int = 0
+	if _prompt_workflows.has_method("register_to_server"):
+		count = int(_prompt_workflows.register_to_server(_native_server))
+	_log_info("All MCP prompts registered successfully. Total: " + str(count))
 
 func _register_scene_resources() -> void:
 	# godot://scene/list
