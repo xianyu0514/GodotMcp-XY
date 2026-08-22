@@ -1,0 +1,85 @@
+# Godot MCP Native — 深度优化计划（借鉴 DeepSeek Harness）
+
+> 目标：在不新增功能的前提下，把插件的**缓存命中率、算力（token）消耗、架构精简**优化到参考 DeepSeek Harness（DSH）的最佳实践水平，并为"内置 agent"给出设计蓝图。
+> 依据：`docs/research/dsh-cache-compute-study.md`（缓存与算力）、`docs/research/dsh-tool-token-economy-study.md`（工具与 token 经济）、`docs/research/dsh-agent-architecture-study.md`（agent 架构）。
+
+---
+
+## 0. DSH 的核心设计原则（TL;DR）
+
+1. **缓存失效由修订驱动，不是 TTL**：DSH 几乎不用 TTL，全部用 seq 水位 / `replace_generation` / epoch / ver 版本号失效——内容变了才作废，缓存命中率最大化。
+2. **模型只见最小 schema**：`schemaOf` 白名单只下发 `name/description/parameters`（工具定义层）；output schema、超时、并发标记一律不进上下文。
+3. **结果体积三层控制**：工具内建 cap（read 2000 行/glob 100/grep 250）→ 50KB spill 落盘（模型见 head/tail 预览 + 定位符 + 恢复指引，落盘失败不转 error）→ 8KB pruner（确定性裁剪可重放）。
+4. **token 计费口径**：`JSON.stringify(tools).length / 4` 字符/token 启发式，provider usage 锚定校正。
+5. **上下文压缩（compaction）**：contextWindow×0.8 触发、16% 尾部保留、8K 摘要、摘要复用会话前缀保 KV cache。
+6. **agent 目标驱动**：goal 持久快照 + CAS revision + 回合驱动器（agent 空闲自动续作下一轮）+ 人类武装授权（armed/disarmed 分离）。
+
+---
+
+## 1. 实施项（按杠杆排序，全部可 GUT 验证）
+
+### M1. tools/list 精简 schema（最高杠杆，先做）
+现状：`mcp_types.gd` 的 `MCPTool.to_dict()` 把 `outputSchema` 也下发到 `tools/list`——221 个 output schema 的每轮字节全部浪费（DSH 只发 name/description/parameters）。
+- **改动**：`to_dict()` 不再包含 `outputSchema`；完整 schema 改由 `get_tool_details`（已有）按需返回。
+- 保留：`annotations`（小）、`x_category`/`x_group`（客户端分组有用）、`inputSchema`（必需）。
+- **token 收益**：221 个 output schema（多为 10-30 属性对象）每轮省数千 token；配合 `_meta.ttlMs` 的客户端缓存，重复请求零开销。
+- 风险：个别客户端依赖 tools/list 的 outputSchema——DSH 全量客户端（Claude Code/Copilot/Codex）均不依赖，且 `get_tool_details` 兜底。
+
+### M2. token 预算门禁（lint 增强）
+- 新建 `utils/token_estimator.gd`：`estimate(text)` = `text.length() / 4`（与 DSH token-meter 口径一致）；`estimate_schema(schema)` = `JSON.stringify(schema).length / 4`。
+- `test_tool_schema_lint.gd` 增强：断言 per-tool 定义（name+description+inputSchema）≤ 400 tokens、默认启用集（28 core + 4 meta）≤ 15k tokens、全量 221 工具 ≤ 60k tokens。超限即失败，倒逼描述精简。
+
+### M3. 工具结果缓存（确定性 key + 事件失效）
+- `mcp_server_core.gd` 现有 scene-structure 缓存（5min TTL）扩展为**通用结果缓存**：
+  - key：工具名 + 规范化参数（字典 key 排序后 JSON，确定性）；
+  - 容量：LRU 上限（如 64 条目）；
+  - 失效：写工具（readOnlyHint=false）执行后全失效 + 可选 mtime 指纹 + TTL 兜底（如 60s）；
+  - 单飞：同一 key 并发请求合并为一次执行（防重复算力）。
+- 只缓存**幂等读工具**（readOnlyHint=true 且显式 opt-in 清单，如 get_scene_structure/list_nodes/list_project_scenes/list_project_scripts）。
+
+### M4. 结果体积控制（spill 落盘）
+- core 层新增结果上限：`MAX_INLINE_RESULT_BYTES = 50000`（DSH 默认）。
+- 超限结果：写盘到 `res://.mcp/out/<hash>.json`，返回 `{truncated: true, total_bytes, path, head: <前 4096 字符>, tail: <后 1024 字符>, resume_hint}`——模型可按需读回全文。
+- **不转 error**（best-effort，DSH 原则）；读文件类工具豁免（防死循环）。
+
+### M5. 读工具 limit/offset/summary 规范（文档+抽查）
+- 高返回工具（list_nodes/get_scene_structure/list_project_resources 等）统一 `limit`/`offset`/`summary` 参数语义并写入 docs；抽查补缺。
+
+### M6. 精简（非破坏性）
+- 巨型文件拆分（project_tools_native.gd 364KB→按域 4-6 文件）——架构精简，纯机械。
+- 死代码清理（audit 已列的 `is_path_safe` 等）。
+- 单一数据表驱动注册（消除 classifier/docs/翻译/测试 5 处重复）。
+
+---
+
+## 2. 内置 agent 蓝图（设计，暂不实现）
+
+DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
+
+| DSH 机制 | Godot MCP 对应 | 落地形态 |
+| --- | --- | --- |
+| 事件溯源会话日志（唯一事实源） | task_plan_store（res://.mcp/task_plan.json）+ 新增 agent_goal_store | `res://.mcp/agent_goal.json` 持久化目标快照 |
+| goal 域（持久快照 + CAS revision） | manage_task_plan（已有任务图+DoD） | 新增 `agent_goal_get/create/update` 三工具（P1） |
+| 回合驱动器（agent 空闲自动续作） | 客户端侧行为 | `autonomous_loop` 状态机（plan→execute→verify→fix→blocked）+ round-limit 门禁（P2/P3） |
+| subagent 缝（独立上下文委派） | 不适用（MCP 服务器不做委派） | 文档说明：由客户端 agent 承担 |
+| skill/todo/plan 消费端 | prompt_workflows（7 模板） | 模板升级为"状态机翻译层"（P2） |
+| 会话续作（session 持久化） | 无会话概念（stateless） | MCP 资源 `mcp://agent/goal/current` 暴露目标状态（P1） |
+
+**关键设计原则**（来自 DSH）：
+1. 续作自动但武装/解除武装永远是人类决定（armed/disarmed 分离）；
+2. 单一事实源，不造第二份状态（goal 状态只存一处，其余投影）；
+3. 回合提示强制"重读现场"（inspect instead of assume）；
+4. fatal 与可重试失败分开；blocked 需连续 3 轮 + 具体原因；
+5. 目标工具变更走 CAS revision 防陈旧覆盖。
+
+> 用户当前指示"不新增功能"，故本节仅作蓝图；实施时机另定。
+
+---
+
+## 3. 落地顺序
+
+| 阶段 | 内容 | 验证 |
+| --- | --- | --- |
+| 本轮 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（结果缓存）+ M4（spill） | 全量 GUT 0 失败 + token 预算断言 |
+| 下轮 | M5（读工具规范）+ M6（巨型文件拆分/死代码/单数据表） | 导入门禁 + 计数一致 |
+| 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |
