@@ -6058,9 +6058,20 @@ func _generate_asset_external(params: Dictionary, category: String) -> Dictionar
 	if budget_block.has("error"):
 		return budget_block
 
+	# S6: endpoint 白名单（https + 已知 provider 主机，或内置本地 preset），
+	# 防止把密钥/请求发往任意内网或外部地址（SSRF）。
+	if not _is_allowed_gen_endpoint(endpoint):
+		return {
+			"error": "Endpoint not in allowlist: %s. Only https:// endpoints on known provider hosts are allowed (%s); the built-in local_sd_webui preset (http://127.0.0.1:7860) is the only http exception." % [_url_host(endpoint), ", ".join(PackedStringArray(_allowed_gen_hosts()))],
+			"status": "endpoint_blocked"
+		}
+
 	var api_key: String = ""
 	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()
 	if not api_key_env.is_empty():
+		# S6: 仅允许读取已知的密钥环境变量名，防止读取任意环境变量并外发。
+		if not _is_allowed_api_key_env(api_key_env):
+			return {"error": "Environment variable name '%s' is not in the allowlist. Allowed names: %s" % [api_key_env, ", ".join(PackedStringArray(_allowed_api_key_env_names()))]}
 		api_key = OS.get_environment(api_key_env)
 		if api_key.is_empty():
 			return {"error": "Environment variable '%s' is not set or empty" % api_key_env}
@@ -6097,7 +6108,7 @@ func _generate_asset_external(params: Dictionary, category: String) -> Dictionar
 				headers.append("Content-Type: application/json")
 
 	var timeout_sec: float = clampf(float(params.get("timeout_sec", 30.0)), 1.0, 120.0)
-	var fetched: Dictionary = _http_blocking_request(endpoint, method, headers, body, timeout_sec)
+	var fetched: Dictionary = _http_blocking_request(endpoint, method, headers, body, timeout_sec, _gen_endpoint_allows_http(endpoint))
 	if fetched.has("error"):
 		return fetched
 
@@ -6252,12 +6263,114 @@ func _enforce_generation_budget(label: String) -> Dictionary:
 		}
 	return {}
 
+# ============================================================================
+# 资产生成 SSRF / 密钥外泄防护 (S6)
+# ============================================================================
+
+# 外部资产生成允许的主机名单（与 asset_provider_presets 内置预设一致）。
+# 除内置 local_sd_webui 预设（用户本机服务，http）外，一律要求 https。
+const ALLOWED_GEN_ENDPOINTS: Array[String] = [
+	"https://api.openai.com",
+	"https://api.stability.ai",
+	"https://api.elevenlabs.io",
+	"https://api.meshy.ai",
+	"https://api.tripo3d.ai",
+]
+# local_sd_webui 预设是唯一允许的 http 端点：指向用户自己的本地服务。
+const ALLOWED_GEN_HTTP_LOCAL_HOST: String = "127.0.0.1"
+const ALLOWED_GEN_HTTP_LOCAL_PORT: int = 7860
+# 允许读取的密钥环境变量名：GODOT_MCP_API_KEY + 各预设声明的 key_env。
+const ALLOWED_GEN_KEY_ENVS: Array[String] = ["GODOT_MCP_API_KEY"]
+
+# 从内置预设收集允许的主机名（endpoint / submit_endpoint / status_endpoint），
+# 与显式名单取并集，避免未来新增预设时忘记同步安全名单。
+static func _allowed_gen_hosts() -> Array[String]:
+	var hosts: Array[String] = []
+	for entry in ALLOWED_GEN_ENDPOINTS:
+		var host: String = _url_hostname(entry)
+		if not host.is_empty() and not hosts.has(host):
+			hosts.append(host)
+	for preset_id in AssetProviderPresets.PRESETS:
+		var preset: Dictionary = AssetProviderPresets.PRESETS[preset_id] as Dictionary
+		for key in ["endpoint", "submit_endpoint", "status_endpoint"]:
+			var ep: String = str(preset.get(key, "")).strip_edges()
+			if ep.is_empty():
+				continue
+			var host: String = _url_hostname(ep)
+			if not host.is_empty() and not hosts.has(host):
+				hosts.append(host)
+	return hosts
+
+# 取 URL 的主机名（去掉 scheme、端口、路径；小写）。
+static func _url_hostname(url: String) -> String:
+	var host_port: String = _url_host(url)
+	var colon: int = host_port.rfind(":")
+	if colon != -1 and not host_port.begins_with("["):
+		host_port = host_port.substr(0, colon)
+	return host_port.to_lower()
+
+# endpoint 白名单校验：https + 主机名在允许列表内；唯一的 http 例外是内置
+# local_sd_webui 预设（http://127.0.0.1:7860，用户本机服务）。
+static func _is_allowed_gen_endpoint(url: String) -> bool:
+	var scheme_end: int = url.find("://")
+	if scheme_end == -1:
+		return false
+	var scheme: String = url.substr(0, scheme_end).to_lower()
+	if scheme != "https" and scheme != "http":
+		return false
+	var host_port: String = _url_host(url)
+	var host: String = host_port
+	var port: int = -1
+	var colon: int = host_port.rfind(":")
+	if colon != -1 and not host_port.begins_with("["):
+		host = host_port.substr(0, colon)
+		port = int(host_port.substr(colon + 1))
+	host = host.to_lower()
+	if scheme == "http":
+		# 唯一的 http 例外：内置本地 Stable Diffusion 预设。
+		return host == ALLOWED_GEN_HTTP_LOCAL_HOST and port == ALLOWED_GEN_HTTP_LOCAL_PORT
+	return _allowed_gen_hosts().has(host)
+
+# 该端点是否允许走 http（仅内置 local_sd_webui 预设命中）。调用方据此把
+# allow_http 传给 _http_blocking_request；白名单校验会先行拦截其余 http 地址。
+static func _gen_endpoint_allows_http(url: String) -> bool:
+	var host_port: String = _url_host(url)
+	var colon: int = host_port.rfind(":")
+	if colon == -1:
+		return false
+	var host: String = host_port.substr(0, colon).to_lower()
+	var port: int = int(host_port.substr(colon + 1))
+	return host == ALLOWED_GEN_HTTP_LOCAL_HOST and port == ALLOWED_GEN_HTTP_LOCAL_PORT
+
+# 允许读取的密钥环境变量名（含内置预设声明的 key_env）。空串表示调用方显式
+# 选择不带认证，视为允许。防止通过 api_key_env 读取任意环境变量并外发。
+static func _allowed_api_key_env_names() -> Array[String]:
+	var names: Array[String] = []
+	for n in ALLOWED_GEN_KEY_ENVS:
+		names.append(n)
+	for preset_id in AssetProviderPresets.PRESETS:
+		var key_env: String = str((AssetProviderPresets.PRESETS[preset_id] as Dictionary).get("api_key_env", "")).strip_edges()
+		if not key_env.is_empty() and not names.has(key_env):
+			names.append(key_env)
+	return names
+
+static func _is_allowed_api_key_env(name: String) -> bool:
+	var env_name: String = name.strip_edges()
+	if env_name.is_empty():
+		return true
+	return _allowed_api_key_env_names().has(env_name)
+
 # Blocking HTTPClient request usable from a RefCounted tool (no SceneTree node).
-func _http_blocking_request(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float) -> Dictionary:
+# 默认仅允许 https；allow_http 仅供通过白名单校验的内置本地预设使用。
+func _http_blocking_request(url: String, method: int, headers: PackedStringArray, body: String, timeout_sec: float, allow_http: bool = false) -> Dictionary:
 	var scheme_end: int = url.find("://")
 	if scheme_end == -1:
 		return {"error": "Invalid endpoint URL (missing scheme): " + url}
 	var scheme: String = url.substr(0, scheme_end).to_lower()
+	if scheme != "https" and scheme != "http":
+		return {"error": "Unsupported URL scheme '%s://' (only https is allowed)" % scheme}
+	if scheme != "https" and not allow_http:
+		return {"error": "Only https:// URLs are allowed; refusing http:// request to %s. Use an https endpoint or the built-in local_sd_webui preset (http://127.0.0.1:7860)." % _url_host(url)}
 	var use_ssl: bool = scheme == "https"
 	var rest: String = url.substr(scheme_end + 3)
 	var slash: int = rest.find("/")
@@ -7532,9 +7645,25 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	if budget_block.has("error"):
 		return budget_block
 
+	# S6: submit/status endpoint 白名单（https + 已知 3D provider 主机），
+	# 防止把密钥发往任意内网/外部地址（SSRF）。
+	if not _is_allowed_gen_endpoint(submit_endpoint):
+		return {
+			"error": "submit_endpoint not in allowlist: %s. Only https:// endpoints on known provider hosts are allowed (%s)." % [_url_host(submit_endpoint), ", ".join(PackedStringArray(_allowed_gen_hosts()))],
+			"status": "endpoint_blocked"
+		}
+	if not _is_allowed_gen_endpoint(str(cfg["status_endpoint"])):
+		return {
+			"error": "status_endpoint not in allowlist: %s. Only https:// endpoints on known provider hosts are allowed (%s)." % [_url_host(str(cfg["status_endpoint"])), ", ".join(PackedStringArray(_allowed_gen_hosts()))],
+			"status": "endpoint_blocked"
+		}
+
 	var api_key: String = ""
 	var api_key_env: String = str(cfg["api_key_env"]).strip_edges()
 	if not api_key_env.is_empty():
+		# S6: 仅允许读取已知的密钥环境变量名，防止读取任意环境变量并外发。
+		if not _is_allowed_api_key_env(api_key_env):
+			return {"error": "Environment variable name '%s' is not in the allowlist. Allowed names: %s" % [api_key_env, ", ".join(PackedStringArray(_allowed_api_key_env_names()))]}
 		api_key = OS.get_environment(api_key_env)
 		if api_key.is_empty():
 			return {"error": "Environment variable '%s' is not set or empty" % api_key_env}
@@ -7627,6 +7756,9 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 			break
 	if model_url.is_empty():
 		return {"error": "Job succeeded but no model URL found (tried: %s)" % ", ".join(PackedStringArray(cfg["model_url_fields"]))}
+	# S6: 下载地址必须 https（provider 响应中的 http 内网地址一律拒绝，防 SSRF 下载内网文件）。
+	if not model_url.begins_with("https://"):
+		return {"error": "Model download URL must be https:// (provider returned %s). Refusing to download a non-https URL." % _url_host(model_url)}
 	var dl: Dictionary = _http_blocking_request(model_url, HTTPClient.METHOD_GET, PackedStringArray(), "", clampf(timeout_sec * 2.0, 1.0, 120.0))
 	if dl.has("error"):
 		return dl

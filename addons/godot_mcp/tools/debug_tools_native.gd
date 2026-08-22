@@ -3755,10 +3755,10 @@ func _register_execute_script(server_core: RefCounted) -> void:
 		"openWorldHint": false
 	}
 	
-	# 注册工具
+	# 注册工具（category=supplementary：默认禁用，降低 RCE 面）
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_execute_script"),
-						  output_schema, annotations, "core", "Script")
+						  output_schema, annotations, "supplementary", "Script")
 
 func _tool_execute_script(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
@@ -3998,7 +3998,7 @@ func _register_execute_editor_script(server_core: RefCounted) -> void:
 
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_execute_editor_script"),
-						  output_schema, annotations, "core", "Editor")
+						  output_schema, annotations, "supplementary", "Editor")
 
 func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
@@ -4282,6 +4282,93 @@ func _find_script_editor_debugger(base: Node) -> Node:
 			pending.append(child)
 	return null
 
+# 版本化编辑器日志文件名候选。Godot 编辑器日志文件名形如
+# editor_log-{major}.{minor}.{patch}.{status}.txt（如 editor_log-4.7.2.stable.txt），
+# 部分版本只有 editor_log-{major}.{minor}.{status}.txt；依次尝试，取第一个存在的。
+# 动态读取引擎版本，避免硬编码 4.6 文件名导致 4.7 下回退永远失败。
+static func _editor_log_filename_candidates() -> Array[String]:
+	var vi: Dictionary = Engine.get_version_info()
+	var major: int = int(vi.get("major", 4))
+	var minor: int = int(vi.get("minor", 0))
+	var patch: int = int(vi.get("patch", 0))
+	var status: String = str(vi.get("status", "stable"))
+	return [
+		"editor_log-%d.%d.%d.%s.txt" % [major, minor, patch, status],
+		"editor_log-%d.%d.%s.txt" % [major, minor, status],
+	]
+
+# 返回当前平台的编辑器日志目录（找不到时为空串）。Windows/Linux/macOS 路径模板保持。
+static func _editor_log_dir() -> String:
+	if OS.has_feature("windows"):
+		var appdata: String = OS.get_environment("APPDATA")
+		if not appdata.is_empty():
+			return appdata.path_join("Godot")
+	elif OS.has_feature("linux"):
+		var home: String = OS.get_environment("HOME")
+		if not home.is_empty():
+			return home.path_join(".local").path_join("share").path_join("godot")
+	elif OS.has_feature("macos"):
+		var home: String = OS.get_environment("HOME")
+		if not home.is_empty():
+			return home.path_join("Library").path_join("Application Support").path_join("Godot")
+	return ""
+
+# 依次检查版本化候选文件名，返回第一个存在的完整路径；都不存在返回空串。
+static func _find_editor_log_file_path() -> String:
+	var dir_path: String = _editor_log_dir()
+	if dir_path.is_empty():
+		return ""
+	for candidate in _editor_log_filename_candidates():
+		var candidate_path: String = dir_path.path_join(candidate)
+		if FileAccess.file_exists(candidate_path):
+			return candidate_path
+	return ""
+
+# 优先按节点类名查找 Output 面板（非英语编辑器界面节点名是翻译后的，类名不会，
+# 见 issue #32），找不到再回退旧的名字通配查找。
+func _find_output_panel(base: Node) -> Node:
+	var by_class: Array[Node] = base.find_children("*", "OutputPanel", true, false)
+	if not by_class.is_empty():
+		return by_class[0]
+	return base.find_child('*Output*', true, false)
+
+# Errors/Debugger 面板同理：按类名依次尝试多个候选，找不到再回退字符串通配查找。
+func _find_errors_panel(base: Node) -> Node:
+	for class_name_candidate in ["ScriptEditorDebugger", "EditorDebuggerPanel", "DebuggerErrors"]:
+		var by_class: Array[Node] = base.find_children("*", class_name_candidate, true, false)
+		if not by_class.is_empty():
+			return by_class[0]
+	var by_name: Node = base.find_child('*Errors*', true, false)
+	if not by_name:
+		by_name = base.find_child('*Error*', true, false)
+	if not by_name:
+		by_name = _find_script_editor_debugger(base)
+	return by_name
+
+# 扫描 godot.log（默认 user://logs/godot.log）中的 SCRIPT ERROR / PARSE ERROR 行。
+# 这些行版本无关、i18n 无关，编辑器把编译/解析错误也写在这里；作为 editor_panel
+# 回退链的兜底（issue #9/#12），让编译错误对 agent 可见。
+func _scan_godot_log_error_lines(log_path: String = "user://logs/godot.log") -> Array[Dictionary]:
+	var lines: Array[Dictionary] = []
+	if not FileAccess.file_exists(log_path):
+		return lines
+	var file: FileAccess = FileAccess.open(log_path, FileAccess.READ)
+	if not file:
+		return lines
+	while not file.eof_reached():
+		var log_line: String = file.get_line().strip_edges()
+		if log_line.is_empty():
+			continue
+		if log_line.contains("SCRIPT ERROR") or log_line.contains("PARSE ERROR"):
+			lines.append({
+				'index': lines.size(),
+				'message': log_line,
+				'type': _infer_log_type_from_line(log_line),
+				'panel': 'godot_log_file'
+			})
+	file.close()
+	return lines
+
 func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
@@ -4290,7 +4377,7 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 	if not base_control:
 		return {"error": "Could not get base control", "source": "editor_panel"}
 	var parsed_lines: Array[Dictionary] = []
-	var output_panel: Node = base_control.find_child('*Output*', true, false)
+	var output_panel: Node = _find_output_panel(base_control)
 	if output_panel:
 		var rich_text: RichTextLabel = _find_rich_text_label(output_panel)
 		if rich_text:
@@ -4301,13 +4388,7 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 					var text_line: String = text_lines[j].strip_edges()
 					if text_line.is_empty(): continue
 					parsed_lines.append({'index': parsed_lines.size(), 'message': text_line, 'type': _infer_log_type_from_line(text_line), 'panel': 'output'})
-	var errors_panel: Node = base_control.find_child('*Errors*', true, false)
-	if not errors_panel:
-		errors_panel = base_control.find_child('*Error*', true, false)
-	if not errors_panel:
-		var script_debugger: Node = _find_script_editor_debugger(base_control)
-		if script_debugger:
-			errors_panel = script_debugger
+	var errors_panel: Node = _find_errors_panel(base_control)
 	if errors_panel:
 		var error_tree: Tree = _find_tree_control(errors_panel)
 		if error_tree:
@@ -4324,21 +4405,11 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 					if not error_text.is_empty():
 						parsed_lines.append({'index': parsed_lines.size(), 'message': error_text, 'type': 'Error', 'panel': 'script_errors'})
 					item = item.get_next()
-	# Fallback: try reading the editor log file directly when UI panels have no data
+	# Fallback: try reading the editor log file directly when UI panels have no data.
+	# 文件名按当前引擎版本动态构造（editor_log-{major}.{minor}.{patch}.{status}.txt），
+	# 不再硬编码 4.6；候选列表依次检查，取第一个存在的。
 	if parsed_lines.is_empty():
-		var editor_log_path: String = ""
-		if OS.has_feature("windows"):
-			var appdata: String = OS.get_environment("APPDATA")
-			if not appdata.is_empty():
-				editor_log_path = appdata.path_join("Godot").path_join("editor_log-4.6.stable.txt")
-		elif OS.has_feature("linux"):
-			var home: String = OS.get_environment("HOME")
-			if not home.is_empty():
-				editor_log_path = home.path_join(".local").path_join("share").path_join("godot").path_join("editor_log-4.6.stable.txt")
-		elif OS.has_feature("macos"):
-			var home: String = OS.get_environment("HOME")
-			if not home.is_empty():
-				editor_log_path = home.path_join("Library").path_join("Application Support").path_join("Godot").path_join("editor_log-4.6.stable.txt")
+		var editor_log_path: String = _find_editor_log_file_path()
 		if not editor_log_path.is_empty() and FileAccess.file_exists(editor_log_path):
 			var file: FileAccess = FileAccess.open(editor_log_path, FileAccess.READ)
 			if file:
@@ -4352,6 +4423,12 @@ func _get_editor_panel_logs(types: Array, count: int, offset: int, order: String
 						'type': _infer_log_type_from_line(log_line),
 						'panel': 'editor_log_file'
 					})
+	# Last-resort fallback: user://logs/godot.log 中的 SCRIPT ERROR / PARSE ERROR 行
+	# （版本无关、i18n 无关），保证编译/解析错误对 agent 可见（issue #9/#12）。
+	if parsed_lines.is_empty():
+		for entry in _scan_godot_log_error_lines():
+			entry['index'] = parsed_lines.size()
+			parsed_lines.append(entry)
 	if not types.is_empty():
 		var filtered: Array[Dictionary] = []
 		for entry in parsed_lines:

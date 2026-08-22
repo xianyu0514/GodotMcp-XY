@@ -546,3 +546,67 @@ func test_play_and_verify_can_ignore_runtime_errors():
 	var result: Dictionary = await tool._tool_play_and_verify({"steps": [], "assertions": [], "fail_on_runtime_error": false})
 	assert_true(bool(result.get("passed", false)), "Run should pass when fail_on_runtime_error is false")
 	assert_eq((result.get("runtime_errors", []) as Array).size(), 1, "Captured errors should still be reported")
+
+# --- get_editor_logs 修复（issue #9/#12/#32） ---
+
+func test_editor_log_filename_candidates_versioned():
+	"""Versioned editor_log filename candidates should track the running engine version"""
+	var debug_tools_script: GDScript = load("res://addons/godot_mcp/tools/debug_tools_native.gd")
+	var vi: Dictionary = Engine.get_version_info()
+	var major: int = int(vi.get("major", 4))
+	var minor: int = int(vi.get("minor", 0))
+	var patch: int = int(vi.get("patch", 0))
+	var status: String = str(vi.get("status", "stable"))
+	var candidates: Array = debug_tools_script._editor_log_filename_candidates()
+	assert_eq(candidates.size(), 2, "Should produce a full and a short candidate filename")
+	assert_eq(candidates[0], "editor_log-%d.%d.%d.%s.txt" % [major, minor, patch, status], "First candidate should be the full versioned filename")
+	assert_eq(candidates[1], "editor_log-%d.%d.%s.txt" % [major, minor, status], "Second candidate should be the short versioned filename")
+	assert_gt(major, 3, "Engine major version should be >= 4")
+	assert_gte(minor, 0, "Engine minor version should be a valid number")
+	assert_true(candidates[0].ends_with(".txt"), "Candidate should end with .txt")
+
+func test_find_output_panel_fallback():
+	"""Class-name lookup first, legacy name-pattern fallback second, no crash on miss"""
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var root: Control = Control.new()
+	root.name = "RootPanel"
+	# 模拟非英语界面的翻译节点名：名字不含 Output，也不是 OutputPanel 类。
+	var translated: Label = Label.new()
+	translated.name = "PanelDeSalida"
+	root.add_child(translated)
+	add_child_autofree(root)
+	# 无 OutputPanel 类节点、名字也不含 Output → 回退返回 null 且不崩溃。
+	var found: Node = debug_tools._find_output_panel(root)
+	assert_eq(found, null, "Fallback should return null when no panel matches")
+	# find_children 按类名找不到时不应抛错。
+	var by_class: Array = root.find_children("*", "OutputPanel", true, false)
+	assert_eq(by_class.size(), 0, "No OutputPanel-class nodes should be found")
+	# 名字含 Output 的普通节点仍能被旧名字通配回退找到。
+	var legacy: Label = Label.new()
+	legacy.name = "LegacyOutputPanel"
+	root.add_child(legacy)
+	var found2: Node = debug_tools._find_output_panel(root)
+	assert_eq(found2, legacy, "Legacy name-pattern fallback should find the node")
+
+func test_scan_godot_log_error_lines_finds_script_errors():
+	"""user://logs/godot.log fallback should surface SCRIPT/PARSE ERROR lines"""
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tmp_dir: String = "res://.test_tmp_debug_logs"
+	if not DirAccess.dir_exists_absolute(tmp_dir):
+		DirAccess.make_dir_recursive_absolute(tmp_dir)
+	var log_path: String = tmp_dir.path_join("godot.log")
+	var f: FileAccess = FileAccess.open(log_path, FileAccess.WRITE)
+	f.store_string("Godot Engine v4.7.2.stable\n")
+	f.store_string("INFO: editor started\n")
+	f.store_string("SCRIPT ERROR: Parse Error: unexpected token\n")
+	f.store_string("   at: res://player.gd:3\n")
+	f.store_string("PARSE ERROR: expected identifier\n")
+	f.store_string("normal log line\n")
+	f.close()
+	var lines: Array = debug_tools._scan_godot_log_error_lines(log_path)
+	assert_eq(lines.size(), 2, "Only SCRIPT ERROR / PARSE ERROR lines should be collected")
+	assert_eq(lines[0].get("type"), "Error", "Collected lines should be typed Error")
+	assert_true(str(lines[0].get("message", "")).contains("SCRIPT ERROR"), "First entry should be the script error")
+	assert_true(str(lines[1].get("message", "")).contains("PARSE ERROR"), "Second entry should be the parse error")
+	DirAccess.remove_absolute(log_path)
+	DirAccess.remove_absolute(tmp_dir)
