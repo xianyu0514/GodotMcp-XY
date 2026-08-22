@@ -41,7 +41,8 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 | `native_mcp/mcp_http_server.gd` | HTTP endpoint and SSE transport. |
 | `native_mcp/mcp_stdio_server.gd` | stdio transport for clients that spawn the server process. |
 | `native_mcp/mcp_types.gd` | Protocol constants and shared data structures. |
-| `native_mcp/mcp_tool_classifier.gd` | Source of truth for tool tier (`core`, `supplementary`, `meta`) and group membership. |
+| `native_mcp/tools_manifest.gd` | Single source of truth for tool tier (`core`, `supplementary`, `meta`) and group membership — one entry per tool (`{name: {category, group}}`), consumed by the classifier and enforced by consistency tests. |
+| `native_mcp/mcp_tool_classifier.gd` | Tool classification lookup API (`get_tool_category` / `get_tool_group` / `is_core_tool` …), generated at init from `MCPToolsManifest.TOOLS`. |
 | `native_mcp/mcp_auth_manager.gd` | Bearer-token validation. |
 | `native_mcp/settings_manager.gd` | Persistent user settings. |
 | `native_mcp/tool_state_manager.gd` | Per-tool enable/disable state. |
@@ -50,7 +51,10 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 
 ## Tool modules
 
-Each category is implemented in one file under `addons/godot_mcp/tools/`:
+Each category is implemented in one or more files under `addons/godot_mcp/tools/`. The
+Project category was split from the 9393-line `project_tools_native.gd` into one main
+module (shared helpers + project-info/config/input/autoload/class-metadata/test-runner
+tools) plus five domain modules (resources, assets, tileset, verification, workflow):
 
 | File | Category | Tools |
 | --- | --- | ---: |
@@ -59,10 +63,15 @@ Each category is implemented in one file under `addons/godot_mcp/tools/`:
 | `scene_tools_native.gd` | Scene | 12 |
 | `editor_tools_native.gd` | Editor | 27 |
 | `debug_tools_native.gd` | Debug & Runtime | 73 |
-| `project_tools_native.gd` | Project | 61 |
+| `project_tools_native.gd` | Project (main: info/config/input/autoload/class metadata/tests) | 16 |
+| `project_resources_tools.gd` | Project (resources: create/read/update/deps/migration/UID) | 21 |
+| `project_assets_tools.gd` | Project (assets: generate/3D/slice/glTF/gradient/drawable/PCK/render) | 9 |
+| `project_tileset_tools.gd` | Project (TileSet: create/layers/collision/terrain/inspect) | 5 |
+| `project_verification_tools.gd` | Project (verification: visual baseline/screenshot diff) | 2 |
+| `project_workflow_tools.gd` | Project (workflow: bump_version/theme/animation/task plan/localization) | 8 |
 | `meta_tools_native.gd` | Meta | 4 |
 
-Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The classifier controls whether a tool is core, advanced or meta.
+Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The category/group come from the single manifest (`native_mcp/tools_manifest.gd`), which the classifier reads to answer whether a tool is core, advanced or meta. `test_mcp_tool_classifier.gd` enforces that the manifest, the classifier and the runtime registry never drift (tool-name sets and per-tool category/group must match).
 
 ## Core, advanced and meta tiers
 
