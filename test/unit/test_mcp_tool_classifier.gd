@@ -1,12 +1,45 @@
 extends "res://addons/gut/test.gd"
 
+# 单一数据表（MCPToolsManifest）与 classifier / server_core 注册的一致性测试：
+#   - test_manifest_matches_classifier：manifest 工具集 == classifier 工具集（含分类/分组）
+#   - test_manifest_matches_registered_tools：运行时注册校验 —— 每个注册工具的
+#     category/group 必须与 manifest 一致（防“新增工具忘改 manifest / register 与
+#     manifest 不一致”漂移）
+#   - test_manifest_counts：manifest 计数（221/28/189/4）
+
+const ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+
+const TOOL_MODULE_PATHS: Array[String] = [
+	"res://addons/godot_mcp/tools/node_tools_native.gd",
+	"res://addons/godot_mcp/tools/script_tools_native.gd",
+	"res://addons/godot_mcp/tools/scene_tools_native.gd",
+	"res://addons/godot_mcp/tools/editor_tools_native.gd",
+	"res://addons/godot_mcp/tools/debug_tools_native.gd",
+	"res://addons/godot_mcp/tools/project_tools_native.gd",
+	"res://addons/godot_mcp/tools/project_resources_tools.gd",
+	"res://addons/godot_mcp/tools/project_assets_tools.gd",
+	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
+	"res://addons/godot_mcp/tools/project_verification_tools.gd",
+	"res://addons/godot_mcp/tools/project_workflow_tools.gd",
+	"res://addons/godot_mcp/tools/meta_tools_native.gd",
+]
+
 var _classifier = null
+var _core = null
 
 func before_each():
 	_classifier = load("res://addons/godot_mcp/native_mcp/mcp_tool_classifier.gd").new()
+	_core = null
 
 func after_each():
 	_classifier = null
+	if _core != null:
+		# 解除注册表对（绑定到模块实例的）callable 的引用，避免 headless 退出时
+		# ObjectDB 泄漏告警（同 test_tool_schema_lint.gd）。
+		var names: Array = _core.get_all_tools().keys()
+		for name in names:
+			_core.unregister_tool(name)
+	_core = null
 
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
@@ -345,3 +378,98 @@ func test_classifier_no_duplicate_tools():
 		if not t in unique:
 			unique.append(t)
 	assert_eq(tools.size(), unique.size(), "Tools should not contain duplicates")
+
+# ----------------------------------------------------------------------------
+# 单一数据表一致性测试（MCPToolsManifest）
+# ----------------------------------------------------------------------------
+
+## manifest 工具名集合 == classifier 工具名集合，且每个工具的 category/group 逐条一致。
+## 防“改了一边忘改另一边”漂移。
+func test_manifest_matches_classifier():
+	var manifest_names: Array[String] = ManifestScript.tool_names()
+	var classifier_names: Array = _classifier.get_all_tools()
+	assert_eq(manifest_names.size(), classifier_names.size(),
+		"manifest 工具数 %d 应等于 classifier 工具数 %d" % [manifest_names.size(), classifier_names.size()])
+
+	var classifier_set: Dictionary = {}
+	for tool_name in classifier_names:
+		classifier_set[str(tool_name)] = true
+
+	var missing_in_classifier: Array[String] = []
+	for tool_name in manifest_names:
+		if not classifier_set.has(tool_name):
+			missing_in_classifier.append(tool_name)
+	assert_eq(missing_in_classifier.size(), 0,
+		"manifest 有但 classifier 没有的工具: " + str(missing_in_classifier))
+
+	var missing_in_manifest: Array[String] = []
+	for tool_name in classifier_names:
+		if not ManifestScript.TOOLS.has(str(tool_name)):
+			missing_in_manifest.append(str(tool_name))
+	assert_eq(missing_in_manifest.size(), 0,
+		"classifier 有但 manifest 没有的工具: " + str(missing_in_manifest))
+
+	# 分类/分组逐条一致。
+	var mismatches: Array[String] = []
+	for tool_name in classifier_names:
+		var name_str: String = str(tool_name)
+		var classifier_category: String = _classifier.get_tool_category(name_str)
+		var classifier_group: String = _classifier.get_tool_group(name_str)
+		var manifest_category: String = ManifestScript.category_of(name_str)
+		var manifest_group: String = ManifestScript.group_of(name_str)
+		if classifier_category != manifest_category or classifier_group != manifest_group:
+			mismatches.append("%s: classifier=(%s,%s) manifest=(%s,%s)" % [
+				name_str, classifier_category, classifier_group, manifest_category, manifest_group])
+	assert_eq(mismatches.size(), 0,
+		"classifier 与 manifest 分类/分组不一致的工具: " + str(mismatches))
+
+## 运行时注册校验：实例化全部工具模块注册进 server_core，断言每个注册工具的
+## category/group 与 manifest 一致。防“新增工具忘改 manifest / register_tool 与
+## manifest 不一致”漂移（注册参数无法直接读取，但可通过 get_all_tools() 拿
+## MCPTool.category/group 对比）。
+func test_manifest_matches_registered_tools():
+	_core = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var load_failures: Array[String] = []
+	for path in TOOL_MODULE_PATHS:
+		var script: GDScript = load(path)
+		if script == null:
+			load_failures.append(path)
+			continue
+		var instance: RefCounted = script.new()
+		instance.register_tools(_core)
+	assert_eq(load_failures.size(), 0, "工具模块加载失败: " + str(load_failures))
+
+	var registered: Dictionary = _core.get_all_tools()
+	assert_eq(registered.size(), ManifestScript.TOOLS.size(),
+		"注册工具数 %d 应等于 manifest 工具数 %d" % [registered.size(), ManifestScript.TOOLS.size()])
+
+	var missing_in_manifest: Array[String] = []
+	var mismatches: Array[String] = []
+	for tool_name in registered:
+		var name_str: String = str(tool_name)
+		var tool = registered[tool_name]
+		if not ManifestScript.TOOLS.has(name_str):
+			missing_in_manifest.append(name_str)
+			continue
+		var manifest_category: String = ManifestScript.category_of(name_str)
+		var manifest_group: String = ManifestScript.group_of(name_str)
+		if str(tool.category) != manifest_category or str(tool.group) != manifest_group:
+			mismatches.append("%s: registered=(%s,%s) manifest=(%s,%s)" % [
+				name_str, str(tool.category), str(tool.group), manifest_category, manifest_group])
+	assert_eq(missing_in_manifest.size(), 0,
+		"已注册但不在 manifest 的工具（新增工具忘改 manifest）: " + str(missing_in_manifest))
+	assert_eq(mismatches.size(), 0,
+		"register_tool 与 manifest 分类/分组不一致的工具: " + str(mismatches))
+
+## manifest 计数基线：221 总 / 28 core / 189 supplementary / 4 meta。
+func test_manifest_counts():
+	assert_eq(ManifestScript.TOOLS.size(), 221, "manifest 应包含 221 个工具")
+	assert_eq(ManifestScript.count_by_category("core"), 28, "manifest 应有 28 个 core 工具")
+	assert_eq(ManifestScript.count_by_category("supplementary"), 189, "manifest 应有 189 个 supplementary 工具")
+	assert_eq(ManifestScript.count_by_category("meta"), 4, "manifest 应有 4 个 meta 工具")
+	# meta 工具必须包含（classifier 依赖 manifest 提供 meta 特殊处理数据）。
+	var meta_names: Array[String] = ManifestScript.tool_names()
+	assert_true("list_tool_catalog" in meta_names, "manifest 应包含 list_tool_catalog")
+	assert_true("search_tools" in meta_names, "manifest 应包含 search_tools")
+	assert_true("get_tool_details" in meta_names, "manifest 应包含 get_tool_details")
+	assert_true("enable_tools" in meta_names, "manifest 应包含 enable_tools")
