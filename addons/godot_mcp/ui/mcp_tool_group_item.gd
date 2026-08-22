@@ -154,6 +154,21 @@ func _tr(key: String) -> String:
 		return _translation_manager.get_text(key)
 	return key
 
+## Format a translated string with args. Defensive: when the translation is
+## missing (returns the key itself) or the placeholder count does not match the
+## args, return the raw text instead of crashing on '%' formatting.
+func _trf(key: String, args: Array) -> String:
+	var text: String = _tr(key)
+	var placeholder_count: int = 0
+	for i in text.length():
+		if text[i] == "%":
+			i += 1
+			if i < text.length() and text[i] in "dsf":
+				placeholder_count += 1
+	if placeholder_count > 0 and placeholder_count == args.size():
+		return text % args
+	return text
+
 func _get_group_display_name() -> String:
 	var key: String = "group." + _group_name
 	var translated: String = _tr(key)
@@ -228,7 +243,7 @@ func _update_count() -> void:
 				enabled += 1
 
 	if _count_label:
-		_count_label.text = _tr("ui.enabled_format") % [enabled, total]
+		_count_label.text = _trf("ui.enabled_format", [enabled, total])
 
 	if _group_check:
 		_group_check.set_block_signals(true)

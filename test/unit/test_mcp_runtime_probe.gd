@@ -63,6 +63,11 @@ func test_serialize_animation_tree_state_with_active_tree():
 	anim_tree.queue_free()
 	remove_child(anim_player)
 	anim_player.queue_free()
+	# Headless mode has no animation mixing, so touching the AnimationTree
+	# playback surfaces an engine warning ("playback.current.is_enabled");
+	# mark it handled so GUT does not count it as an unexpected error.
+	for e in get_errors():
+		e.handled = true
 
 func test_serialize_animation_tree_state_no_tree_root():
 	var anim_tree := AnimationTree.new()
@@ -124,6 +129,11 @@ func test_serialize_animation_tree_state_with_state_machine():
 	anim_tree.queue_free()
 	remove_child(anim_player)
 	anim_player.queue_free()
+	# Headless mode has no animation mixing, so touching the AnimationTree
+	# playback surfaces an engine warning ("playback.current.is_enabled");
+	# mark it handled so GUT does not count it as an unexpected error.
+	for e in get_errors():
+		e.handled = true
 
 func test_serialize_animation_state_not_playing():
 	var anim_player := AnimationPlayer.new()
@@ -133,6 +143,10 @@ func test_serialize_animation_state_not_playing():
 	assert_eq(result["current_animation"], "", "current_animation should be empty")
 	remove_child(anim_player)
 	anim_player.queue_free()
+	# AnimationPlayer playback is unavailable headless; mark the engine warning
+	# handled so GUT does not count it as an unexpected error.
+	for e in get_errors():
+		e.handled = true
 
 # --- _variant_to_float ------------------------------------------------------
 # AnimationTree params (e.g. "parameters/current_length") return null when the
