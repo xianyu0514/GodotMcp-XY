@@ -18,6 +18,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 # 标准MCP方法
 const METHOD_INITIALIZE: String = "initialize"
 const METHOD_NOTIFICATIONS_INITIALIZED: String = "notifications/initialized"
+const METHOD_NOTIFICATIONS_CANCELLED: String = "notifications/cancelled"
 const METHOD_TOOLS_LIST: String = "tools/list"
 const METHOD_TOOLS_CALL: String = "tools/call"
 const METHOD_RESOURCES_LIST: String = "resources/list"
@@ -30,6 +31,7 @@ const METHOD_PING: String = "ping"
 
 # Server-initiated notifications
 const NOTIFICATION_RESOURCES_UPDATED: String = "notifications/resources/updated"
+const NOTIFICATION_PROGRESS: String = "notifications/progress"
 
 # JSON-RPC错误码
 const ERROR_PARSE_ERROR: int = -32700

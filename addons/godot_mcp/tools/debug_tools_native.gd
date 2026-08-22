@@ -2911,6 +2911,21 @@ func _compare_values(actual: String, expected: String, operator: String) -> bool
 			return float(actual) <= float(expected)
 	return false
 
+# ============================================================================
+# Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
+# ============================================================================
+
+## True when the client cancelled the currently executing tool call. Long-running
+## tools poll this inside their loops and abort early when it flips.
+func _tool_cancelled() -> bool:
+	return _server_core != null and _server_core.has_method("is_current_tool_cancelled") and bool(_server_core.is_current_tool_cancelled())
+
+## Best-effort progress notification; silently skipped when the client supplied
+## no progress token or no transport is connected.
+func _send_tool_progress(progress_token: Variant, progress: int, total: int = 0, message: String = "") -> void:
+	if _server_core != null and _server_core.has_method("send_progress_notification"):
+		_server_core.send_progress_notification(progress_token, progress, total, message)
+
 func _register_play_and_verify(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"play_and_verify",
@@ -2966,6 +2981,11 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 	while screenshot_dir.ends_with("/"):
 		screenshot_dir = screenshot_dir.substr(0, screenshot_dir.length() - 1)
 
+	# Optional client progress token (arguments._meta.progressToken).
+	var progress_token: Variant = null
+	if params.has("_meta") and params["_meta"] is Dictionary:
+		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
+
 	# Verify a runtime session with the probe is reachable before doing anything.
 	var info: Dictionary = await _tool_get_runtime_info(_merge_runtime_params(params, {}))
 	if info.has("error") or info.get("status", "") == "no_active_sessions":
@@ -2986,6 +3006,9 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 	var executed: int = 0
 
 	for i in steps.size():
+		# 客户端取消检查：每一步都检查，取消则中止编排并返回 cancelled。
+		if _tool_cancelled():
+			return {"status": "cancelled", "error": "cancelled by client", "steps_executed": executed}
 		var step: Dictionary = steps[i] if steps[i] is Dictionary else {}
 		if step.has("action"):
 			var input_params: Dictionary = _merge_runtime_params(params, {
@@ -3030,6 +3053,8 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			else:
 				screenshots.append({"step": i, "save_path": save_path, "size": shot_result.get("size", "")})
 		executed += 1
+		# 进度通知：step index -> progress（steps 为总进度）。
+		_send_tool_progress(progress_token, executed, steps.size(), "step")
 
 	if deterministic and int(params.get("settle_frames", 0)) > 0:
 		var settle_adv: Dictionary = await _advance_runtime_frames(params, int(params["settle_frames"]), frame_type, sample_specs)
@@ -3046,6 +3071,9 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 	var assertion_results: Array = []
 	var passed_count: int = 0
 	for i in assertions.size():
+		# 断言阶段也可能耗时（每个断言都要轮询运行时探针），同样响应取消。
+		if _tool_cancelled():
+			return {"status": "cancelled", "error": "cancelled by client", "steps_executed": executed, "assertions_total": i, "assertions_passed": passed_count}
 		var spec: Dictionary = assertions[i] if assertions[i] is Dictionary else {}
 		if spec.has("metric"):
 			var metric_result: Dictionary = _evaluate_metric_assertion(spec, metrics)

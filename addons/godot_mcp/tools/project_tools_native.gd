@@ -9,6 +9,9 @@ const MAX_CONCURRENT_TEST_JOBS: int = 4
 var _editor_interface: EditorInterface = null
 var _test_runner: AsyncJobRunner = AsyncJobRunner.new()
 var _batch_test_runner: AsyncJobRunner = AsyncJobRunner.new()
+# Reference to the owning MCPServerCore, captured at registration, so long-running
+# tools can emit progress notifications and observe client cancellation.
+var _server_core: RefCounted = null
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -27,6 +30,7 @@ func _get_editor_interface() -> EditorInterface:
 # ============================================================================
 
 func register_tools(server_core: RefCounted) -> void:
+	_server_core = server_core
 	_register_get_project_info(server_core)
 	_register_get_project_settings(server_core)
 	_register_bump_version(server_core)
@@ -88,6 +92,21 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_set_tile_terrain(server_core)
 	_register_manage_task_plan(server_core)
 	_register_manage_localization(server_core)
+
+# ============================================================================
+# Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
+# ============================================================================
+
+## True when the client cancelled the currently executing tool call. Long-running
+## tools poll this inside their loops and abort early when it flips.
+func _tool_cancelled() -> bool:
+	return _server_core != null and _server_core.has_method("is_current_tool_cancelled") and bool(_server_core.is_current_tool_cancelled())
+
+## Best-effort progress notification; silently skipped when the client supplied
+## no progress token or no transport is connected.
+func _send_tool_progress(progress_token: Variant, progress: int, total: int = 0, message: String = "") -> void:
+	if _server_core != null and _server_core.has_method("send_progress_notification"):
+		_server_core.send_progress_notification(progress_token, progress, total, message)
 
 # ============================================================================
 # get_project_info - 获取项目信息
@@ -880,6 +899,16 @@ func _tool_run_project_test(params: Dictionary) -> Dictionary:
 	if not FileAccess.file_exists(test_path):
 		return {"error": "Test file not found: " + test_path}
 
+	# Optional client progress token (arguments._meta.progressToken). Absent ->
+	# progress notifications are silently skipped.
+	var progress_token: Variant = null
+	if params.has("_meta") and params["_meta"] is Dictionary:
+		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
+
+	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。
+	if _tool_cancelled():
+		return {"status": "cancelled", "test_path": test_path, "error": "cancelled by client"}
+
 	# A test run spawns a full subprocess (python, or a headless Godot for GUT)
 	# that can take seconds to minutes. Run it on a background thread so the
 	# editor stays responsive: the first call starts the run and returns
@@ -887,6 +916,8 @@ func _tool_run_project_test(params: Dictionary) -> Dictionary:
 	if _test_runner.has_job(test_path):
 		var polled: Dictionary = _test_runner.poll(test_path)
 		if not bool(polled["finished"]):
+			# Report elapsed seconds as progress on each poll round.
+			_send_tool_progress(progress_token, int(_test_runner.elapsed_ms(test_path) / 1000), 0, "polling")
 			return {
 				"status": "pending",
 				"test_path": test_path,
@@ -970,6 +1001,15 @@ func _tool_run_project_tests(params: Dictionary) -> Dictionary:
 	var framework: String = str(params.get("framework", "")).strip_edges().to_lower()
 	var only_runnable: bool = bool(params.get("only_runnable", true))
 
+	# Optional client progress token (arguments._meta.progressToken).
+	var progress_token: Variant = null
+	if params.has("_meta") and params["_meta"] is Dictionary:
+		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
+
+	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。
+	if _tool_cancelled():
+		return {"status": "cancelled", "search_path": search_path, "error": "cancelled by client"}
+
 	# A batch can spawn many test subprocesses back to back and take minutes.
 	# Run the whole batch on a background thread so the editor stays responsive:
 	# the first call starts the batch and returns "pending"; calling again with
@@ -979,6 +1019,8 @@ func _tool_run_project_tests(params: Dictionary) -> Dictionary:
 	if _batch_test_runner.has_job(job_key):
 		var polled: Dictionary = _batch_test_runner.poll(job_key)
 		if not bool(polled["finished"]):
+			# Report elapsed seconds as progress on each poll round.
+			_send_tool_progress(progress_token, int(_batch_test_runner.elapsed_ms(job_key) / 1000), 0, "polling")
 			return {
 				"status": "pending",
 				"search_path": search_path,
@@ -7624,6 +7666,11 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 		return {"error": "Invalid resource_path: " + str(validation.get("error", ""))}
 	resource_path = str(validation.get("sanitized", resource_path))
 
+	# Optional client progress token (arguments._meta.progressToken).
+	var progress_token: Variant = null
+	if params.has("_meta") and params["_meta"] is Dictionary:
+		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
+
 	var cfg: Dictionary = _resolve_3d_config(params)
 	if cfg.has("error"):
 		return cfg
@@ -7724,10 +7771,14 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	var status_json: Variant = null
 	var poll_count: int = 0
 	while true:
+		# 客户端取消检查：轮询每一轮都检查，取消则中止任务。
+		if _tool_cancelled():
+			return {"error": "cancelled by client", "status": "cancelled", "task_id": task_id, "poll_count": poll_count}
 		var st_res: Dictionary = _http_blocking_request(status_endpoint, status_method, headers, "", timeout_sec)
 		if st_res.has("error"):
 			return st_res
 		poll_count += 1
+		_send_tool_progress(progress_token, poll_count, 0, "polling 3D generation job")
 		status_json = JSON.parse_string((st_res["bytes"] as PackedByteArray).get_string_from_utf8())
 		if status_json == null:
 			return {"error": "Status response was not valid JSON"}

@@ -137,6 +137,18 @@ var _request_timestamps: Dictionary = {}  # String (client_id) -> Array[int]
 var _scene_structure_cache: Dictionary = {}  # String -> Dictionary
 var _cache_timestamp: Dictionary = {}  # String -> int
 
+## Requests the client asked to cancel via `notifications/cancelled`
+## (request id -> true). Long-running tools poll `is_request_cancelled()` /
+## `is_current_tool_cancelled()` while they run and abort early when set.
+var _cancelled_requests: Dictionary = {}
+
+## Execution context of the currently running tool call (main thread only, the
+## serial queue guarantees a single in-flight call): {"tool_name", "request_id",
+## "progress_token"}. Set right before a tool callable runs and cleared after,
+## so tools can correlate progress notifications and cancellation with the
+## request that started them without the request id in their signature.
+var _execution_context: Dictionary = {}
+
 # JSONRPC实例（如需使用Godot内置JSONRPC处理，可取消注释）
 # var _jsonrpc: JSONRPC = JSONRPC.new()
 
@@ -234,6 +246,14 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	# Only requests/notifications (carrying "method") are processed; ignore responses.
 	if not message.has("method"):
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
+		return
+	
+	# Cancellation must be observed by an in-flight tool call, so it bypasses the
+	# serial queue and marks the request immediately instead of waiting behind the
+	# long-running call it cancels. All state touched here lives on the main
+	# thread (transport marshals via call_deferred), so this is safe.
+	if String(message.get("method", "")) == MCPTypes.METHOD_NOTIFICATIONS_CANCELLED:
+		_handle_cancelled_notification(message)
 		return
 	
 	# Backpressure: when the queue is full (or other requests are already waiting),
@@ -421,6 +441,10 @@ func stop() -> void:
 	# Resource subscriptions are per-session; drop them so a restarted server does
 	# not emit resources/updated for resources the new client never subscribed to.
 	_resource_subscriptions.clear()
+	# Drop cancellation markers and the execution context so a restarted server
+	# never carries stale cancellation state from the previous session.
+	_cancelled_requests.clear()
+	_execution_context = {}
 
 	_log_info("MCP Server stopped")
 
@@ -446,6 +470,8 @@ func _handle_request(message: Dictionary) -> Dictionary:
 		match method:
 			MCPTypes.METHOD_NOTIFICATIONS_INITIALIZED:
 				return _handle_initialized_notification(message)
+			MCPTypes.METHOD_NOTIFICATIONS_CANCELLED:
+				return _handle_cancelled_notification(message)
 		# 未知通知：忽略，不发送任何响应
 		_log_warn("Unknown notification ignored: " + method)
 		return {}
@@ -547,6 +573,20 @@ func _handle_initialized_notification(message: Dictionary) -> Dictionary:
 	# 这是一个通知，不需要返回响应
 	return {}
 
+## Handle a `notifications/cancelled` notification: mark the referenced request
+## id so the running tool call can observe it via `is_request_cancelled()` /
+## `is_current_tool_cancelled()` and abort early. Notifications never produce a
+## response, so an empty dict is returned (falsy -> nothing is sent).
+func _handle_cancelled_notification(message: Dictionary) -> Dictionary:
+	var params: Dictionary = message.get("params", {})
+	var request_id: Variant = params.get("requestId", null)
+	if request_id != null:
+		_cancelled_requests[request_id] = true
+		_log_info("Cancellation requested for request: " + str(request_id))
+	else:
+		_log_warn("Cancellation notification without a requestId; ignored")
+	return {}
+
 func _handle_tools_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	
@@ -623,6 +663,23 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	# 发送开始信号
 	tool_execution_started.emit(tool_name, arguments)
 	
+	# Capture the execution context (request id + optional progress token) so a
+	# long-running tool can emit notifications/progress and observe
+	# notifications/cancelled while it runs. The token is read from the
+	# spec-compliant params._meta location first, then from arguments._meta for
+	# clients that nest it inside the tool arguments.
+	var progress_token: Variant = null
+	var meta: Variant = params.get("_meta", null)
+	if meta is Dictionary:
+		progress_token = (meta as Dictionary).get("progressToken", null)
+	if progress_token == null and arguments.has("_meta") and arguments["_meta"] is Dictionary:
+		progress_token = (arguments["_meta"] as Dictionary).get("progressToken", null)
+	_execution_context = {
+		"tool_name": tool_name,
+		"request_id": id,
+		"progress_token": progress_token
+	}
+	
 	# 执行工具
 	var result: Variant = null
 	var error: String = ""
@@ -630,6 +687,13 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
 		result = await tool.callable.call(arguments)
+	
+	# Tool execution finished: drop this request's cancellation marker (if the
+	# client cancelled mid-run) and the execution context so the next request
+	# starts clean.
+	if _cancelled_requests.has(id):
+		_cancelled_requests.erase(id)
+	_execution_context = {}
 	
 	# 处理执行结果
 	if not error.is_empty():
@@ -808,6 +872,61 @@ func notify_resource_updated(uri: String) -> bool:
 		_log_debug("Sent resources/updated notification: " + uri)
 		return true
 	return false
+
+# ============================================================================
+# Progress 通知与取消支持（2025-03-26+ MCP 规范）
+# ============================================================================
+
+## Send a `notifications/progress` notification to the client. `progress_token`
+## is the client-supplied `_meta.progressToken` of the tool call being reported
+## on; when it is absent (client did not opt in) or no transport is connected,
+## the notification is silently skipped. `total` and `message` are optional per
+## the spec and omitted from the payload when empty.
+func send_progress_notification(progress_token: Variant, progress: int, total: int = 0, message: String = "") -> void:
+	if progress_token == null:
+		return
+	if not _transport or not _transport.has_method("send_raw_message"):
+		return
+	var params: Dictionary = {
+		"progressToken": progress_token,
+		"progress": progress
+	}
+	if total > 0:
+		params["total"] = total
+	if not message.is_empty():
+		params["message"] = message
+	var notification: Dictionary = {
+		"jsonrpc": "2.0",
+		"method": MCPTypes.NOTIFICATION_PROGRESS,
+		"params": params
+	}
+	_transport.send_raw_message(notification)
+	_log_debug("Sent progress notification (token=%s, progress=%d, total=%d)" % [str(progress_token), progress, total])
+
+## Whether the client sent a `notifications/cancelled` for the given request id.
+func is_request_cancelled(request_id: Variant) -> bool:
+	return _cancelled_requests.has(request_id)
+
+## Drop the cancellation marker for a request id (called after a tool finishes).
+func clear_cancelled(request_id: Variant) -> void:
+	if _cancelled_requests.has(request_id):
+		_cancelled_requests.erase(request_id)
+
+## Whether the currently executing tool call (see `_execution_context`) has been
+## cancelled by the client. Tools cannot see their own request id, so they poll
+## this while running and abort early when it returns true.
+func is_current_tool_cancelled() -> bool:
+	if _execution_context.is_empty():
+		return false
+	return _cancelled_requests.has(_execution_context.get("request_id", null))
+
+## The progress token of the currently executing tool call, or null when the
+## client did not supply one. Lets tools that did not see `_meta` in their
+## arguments still report progress.
+func get_current_progress_token() -> Variant:
+	if _execution_context.is_empty():
+		return null
+	return _execution_context.get("progress_token", null)
 
 func _handle_prompts_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")

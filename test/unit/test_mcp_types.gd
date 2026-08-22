@@ -188,3 +188,9 @@ func test_protocol_version():
 
 func test_method_ping_constant():
 	assert_eq(MCPTypes.METHOD_PING, "ping", "METHOD_PING should be 'ping'")
+
+func test_method_notifications_cancelled_constant():
+	assert_eq(MCPTypes.METHOD_NOTIFICATIONS_CANCELLED, "notifications/cancelled", "METHOD_NOTIFICATIONS_CANCELLED should be 'notifications/cancelled'")
+
+func test_notification_progress_constant():
+	assert_eq(MCPTypes.NOTIFICATION_PROGRESS, "notifications/progress", "NOTIFICATION_PROGRESS should be 'notifications/progress'")

@@ -588,3 +588,194 @@ func test_all_cacheable_read_tools_invalidated_by_mutation():
 		await _core._handle_request(mutate_msg)
 		await _core._handle_request(read_msg)
 		assert_eq(calls[0], 2, "%s must recompute after a mutating tool" % tool_name)
+
+# ============================================================================
+# Progress 通知与取消支持（notifications/progress + notifications/cancelled）
+# ============================================================================
+
+## Minimal transport double that records every raw message sent. Extends the
+## transport base so it can be assigned to the core's typed _transport member.
+class MockTransport:
+	extends McpTransportBase
+	var sent: Array = []
+	func send_raw_message(message: Dictionary) -> void:
+		sent.append(message)
+	func is_running() -> bool:
+		return false
+
+# --- notifications/cancelled handling ---------------------------------------
+
+func test_cancelled_notification_marks_request():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 42}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "cancelled notification must never produce a response")
+	assert_true(_core.is_request_cancelled(42), "request id should be marked cancelled")
+
+func test_cancelled_unknown_request_noop():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 999}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "unknown cancelled notification produces no response")
+	assert_false(_core.is_request_cancelled(1), "unrelated ids must not be marked")
+	# clear_cancelled on a known id removes it; on an unknown id it is a no-op.
+	_core.clear_cancelled(999)
+	assert_false(_core.is_request_cancelled(999), "clear_cancelled removes the marker")
+	_core.clear_cancelled(12345)
+	assert_true(true, "clear_cancelled on an unknown id must not crash")
+
+func test_cancelled_notification_without_request_id_ignored():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "missing requestId still yields no response")
+	assert_eq(_core._cancelled_requests.size(), 0, "no marker added without requestId")
+
+func test_cancelled_notification_fast_path_bypasses_queue():
+	# Cancellation must not wait behind the serial queue (it is meant to cancel
+	# the in-flight request, which is exactly the one occupying the queue), so it
+	# is processed immediately when received through the transport.
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "req-1"}}
+	_core._on_transport_message_received(msg, null)
+	assert_true(_core.is_request_cancelled("req-1"), "fast path marks the request immediately")
+	assert_eq(_core.get_request_queue_depth(), 0, "cancelled notification must not enter the serial queue")
+
+# --- send_progress_notification --------------------------------------------
+
+func test_send_progress_without_transport_silent():
+	# No transport connected: sending must not crash and must silently no-op.
+	_core.send_progress_notification("tok-1", 1, 0, "hi")
+	assert_true(true, "send_progress with no transport should not crash")
+
+func test_send_progress_without_token_silent():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification(null, 1)
+	assert_eq(mock.sent.size(), 0, "no notification sent without a progress token")
+	_core._transport = null
+
+func test_send_progress_with_token_sends_notification():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification("tok-1", 5, 10, "working")
+	assert_eq(mock.sent.size(), 1, "one progress notification sent")
+	var msg: Dictionary = mock.sent[0]
+	assert_eq(msg.get("jsonrpc", ""), "2.0", "payload should be JSON-RPC 2.0")
+	assert_eq(msg.get("method", ""), "notifications/progress", "method should be notifications/progress")
+	var params: Dictionary = msg.get("params", {})
+	assert_eq(params.get("progressToken"), "tok-1", "progressToken echoed")
+	assert_eq(params.get("progress"), 5, "progress value")
+	assert_eq(params.get("total"), 10, "total value")
+	assert_eq(params.get("message"), "working", "message value")
+	_core._transport = null
+
+func test_send_progress_omits_optional_fields_when_empty():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification("tok-2", 3)
+	var params: Dictionary = mock.sent[0].get("params", {})
+	assert_false(params.has("total"), "total omitted when 0")
+	assert_false(params.has("message"), "message omitted when empty")
+	_core._transport = null
+
+# --- tool-call execution context + cancellation cleanup ---------------------
+
+func test_tool_call_clears_cancelled_marker():
+	var observed: Array = []
+	_core.register_tool("cancel_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core.is_request_cancelled(77))
+		return {})
+	_core._cancelled_requests[77] = true
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 77, "method": "tools/call", "params": {"name": "cancel_probe", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_eq(observed.size(), 1, "tool executed once")
+	assert_true(observed[0], "marker visible to the tool during execution")
+	assert_false(_core.is_request_cancelled(77), "marker cleared after tool execution")
+	assert_false(response.get("result", {}).get("isError", false), "call should succeed")
+
+func test_execution_context_set_during_call_and_cleared_after():
+	var observed: Array = []
+	_core.register_tool("ctx_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core._execution_context.duplicate())
+		return {})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 55, "method": "tools/call", "params": {"name": "ctx_probe", "arguments": {"_meta": {"progressToken": "pt-55"}}}}
+	await _core._handle_tool_call(msg)
+	assert_eq(observed.size(), 1, "tool executed once")
+	assert_eq(observed[0].get("tool_name"), "ctx_probe", "context records the tool name")
+	assert_eq(observed[0].get("request_id"), 55, "context records the request id")
+	assert_eq(observed[0].get("progress_token"), "pt-55", "context records arguments._meta.progressToken")
+	assert_true(_core._execution_context.is_empty(), "execution context cleared after the tool call")
+
+func test_execution_context_token_from_params_meta():
+	# Spec-compliant clients put _meta.progressToken next to arguments, not inside
+	# them; the core must capture it from there as well.
+	var observed: Array = []
+	_core.register_tool("meta_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core._execution_context.duplicate())
+		return {})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "meta_probe", "arguments": {}, "_meta": {"progressToken": "pt-params"}}}
+	await _core._handle_tool_call(msg)
+	assert_eq(observed[0].get("progress_token"), "pt-params", "params._meta.progressToken captured")
+
+func test_is_current_tool_cancelled_outside_execution():
+	assert_false(_core.is_current_tool_cancelled(), "no execution context -> not cancelled")
+	assert_eq(_core.get_current_progress_token(), null, "no execution context -> no progress token")
+
+func test_fast_path_cancel_flips_inflight_flag():
+	# A cancel notification delivered before a queued tool call runs must be
+	# observed by that call (fast path), and the marker must be cleared once the
+	# call finishes.
+	var saw: Array = []
+	_core.register_tool("inflight_probe", "Probe", {"type": "object"}, func(args):
+		await get_tree().process_frame
+		saw.append(_core.is_current_tool_cancelled())
+		return {"done": true})
+	_core._active = true
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 321, "method": "tools/call", "params": {"name": "inflight_probe", "arguments": {}}}
+	_core._request_queue.append({"message": msg, "context": null})
+	var cancel_msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 321}}
+	_core._on_transport_message_received(cancel_msg, null)
+	assert_true(_core.is_request_cancelled(321), "fast path marks before the queued call runs")
+	_core._drain_request_queue()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(saw.size(), 1, "tool ran once")
+	assert_true(saw[0], "tool observed the cancellation mid-run")
+	assert_false(_core.is_request_cancelled(321), "marker cleared after the call finished")
+	assert_eq(_core.get_request_queue_depth(), 0, "queue fully drained")
+	_core._active = false
+
+# --- tool integration: run_project_test through the real core ----------------
+
+func test_run_project_test_progress_and_cancel_via_core():
+	# End-to-end: the real project tool wired to the real core. The cancelled
+	# path returns a cancelled status; the pending-poll path emits a progress
+	# notification through the (mock) transport.
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	tools._server_core = core
+	core.register_tool("run_project_test", "Run a single test", {"type": "object"},
+		Callable(tools, "_tool_run_project_test"), {}, {}, "supplementary", "Project-Advanced")
+	core.set_tool_enabled("run_project_test", true)
+	var mock: MockTransport = MockTransport.new()
+	core._transport = mock
+	var test_path: String = "res://test/unit/test_async_job_runner.gd"
+	# Seed a running job so the tool takes the pending/poll path.
+	tools._test_runner.start(test_path, func() -> Dictionary:
+		OS.delay_msec(800)
+		return {"status": "passed", "framework": "fake"})
+	# 1) Cancelled request -> tool aborts with a cancelled status.
+	core._cancelled_requests[1001] = true
+	var cancel_msg: Dictionary = {"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": {"name": "run_project_test", "arguments": {"test_path": test_path, "_meta": {"progressToken": "tok-x"}}}}
+	var cancel_resp: Dictionary = await core._handle_tool_call(cancel_msg)
+	var cancel_payload: Dictionary = JSON.parse_string(cancel_resp.get("result", {}).get("content", [{}])[0].get("text", "{}"))
+	assert_eq(cancel_payload.get("status"), "cancelled", "run_project_test aborts when the request is cancelled")
+	assert_false(core.is_request_cancelled(1001), "marker cleared after the cancelled call finished")
+	# 2) Normal pending poll -> a progress notification is emitted.
+	var poll_msg: Dictionary = {"jsonrpc": "2.0", "id": 1002, "method": "tools/call", "params": {"name": "run_project_test", "arguments": {"test_path": test_path, "_meta": {"progressToken": "tok-y"}}}}
+	var poll_resp: Dictionary = await core._handle_tool_call(poll_msg)
+	var poll_payload: Dictionary = JSON.parse_string(poll_resp.get("result", {}).get("content", [{}])[0].get("text", "{}"))
+	assert_eq(poll_payload.get("status"), "pending", "running job still reports pending")
+	assert_true(mock.sent.size() >= 1, "at least one progress notification was sent")
+	var sent_methods: Array = []
+	for m in mock.sent:
+		sent_methods.append(m.get("method", ""))
+	assert_true("notifications/progress" in sent_methods, "a notifications/progress message was sent during polling")
+	tools._test_runner.flush()
