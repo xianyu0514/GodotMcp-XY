@@ -10,14 +10,14 @@
 
 | 维度 | 现状 | 评价 |
 | --- | --- | --- |
-| 工具面 | 215 工具（28 core + 185 supplementary + 2 meta），6 大类 + Meta（S4 已将 execute_script/execute_editor_script 降级为 supplementary） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
+| 工具面 | 221 工具（28 core + 189 supplementary + 4 meta），6 大类 + Meta（S4 已降级 execute_*；已加 search_tools/get_tool_details/verify_scripts/undo/redo/get_undo_history） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
 | 架构 | 纯 GDScript 原生 EditorPlugin，零外部依赖 | 结构性优势：无"进程启动器+抓 stdout"的假成功问题 |
 | 传输 | HTTP/SSE(:9080) + stdio，手写 HTTP 服务器（独立线程 + call_deferred 回主线程） | 可用但未跟上 2025 标准 Streamable HTTP |
-| 协议面 | initialize/tools/resources/prompts 四组方法 + instructions 渐进披露 | prompts 是**空壳**（capability 声明了但 0 注册）；缺 ping/completion/logging/roots/sampling/elicitation/cancellation/progress/分页 |
+| 协议面 | initialize/tools/resources/prompts 四组方法 + instructions 渐进披露 | prompts 已实现（7 工作流 prompt）；缺 completion/sampling/elicitation/分页 |
 | 安全 | Bearer 认证、路径校验、脚本沙箱（能力黑名单）、速率限制、工具分级 | 分层合理；路径校验用黑名单而非规范化 |
 | 验证闭环 | play_and_verify / assert_performance_budget / assert_no_runtime_errors / assert_visual_baseline / smoke_test_export / manage_task_plan(DoD gates) | 业界领先的"工业化"闭环 |
-| 测试 | ~100 GUT 单测 + 40 集成测试 + CI（headless import + GUT） | 扎实；但协议面测试薄（ping/completion/logging 无覆盖） |
-| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（215/28/185 已核对） |
+| 测试 | ~100 GUT 单测 + 40 集成测试 + CI（headless import + GUT） | 全量 0 失败（Godot 4.7.2 + GUT 9.7.1）；含 schema lint |
+| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（221/28/189 已核对） |
 
 ---
 
@@ -133,8 +133,8 @@
 | --- | --- | --- | --- |
 | 1 | `bake_lightmap` / `bake_voxel_gi` | GI 烘焙，异步+进度+截图门禁 | ⚠️ 4.7 master 文档 LightmapGI.bake() 疑似移除，实施前按版本实测 |
 | 2 | `bake_navigation_mesh` | NavigationRegion3D + NavigationServer3D 异步烘焙 | 防 cell_size 过小冻结 |
-| 3 | `undo` / `redo` / `get_undo_redo_state` | 显式撤销 + 历史查询 + version_changed 通知 | 属性编辑用 MERGE_ENDS 合并 |
-| 4 | `async_job` | start/poll/cancel/progress 统一异步框架，烘焙/导出/录制/导入全接入 | WorkerThreadPool.add_group_task + 信号 |
+| 3 | `undo` / `redo` / `get_undo_history` | 显式撤销 + 历史查询（✅ 已实现，editor_tools Editor-Advanced） | 属性编辑用 MERGE_ENDS 合并（后续优化） |
+| 4 | `async_job` | start/poll/cancel/progress 统一异步框架（✅ 已实现 utils/async_job_manager，长工具接入） | WorkerThreadPool.add_group_task + 信号 |
 | 5 | `memory_snapshot_diff` | ObjectDB 两时刻快照对比，泄漏检测 | 4.6 新增 |
 | 6 | `resource_preview` | EditorResourcePreview 异步缩略图 / make_mesh_previews | |
 | 7 | `editor_navigate` | edit_node/edit_script(line,col)/inspect_object/切换主屏 | |
