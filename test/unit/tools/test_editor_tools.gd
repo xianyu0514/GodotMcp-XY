@@ -326,3 +326,151 @@ func test_configure_android_export_writes_options():
 	assert_eq(bool(verify.get_value("preset.0.options", "architectures/arm64-v8a", false)), true, "Listed architecture should be enabled")
 	assert_eq(bool(verify.get_value("preset.0.options", "architectures/x86_64", true)), false, "Unlisted architecture should be disabled")
 	DirAccess.remove_absolute(cfg)
+
+# ---------------------------------------------------------------------------
+# undo / redo / get_undo_history
+# ---------------------------------------------------------------------------
+
+func _push_undo_action(ur: UndoRedo, name: String, target: Variant, delta: int) -> void:
+	ur.create_action(name)
+	ur.add_do_property(target, "value", target.value + delta)
+	ur.add_undo_property(target, "value", target.value)
+	ur.commit_action()
+
+func test_undo_requires_editor_interface():
+	var result: Dictionary = _editor_tools._tool_undo({})
+	assert_eq(result.get("error", ""), "Editor interface not available", "Should guard on missing editor interface")
+
+func test_redo_requires_editor_interface():
+	var result: Dictionary = _editor_tools._tool_redo({})
+	assert_eq(result.get("error", ""), "Editor interface not available", "Should guard on missing editor interface")
+
+func test_get_undo_history_requires_editor_interface():
+	var result: Dictionary = _editor_tools._tool_get_undo_history({})
+	assert_eq(result.get("error", ""), "Editor interface not available", "Should guard on missing editor interface")
+
+func test_undo_rejects_invalid_count():
+	var result: Dictionary = _editor_tools._tool_undo({"count": 0})
+	assert_true(result.has("error"), "count < 1 should error")
+	assert_true(str(result["error"]).contains("count"), "Error should mention count")
+
+func test_get_undo_history_rejects_invalid_limit():
+	var result: Dictionary = _editor_tools._tool_get_undo_history({"limit": 0})
+	assert_true(result.has("error"), "limit < 1 should error")
+
+func test_apply_undo_actions_null_manager_returns_error():
+	var result: Dictionary = _editor_tools._apply_undo_actions(null, 1)
+	assert_true(result.has("error"), "Null UndoRedo should error")
+
+func test_apply_undo_actions_empty_stack_returns_noop():
+	var ur: UndoRedo = UndoRedo.new()
+	var result: Dictionary = _editor_tools._apply_undo_actions(ur, 1)
+	assert_eq(result.get("status", ""), "noop", "Empty undo stack should return noop")
+	assert_eq(result.get("message", ""), "Nothing to undo", "Should explain there is nothing to undo")
+	ur.free()
+
+func test_apply_redo_actions_empty_stack_returns_noop():
+	var ur: UndoRedo = UndoRedo.new()
+	var result: Dictionary = _editor_tools._apply_redo_actions(ur, 1)
+	assert_eq(result.get("status", ""), "noop", "Empty redo stack should return noop")
+	assert_eq(result.get("message", ""), "Nothing to redo", "Should explain there is nothing to redo")
+	ur.free()
+
+func test_describe_undo_history_empty():
+	var ur: UndoRedo = UndoRedo.new()
+	var history: Dictionary = _editor_tools._describe_undo_history(ur, 20)
+	assert_eq(history["undo_count"], 0, "No undoable actions")
+	assert_eq(history["redo_count"], 0, "No redoable actions")
+	assert_eq(history["can_undo"], false, "can_undo should be false")
+	assert_eq(history["can_redo"], false, "can_redo should be false")
+	assert_eq((history["undo_actions"] as Array).size(), 0, "No undo actions listed")
+	assert_eq((history["redo_actions"] as Array).size(), 0, "No redo actions listed")
+	ur.free()
+
+func test_undo_redo_round_trip_via_helpers():
+	var ur: UndoRedo = UndoRedo.new()
+	var box: Variant = CounterBox.new()
+	_push_undo_action(ur, "Step A", box, 3)
+	_push_undo_action(ur, "Step B", box, 4)
+	assert_eq(box.value, 7, "Both do steps should be applied at commit")
+	var undo_result: Dictionary = _editor_tools._apply_undo_actions(ur, 2)
+	assert_eq(undo_result.get("status", ""), "success", "Undo should succeed")
+	assert_eq(int(undo_result.get("undone_count", 0)), 2, "Both actions should be undone")
+	assert_eq(bool(undo_result.get("has_undo", true)), false, "No undo should remain")
+	assert_eq(box.value, 0, "Value should return to the initial state")
+	var redo_result: Dictionary = _editor_tools._apply_redo_actions(ur, 2)
+	assert_eq(redo_result.get("status", ""), "success", "Redo should succeed")
+	assert_eq(int(redo_result.get("redone_count", 0)), 2, "Both actions should be redone")
+	assert_eq(box.value, 7, "Value should be restored after redo")
+	assert_eq(bool(redo_result.get("has_redo", true)), false, "No redo should remain")
+	ur.free()
+
+func test_apply_undo_count_exceeds_stack_stops_at_empty():
+	var ur: UndoRedo = UndoRedo.new()
+	var box: Variant = CounterBox.new()
+	_push_undo_action(ur, "Only", box, 5)
+	var result: Dictionary = _editor_tools._apply_undo_actions(ur, 10)
+	assert_eq(result.get("status", ""), "success", "Should succeed")
+	assert_eq(int(result.get("undone_count", 0)), 1, "Should stop at empty stack")
+	assert_eq(bool(result.get("has_undo", true)), false, "has_undo should be false")
+	ur.free()
+
+func test_describe_undo_history_lists_most_recent_first():
+	var ur: UndoRedo = UndoRedo.new()
+	var box: Variant = CounterBox.new()
+	_push_undo_action(ur, "Set 10", box, 10)
+	_push_undo_action(ur, "Set 25", box, 15)
+	assert_eq(box.value, 25, "Latest do step should be applied")
+	var history: Dictionary = _editor_tools._describe_undo_history(ur, 20)
+	assert_eq(history["undo_count"], 2, "Two actions should be undoable")
+	assert_eq(history["redo_count"], 0, "Nothing should be redoable yet")
+	assert_eq(history["can_undo"], true, "can_undo should be true")
+	assert_eq(history["can_redo"], false, "can_redo should be false")
+	var undo_names: Array = history["undo_actions"]
+	assert_eq(undo_names.size(), 2, "Should list two undo actions")
+	assert_eq(undo_names[0]["name"], "Set 25", "Most recent undo action should come first")
+	assert_eq(undo_names[1]["name"], "Set 10", "Older undo action should come second")
+	ur.free()
+
+func test_describe_undo_history_after_undo_shows_redo():
+	var ur: UndoRedo = UndoRedo.new()
+	var box: Variant = CounterBox.new()
+	_push_undo_action(ur, "Alpha", box, 5)
+	_push_undo_action(ur, "Beta", box, 5)
+	_editor_tools._apply_undo_actions(ur, 1)
+	var history: Dictionary = _editor_tools._describe_undo_history(ur, 20)
+	assert_eq(history["undo_count"], 1, "One undoable action should remain")
+	assert_eq(history["redo_count"], 1, "One redoable action should exist")
+	assert_eq(history["can_undo"], true, "can_undo should be true")
+	assert_eq(history["can_redo"], true, "can_redo should be true")
+	var undo_names: Array = history["undo_actions"]
+	assert_eq(undo_names.size(), 1, "Should list one undo action")
+	assert_eq(undo_names[0]["name"], "Alpha", "Remaining undo action should be Alpha")
+	var redo_names: Array = history["redo_actions"]
+	assert_eq(redo_names.size(), 1, "Should list one redo action")
+	assert_eq(redo_names[0]["name"], "Beta", "Next redo action should be Beta")
+	ur.free()
+
+func test_describe_undo_history_limit_caps_action_names():
+	var ur: UndoRedo = UndoRedo.new()
+	var box: Variant = CounterBox.new()
+	_push_undo_action(ur, "One", box, 1)
+	_push_undo_action(ur, "Two", box, 1)
+	_push_undo_action(ur, "Three", box, 1)
+	var limited: Dictionary = _editor_tools._describe_undo_history(ur, 2)
+	assert_eq((limited["undo_actions"] as Array).size(), 2, "limit should cap listed undo action names")
+	assert_eq(limited["undo_count"], 3, "undo_count should still reflect the full stack")
+	ur.free()
+
+func test_undo_redo_tools_registered_and_use_editor_undo_redo():
+	var source_code: String = _editor_tools.get_script().source_code
+	assert_true(source_code.contains("_register_undo(server_core)"), "undo should be registered in register_tools")
+	assert_true(source_code.contains("_register_redo(server_core)"), "redo should be registered in register_tools")
+	assert_true(source_code.contains("_register_get_undo_history(server_core)"), "get_undo_history should be registered in register_tools")
+	assert_true(source_code.contains("get_undo_redo"), "Undo/redo tools should use EditorInterface.get_undo_redo()")
+	assert_true(source_code.contains("has_undo()"), "undo should guard with has_undo()")
+	assert_true(source_code.contains("get_action_name"), "get_undo_history should list action names via get_action_name")
+
+class CounterBox:
+	extends RefCounted
+	var value: int = 0

@@ -11,9 +11,9 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_218_tools_registered():
+func test_all_221_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 218, "Should have exactly 218 tools registered")
+	assert_eq(all_tools.size(), 221, "Should have exactly 221 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
@@ -37,6 +37,17 @@ func test_verify_scripts_is_supplementary_script_advanced():
 	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
 	assert_false(_classifier.is_core_tool("verify_scripts"), "verify_scripts should not be core")
 	assert_eq(_classifier.get_tool_group("verify_scripts"), "Script-Advanced", "verify_scripts should be in Script-Advanced group")
+
+func test_undo_redo_history_tools_are_supplementary_editor_advanced():
+	for tool_name in ["undo", "redo", "get_undo_history"]:
+		assert_true(_classifier.is_supplementary_tool(tool_name), tool_name + " should be supplementary")
+		assert_false(_classifier.is_core_tool(tool_name), tool_name + " should not be core")
+		assert_false(_classifier.is_meta_tool(tool_name), tool_name + " should not be meta")
+		assert_eq(_classifier.get_tool_group(tool_name), "Editor-Advanced", tool_name + " should be in Editor-Advanced group")
+
+func test_editor_advanced_group_count():
+	var tools: Array = _classifier.get_group_tools("Editor-Advanced")
+	assert_eq(tools.size(), 23, "Editor-Advanced should have 23 tools")
 
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
@@ -80,7 +91,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 186, "Should have 186 supplementary tools")
+	assert_eq(supp_tools.size(), 189, "Should have 189 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")

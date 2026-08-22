@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**24 tools** — 3 core, 21 advanced.
+**27 tools** — 3 core, 24 advanced.
 
 Drive the Godot editor itself: run/stop the project, inspect editor state, select files/nodes, manage open scripts, export builds and capture screenshots.
 
@@ -26,7 +26,7 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 
 > **Script sandbox guard:** when `security_level` is `1` (STRICT, the default), `execute_editor_script` is scanned by a capability denylist before it runs. Scripts that reference OS process execution (`OS.execute`, `OS.create_process`, …), out-of-project filesystem paths, networking (`HTTPRequest`, `TCPServer`, …) or other dangerous APIs are rejected with `{"blocked": true, "reason": "script_sandbox", "category": …}` instead of being executed. Set `security_level = 0` (PERMISSIVE) to disable the guard. This is an anti-footgun guard, not an adversarial sandbox. The same guard applies to `execute_script` (including its single-line expression path), `evaluate_debug_expression` and `evaluate_runtime_expression`.
 
-### Editor-Advanced (21 advanced)
+### Editor-Advanced (24 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -50,3 +50,6 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `reload_open_scripts` | advanced | Reload the editor's open script buffers from disk so the editor does not overwrite externally rewritten files (Godot 4.7). |
 | `close_script_tab` | advanced | Close a script tab in the editor's script editor, optionally targeting a specific script path (Godot 4.7). |
 | `get_import_status` | advanced | Report whether the EditorFileSystem is currently scanning or importing assets (importing field requires Godot 4.7). |
+| `undo` | advanced | Undo the most recent editor action(s) via the editor's UndoRedo stack (node create/delete, property change, tile paint, …). Pass `count` to undo several actions at once; the loop stops when the undo stack is empty. Returns status `noop` with message `Nothing to undo` when the stack is empty. |
+| `redo` | advanced | Redo the most recently undone editor action(s). Pass `count` to redo several actions at once; the loop stops when the redo stack is empty. Returns status `noop` with message `Nothing to redo` when the stack is empty. |
+| `get_undo_history` | advanced | Read-only summary of the editor's UndoRedo stack: how many actions can be undone/redone and the names of the most recent undoable and redoable actions (most recent first, capped by `limit`, default 20). |
