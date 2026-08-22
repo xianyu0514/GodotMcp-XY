@@ -226,3 +226,93 @@ func test_start_stop_lifecycle():
 		assert_true(_http_server.is_running(), "Server should be running after start")
 		_http_server.stop()
 		assert_false(_http_server.is_running(), "Server should stop cleanly")
+
+# ==============================================================================
+# Streamable HTTP 双轨：Accept 协商、stateless 会话头与 SSE POST 响应
+# ==============================================================================
+
+func test_wants_sse_negotiation_matrix():
+	assert_true(_http_server._wants_sse("text/event-stream"), "text/event-stream should negotiate SSE")
+	assert_false(_http_server._wants_sse("application/json"), "application/json should negotiate JSON")
+	assert_false(_http_server._wants_sse(""), "Empty Accept should negotiate JSON")
+	assert_false(_http_server._wants_sse("*/*"), "*/* should negotiate JSON (stateless default)")
+
+func test_send_response_invalid_context_no_crash():
+	_http_server.send_response({"jsonrpc": "2.0", "id": 1, "result": {}}, null)
+	assert_true(true, "send_response with null context should not crash")
+
+func test_get_server_session_id_stable():
+	var id1: String = _http_server._get_server_session_id()
+	var id2: String = _http_server._get_server_session_id()
+	assert_false(id1.is_empty(), "Server session id should be non-empty")
+	assert_eq(id1, id2, "Server session id should be stable within the process")
+
+func test_session_id_header_format():
+	var header: String = _http_server._session_id_header()
+	assert_true(header.begins_with("Mcp-Session-Id: "), "Header should use the Mcp-Session-Id name")
+	assert_true(header.ends_with("\r\n"), "Header should end with CRLF")
+
+func test_send_sse_post_response_wire_format():
+	# 真实回环 TCP：验证 Streamable HTTP 的 SSE POST 响应在线上字节格式
+	_http_server.set_port(23142)
+	assert_true(_http_server.start(), "Server should start on test port")
+	var client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(client.connect_to_host("127.0.0.1", 23142), OK, "Client should initiate connection")
+	var server_peer: StreamPeerTCP = _wait_for_server_peer(client)
+	assert_ne(server_peer, null, "Server should accept the client connection")
+	if server_peer == null:
+		client.disconnect_from_host()
+		return
+	var response: Dictionary = {"jsonrpc": "2.0", "id": 1, "result": {"ok": true}}
+	_http_server._send_sse_post_response(server_peer, response)
+	var received: String = _read_client_data(client)
+	assert_true(received.contains("HTTP/1.1 200 OK"), "SSE response should be 200 OK")
+	assert_true(received.contains("Content-Type: text/event-stream"), "SSE response should declare text/event-stream")
+	assert_true(received.contains("event: message"), "SSE response should use the message event name")
+	assert_true(received.contains("data: " + JSON.stringify(response)), "SSE response should carry the JSON-RPC data event")
+	assert_true(received.contains("Mcp-Session-Id: "), "SSE response should include a session id header")
+	client.disconnect_from_host()
+
+func test_send_http_response_json_wire_format():
+	# 真实回环 TCP：验证 application/json 单响应（stateless 主路径）的线上字节格式
+	_http_server.set_port(23143)
+	assert_true(_http_server.start(), "Server should start on test port")
+	var client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(client.connect_to_host("127.0.0.1", 23143), OK, "Client should initiate connection")
+	var server_peer: StreamPeerTCP = _wait_for_server_peer(client)
+	assert_ne(server_peer, null, "Server should accept the client connection")
+	if server_peer == null:
+		client.disconnect_from_host()
+		return
+	var response: Dictionary = {"jsonrpc": "2.0", "id": 2, "result": {"pong": true}}
+	_http_server._send_http_response(server_peer, response)
+	var received: String = _read_client_data(client)
+	assert_true(received.contains("Content-Type: application/json; charset=utf-8"), "JSON response should declare application/json")
+	assert_true(received.contains("Mcp-Session-Id: "), "JSON response should include a session id header")
+	assert_true(received.contains(JSON.stringify(response)), "JSON response should carry the body")
+	client.disconnect_from_host()
+
+# --- 辅助：等待服务器接受连接并返回服务器侧 peer ---
+func _wait_for_server_peer(client: StreamPeerTCP) -> StreamPeerTCP:
+	var attempts: int = 0
+	while attempts < 200:
+		client.poll()
+		OS.delay_msec(5)
+		if client.get_status() == StreamPeerTCP.STATUS_CONNECTED and _http_server._connections.size() > 0:
+			return _http_server._connections[0]
+		attempts += 1
+	return null
+
+# --- 辅助：读取客户端已接收的所有数据 ---
+func _read_client_data(client: StreamPeerTCP) -> String:
+	var received: String = ""
+	var attempts: int = 0
+	while received.is_empty() and attempts < 200:
+		client.poll()
+		OS.delay_msec(5)
+		if client.get_available_bytes() > 0:
+			var data: Array = client.get_data(client.get_available_bytes())
+			if data[0] == OK:
+				received += data[1].get_string_from_utf8()
+		attempts += 1
+	return received

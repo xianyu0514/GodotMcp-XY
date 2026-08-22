@@ -2,7 +2,10 @@ class_name McpHttpServer
 extends McpTransportBase
 
 # HTTP 传输实现 - 支持 JSON-RPC over HTTP
-# 符合 MCP 2025-03-26 规范（Streamable HTTP）
+# Streamable HTTP 双轨（MCP 2025-06-18+ 规范）：
+#   - POST /mcp + Accept: application/json（默认）-> 单 JSON 响应（stateless 优先）
+#   - POST /mcp + Accept: text/event-stream    -> SSE 单事件响应（流式客户端）
+#   - GET /mcp + Accept: text/event-stream     -> 纯 SSE 长连接（向后兼容保留）
 # 使用 Godot TCPServer 实现 HTTP 服务器
 
 # ==============================================================================
@@ -61,6 +64,13 @@ var _auth_manager: McpAuthManager = null
 
 ## 会话管理
 var _sessions: Dictionary = {}  # session_id -> session_data
+
+## POST 请求按 peer 协商的响应格式（"json" 或 "sse"），主线程 send_response 据此选择。
+## 与 _sse_connections 相同的既有跨线程访问模式（服务器线程写、主线程读）。
+var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
+
+## 插件进程级稳定会话 ID（stateless 服务器仍返回该 id，兼容 stateful 客户端）
+var _server_session_id: String = ""
 
 ## 远程访问配置
 var _allow_remote: bool = false
@@ -236,6 +246,7 @@ func stop() -> void:
 			peer.disconnect_from_host()
 	
 	_connections.clear()
+	_post_response_formats.clear()
 	
 	server_stopped.emit()
 	if _log_callback.is_valid():
@@ -287,6 +298,8 @@ func _http_server_loop() -> void:
 				disconnected.append(p)
 				if _sse_connections.has(p):
 					_close_sse_connection(p)
+				if _post_response_formats.has(p):
+					_post_response_formats.erase(p)
 				continue
 			
 			if p.get_available_bytes() > 0:
@@ -495,6 +508,20 @@ static func batch_error_payload() -> Dictionary:
 		}
 	}
 
+# ==============================================================================
+# Streamable HTTP 双轨（Accept 协商）
+# ==============================================================================
+
+## 根据 Accept 头判断客户端是否期望 SSE 流式响应（Streamable HTTP 双轨协商）。
+## 仅当 Accept 显式包含 "text/event-stream" 时返回 true；
+## application/json、空头、*/*（通用通配）均走默认的单 JSON 响应路径——
+## stateless 优先，且与 Python requests（默认 Accept: */*）等通用 HTTP 客户端向后兼容。
+## @param accept_header: String - 请求的 Accept 头原文（可为空）
+## @returns: bool - 期望 SSE 返回 true，否则 false
+static func _wants_sse(accept_header: String) -> bool:
+	var header: String = accept_header.strip_edges().to_lower()
+	return header.contains("text/event-stream")
+
 ## 处理 POST 请求（JSON-RPC over HTTP）
 ## @param peer: StreamPeerTCP - 客户端连接
 ## @param parsed: Dictionary - 解析后的 HTTP 请求
@@ -529,6 +556,20 @@ func _handle_post_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	if is_batch_payload(data):
 		_send_http_response(peer, batch_error_payload())
 		return
+	
+	# --- Streamable HTTP 双轨：Accept 协商 ---
+	# 仅当 Accept 显式包含 text/event-stream 时协商 SSE 流式响应；
+	# 其余（application/json、空、*/*）走单 JSON 响应（stateless 优先，向后兼容）。
+	# 协商结果按 peer 记录，主线程 send_response 时据此选择响应格式。
+	var accept_header: String = parsed["headers"].get("accept", "")
+	_post_response_formats[peer] = "sse" if _wants_sse(accept_header) else "json"
+	if _log_callback.is_valid():
+		_log_callback.call("DEBUG", "POST /mcp Accept negotiation: format=" + str(_post_response_formats[peer]) + " (Accept: " + accept_header + ")")
+	
+	# --- Mcp-Session-Id：stateless 服务器忽略客户端会话头，仅记录日志 ---
+	var client_session_id: String = parsed["headers"].get("mcp-session-id", "")
+	if not client_session_id.is_empty() and _log_callback.is_valid():
+		_log_callback.call("DEBUG", "Ignoring Mcp-Session-Id header (stateless server): " + client_session_id)
 	
 	var message: Dictionary = data
 	
@@ -722,7 +763,13 @@ func send_response(response: Dictionary, context: Variant) -> void:
 		if _log_callback.is_valid():
 			_log_callback.call("ERROR", "Cannot send response: invalid peer context")
 		return
-	_send_http_response(peer, response)
+	# Streamable HTTP 双轨：按 POST 时协商的结果选择 JSON 单响应或 SSE 事件。
+	# 未协商过的 peer 默认走 JSON（向后兼容）。
+	var format: String = _post_response_formats.get(peer, "json")
+	if format == "sse":
+		_send_sse_post_response(peer, response)
+	else:
+		_send_http_response(peer, response)
 
 ## 构建并发送 HTTP 响应
 ## @param peer: StreamPeerTCP - 客户端连接
@@ -735,6 +782,7 @@ func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 	http_response += "Content-Type: application/json; charset=utf-8\r\n"
 	http_response += "Content-Length: " + str(json_bytes.size()) + "\r\n"
 	http_response += _cors_header()
+	http_response += _session_id_header()
 	http_response += "\r\n"
 	
 	var header_bytes: PackedByteArray = http_response.to_utf8_buffer()
@@ -746,7 +794,47 @@ func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 		if _log_callback.is_valid():
 			_log_callback.call("ERROR", "Failed to send response: " + str(error))
 	
+	_post_response_formats.erase(peer)
 	peer.disconnect_from_host()
+
+## 发送 Streamable HTTP 的 SSE 单事件响应（POST /mcp 协商为 text/event-stream 时使用）
+## 格式: event: message / data: {json}\n\n，写后断开连接（单事件最小实现，不做长连接）
+## @param peer: StreamPeerTCP - 客户端连接
+## @param data: Dictionary - 要发送的 JSON-RPC 响应
+func _send_sse_post_response(peer: StreamPeerTCP, data: Dictionary) -> void:
+	var json_string: String = JSON.stringify(data)
+	
+	var http_response: String = "HTTP/1.1 200 OK\r\n"
+	http_response += "Content-Type: text/event-stream\r\n"
+	http_response += "Cache-Control: no-cache\r\n"
+	http_response += "Connection: close\r\n"
+	http_response += _cors_header()
+	http_response += _session_id_header()
+	http_response += "\r\n"
+	http_response += "event: message\r\n"
+	http_response += "data: " + json_string + "\r\n"
+	http_response += "\r\n"
+	
+	var error: Error = peer.put_data(http_response.to_utf8_buffer())
+	if error != OK:
+		server_error.emit("Failed to send SSE response: " + str(error))
+		if _log_callback.is_valid():
+			_log_callback.call("ERROR", "Failed to send SSE response: " + str(error))
+	
+	_post_response_formats.erase(peer)
+	peer.disconnect_from_host()
+
+## 获取插件进程级稳定会话 ID；首次调用时惰性生成，之后保持不变
+## @returns: String - 稳定会话 ID
+func _get_server_session_id() -> String:
+	if _server_session_id.is_empty():
+		_server_session_id = _generate_session_id()
+	return _server_session_id
+
+## 构建 Mcp-Session-Id 响应头（stateless 服务器仍返回稳定 id，兼容 stateful 客户端）
+## @returns: String - 单行响应头（含 \r\n）
+func _session_id_header() -> String:
+	return "Mcp-Session-Id: " + _get_server_session_id() + "\r\n"
 
 ## 发送 HTTP 错误响应
 ## @param peer: StreamPeerTCP - 客户端连接
@@ -756,6 +844,7 @@ func _send_http_accepted(peer: StreamPeerTCP) -> void:
 	var response: String = "HTTP/1.1 202 Accepted\r\n"
 	response += "Content-Length: 0\r\n"
 	response += _cors_header()
+	response += _session_id_header()
 	response += "\r\n"
 	peer.put_data(response.to_utf8_buffer())
 	peer.disconnect_from_host()
@@ -778,6 +867,7 @@ func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) ->
 	response_header += "Content-Type: text/plain; charset=utf-8\r\n"
 	response_header += "Content-Length: " + str(message.to_utf8_buffer().size()) + "\r\n"
 	response_header += _cors_header()
+	response_header += _session_id_header()
 	response_header += "\r\n"
 	
 	peer.put_data(response_header.to_utf8_buffer() + message.to_utf8_buffer())

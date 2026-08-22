@@ -115,3 +115,40 @@ func test_batch_error_payload_round_trips_json():
 	var error_obj: Dictionary = reparsed.get("error", {})
 	assert_eq(error_obj.get("code"), -32600.0, "Round-tripped error code should be -32600")
 	assert_eq(error_obj.get("message"), "Invalid Request", "Round-tripped error message should be Invalid Request")
+
+# ==============================================================================
+# Streamable HTTP 双轨：Accept 头协商（McpHttpServer._wants_sse）
+# ==============================================================================
+
+func test_wants_sse_explicit_event_stream():
+	assert_true(_http_server._wants_sse("text/event-stream"), "Explicit text/event-stream should request SSE")
+
+func test_wants_sse_application_json():
+	assert_false(_http_server._wants_sse("application/json"), "application/json should request single JSON response")
+
+func test_wants_sse_empty_header():
+	assert_false(_http_server._wants_sse(""), "Empty Accept should default to single JSON response")
+
+func test_wants_sse_wildcard_defaults_json():
+	assert_false(_http_server._wants_sse("*/*"), "Wildcard */* should default to JSON (stateless-first, backward compat)")
+
+func test_wants_sse_combined_prefers_sse():
+	assert_true(_http_server._wants_sse("application/json, text/event-stream"), "Accept listing text/event-stream should negotiate SSE")
+
+func test_wants_sse_reversed_order():
+	assert_true(_http_server._wants_sse("text/event-stream, application/json"), "SSE listed first should still negotiate SSE")
+
+func test_wants_sse_case_insensitive():
+	assert_true(_http_server._wants_sse("TEXT/EVENT-STREAM"), "Accept matching should be case-insensitive")
+
+func test_wants_sse_with_q_value():
+	assert_true(_http_server._wants_sse("text/event-stream;q=0.9"), "q-value parameter should not block SSE negotiation")
+
+func test_wants_sse_trimmed_whitespace():
+	assert_true(_http_server._wants_sse("  text/event-stream  "), "Surrounding whitespace should be tolerated")
+
+func test_wants_sse_json_with_charset():
+	assert_false(_http_server._wants_sse("application/json; charset=utf-8"), "JSON media type with parameters should not request SSE")
+
+func test_wants_sse_multiple_json_types():
+	assert_false(_http_server._wants_sse("application/json, application/*+json"), "Accept with only JSON types should not request SSE")
