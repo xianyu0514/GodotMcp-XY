@@ -40,6 +40,14 @@ func test_project_context_rejects_unknown_section():
 	assert_has(result, "error", "Unknown sections fail fast")
 	assert_true(str(result.get("error", "")).contains("expensive_scan"), "Error names the invalid section")
 
+func test_project_context_editor_section_reports_script_and_unsaved_buffers():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_get_project_context({"sections": ["editor"]})
+	var editor: Dictionary = result.get("context", {}).get("editor", {})
+	assert_has(editor, "current_script")
+	assert_has(editor, "unsaved_scripts")
+	assert_has(editor, "unsaved_scenes")
+
 func test_project_context_task_plan_summary_is_compact():
 	var plan: Dictionary = {
 		"goal": "Playable vertical slice",

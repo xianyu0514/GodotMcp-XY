@@ -25,8 +25,10 @@ const METHOD_RESOURCES_LIST: String = "resources/list"
 const METHOD_RESOURCES_READ: String = "resources/read"
 const METHOD_RESOURCES_SUBSCRIBE: String = "resources/subscribe"
 const METHOD_RESOURCES_UNSUBSCRIBE: String = "resources/unsubscribe"
+const METHOD_RESOURCES_TEMPLATES_LIST: String = "resources/templates/list"
 const METHOD_PROMPTS_LIST: String = "prompts/list"
 const METHOD_PROMPTS_GET: String = "prompts/get"
+const METHOD_COMPLETION_COMPLETE: String = "completion/complete"
 const METHOD_PING: String = "ping"
 
 # Server-initiated notifications
@@ -231,6 +233,30 @@ class MCPResource:
 		return true
 
 # ============================================================================
+# MCPResourceTemplate类 - 参数化资源元数据
+# ============================================================================
+
+class MCPResourceTemplate:
+	var uri_template: String = ""
+	var name: String = ""
+	var description: String = ""
+	var mime_type: String = "application/octet-stream"
+	var load_callable: Callable = Callable()
+
+	func to_dict() -> Dictionary:
+		var result: Dictionary = {
+			"uriTemplate": uri_template,
+			"name": name,
+			"mimeType": mime_type
+		}
+		if not description.is_empty():
+			result["description"] = description
+		return result
+
+	func is_valid() -> bool:
+		return not uri_template.is_empty() and not name.is_empty() and load_callable.is_valid()
+
+# ============================================================================
 # MCPPrompt类 - 提示模板元数据
 # ============================================================================
 
@@ -295,7 +321,8 @@ static func create_error_response(id: Variant, code: int, message: String, data:
 static func create_capabilities(tools_changed: bool = true,
 								resources_subscribe: bool = true,
 								resources_changed: bool = true,
-								prompts_changed: bool = true) -> Dictionary:
+								prompts_changed: bool = true,
+								completions: bool = true) -> Dictionary:
 	var capabilities: Dictionary = {}
 	
 	if tools_changed:
@@ -311,6 +338,9 @@ static func create_capabilities(tools_changed: bool = true,
 	
 	if prompts_changed:
 		capabilities["prompts"] = {"listChanged": true}
+
+	if completions:
+		capabilities["completions"] = {}
 	
 	return capabilities
 

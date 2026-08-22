@@ -14,7 +14,7 @@ Transport layer
 MCP server core
   ├─ tool registry and classification
   ├─ auth, rate limit and security checks
-  ├─ resources/prompts support
+  ├─ resources/templates/prompts/completions support
   └─ notifications
       │
       ▼
@@ -68,7 +68,7 @@ runtime-probe and verify domains moved into three dedicated modules:
 | `debug_tools_native.gd` | Debug (main: logs/misc + shared static helpers) | 6 |
 | `debug_bridge_tools.gd` | Debug (bridge + execution control) | 28 |
 | `debug_runtime_tools.gd` | Debug (runtime probe) | 38 |
-| `debug_verify_tools.gd` | Debug (verify gates: play_and_verify/perf budget/runtime errors) | 3 |
+| `debug_verify_tools.gd` | Debug (verify gates: play_and_verify/visual playtest/perf budget/runtime errors) | 4 |
 | `project_tools_native.gd` | Project (main: compact context/info/config/input/autoload/class metadata/tests) | 17 |
 | `project_resources_tools.gd` | Project (resources: create/read/update/deps/migration/UID) | 21 |
 | `project_assets_tools.gd` | Project (assets: generate/3D/slice/glTF/gradient/drawable/PCK/render) | 9 |
@@ -98,6 +98,8 @@ These hints flow to three places that agents already consume:
 This design keeps the default client context small without making specialized capabilities unavailable.
 
 The compact context loop exposes the same snapshot through the core `get_project_context` tool and the subscribable `godot://project/context` resource. The payload uses canonical section ordering and a SHA-256 content revision; clients can pass `known_revision` to suppress unchanged context. After any successful tool marked `readOnlyHint=false`, the server emits `notifications/resources/updated` for currently subscribed resources.
+
+Protocol discovery is bounded and dynamic: `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list` return deterministic pages of at most 100 entries. `completion/complete` serves prompt arguments and the `godot://script/{path}` / `godot://scene/{path}` templates; template reads validate project-relative paths and load files only from `res://`.
 
 ## Runtime probe
 

@@ -21,7 +21,7 @@ This folder is the documentation hub for Godot MCP Native, a Godot 4.7 editor pl
 - **Engine:** Godot 4.7, GL Compatibility renderer.
 - **Entry point:** `addons/godot_mcp/mcp_server_native.gd`.
 - **Default endpoint:** `http://localhost:9080/mcp`.
-- **Tool count:** 222 total = 29 core + 189 advanced + 4 always-on meta tools.
+- **Tool count:** 223 total = 29 core + 190 advanced + 4 always-on meta tools.
 - **Runtime dependency:** none for the plugin itself; testing may require Godot/GUT and Python.
 - **Primary config file:** `user://mcp_settings.cfg`.
 

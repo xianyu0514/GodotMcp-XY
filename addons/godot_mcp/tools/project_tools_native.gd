@@ -290,7 +290,7 @@ func _build_project_context_project() -> Dictionary:
 func _build_project_context_editor() -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if editor_interface == null:
-		return {"available": false, "is_playing": false, "current_scene": "", "selected_nodes": []}
+		return {"available": false, "is_playing": false, "current_scene": "", "current_script": "", "selected_nodes": [], "unsaved_scripts": [], "unsaved_scenes": []}
 	var current_scene: String = ""
 	var scene_root: Node = editor_interface.get_edited_scene_root()
 	if scene_root:
@@ -301,11 +301,30 @@ func _build_project_context_editor() -> Dictionary:
 		for node in selection.get_selected_nodes():
 			selected_nodes.append(str(node.get_path()))
 	selected_nodes.sort()
+	var current_script: String = ""
+	var unsaved_scripts: Array[String] = []
+	var script_editor: ScriptEditor = editor_interface.get_script_editor()
+	if script_editor:
+		var script: Script = script_editor.get_current_script()
+		if script:
+			current_script = script.resource_path
+		if script_editor.has_method("get_unsaved_files"):
+			for script_path in script_editor.call("get_unsaved_files"):
+				unsaved_scripts.append(str(script_path))
+	unsaved_scripts.sort()
+	var unsaved_scenes: Array[String] = []
+	if editor_interface.has_method("get_unsaved_scenes"):
+		for scene_path in editor_interface.call("get_unsaved_scenes"):
+			unsaved_scenes.append(str(scene_path))
+	unsaved_scenes.sort()
 	return {
 		"available": true,
 		"is_playing": editor_interface.is_playing_scene(),
 		"current_scene": current_scene,
-		"selected_nodes": selected_nodes
+		"current_script": current_script,
+		"selected_nodes": selected_nodes,
+		"unsaved_scripts": unsaved_scripts,
+		"unsaved_scenes": unsaved_scenes
 	}
 
 func _build_project_context_autoloads() -> Dictionary:

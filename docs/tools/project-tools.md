@@ -20,7 +20,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_project_info` | core | Get general information about the Godot project, including name, version, and description. |
-| `get_project_context` | core | Return a compact, revisioned orientation snapshot with selectable project, editor, autoload, input-action, global-class, task-plan and enabled-tool sections. It does not scan full scene trees or script contents. A matching `known_revision` returns `changed=false` without repeating `context`. The same snapshot is available as the subscribable `godot://project/context` resource. |
+| `get_project_context` | core | Return a compact, revisioned orientation snapshot with selectable project, editor, autoload, input-action, global-class, task-plan and enabled-tool sections. The editor section includes current scene/script, selection and unsaved scene/script buffers. It does not scan full scene trees or script contents. A matching `known_revision` returns `changed=false` without repeating `context`. The same snapshot is available as the subscribable `godot://project/context` resource. |
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
 

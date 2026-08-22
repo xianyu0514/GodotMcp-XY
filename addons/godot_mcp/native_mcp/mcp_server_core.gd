@@ -40,7 +40,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a preset (minimal_core, level_design, debugging, automation_qa, art_resources, all). After enabling, the new tools appear in tools/list and you can call them directly. Catalog and search results carry readOnlyHint/destructiveHint/idempotentHint from each tool's MCP annotations: prefer read-only discovery and inspection tools first, and reserve mutating or destructive tools for the concrete edit step. This keeps context small and saves compute."
+const SERVER_INSTRUCTIONS: String = "Start orientation with get_project_context; retain its revision and pass it as known_revision on later turns so unchanged context is not repeated. Godot MCP exposes ~30 core tools plus four always-on meta tools (list_tool_catalog, search_tools, get_tool_details, enable_tools). If a needed capability is absent, search the catalog, fetch details only for the selected tool, then enable that tool/group/preset; do not give up or load the full catalog. Prefer read-only inspection first, then the smallest concrete mutation, and use returned verification/read-back evidence. For gameplay changes, use visual_playtest when you need the complete launch -> runtime assertions -> screenshot -> golden-baseline -> cleanup verdict. List endpoints are paginated: follow nextCursor. Script and scene contents are also available through godot://script/{path} and godot://scene/{path} resource templates with completion."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -112,9 +112,11 @@ const SPILL_EXEMPT_TOOLS: Array[String] = ["read_script", "batch_read_scripts", 
 ## adds `_meta.ttlMs`/`cacheScope` for list caching; Claude Code validates these
 ## fields and rejects list results that omit them.
 const LIST_CACHE_TTL_MS: int = 30000
+const LIST_PAGE_SIZE: int = 100
 const TOOLS_LIST_CACHE_SCOPE: String = "toolSet"
 const RESOURCES_LIST_CACHE_SCOPE: String = "resourceList"
 const PROMPTS_LIST_CACHE_SCOPE: String = "promptList"
+const RESOURCE_TEMPLATES_LIST_CACHE_SCOPE: String = "resourceTemplateList"
 
 ## Path to the plugin manifest whose `plugin/version` key is the single source
 ## of truth for the version reported in the `initialize` handshake.
@@ -149,7 +151,9 @@ var _admission_waiter_seq: int = 0
 # 工具和资源注册表
 var _tools: Dictionary = {}  # String -> MCPTool
 var _resources: Dictionary = {}  # String -> MCPResource
+var _resource_templates: Dictionary = {}  # String uriTemplate -> MCPResourceTemplate
 var _prompts: Dictionary = {}  # String -> MCPPrompt
+var _completion_providers: Dictionary = {}  # refType\nrefId\nargument -> Array or Callable
 var _resource_subscriptions: Dictionary = {}  # String (uri) -> true; active resource subscriptions
 var _tool_list_dirty: bool = false  # 工具列表变更标记
 # tools/list 服务端缓存：启用工具按名字排序后的 MCPTool.to_dict() 数组。
@@ -553,12 +557,18 @@ func _handle_request(message: Dictionary) -> Dictionary:
 		
 		MCPTypes.METHOD_RESOURCES_UNSUBSCRIBE:
 			return _handle_resource_unsubscribe(message)
+
+		MCPTypes.METHOD_RESOURCES_TEMPLATES_LIST:
+			return _handle_resource_templates_list(message)
 		
 		MCPTypes.METHOD_PROMPTS_LIST:
 			return _handle_prompts_list(message)
 		
 		MCPTypes.METHOD_PROMPTS_GET:
 			return await _handle_prompt_get(message)
+
+		MCPTypes.METHOD_COMPLETION_COMPLETE:
+			return await _handle_completion_complete(message)
 		
 		_:
 			_log_warn("Method not found: " + method)
@@ -641,7 +651,12 @@ func _handle_tools_list(message: Dictionary) -> Dictionary:
 	if not _tool_list_cache_valid:
 		_rebuild_tool_list_cache()
 	
-	var result: Dictionary = {"tools": _tool_list_cache}
+	var page: Dictionary = _paginate_protocol_list(_tool_list_cache, str(message.get("params", {}).get("cursor", "")))
+	if page.has("error"):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, str(page["error"]))
+	var result: Dictionary = {"tools": page["items"]}
+	if page.has("next_cursor"):
+		result["nextCursor"] = page["next_cursor"]
 	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope），Claude Code 缺失会拒绝。
 	result["_meta"] = {
 		"ttlMs": LIST_CACHE_TTL_MS,
@@ -862,12 +877,19 @@ func _handle_resources_list(message: Dictionary) -> Dictionary:
 	# 构建资源列表（根据mcp-builder，包含description）
 	var resources_list: Array[Dictionary] = []
 	
-	for uri in _resources:
+	var resource_uris: Array = _resources.keys()
+	resource_uris.sort()
+	for uri in resource_uris:
 		var resource: MCPTypes.MCPResource = _resources[uri]
 		if resource and resource.is_valid():
 			resources_list.append(resource.to_dict())
 	
-	var result: Dictionary = {"resources": resources_list}
+	var page: Dictionary = _paginate_protocol_list(resources_list, str(message.get("params", {}).get("cursor", "")))
+	if page.has("error"):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, str(page["error"]))
+	var result: Dictionary = {"resources": page["items"]}
+	if page.has("next_cursor"):
+		result["nextCursor"] = page["next_cursor"]
 	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
 	result["_meta"] = {
 		"ttlMs": LIST_CACHE_TTL_MS,
@@ -880,6 +902,29 @@ func _handle_resources_list(message: Dictionary) -> Dictionary:
 	
 	return response
 
+func _handle_resource_templates_list(message: Dictionary) -> Dictionary:
+	var id: Variant = message.get("id")
+	var templates: Array[Dictionary] = []
+	var keys: Array = _resource_templates.keys()
+	keys.sort()
+	for uri_template in keys:
+		var resource_template: MCPTypes.MCPResourceTemplate = _resource_templates[uri_template]
+		if resource_template and resource_template.is_valid():
+			templates.append(resource_template.to_dict())
+	var page: Dictionary = _paginate_protocol_list(templates, str(message.get("params", {}).get("cursor", "")))
+	if page.has("error"):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, str(page["error"]))
+	var result: Dictionary = {
+		"resourceTemplates": page["items"],
+		"_meta": {
+			"ttlMs": LIST_CACHE_TTL_MS,
+			"cacheScope": RESOURCE_TEMPLATES_LIST_CACHE_SCOPE
+		}
+	}
+	if page.has("next_cursor"):
+		result["nextCursor"] = page["next_cursor"]
+	return MCPTypes.create_response(id, result)
+
 func _handle_resource_read(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	var params: Dictionary = message.get("params", {})
@@ -887,19 +932,33 @@ func _handle_resource_read(message: Dictionary) -> Dictionary:
 	
 	_log_info("Resource read: " + uri)
 	
-	# 检查资源是否存在
-	if not _resources.has(uri):
+	var load_callable: Callable = Callable()
+	var mime_type: String = "application/octet-stream"
+	var load_params: Dictionary = params.duplicate(true)
+	if _resources.has(uri):
+		var direct_resource: MCPTypes.MCPResource = _resources[uri]
+		load_callable = direct_resource.load_callable
+		mime_type = direct_resource.mime_type
+	else:
+		var matched: Dictionary = _match_resource_template(uri)
+		if not matched.is_empty():
+			var resource_template: MCPTypes.MCPResourceTemplate = matched["template"]
+			load_callable = resource_template.load_callable
+			mime_type = resource_template.mime_type
+			load_params["_template_arguments"] = matched["arguments"]
+			load_params["_template_uri"] = uri
+
+	if not load_callable.is_valid():
 		_log_error("Resource not found: " + uri)
 		return MCPTypes.create_error_response(id, MCPTypes.ERROR_RESOURCE_NOT_FOUND, "Resource not found: " + uri)
 	
-	var resource: MCPTypes.MCPResource = _resources[uri]
-	
-	resource_requested.emit(uri, params)
+	resource_requested.emit(uri, load_params)
 	
 	var content: Dictionary = {}
 	
-	if resource.load_callable.is_valid():
-		content = await resource.load_callable.call(params)
+	content = await load_callable.call(load_params)
+	if content.has("error"):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_RESOURCE_NOT_FOUND, str(content["error"]), {"uri": uri})
 	
 	var result: Dictionary = {}
 	
@@ -909,7 +968,7 @@ func _handle_resource_read(message: Dictionary) -> Dictionary:
 		result = {
 			"contents": [{
 				"uri": uri,
-				"mimeType": resource.mime_type,
+				"mimeType": mime_type,
 				"text": content.get("text", JSON.stringify(content))
 			}]
 		}
@@ -930,7 +989,7 @@ func _handle_resource_subscribe(message: Dictionary) -> Dictionary:
 	if uri.is_empty():
 		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, "Missing required parameter: uri")
 	
-	if not _resources.has(uri):
+	if not _resources.has(uri) and _match_resource_template(uri).is_empty():
 		_log_warn("Subscribe to unknown resource: " + uri)
 		return MCPTypes.create_error_response(id, MCPTypes.ERROR_RESOURCE_NOT_FOUND, "Resource not found: " + uri)
 	
@@ -939,6 +998,27 @@ func _handle_resource_subscribe(message: Dictionary) -> Dictionary:
 	
 	# MCP spec: resources/subscribe returns an empty result on success.
 	return MCPTypes.create_response(id, {})
+
+func _match_resource_template(uri: String) -> Dictionary:
+	for uri_template in _resource_templates.keys():
+		var open_brace: int = str(uri_template).find("{")
+		var close_brace: int = str(uri_template).find("}", open_brace + 1)
+		if open_brace < 0 or close_brace <= open_brace + 1:
+			continue
+		var prefix: String = str(uri_template).substr(0, open_brace)
+		var suffix: String = str(uri_template).substr(close_brace + 1)
+		if not uri.begins_with(prefix) or not uri.ends_with(suffix):
+			continue
+		var value_length: int = uri.length() - prefix.length() - suffix.length()
+		if value_length <= 0:
+			continue
+		var argument_name: String = str(uri_template).substr(open_brace + 1, close_brace - open_brace - 1).trim_prefix("+")
+		var argument_value: String = uri.substr(prefix.length(), value_length).uri_decode()
+		return {
+			"template": _resource_templates[uri_template],
+			"arguments": {argument_name: argument_value}
+		}
+	return {}
 
 func _handle_resource_unsubscribe(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
@@ -1056,8 +1136,16 @@ func _handle_prompts_list(message: Dictionary) -> Dictionary:
 		var prompt: MCPTypes.MCPPrompt = _prompts[prompt_name]
 		if prompt and prompt.is_valid():
 			prompts_list.append(prompt.to_dict())
+	prompts_list.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a.get("name", "")) < str(b.get("name", ""))
+	)
 	
-	var result: Dictionary = {"prompts": prompts_list}
+	var page: Dictionary = _paginate_protocol_list(prompts_list, str(message.get("params", {}).get("cursor", "")))
+	if page.has("error"):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, str(page["error"]))
+	var result: Dictionary = {"prompts": page["items"]}
+	if page.has("next_cursor"):
+		result["nextCursor"] = page["next_cursor"]
 	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
 	result["_meta"] = {
 		"ttlMs": LIST_CACHE_TTL_MS,
@@ -1105,6 +1193,71 @@ func _handle_prompt_get(message: Dictionary) -> Dictionary:
 		result["messages"] = []
 	
 	return MCPTypes.create_response(id, result)
+
+func _handle_completion_complete(message: Dictionary) -> Dictionary:
+	var id: Variant = message.get("id")
+	var params: Dictionary = message.get("params", {})
+	var ref: Variant = params.get("ref", null)
+	var argument: Variant = params.get("argument", null)
+	if not (ref is Dictionary) or not (argument is Dictionary):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, "completion/complete requires ref and argument objects")
+	var ref_type: String = str(ref.get("type", ""))
+	var ref_id: String = str(ref.get("name", "")) if ref_type == "ref/prompt" else str(ref.get("uri", ""))
+	var argument_name: String = str(argument.get("name", ""))
+	var partial: String = str(argument.get("value", ""))
+	if not (ref_type in ["ref/prompt", "ref/resource"]) or ref_id.is_empty() or argument_name.is_empty():
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, "Invalid completion reference or argument")
+	if ref_type == "ref/prompt" and not _prompts.has(ref_id):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, "Prompt not found: " + ref_id)
+	if ref_type == "ref/resource" and not _resource_templates.has(ref_id):
+		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INVALID_PARAMS, "Resource template not found: " + ref_id)
+
+	var provider_key: String = _completion_key(ref_type, ref_id, argument_name)
+	var raw_values: Array = []
+	if _completion_providers.has(provider_key):
+		var provider: Variant = _completion_providers[provider_key]
+		if provider is Callable and (provider as Callable).is_valid():
+			var context: Dictionary = params.get("context", {}) if params.get("context", {}) is Dictionary else {}
+			var produced: Variant = await (provider as Callable).call(partial, context)
+			if produced is Array:
+				raw_values = produced
+		elif provider is Array:
+			raw_values = provider
+
+	var matches: Array[String] = []
+	var seen: Dictionary = {}
+	var lowered_partial: String = partial.to_lower()
+	for raw_value in raw_values:
+		var value: String = str(raw_value)
+		if not lowered_partial.is_empty() and not value.to_lower().begins_with(lowered_partial):
+			continue
+		if not seen.has(value):
+			seen[value] = true
+			matches.append(value)
+	matches.sort()
+	var total: int = matches.size()
+	var values: Array = matches.slice(0, mini(total, 100))
+	return MCPTypes.create_response(id, {
+		"completion": {
+			"values": values,
+			"total": total,
+			"hasMore": total > values.size()
+		}
+	})
+
+static func _paginate_protocol_list(items: Array, cursor: String) -> Dictionary:
+	var offset: int = 0
+	if not cursor.is_empty():
+		if not cursor.is_valid_int():
+			return {"error": "Invalid cursor"}
+		offset = int(cursor)
+		if offset < 0 or offset > items.size():
+			return {"error": "Cursor is outside the result set"}
+	var end: int = mini(offset + LIST_PAGE_SIZE, items.size())
+	var result: Dictionary = {"items": items.slice(offset, end)}
+	if end < items.size():
+		result["next_cursor"] = str(end)
+	return result
 
 # ============================================================================
 # 工具注册API（优化版 - 根据mcp-builder）
@@ -1301,6 +1454,47 @@ func register_resource(uri: String, name: String,
 	
 	_resources[uri] = resource
 	_log_info("Resource registered: " + uri)
+
+func register_resource_template(uri_template: String, name: String,
+								mime_type: String, load_callable: Callable,
+								description: String = "", completions: Dictionary = {}) -> void:
+	var resource_template: MCPTypes.MCPResourceTemplate = MCPTypes.MCPResourceTemplate.new()
+	resource_template.uri_template = uri_template
+	resource_template.name = name
+	resource_template.description = description
+	resource_template.mime_type = mime_type
+	resource_template.load_callable = load_callable
+	if not resource_template.is_valid():
+		_log_error("Invalid resource template definition: " + uri_template)
+		return
+	_resource_templates[uri_template] = resource_template
+	for argument_name in completions.keys():
+		register_completion("ref/resource", uri_template, str(argument_name), completions[argument_name])
+	_log_info("Resource template registered: " + uri_template)
+
+func unregister_resource_template(uri_template: String) -> void:
+	if not _resource_templates.has(uri_template):
+		return
+	_resource_templates.erase(uri_template)
+	var prefix: String = "ref/resource\n" + uri_template + "\n"
+	for key in _completion_providers.keys():
+		if str(key).begins_with(prefix):
+			_completion_providers.erase(key)
+
+func get_all_resource_templates() -> Dictionary:
+	return _resource_templates.duplicate()
+
+func register_completion(ref_type: String, ref_id: String, argument_name: String, provider: Variant) -> void:
+	if not (ref_type in ["ref/prompt", "ref/resource"]) or ref_id.is_empty() or argument_name.is_empty():
+		_log_error("Invalid completion registration")
+		return
+	if not (provider is Array) and not (provider is Callable):
+		_log_error("Completion provider must be an Array or Callable")
+		return
+	_completion_providers[_completion_key(ref_type, ref_id, argument_name)] = provider
+
+static func _completion_key(ref_type: String, ref_id: String, argument_name: String) -> String:
+	return ref_type + "\n" + ref_id + "\n" + argument_name
 
 func unregister_resource(uri: String) -> void:
 	if _resources.has(uri):

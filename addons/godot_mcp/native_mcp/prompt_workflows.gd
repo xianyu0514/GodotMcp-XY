@@ -280,6 +280,13 @@ func register_to_server(server: RefCounted) -> int:
 			entry["callable"]
 		)
 		count += 1
+	if server.has_method("register_completion"):
+		server.register_completion("ref/prompt", "run_test_suite", "target_dir", [
+			"res://test", "res://test/unit", "res://test/integration"
+		])
+		server.register_completion("ref/prompt", "review_scene", "focus", [
+			"hierarchy", "inheritance", "node ownership", "persistence", "signals"
+		])
 	return count
 
 # ============================================================================

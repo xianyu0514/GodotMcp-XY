@@ -260,3 +260,15 @@ func test_prompt_get_via_server_core():
 	var list_resp: Dictionary = await _core._handle_prompts_list({"id": 2, "params": {}})
 	assert_true(list_resp.has("result"), "prompts/list should succeed")
 	assert_gte(list_resp["result"]["prompts"].size(), 6, "prompts/list should expose the registered prompts")
+
+func test_workflow_prompt_completions_are_registered():
+	var workflows: RefCounted = _new_workflows()
+	workflows.register_to_server(_core)
+	var response: Dictionary = await _core._handle_completion_complete({
+		"id": 3,
+		"params": {
+			"ref": {"type": "ref/prompt", "name": "run_test_suite"},
+			"argument": {"name": "target_dir", "value": "res://test/u"}
+		}
+	})
+	assert_eq(response.get("result", {}).get("completion", {}).get("values", []), ["res://test/unit/"])

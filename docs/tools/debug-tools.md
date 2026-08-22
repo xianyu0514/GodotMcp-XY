@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**73 tools** — 3 core, 70 advanced.
+**74 tools** — 3 core, 71 advanced.
 
 Debug edit-time logs and debugger sessions, then inspect and control a running game through the runtime probe. This is the largest category and includes deterministic play verification, performance budgets and runtime error gates.
 
@@ -11,7 +11,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 1. Start from core logging tools: `get_editor_logs`, `debug_print`, `clear_output`.
 2. Enable `Debug-Advanced` for breakpoints, stack frames, variables and profiler workflows.
 3. Install the runtime probe before calling live-scene or input tools.
-4. Use `play_and_verify`, `assert_performance_budget` and `assert_no_runtime_errors` as regression gates.
+4. Prefer `visual_playtest` for the complete launch → drive/assert → screenshot → golden-baseline → cleanup loop; use the narrower gates independently when needed.
 
 ## Tool list
 
@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (70 advanced)
+### Debug-Advanced (71 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -50,6 +50,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `await_runtime_condition` | advanced | Wait for a condition to be true in the running game. |
 | `assert_runtime_condition` | advanced | Assert a condition in the running game. |
 | `play_and_verify` | advanced | Drive the running game through a scripted sequence of input steps (with optional waits and screenshots), then evaluate a batch of runtime assertions, returning a single pass/fail report. Set deterministic=true to make per-step 'wait_frames' advance an exact number of physics frames inside the game (frame-stepped, fps-independent and reproducible) instead of a wall-clock approximation; combine with 'sample' to record a frame-indexed trajectory and per-label 'metrics' (min/max/first/last/delta/peak frame+time) for measuring game feel, and assert on them via {metric, aggregate, operator, expected}. Runtime errors the game emits during the run are captured via the debugger bridge and (by default) fail the report. Requires the game to be running with the runtime probe installed. |
+| `visual_playtest` | advanced | Execute the full visual feedback loop in one call: optionally install the runtime probe and launch a scene, drive deterministic input steps and runtime assertions, ensure a final PNG screenshot, compare or bootstrap a golden baseline, combine runtime and visual results into one verdict, and stop a game launched by the call. |
 | `assert_performance_budget` | advanced | Performance budget gate: capture a runtime performance snapshot from the running game and check it against a budget, returning a pass/fail verdict plus a per-metric breakdown. Budget keys: min_fps, max_frame_time_ms, max_physics_frame_time_ms, max_object_count, max_resource_count, max_rendered_objects, max_memory_mb, max_node_count (define only the ones to enforce). min_* checks actual >= limit; max_* checks actual <= limit. Pass an explicit 'snapshot' object to evaluate a previously captured snapshot instead of querying the game. Requires the game to be running with the runtime probe installed (unless 'snapshot' is supplied). |
 | `assert_no_runtime_errors` | advanced | Runtime-error hard gate: scan the categorized debugger output captured from the running game and fail if any error events are present. By default it inspects the 'stderr' category; pass 'categories' to widen or narrow it, and 'since_sequence' to only consider events newer than a previously recorded sequence number (so you can gate a specific window of a run). Returns passed=false with the captured error events when any are found. |
 | `get_debug_threads` | advanced | Return DAP-style debugger threads visible from the active Godot debug session. |

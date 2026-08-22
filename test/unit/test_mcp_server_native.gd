@@ -40,6 +40,15 @@ func test_plugin_registers_project_context_resource():
 	assert_true(method_names.has("_resource_project_context"), "Plugin should expose the compact project context resource loader")
 	assert_true(_plugin_script.source_code.contains("godot://project/context"), "Project context resource URI should be registered")
 
+func test_plugin_registers_project_file_resource_templates():
+	assert_true(_plugin_script.source_code.contains("godot://script/{path}"), "Script resource template should be registered")
+	assert_true(_plugin_script.source_code.contains("godot://scene/{path}"), "Scene resource template should be registered")
+	assert_true(_plugin_script.source_code.contains("register_resource_template"), "Templates should use the core registration API")
+
+func test_current_script_resource_uses_real_script_editor_state():
+	assert_true(_plugin_script.source_code.contains("_tool_get_current_script"), "Current script resource should reuse the tested tool reader")
+	assert_false(_plugin_script.source_code.contains("Current script feature not yet implemented"), "Placeholder resource content should be removed")
+
 func test_find_files_recursive():
 	var result: Array = []
 	var dir: DirAccess = DirAccess.open("res://")

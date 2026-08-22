@@ -5,7 +5,7 @@ extends "res://addons/gut/test.gd"
 #   - test_manifest_matches_registered_tools：运行时注册校验 —— 每个注册工具的
 #     category/group 必须与 manifest 一致（防“新增工具忘改 manifest / register 与
 #     manifest 不一致”漂移）
-#   - test_manifest_counts：manifest 计数（222/29/189/4）
+#   - test_manifest_counts：manifest 计数（223/29/190/4）
 
 const ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
 
@@ -47,9 +47,9 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_222_tools_registered():
+func test_all_223_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 222, "Should have exactly 222 tools registered")
+	assert_eq(all_tools.size(), 223, "Should have exactly 223 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
@@ -88,6 +88,10 @@ func test_editor_advanced_group_count():
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
 	assert_eq(_classifier.get_tool_group("play_and_verify"), "Debug-Advanced", "play_and_verify should be in Debug-Advanced group")
+
+func test_visual_playtest_is_supplementary_debug_advanced():
+	assert_true(_classifier.is_supplementary_tool("visual_playtest"), "visual_playtest should be supplementary")
+	assert_eq(_classifier.get_tool_group("visual_playtest"), "Debug-Advanced", "visual_playtest should be in Debug-Advanced group")
 
 func test_manage_task_plan_is_supplementary_project_advanced():
 	assert_true(_classifier.is_supplementary_tool("manage_task_plan"), "manage_task_plan should be supplementary")
@@ -131,7 +135,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 189, "Should have 189 supplementary tools")
+	assert_eq(supp_tools.size(), 190, "Should have 190 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -468,11 +472,11 @@ func test_manifest_matches_registered_tools():
 	assert_eq(mismatches.size(), 0,
 		"register_tool 与 manifest 分类/分组不一致的工具: " + str(mismatches))
 
-## manifest 计数基线：222 总 / 29 core / 189 supplementary / 4 meta。
+## manifest 计数基线：223 总 / 29 core / 190 supplementary / 4 meta。
 func test_manifest_counts():
-	assert_eq(ManifestScript.TOOLS.size(), 222, "manifest 应包含 222 个工具")
+	assert_eq(ManifestScript.TOOLS.size(), 223, "manifest 应包含 223 个工具")
 	assert_eq(ManifestScript.count_by_category("core"), 29, "manifest 应有 29 个 core 工具")
-	assert_eq(ManifestScript.count_by_category("supplementary"), 189, "manifest 应有 189 个 supplementary 工具")
+	assert_eq(ManifestScript.count_by_category("supplementary"), 190, "manifest 应有 190 个 supplementary 工具")
 	assert_eq(ManifestScript.count_by_category("meta"), 4, "manifest 应有 4 个 meta 工具")
 	# meta 工具必须包含（classifier 依赖 manifest 提供 meta 特殊处理数据）。
 	var meta_names: Array[String] = ManifestScript.tool_names()

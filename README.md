@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-222-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-223-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 
@@ -15,8 +15,10 @@ No Node.js bridge, no Python daemon and no separate server process are required.
 
 - **Native server:** the MCP server lives in the editor process and ships with the plugin.
 - **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
-- **222 tools with a small default surface:** 29 core tools are enabled immediately, 189 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
+- **223 tools with a small default surface:** 29 core tools are enabled immediately, 190 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
 - **Revisioned project orientation:** `get_project_context` and `godot://project/context` summarize project/editor state without scanning full scenes or scripts; unchanged revisions avoid repeating the payload.
+- **One-call visual verdict:** `visual_playtest` launches when needed, drives runtime assertions, captures a screenshot, applies the golden-image gate and cleans up.
+- **Efficient protocol discovery:** list endpoints paginate deterministically; resource templates and `completion/complete` expose project scripts/scenes without pre-registering every file.
 - **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
 - **Verified edits:** high-frequency node/property writes return live read-back evidence, and changed GDScript is compiled once by default after `modify_script`.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
@@ -65,10 +67,10 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Script](docs/tools/script-tools.md) | 18 | 6 | 12 | Read/write/validate GDScript and C#, shader validation, search, symbols and references |
 | [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | Create/open/save scenes, structure inspection, prefab-style instancing and TileMapLayer cells |
 | [Editor](docs/tools/editor-tools.md) | 27 | 3 | 24 | Run/stop, screenshots, selection, inspector state, export templates, script buffers and undo/redo |
-| [Debug & Runtime](docs/tools/debug-tools.md) | 73 | 3 | 70 | Logs, debugger control, profilers, runtime probe, deterministic play checks and regression gates |
+| [Debug & Runtime](docs/tools/debug-tools.md) | 74 | 3 | 71 | Logs, debugger control, profilers, runtime probe, deterministic play checks and one-call visual regression gates |
 | [Project](docs/tools/project-tools.md) | 62 | 4 | 58 | Compact context, settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | Always-on tool discovery and on-demand enablement |
-| **Total** | **222** | **29** | **189** | |
+| **Total** | **223** | **29** | **190** | |
 
 Only core and meta tools are visible to `tools/list` at startup. Use the MCP panel or the `enable_tools` meta tool to enable advanced tools by name, group or preset. See the [Tools Reference](docs/tools/README.md).
 

@@ -10,14 +10,14 @@
 
 | 维度 | 现状 | 评价 |
 | --- | --- | --- |
-| 工具面 | 222 工具（29 core + 189 supplementary + 4 meta），6 大类 + Meta（已加紧凑 revision 上下文、search_tools/get_tool_details/verify_scripts/undo/redo/get_undo_history） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
+| 工具面 | 223 工具（29 core + 190 supplementary + 4 meta），6 大类 + Meta（已加 revision 上下文、一键视觉 playtest、渐进发现与验证门禁） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
 | 架构 | 纯 GDScript 原生 EditorPlugin，零外部依赖 | 结构性优势：无"进程启动器+抓 stdout"的假成功问题 |
 | 传输 | HTTP/SSE(:9080) + stdio，手写 HTTP 服务器（独立线程 + call_deferred 回主线程） | 可用但未跟上 2025 标准 Streamable HTTP |
-| 协议面 | initialize/tools/resources/prompts 四组方法 + instructions 渐进披露 | prompts 已实现（7 工作流 prompt）；缺 completion/sampling/elicitation/分页 |
+| 协议面 | initialize/tools/resources/templates/prompts/completion + instructions 渐进披露 | 7 个工作流 prompt、补全、动态资源模板与确定性分页均已实现；按取舍不实现已弃用能力 |
 | 安全 | Bearer 认证、路径校验、脚本沙箱（能力黑名单）、速率限制、工具分级 | 分层合理；路径校验用黑名单而非规范化 |
 | 验证闭环 | play_and_verify / assert_performance_budget / assert_no_runtime_errors / assert_visual_baseline / smoke_test_export / manage_task_plan(DoD gates) | 业界领先的"工业化"闭环 |
 | 测试 | ~100 GUT 单测 + 40 集成测试 + CI（headless import + GUT） | 全量 0 失败（Godot 4.7.2 + GUT 9.7.1）；含 schema lint |
-| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（222/29/189 已核对） |
+| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（223/29/190 已核对） |
 
 ---
 
@@ -33,10 +33,10 @@
 | P1c | **速率限制作用于通知**（对通知返回错误响应） | `_handle_request` L401 对通知也做 `_check_rate_limit` | 仅对请求（带 id）限流 |
 | P1d | **JSON-RPC 批处理请求崩溃** | `mcp_http_server.gd` L496 `json.get_data()` 直接赋给 `Dictionary`，数组（batch）会类型断言崩溃 | batch 返回 -32600 Invalid Request（MCP 不支持 batch，官方以并发+Tasks 覆盖） |
 | P2 | prompts 空壳：capabilities 声明 `prompts.listChanged` 但 `register_prompt` 零调用，`prompts/list` 返回空 | grep 全仓无 `register_prompt(` 调用点；`test_mcp_prompts_resources.gd` 存在但无真实 prompt | 注册 6~8 个高价值工作流 prompt（见 §3） |
-| P3 | 无 `completion/complete`（capabilities.completion 缺失） | 规范提供；对 prompts 参数/资源 URI 补全有用（支持面窄，P1 优先级） | 为 prompts 参数实现 completion |
+| P3 | ✅ `completion/complete` 已实现 | prompts 参数与动态脚本/场景 URI 模板均可补全 | 保持建议值有界、按前缀过滤 |
 | P4 | 无 `notifications/progress`、无 `notifications/cancelled` | 长任务（export/烘焙/外部生成）无进度反馈，无法取消 | 长工具加 progress 上报；处理 cancelled；分钟级任务演进为 Tasks 扩展（`io.modelcontextprotocol/tasks`，适配 generate_3d_asset/play_and_verify/smoke_test_export） |
-| P5 | tools/list、resources/list、prompts/list 无分页（`nextCursor`） | 215 工具全量返回；规范支持分页 | 加 cursor 分页（>100 项时启用），配合 P0 的 ttlMs |
-| P6 | 无 `resources/templates/list` | 适合 `godot://scene/{path}` 模板 | 注册 URI 模板 |
+| P5 | ✅ tools/resources/resource-templates/prompts 列表已分页 | 每页至多 100，确定性排序并返回 `nextCursor` | 继续维持稳定 cursor 语义 |
+| P6 | ✅ `resources/templates/list` 已实现 | `godot://script/{path}` / `godot://scene/{path}` | 路径限定 `res://`，补全按需扫描 |
 | P7 | `serverInfo.version` 为 `"2.0.0"`、HTTP GET / 返回 `"1.0.0"` + `"MCP 2025-03-26"`，与插件 1.0.7-pre1 不一致 | `mcp_server_core.gd` L460 / `mcp_http_server.gd` L517 | 统一从 plugin.cfg 读版本 |
 | P8 | stdio 传输 `stop()` 潜在死锁：线程阻塞在 `OS.read_string_from_stdin()` 时 `wait_to_finish()` 挂起 | `mcp_stdio_server.gd` L64-66 + L95 | 非阻塞读或超时退出机制；单测覆盖 |
 | P9 | **缺少 `search_tools`/`get_tool_details` 元工具** | 官方渐进发现三层模式：catalog（search_tools）→ details（get_tool_details）→ execute；现有 `list_tool_catalog` 已对齐第一层 | meta 工具补齐三层；`tools/list` 保持确定性排序（利于 prompt cache） |
@@ -93,7 +93,7 @@
 - `modify_script` → 重新解析编译；
 - `update_node_property` → 读回属性值。
 
-### 3.4 视觉 playtest 一键编排
+### 3.4 视觉 playtest 一键编排（✅ 已实现）
 
 把 screenshot + play_and_verify + assert_visual_baseline + 差异热力图编排为高内聚流程（对齐 Unity/UE 同行的 Visual Review Loop 与 Coding-Solo #88）。
 

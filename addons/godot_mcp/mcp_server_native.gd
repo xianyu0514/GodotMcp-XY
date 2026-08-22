@@ -651,6 +651,7 @@ func _register_all_resources() -> void:
 	
 	# 注册项目资源
 	_register_project_resources()
+	_register_project_resource_templates()
 	
 	# 注册编辑器资源
 	_register_editor_resources()
@@ -744,6 +745,24 @@ func _register_project_resources() -> void:
 		"Project setting values and configuration"
 	)
 
+func _register_project_resource_templates() -> void:
+	_native_server.register_resource_template(
+		"godot://script/{path}",
+		"Project Script by Path",
+		"text/plain",
+		Callable(self, "_resource_script_by_path"),
+		"Read a GDScript or C# source file by project-relative path",
+		{"path": Callable(self, "_complete_script_resource_path")}
+	)
+	_native_server.register_resource_template(
+		"godot://scene/{path}",
+		"Project Scene by Path",
+		"application/json",
+		Callable(self, "_resource_scene_by_path"),
+		"Load a scene by project-relative path and return a bounded structure summary",
+		{"path": Callable(self, "_complete_scene_resource_path")}
+	)
+
 func _register_editor_resources() -> void:
 	# godot://editor/state
 	_native_server.register_resource(
@@ -825,13 +844,104 @@ func _resource_script_list(params: Dictionary) -> Dictionary:
 	}
 
 func _resource_script_current(params: Dictionary) -> Dictionary:
+	var result: Dictionary = {"script_found": false, "message": "Script tools are not available"}
+	var script_tools: Variant = _tool_instances.get("ScriptToolsNative")
+	if script_tools != null and script_tools.has_method("_tool_get_current_script"):
+		result = script_tools._tool_get_current_script({})
+	var text: String = str(result.get("content", ""))
+	if not bool(result.get("script_found", false)):
+		text = JSON.stringify(result)
 	return {
 		"contents": [{
 			"uri": "godot://script/current",
 			"mimeType": "text/plain",
-			"text": "# Current script feature not yet implemented\n# Godot 4.x requires EditorPlugin or ScriptEditor to get current script"
+			"text": text
 		}]
 	}
+
+func _resource_script_by_path(params: Dictionary) -> Dictionary:
+	var args: Dictionary = params.get("_template_arguments", {}) if params.get("_template_arguments", {}) is Dictionary else {}
+	var resolved: Dictionary = _resolve_template_project_path(str(args.get("path", "")), [".gd", ".cs"])
+	var uri: String = str(params.get("_template_uri", "godot://script/{path}"))
+	if resolved.has("error"):
+		return resolved
+	var file: FileAccess = FileAccess.open(str(resolved["path"]), FileAccess.READ)
+	if file == null:
+		return {"error": "Unable to read script"}
+	var text: String = file.get_as_text()
+	file.close()
+	return {"contents": [{"uri": uri, "mimeType": "text/plain", "text": text}]}
+
+func _resource_scene_by_path(params: Dictionary) -> Dictionary:
+	var args: Dictionary = params.get("_template_arguments", {}) if params.get("_template_arguments", {}) is Dictionary else {}
+	var resolved: Dictionary = _resolve_template_project_path(str(args.get("path", "")), [".tscn", ".scn"])
+	var uri: String = str(params.get("_template_uri", "godot://scene/{path}"))
+	if resolved.has("error"):
+		return resolved
+	var packed: PackedScene = ResourceLoader.load(str(resolved["path"])) as PackedScene
+	if packed == null:
+		return {"error": "Unable to load scene"}
+	var state: SceneState = packed.get_state()
+	var node_count: int = state.get_node_count()
+	var nodes: Array = []
+	var returned_count: int = mini(node_count, 500)
+	for node_index in returned_count:
+		nodes.append({
+			"path": str(state.get_node_path(node_index)),
+			"name": str(state.get_node_name(node_index)),
+			"type": str(state.get_node_type(node_index))
+		})
+	var summary: Dictionary = {
+		"path": resolved["path"],
+		"node_count": node_count,
+		"returned_count": returned_count,
+		"truncated": returned_count < node_count,
+		"nodes": nodes
+	}
+	return {"contents": [{"uri": uri, "mimeType": "application/json", "text": JSON.stringify(summary)}]}
+
+func _complete_script_resource_path(_partial: String, _context: Dictionary) -> Array:
+	var paths: Array = []
+	var dir: DirAccess = DirAccess.open("res://")
+	if dir:
+		_find_files_recursive(dir, ".gd", paths)
+		dir = DirAccess.open("res://")
+		if dir:
+			_find_files_recursive(dir, ".cs", paths)
+	return _resource_completion_paths(paths)
+
+func _complete_scene_resource_path(_partial: String, _context: Dictionary) -> Array:
+	var paths: Array = []
+	var dir: DirAccess = DirAccess.open("res://")
+	if dir:
+		_find_files_recursive(dir, ".tscn", paths)
+		dir = DirAccess.open("res://")
+		if dir:
+			_find_files_recursive(dir, ".scn", paths)
+	return _resource_completion_paths(paths)
+
+static func _resource_completion_paths(paths: Array) -> Array:
+	var result: Array[String] = []
+	for path in paths:
+		result.append(str(path).trim_prefix("res://"))
+	result.sort()
+	return result
+
+static func _resolve_template_project_path(raw_path: String, allowed_extensions: Array) -> Dictionary:
+	var path: String = raw_path.uri_decode().strip_edges().replace("\\", "/")
+	if path.is_empty():
+		return {"error": "Missing template path"}
+	if not path.begins_with("res://"):
+		path = "res://" + path.trim_prefix("/")
+	path = path.simplify_path()
+	if not path.begins_with("res://") or path.contains(".."):
+		return {"error": "Template path must stay inside res://"}
+	var extension: String = "." + path.get_extension().to_lower()
+	if not (extension in allowed_extensions):
+		return {"error": "Unsupported resource extension: " + extension}
+	if not FileAccess.file_exists(path):
+		return {"error": "Resource not found: " + path}
+	return {"path": path}
 
 func _resource_project_info(params: Dictionary) -> Dictionary:
 	var project_info: Dictionary = {

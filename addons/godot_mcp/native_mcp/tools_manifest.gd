@@ -10,7 +10,7 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 内容来源：与工具注册实现逐条一致（222 个工具：29 core + 189
+# 内容来源：与工具注册实现逐条一致（223 个工具：29 core + 190
 # supplementary + 4 meta）。
 #
 # 注意：
@@ -244,6 +244,7 @@ const TOOLS: Dictionary = {
 	"validate_script": {"category": "supplementary", "group": "Script-Advanced"},
 	"validate_shader": {"category": "supplementary", "group": "Script-Advanced"},
 	"verify_scripts": {"category": "supplementary", "group": "Script-Advanced"},
+	"visual_playtest": {"category": "supplementary", "group": "Debug-Advanced"},
 }
 
 ## 全部工具名（按名字排序，便于测试与文档对照）。

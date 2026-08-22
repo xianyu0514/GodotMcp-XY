@@ -222,6 +222,7 @@ func test_create_capabilities():
 	assert_has(caps, "tools", "Should have tools capability")
 	assert_has(caps, "resources", "Should have resources capability")
 	assert_has(caps, "prompts", "Should have prompts capability")
+	assert_has(caps, "completions", "Should advertise argument completions")
 
 func test_protocol_version():
 	assert_eq(MCPTypes.PROTOCOL_VERSION, "2025-11-25", "Protocol version should be 2025-11-25")
@@ -231,6 +232,10 @@ func test_method_ping_constant():
 
 func test_method_notifications_cancelled_constant():
 	assert_eq(MCPTypes.METHOD_NOTIFICATIONS_CANCELLED, "notifications/cancelled", "METHOD_NOTIFICATIONS_CANCELLED should be 'notifications/cancelled'")
+
+func test_completion_and_resource_template_method_constants():
+	assert_eq(MCPTypes.METHOD_COMPLETION_COMPLETE, "completion/complete")
+	assert_eq(MCPTypes.METHOD_RESOURCES_TEMPLATES_LIST, "resources/templates/list")
 
 func test_notification_progress_constant():
 	assert_eq(MCPTypes.NOTIFICATION_PROGRESS, "notifications/progress", "NOTIFICATION_PROGRESS should be 'notifications/progress'")

@@ -6,6 +6,14 @@ extends "res://addons/gut/test.gd"
 
 var tools: DebugVerifyTools
 
+class FakeBridgeTools:
+	extends RefCounted
+	var remove_calls: int = 0
+
+	func _tool_remove_runtime_probe(_params: Dictionary) -> Dictionary:
+		remove_calls += 1
+		return {"status": "success"}
+
 func before_each() -> void:
 	tools = DebugVerifyTools.new()
 
@@ -121,3 +129,35 @@ func test_compare_metric_value_operators():
 	assert_true(tools._compare_metric_value(5.0, 5.0, "lte"))
 	assert_false(tools._compare_metric_value(5.0, 4.0, "lt"))
 	assert_false(tools._compare_metric_value(5.0, 4.0, "unknown_op"))
+
+# --- visual_playtest orchestration helpers --------------------------------
+
+func test_visual_playtest_appends_final_screenshot_when_missing():
+	var steps: Array = tools._visual_playtest_steps([{"action": "jump", "wait_frames": 3}])
+	assert_eq(steps.size(), 2)
+	assert_eq(steps[0].get("action"), "jump")
+	assert_eq(steps[1].get("screenshot"), true)
+	assert_eq(steps[1].get("wait_frames"), 0)
+
+func test_visual_playtest_keeps_existing_screenshot_step():
+	var source: Array = [{"wait_frames": 2, "screenshot": true}]
+	var steps: Array = tools._visual_playtest_steps(source)
+	assert_eq(steps.size(), 1, "Existing screenshot avoids an extra runtime round trip")
+	assert_eq(source.size(), 1, "Input steps are not mutated")
+
+func test_visual_playtest_verdict_requires_runtime_and_visual_pass():
+	assert_true(tools._visual_playtest_passed({"passed": true}, {"passed": true}))
+	assert_false(tools._visual_playtest_passed({"passed": false}, {"passed": true}))
+	assert_false(tools._visual_playtest_passed({"passed": true}, {"passed": false}))
+
+func test_visual_playtest_requires_baseline_before_resolving_modules():
+	var result: Dictionary = await tools._tool_visual_playtest({})
+	assert_eq(result.get("error"), "Missing required parameter: baseline_path")
+
+func test_visual_playtest_only_removes_probe_installed_by_this_call():
+	var bridge := FakeBridgeTools.new()
+	tools._bridge_tools = bridge
+	assert_false(tools._cleanup_visual_playtest_probe(false))
+	assert_eq(bridge.remove_calls, 0)
+	assert_true(tools._cleanup_visual_playtest_probe(true))
+	assert_eq(bridge.remove_calls, 1)

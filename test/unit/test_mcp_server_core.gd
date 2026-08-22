@@ -241,6 +241,58 @@ func test_register_resource():
 	_core.register_resource("godot://test", "Test", "application/json", func(params): return {})
 	assert_eq(_core.get_resources_count(), 1, "Should have 1 resource after registration")
 
+func test_resource_template_lists_and_reads_matching_uri():
+	_core.register_resource_template(
+		"godot://script/{path}",
+		"Project Script",
+		"text/plain",
+		func(params): return {"text": "path=" + str(params.get("_template_arguments", {}).get("path", ""))},
+		"Read a project script",
+		{"path": ["scripts/player.gd", "scripts/enemy.gd"]}
+	)
+	var listed: Dictionary = _core._handle_resource_templates_list({"id": 1})
+	var templates: Array = listed.get("result", {}).get("resourceTemplates", [])
+	assert_eq(templates.size(), 1)
+	assert_eq(templates[0].get("uriTemplate"), "godot://script/{path}")
+	var read: Dictionary = await _core._handle_resource_read({"id": 2, "params": {"uri": "godot://script/scripts/player.gd"}})
+	assert_eq(read.get("result", {}).get("contents", [])[0].get("text"), "path=scripts/player.gd")
+
+func test_resource_template_rejects_non_matching_uri():
+	_core.register_resource_template("godot://script/{path}", "Project Script", "text/plain", func(_params): return {"text": "x"})
+	var read: Dictionary = await _core._handle_resource_read({"id": 2, "params": {"uri": "godot://scene/main.tscn"}})
+	assert_eq(read.get("error", {}).get("code"), MCPTypes.ERROR_RESOURCE_NOT_FOUND)
+
+func test_completion_filters_registered_values():
+	_core.register_completion("ref/prompt", "run_test_suite", "target_dir", ["res://test", "res://test/unit", "res://demo"])
+	var response: Dictionary = await _core._handle_completion_complete({
+		"id": 3,
+		"params": {
+			"ref": {"type": "ref/prompt", "name": "run_test_suite"},
+			"argument": {"name": "target_dir", "value": "res://test"}
+		}
+	})
+	var completion: Dictionary = response.get("result", {}).get("completion", {})
+	assert_eq(completion.get("values"), ["res://test", "res://test/unit"])
+	assert_eq(completion.get("total"), 2)
+	assert_eq(completion.get("hasMore"), false)
+
+func test_completion_supports_resource_template_reference():
+	_core.register_resource_template(
+		"godot://scene/{path}", "Project Scene", "application/json", func(_params): return {}, "", {"path": ["main.tscn", "levels/one.tscn"]}
+	)
+	var response: Dictionary = await _core._handle_completion_complete({
+		"id": 4,
+		"params": {
+			"ref": {"type": "ref/resource", "uri": "godot://scene/{path}"},
+			"argument": {"name": "path", "value": "levels"}
+		}
+	})
+	assert_eq(response.get("result", {}).get("completion", {}).get("values"), ["levels/one.tscn"])
+
+func test_completion_rejects_malformed_request():
+	var response: Dictionary = await _core._handle_completion_complete({"id": 5, "params": {}})
+	assert_eq(response.get("error", {}).get("code"), MCPTypes.ERROR_INVALID_PARAMS)
+
 func test_clear_cache():
 	_core.set_cached_scene_structure("res://test.tscn", {"test": true})
 	_core.clear_cache()
@@ -341,6 +393,20 @@ func test_tools_list_has_meta_ttl():
 	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
 	assert_eq(meta.get("cacheScope", ""), "toolSet", "_meta.cacheScope should be 'toolSet'")
 
+func test_tools_list_paginates_large_enabled_surface():
+	for i in 105:
+		_core.register_tool("page_tool_%03d" % i, "Page tool", {"type": "object"}, func(_args): return {}, {}, {}, "core", "Test")
+	var first: Dictionary = _core._handle_tools_list({"id": 1, "params": {}})
+	assert_eq(first.get("result", {}).get("tools", []).size(), 100)
+	assert_eq(first.get("result", {}).get("nextCursor"), "100")
+	var second: Dictionary = _core._handle_tools_list({"id": 2, "params": {"cursor": "100"}})
+	assert_eq(second.get("result", {}).get("tools", []).size(), 5)
+	assert_false(second.get("result", {}).has("nextCursor"))
+
+func test_protocol_list_rejects_invalid_cursor():
+	var response: Dictionary = _core._handle_tools_list({"id": 1, "params": {"cursor": "not-an-offset"}})
+	assert_eq(response.get("error", {}).get("code"), MCPTypes.ERROR_INVALID_PARAMS)
+
 func test_resources_list_has_meta_ttl():
 	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "resources/list"}
 	var response: Dictionary = _core._handle_resources_list(msg)
@@ -357,12 +423,20 @@ func test_prompts_list_has_meta_ttl():
 	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
 	assert_eq(meta.get("cacheScope", ""), "promptList", "_meta.cacheScope should be 'promptList'")
 
+func test_resource_templates_list_has_meta_ttl():
+	var response: Dictionary = _core._handle_resource_templates_list({"id": 1})
+	var meta: Dictionary = response.get("result", {}).get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS)
+	assert_eq(meta.get("cacheScope", ""), "resourceTemplateList")
+
 func test_initialize_default_server_version_fallback():
 	# start() 尚未调用时，_server_version 保持默认 "0.0.0"，且不再硬编码 "2.0.0"。
 	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
 	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
 	assert_eq(server_info.get("name", ""), "godot-native-mcp", "serverInfo.name should stay godot-native-mcp")
 	assert_eq(server_info.get("version", ""), "0.0.0", "Before start(), serverInfo.version should fall back to 0.0.0")
+	assert_true(str(response.get("result", {}).get("instructions", "")).contains("get_project_context"))
+	assert_true(str(response.get("result", {}).get("instructions", "")).contains("nextCursor"))
 
 func test_initialize_server_version_from_plugin_cfg():
 	# start() 会在 _active = true 之前调用 _load_plugin_version()；测试直接调用它，

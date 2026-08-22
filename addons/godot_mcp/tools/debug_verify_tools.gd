@@ -7,6 +7,9 @@ extends RefCounted
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
 var _runtime_tools: RefCounted = null
+var _editor_tools: RefCounted = null
+var _bridge_tools: RefCounted = null
+var _project_verification_tools: RefCounted = null
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -41,6 +44,30 @@ func _get_runtime_tools() -> RefCounted:
 				_runtime_tools = instances["DebugRuntimeTools"]
 	return _runtime_tools
 
+func _get_registered_tool_module(module_name: String) -> RefCounted:
+	if not Engine.has_meta("GodotMCPPlugin"):
+		return null
+	var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+	if not plugin or not (plugin.get("_tool_instances") is Dictionary):
+		return null
+	var instances: Dictionary = plugin.get("_tool_instances")
+	return instances.get(module_name, null) as RefCounted
+
+func _get_editor_tools() -> RefCounted:
+	if _editor_tools == null:
+		_editor_tools = _get_registered_tool_module("EditorToolsNative")
+	return _editor_tools
+
+func _get_bridge_tools() -> RefCounted:
+	if _bridge_tools == null:
+		_bridge_tools = _get_registered_tool_module("DebugBridgeTools")
+	return _bridge_tools
+
+func _get_project_verification_tools() -> RefCounted:
+	if _project_verification_tools == null:
+		_project_verification_tools = _get_registered_tool_module("ProjectVerificationTools")
+	return _project_verification_tools
+
 # ============================================================================
 # Tool registration
 # ============================================================================
@@ -48,6 +75,7 @@ func _get_runtime_tools() -> RefCounted:
 func register_tools(server_core: RefCounted) -> void:
 	_server_core = server_core
 	_register_play_and_verify(server_core)
+	_register_visual_playtest(server_core)
 	_register_assert_performance_budget(server_core)
 	_register_assert_no_runtime_errors(server_core)
 # ============================================================================
@@ -293,6 +321,149 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		if include_trajectory:
 			report["trajectory"] = trajectory
 	return report
+
+# ============================================================================
+# visual_playtest - launch -> drive/assert -> screenshot -> baseline -> verdict
+# ============================================================================
+
+func _register_visual_playtest(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"visual_playtest",
+		"Run the complete local visual verification loop in one call: optionally install the runtime probe and launch a scene, drive scripted inputs and assertions, capture a final screenshot, compare or bootstrap a golden baseline, return one verdict, then stop a game launched by this call.",
+		{
+			"type": "object",
+			"properties": {
+				"baseline_path": {"type": "string", "description": "Golden image path under res:// or user://."},
+				"steps": {"type": "array", "items": {"type": "object"}},
+				"assertions": {"type": "array", "items": {"type": "object"}},
+				"scene_path": {"type": "string", "description": "Optional scene to launch."},
+				"auto_start": {"type": "boolean", "default": true},
+				"install_probe": {"type": "boolean", "default": true},
+				"stop_after": {"type": "boolean", "default": true},
+				"deterministic": {"type": "boolean", "default": true},
+				"screenshot_dir": {"type": "string", "default": "user://mcp_visual_playtest"},
+				"update_baseline": {"type": "boolean", "default": false},
+				"max_diff_pixels": {"type": "integer", "description": "Optional absolute differing-pixel limit; omit to use ratio/RMSE only."},
+				"max_diff_ratio": {"type": "number", "default": 0.005},
+				"rmse_threshold": {"type": "number", "default": 0.0},
+				"per_pixel_threshold": {"type": "number", "default": 0.00001},
+				"diff_output_path": {"type": "string"},
+				"allow_window": {"type": "boolean", "default": false},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 5000}
+			},
+			"required": ["baseline_path"]
+		},
+		Callable(self, "_tool_visual_playtest"),
+		{"type": "object", "properties": {"status": {"type": "string"}, "passed": {"type": "boolean"}, "started_by_tool": {"type": "boolean"}, "stopped": {"type": "boolean"}, "probe_removed": {"type": "boolean"}, "candidate_path": {"type": "string"}, "runtime": {"type": "object"}, "visual": {"type": "object"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_visual_playtest(params: Dictionary) -> Dictionary:
+	var baseline_path: String = str(params.get("baseline_path", "")).strip_edges()
+	if baseline_path.is_empty():
+		return {"error": "Missing required parameter: baseline_path"}
+	if _get_project_verification_tools() == null:
+		return {"error": "Project verification tools are not available"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	var already_running: bool = editor_interface != null and editor_interface.is_playing_scene()
+	var started_by_tool: bool = false
+	var probe_installed_by_tool: bool = false
+	var launch: Dictionary = {"status": "already_running"} if already_running else {}
+	if not already_running:
+		if not bool(params.get("auto_start", true)):
+			return {"error": "No game is running and auto_start=false"}
+		if _get_editor_tools() == null:
+			return {"error": "Editor run tools are not available"}
+		if bool(params.get("install_probe", true)):
+			if _get_bridge_tools() == null:
+				return {"error": "Runtime probe installer is not available"}
+			var probe: Dictionary = _get_bridge_tools()._tool_install_runtime_probe({})
+			if probe.has("error"):
+				return {"error": probe["error"], "phase": "install_probe"}
+			probe_installed_by_tool = probe.get("status", "") == "success"
+		var run_params: Dictionary = {"allow_window": bool(params.get("allow_window", false))}
+		if params.has("scene_path"):
+			run_params["scene_path"] = params["scene_path"]
+		launch = await _get_editor_tools()._tool_run_project(run_params)
+		if launch.has("error") or launch.get("status", "") == "error":
+			_cleanup_visual_playtest_probe(probe_installed_by_tool)
+			return {"error": launch.get("error", "Failed to launch project"), "phase": "launch", "launch": launch}
+		started_by_tool = true
+
+	var play_params: Dictionary = params.duplicate(true)
+	play_params["steps"] = _visual_playtest_steps(params.get("steps", []) if params.get("steps", []) is Array else [])
+	play_params["assertions"] = params.get("assertions", []) if params.get("assertions", []) is Array else []
+	play_params["deterministic"] = bool(params.get("deterministic", true))
+	play_params["screenshot_format"] = "png"
+	play_params["screenshot_dir"] = str(params.get("screenshot_dir", "user://mcp_visual_playtest"))
+	var runtime: Dictionary = await _tool_play_and_verify(play_params)
+	var screenshots: Array = runtime.get("screenshots", []) if runtime.get("screenshots", []) is Array else []
+	if screenshots.is_empty():
+		var stopped_without_shot: bool = await _stop_visual_playtest_if_needed(started_by_tool, params)
+		var probe_removed_without_shot: bool = _cleanup_visual_playtest_probe(probe_installed_by_tool)
+		return {
+			"error": runtime.get("error", "Visual playtest produced no screenshot"),
+			"phase": "runtime",
+			"started_by_tool": started_by_tool,
+			"stopped": stopped_without_shot,
+			"probe_removed": probe_removed_without_shot,
+			"runtime": runtime
+		}
+
+	var candidate_path: String = str(screenshots[-1].get("save_path", ""))
+	var visual_params: Dictionary = {
+		"candidate_path": candidate_path,
+		"baseline_path": baseline_path,
+		"update_baseline": bool(params.get("update_baseline", false)),
+		"max_diff_ratio": float(params.get("max_diff_ratio", 0.005)),
+		"rmse_threshold": float(params.get("rmse_threshold", 0.0)),
+		"per_pixel_threshold": float(params.get("per_pixel_threshold", 0.00001))
+	}
+	if params.has("max_diff_pixels"):
+		visual_params["max_diff_pixels"] = int(params["max_diff_pixels"])
+	if params.has("diff_output_path"):
+		visual_params["diff_output_path"] = params["diff_output_path"]
+	var visual: Dictionary = _get_project_verification_tools()._tool_assert_visual_baseline(visual_params)
+	var passed: bool = _visual_playtest_passed(runtime, visual)
+	var stopped: bool = await _stop_visual_playtest_if_needed(started_by_tool, params)
+	var probe_removed: bool = _cleanup_visual_playtest_probe(probe_installed_by_tool)
+	return {
+		"status": "success" if passed else "failed",
+		"passed": passed,
+		"started_by_tool": started_by_tool,
+		"stopped": stopped,
+		"probe_removed": probe_removed,
+		"candidate_path": candidate_path,
+		"launch": launch,
+		"runtime": runtime,
+		"visual": visual
+	}
+
+func _stop_visual_playtest_if_needed(started_by_tool: bool, params: Dictionary) -> bool:
+	if not started_by_tool or not bool(params.get("stop_after", true)) or _get_editor_tools() == null:
+		return false
+	var stopped: Dictionary = await _get_editor_tools()._tool_stop_project({"allow_window": bool(params.get("allow_window", false))})
+	return not stopped.has("error") and stopped.get("status", "") != "error"
+
+func _cleanup_visual_playtest_probe(probe_installed_by_tool: bool) -> bool:
+	if not probe_installed_by_tool or _get_bridge_tools() == null:
+		return false
+	var removed: Dictionary = _get_bridge_tools()._tool_remove_runtime_probe({})
+	return not removed.has("error") and removed.get("status", "") == "success"
+
+static func _visual_playtest_steps(raw_steps: Array) -> Array:
+	var steps: Array = raw_steps.duplicate(true)
+	for step in steps:
+		if step is Dictionary and bool(step.get("screenshot", false)):
+			return steps
+	steps.append({"wait_frames": 0, "screenshot": true})
+	return steps
+
+static func _visual_playtest_passed(runtime: Dictionary, visual: Dictionary) -> bool:
+	return not runtime.has("error") and bool(runtime.get("passed", false)) and not visual.has("error") and bool(visual.get("passed", false))
 
 ## Deterministically advances the running game by `frames` frames, sampling
 ## `sample_specs` each frame, via the runtime probe's advance_frames command.
