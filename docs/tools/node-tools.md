@@ -41,7 +41,7 @@ Create, inspect, reorganize and audit nodes in the edited scene. Core tools cove
 | `get_node_groups` | advanced | Get groups that a node belongs to. |
 | `find_nodes_in_group` | advanced | Find all nodes in a specific group. |
 | `get_node_subresource` | advanced | Read the inline sub-resource currently assigned to a node's Object property in the edited scene (e.g. inspect CollisionShape2D.shape size, or a material's fields). Returns the resource class and its storage properties in a JSON-friendly form. 'has_resource' is false when the property is null. |
-| `batch_update_node_properties` | advanced | Update multiple node properties inside one editor UndoRedo action. Useful for transaction-style scene edits that should undo in a single step. |
+| `batch_update_node_properties` | advanced | Update multiple node properties inside one editor UndoRedo action. `dry_run=true` validates targets and returns old/new values plus whether the live scene already matches, without mutation. |
 | `batch_scene_node_edits` | advanced | Apply multiple create/delete scene node edits inside one editor UndoRedo action so the full structure change undoes in a single step. |
 | `batch_get_node_properties` | advanced | Read the properties of multiple nodes in a single call. Returns one result entry per requested node path, reducing round trips when inspecting several nodes. |
 | `batch_connect_signals` | advanced | Connect multiple node signals in a single call. Returns one result entry per requested connection, reducing round trips when wiring several signals. |

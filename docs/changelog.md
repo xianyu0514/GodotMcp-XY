@@ -1,5 +1,7 @@
 # Changelog
 
+- Added the core `apply_project_change_set` transaction: dry-run planning returns a target-state revision; commits preflight coordinated text/script file writes, ProjectSettings updates and edited-scene node property batches; revision conflicts reject before mutation, read-back produces one verdict, and later failures restore prior state. `batch_update_node_properties` now supports mutation-free previews. Catalog: 224 tools = 30 core + 190 advanced + 4 meta.
+
 - Completed the remaining high-return agent loop: `visual_playtest` now composes probe installation, optional launch, deterministic runtime steps/assertions, final PNG capture, golden-baseline comparison/bootstrap, a combined verdict and cleanup. Added real `godot://script/current`, parameterized `godot://script/{path}` and `godot://scene/{path}` resources, `completion/complete`, and deterministic 100-entry pagination for MCP list endpoints. Catalog: 223 tools = 29 core + 190 advanced + 4 meta.
 - Added a high-ROI project-orientation loop: the core `get_project_context` tool returns selectable compact summaries with a stable SHA-256 revision, and a matching `known_revision` suppresses unchanged payloads. The same builder backs the subscribable `godot://project/context` resource; successful mutating tool calls now emit resource update notifications. Catalog: 222 tools = 29 core + 189 advanced + 4 meta.
 

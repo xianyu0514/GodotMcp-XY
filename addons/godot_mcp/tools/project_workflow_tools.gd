@@ -7,6 +7,12 @@ extends RefCounted
 
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
+var _node_tools: RefCounted = null
+var _script_tools: RefCounted = null
+
+const CHANGE_SET_FILE_EXTENSIONS: Array[String] = [
+	".gd", ".cs", ".tscn", ".tres", ".gdshader", ".json", ".cfg", ".csv", ".md", ".txt"
+]
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -17,6 +23,7 @@ func initialize(editor_interface: EditorInterface) -> void:
 
 func register_tools(server_core: RefCounted) -> void:
 	_server_core = server_core
+	_register_apply_project_change_set(server_core)
 	_register_bump_version(server_core)
 	_register_create_theme(server_core)
 	_register_set_theme_item(server_core)
@@ -25,6 +32,338 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_insert_animation_keys(server_core)
 	_register_manage_task_plan(server_core)
 	_register_manage_localization(server_core)
+
+# ============================================================================
+# apply_project_change_set - revision-guarded cross-domain transaction
+# ============================================================================
+
+func _register_apply_project_change_set(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"apply_project_change_set",
+		"Atomically apply a revision-guarded set of text/script file writes, ProjectSettings updates, and edited-scene node property updates. Preflights every change before mutation, supports dry-run previews, verifies read-back, and restores earlier changes if a later stage fails.",
+		{
+			"type": "object",
+			"properties": {
+				"changes": {
+					"type": "array",
+					"items": {"type": "object"},
+					"description": "Ordered changes. Types: file_write {path,content}; project_setting {setting,value,value_type?,require_existing?,persist?}; node_properties {changes:[{node_path,property_name,property_value}]}"
+				},
+				"dry_run": {"type": "boolean", "default": false},
+				"expected_revision": {"type": "string", "description": "Revision returned by a dry-run with the same changes. A mismatch rejects the transaction before writing."},
+				"label": {"type": "string", "default": "Apply Project Change Set"},
+				"verify_scripts": {"type": "boolean", "default": true}
+			},
+			"required": ["changes"]
+		},
+		Callable(self, "_tool_apply_project_change_set"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"revision": {"type": "string"},
+				"change_count": {"type": "integer"},
+				"applied_count": {"type": "integer"},
+				"verified": {"type": "boolean"},
+				"rolled_back": {"type": "boolean"},
+				"results": {"type": "array"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
+		"core", "Project"
+	)
+
+func _get_node_tools() -> RefCounted:
+	if _node_tools != null:
+		return _node_tools
+	if not Engine.has_meta("GodotMCPPlugin"):
+		return null
+	var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+	if plugin == null or not (plugin.get("_tool_instances") is Dictionary):
+		return null
+	_node_tools = (plugin.get("_tool_instances") as Dictionary).get("NodeToolsNative", null) as RefCounted
+	return _node_tools
+
+func _get_script_tools() -> RefCounted:
+	if _script_tools != null:
+		return _script_tools
+	if not Engine.has_meta("GodotMCPPlugin"):
+		return null
+	var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+	if plugin == null or not (plugin.get("_tool_instances") is Dictionary):
+		return null
+	_script_tools = (plugin.get("_tool_instances") as Dictionary).get("ScriptToolsNative", null) as RefCounted
+	return _script_tools
+
+func _tool_apply_project_change_set(params: Dictionary) -> Dictionary:
+	var prepared_result: Dictionary = _prepare_project_change_set(params)
+	if prepared_result.has("error"):
+		return prepared_result
+	var revision: String = str(prepared_result["revision"])
+	var expected_revision: String = str(params.get("expected_revision", "")).strip_edges()
+	if not expected_revision.is_empty() and expected_revision != revision:
+		return {
+			"error": "Change-set revision conflict; run dry_run again before retrying",
+			"stage": "conflict",
+			"expected_revision": expected_revision,
+			"actual_revision": revision,
+			"rolled_back": false
+		}
+	if bool(params.get("dry_run", false)):
+		return {
+			"status": "preview",
+			"revision": revision,
+			"change_count": int(prepared_result["prepared"].size()),
+			"plan": prepared_result["plan"],
+			"verified": false,
+			"rolled_back": false
+		}
+
+	var prepared: Array = prepared_result["prepared"]
+	var results: Array = []
+	var applied: Array = []
+	var node_undo_count: int = 0
+	for entry in prepared:
+		var apply_result: Dictionary = _apply_prepared_change(entry, str(params.get("label", "Apply Project Change Set")))
+		if apply_result.has("error"):
+			var rolled_back: bool = _rollback_project_change_set(applied, node_undo_count)
+			return {
+				"error": apply_result["error"],
+				"stage": "apply",
+				"failed_index": results.size(),
+				"applied_count": applied.size(),
+				"results": results,
+				"rolled_back": rolled_back,
+				"revision": revision
+			}
+		results.append(apply_result)
+		applied.append(entry)
+		if entry["type"] == "node_properties":
+			node_undo_count += 1
+
+	var persist_settings: bool = false
+	for entry in prepared:
+		if entry["type"] == "project_setting" and bool(entry.get("persist", true)):
+			persist_settings = true
+			break
+	if persist_settings:
+		var save_error: Error = ProjectSettings.save()
+		if save_error != OK:
+			var rolled_back_save: bool = _rollback_project_change_set(applied, node_undo_count)
+			return {"error": "Failed to save project settings: " + error_string(save_error), "stage": "persist", "rolled_back": rolled_back_save, "revision": revision}
+
+	var verification: Dictionary = _verify_prepared_change_set(prepared)
+	if not bool(verification.get("verified", false)):
+		var rolled_back_verify: bool = _rollback_project_change_set(applied, node_undo_count)
+		return {"error": "Change-set read-back verification failed", "stage": "verify", "verification": verification, "rolled_back": rolled_back_verify, "revision": revision}
+	return {
+		"status": "success",
+		"revision": revision,
+		"change_count": prepared.size(),
+		"applied_count": applied.size(),
+		"verified": true,
+		"rolled_back": false,
+		"results": results,
+		"verification": verification
+	}
+
+func _prepare_project_change_set(params: Dictionary) -> Dictionary:
+	var raw_changes: Variant = params.get("changes", [])
+	if not (raw_changes is Array) or raw_changes.is_empty():
+		return {"error": "Missing required parameter: changes", "stage": "preflight"}
+	var prepared: Array = []
+	var plan: Array = []
+	var revision_material: Array = []
+	var targets: Dictionary = {}
+	var setting_persist_mode: int = -1
+	for index in raw_changes.size():
+		var raw: Variant = raw_changes[index]
+		if not (raw is Dictionary):
+			return {"error": "Each change must be an object", "stage": "preflight", "failed_index": index}
+		var change: Dictionary = raw
+		var change_type: String = str(change.get("type", "")).strip_edges().to_lower()
+		var entry: Dictionary
+		match change_type:
+			"file_write":
+				entry = _prepare_change_set_file(change, bool(params.get("verify_scripts", true)))
+			"project_setting":
+				entry = _prepare_change_set_setting(change)
+			"node_properties":
+				entry = _prepare_change_set_nodes(change, str(params.get("label", "Apply Project Change Set")))
+			_:
+				return {"error": "Unsupported change type: " + change_type, "stage": "preflight", "failed_index": index}
+		if entry.has("error"):
+			entry["stage"] = "preflight"
+			entry["failed_index"] = index
+			return entry
+		if entry["type"] == "project_setting":
+			var persist_mode: int = 1 if bool(entry.get("persist", true)) else 0
+			if setting_persist_mode >= 0 and persist_mode != setting_persist_mode:
+				return {"error": "All project_setting changes in one transaction must use the same persist value", "stage": "preflight", "failed_index": index}
+			setting_persist_mode = persist_mode
+		var target_keys: Array = entry.get("target_keys", [entry["target_key"]])
+		for raw_target_key in target_keys:
+			var target_key: String = str(raw_target_key)
+			if targets.has(target_key):
+				return {"error": "Duplicate change target: " + target_key, "stage": "preflight", "failed_index": index}
+			targets[target_key] = true
+		prepared.append(entry)
+		plan.append(entry["summary"])
+		revision_material.append(entry["revision"])
+	return {"prepared": prepared, "plan": plan, "revision": _change_set_hash(revision_material)}
+
+func _prepare_change_set_file(change: Dictionary, verify_scripts: bool) -> Dictionary:
+	var path: String = str(change.get("path", "")).strip_edges()
+	if not change.has("content"):
+		return {"error": "file_write requires content"}
+	var validation: Dictionary = PathValidator.validate_file_path(path, CHANGE_SET_FILE_EXTENSIONS)
+	if not bool(validation.get("valid", false)):
+		return {"error": "Invalid file path: " + str(validation.get("error", ""))}
+	path = str(validation["sanitized"])
+	var parent_path: String = path.get_base_dir()
+	if DirAccess.open(parent_path) == null:
+		return {"error": "Parent directory does not exist: " + parent_path}
+	var content: String = str(change["content"])
+	if verify_scripts and path.ends_with(".gd"):
+		var script_tools: RefCounted = _get_script_tools()
+		if script_tools != null:
+			var validation_result: Dictionary = script_tools._tool_validate_script({"content": content, "check_warnings": false})
+			if not bool(validation_result.get("valid", false)):
+				return {"error": "GDScript preflight failed", "diagnostics": validation_result.get("errors", [])}
+		else:
+			var script := GDScript.new()
+			script.source_code = content
+			var reload_error: Error = script.reload()
+			if reload_error != OK:
+				return {"error": "GDScript preflight failed: " + error_string(reload_error)}
+	var existed: bool = FileAccess.file_exists(path)
+	var previous: String = FileAccess.get_file_as_string(path) if existed else ""
+	return {
+		"type": "file_write", "target_key": "file:" + path, "path": path,
+		"content": content, "existed": existed, "previous": previous,
+		"summary": {"type": "file_write", "path": path, "existed": existed, "bytes": content.to_utf8_buffer().size()},
+		"revision": {"type": "file_write", "path": path, "before": _change_set_hash(previous), "after": _change_set_hash(content), "existed": existed}
+	}
+
+func _prepare_change_set_setting(change: Dictionary) -> Dictionary:
+	var setting: String = str(change.get("setting", "")).strip_edges()
+	if setting.is_empty() or not change.has("value"):
+		return {"error": "project_setting requires setting and value"}
+	var existed: bool = ProjectSettings.has_setting(setting)
+	if bool(change.get("require_existing", false)) and not existed:
+		return {"error": "Project setting does not exist: " + setting}
+	var coerced: Dictionary = ProjectToolsNative._coerce_setting_value(change["value"], str(change.get("value_type", "")))
+	if coerced.has("error"):
+		return coerced
+	var previous: Variant = ProjectSettings.get_setting(setting) if existed else null
+	return {
+		"type": "project_setting", "target_key": "setting:" + setting, "setting": setting,
+		"value": coerced["value"], "existed": existed, "previous": previous,
+		"persist": bool(change.get("persist", true)),
+		"summary": {"type": "project_setting", "setting": setting, "existed": existed, "persist": bool(change.get("persist", true))},
+		"revision": {"type": "project_setting", "setting": setting, "before": _change_set_value(previous), "after": _change_set_value(coerced["value"]), "existed": existed}
+	}
+
+func _prepare_change_set_nodes(change: Dictionary, label: String) -> Dictionary:
+	var changes: Variant = change.get("changes", [])
+	if not (changes is Array) or changes.is_empty():
+		return {"error": "node_properties requires a non-empty changes array"}
+	var node_tools: RefCounted = _get_node_tools()
+	if node_tools == null:
+		return {"error": "Node tools are not available"}
+	var preview: Dictionary = node_tools._tool_batch_update_node_properties({"changes": changes, "label": label, "dry_run": true})
+	if preview.has("error"):
+		return preview
+	var keys: Array[String] = []
+	for item in changes:
+		if item is Dictionary:
+			keys.append(str(item.get("node_path", "")) + ":" + str(item.get("property_name", "")))
+	keys.sort()
+	var node_target_keys: Array[String] = []
+	for key in keys:
+		node_target_keys.append("node:" + key)
+	return {
+		"type": "node_properties", "target_key": "nodes:" + ",".join(keys), "target_keys": node_target_keys, "changes": changes.duplicate(true),
+		"summary": {"type": "node_properties", "change_count": changes.size(), "targets": keys},
+		"revision": {"type": "node_properties", "preview": preview.get("changes", []), "requested": changes}
+	}
+
+func _apply_prepared_change(entry: Dictionary, label: String) -> Dictionary:
+	match str(entry["type"]):
+		"file_write":
+			var file: FileAccess = FileAccess.open(str(entry["path"]), FileAccess.WRITE)
+			if file == null:
+				return {"error": "Failed to write file: " + str(entry["path"])}
+			file.store_string(str(entry["content"]))
+			file.close()
+			return {"type": "file_write", "path": entry["path"], "changed": str(entry["previous"]) != str(entry["content"])}
+		"project_setting":
+			ProjectSettings.set_setting(str(entry["setting"]), entry["value"])
+			return {"type": "project_setting", "setting": entry["setting"], "changed": _change_set_value(entry["previous"]) != _change_set_value(entry["value"])}
+		"node_properties":
+			return _get_node_tools()._tool_batch_update_node_properties({"changes": entry["changes"], "label": label})
+	return {"error": "Unsupported prepared change"}
+
+func _verify_prepared_change_set(prepared: Array) -> Dictionary:
+	var checks: Array = []
+	var verified: bool = true
+	for entry in prepared:
+		var passed: bool = false
+		match str(entry["type"]):
+			"file_write":
+				passed = FileAccess.file_exists(str(entry["path"])) and FileAccess.get_file_as_string(str(entry["path"])) == str(entry["content"])
+			"project_setting":
+				passed = ProjectSettings.has_setting(str(entry["setting"])) and _change_set_value(ProjectSettings.get_setting(str(entry["setting"]))) == _change_set_value(entry["value"])
+			"node_properties":
+				var preview: Dictionary = _get_node_tools()._tool_batch_update_node_properties({"changes": entry["changes"], "dry_run": true})
+				passed = not preview.has("error") and bool(preview.get("matches_requested", false))
+		verified = verified and passed
+		checks.append({"type": entry["type"], "target": entry["target_key"], "passed": passed})
+	return {"verified": verified, "checks": checks}
+
+func _rollback_project_change_set(applied: Array, node_undo_count: int) -> bool:
+	var ok: bool = true
+	if node_undo_count > 0:
+		if _editor_interface == null or _editor_interface.get_editor_undo_redo() == null:
+			ok = false
+		else:
+			for _index in node_undo_count:
+				_editor_interface.get_editor_undo_redo().undo()
+	for index in range(applied.size() - 1, -1, -1):
+		var entry: Dictionary = applied[index]
+		match str(entry["type"]):
+			"file_write":
+				if bool(entry["existed"]):
+					var file: FileAccess = FileAccess.open(str(entry["path"]), FileAccess.WRITE)
+					if file == null:
+						ok = false
+					else:
+						file.store_string(str(entry["previous"]))
+						file.close()
+				else:
+					ok = DirAccess.remove_absolute(ProjectSettings.globalize_path(str(entry["path"]))) == OK and ok
+			"project_setting":
+				if bool(entry["existed"]):
+					ProjectSettings.set_setting(str(entry["setting"]), entry["previous"])
+				else:
+					ProjectSettings.clear(str(entry["setting"]))
+	var restore_persisted_settings: bool = false
+	for entry in applied:
+		if entry["type"] == "project_setting" and bool(entry.get("persist", true)):
+			restore_persisted_settings = true
+			break
+	if restore_persisted_settings:
+		ok = ProjectSettings.save() == OK and ok
+	return ok
+
+static func _change_set_hash(value: Variant) -> String:
+	var hashing_context := HashingContext.new()
+	hashing_context.start(HashingContext.HASH_SHA256)
+	hashing_context.update(JSON.stringify(value).to_utf8_buffer())
+	return hashing_context.finish().hex_encode()
+
+static func _change_set_value(value: Variant) -> String:
+	return "%s:%s" % [type_string(typeof(value)), JSON.stringify(value)]
 
 # ============================================================================
 # bump_version - 语义化版本号自增 + changelog 自动追加（出货闭环 ⑦）

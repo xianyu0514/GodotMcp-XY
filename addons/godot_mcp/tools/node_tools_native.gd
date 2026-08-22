@@ -425,7 +425,8 @@ func _register_batch_update_node_properties(server_core: RefCounted) -> void:
 						"required": ["node_path", "property_name", "property_value"]
 					},
 					"description": "Property updates to apply in one action."
-				}
+				},
+				"dry_run": {"type": "boolean", "default": false, "description": "Validate and preview old/new values without mutating the scene."}
 			},
 			"required": ["changes"]
 		},
@@ -487,6 +488,11 @@ func _tool_batch_update_node_properties(params: Dictionary) -> Dictionary:
 	var label: String = str(params.get("label", "Batch Update Node Properties")).strip_edges()
 	if label.is_empty():
 		label = "Batch Update Node Properties"
+	if bool(params.get("dry_run", false)):
+		var preview: Dictionary = _build_batch_property_preview(prepared_changes)
+		preview["status"] = "preview"
+		preview["label"] = label
+		return preview
 
 	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
 	if undo_redo:
@@ -524,6 +530,21 @@ func _tool_batch_update_node_properties(params: Dictionary) -> Dictionary:
 		"changes": results,
 		"property_types": property_types
 	}
+
+static func _build_batch_property_preview(prepared_changes: Array) -> Dictionary:
+	var preview_changes: Array = []
+	var all_match: bool = true
+	for prepared in prepared_changes:
+		var current_matches: bool = prepared["old_value"] == prepared["new_value"]
+		all_match = all_match and current_matches
+		preview_changes.append({
+			"node_path": prepared["node_path"],
+			"property_name": prepared["property_name"],
+			"old_value": _serialize_value(prepared["old_value"]),
+			"new_value": _serialize_value(prepared["new_value"]),
+			"matches_requested": current_matches
+		})
+	return {"change_count": preview_changes.size(), "changes": preview_changes, "matches_requested": all_match}
 
 func _get_type_name(type_id: int) -> String:
 	match type_id:

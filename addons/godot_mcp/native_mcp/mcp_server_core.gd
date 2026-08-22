@@ -40,7 +40,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Start orientation with get_project_context; retain its revision and pass it as known_revision on later turns so unchanged context is not repeated. Godot MCP exposes ~30 core tools plus four always-on meta tools (list_tool_catalog, search_tools, get_tool_details, enable_tools). If a needed capability is absent, search the catalog, fetch details only for the selected tool, then enable that tool/group/preset; do not give up or load the full catalog. Prefer read-only inspection first, then the smallest concrete mutation, and use returned verification/read-back evidence. For gameplay changes, use visual_playtest when you need the complete launch -> runtime assertions -> screenshot -> golden-baseline -> cleanup verdict. List endpoints are paginated: follow nextCursor. Script and scene contents are also available through godot://script/{path} and godot://scene/{path} resource templates with completion."
+const SERVER_INSTRUCTIONS: String = "Start orientation with get_project_context; retain its revision and pass it as known_revision on later turns so unchanged context is not repeated. Godot MCP exposes ~30 core tools plus four always-on meta tools (list_tool_catalog, search_tools, get_tool_details, enable_tools). If a needed capability is absent, search the catalog, fetch details only for the selected tool, then enable that tool/group/preset; do not give up or load the full catalog. Prefer read-only inspection first, then the smallest concrete mutation, and use returned verification/read-back evidence. When one feature needs coordinated file, ProjectSettings and node-property edits, preview and commit them through apply_project_change_set to reduce calls and get conflict detection plus rollback. For gameplay changes, use visual_playtest when you need the complete launch -> runtime assertions -> screenshot -> golden-baseline -> cleanup verdict. List endpoints are paginated: follow nextCursor. Script and scene contents are also available through godot://script/{path} and godot://scene/{path} resource templates with completion."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -1254,7 +1254,11 @@ static func _paginate_protocol_list(items: Array, cursor: String) -> Dictionary:
 		if offset < 0 or offset > items.size():
 			return {"error": "Cursor is outside the result set"}
 	var end: int = mini(offset + LIST_PAGE_SIZE, items.size())
-	var result: Dictionary = {"items": items.slice(offset, end)}
+	# Preserve the cached Array identity for the overwhelmingly common unpaged
+	# response. Besides avoiding an allocation, existing clients/tests can rely
+	# on a stable cached payload until the tool set is invalidated.
+	var page_items: Array = items if offset == 0 and end == items.size() else items.slice(offset, end)
+	var result: Dictionary = {"items": page_items}
 	if end < items.size():
 		result["next_cursor"] = str(end)
 	return result

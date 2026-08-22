@@ -271,4 +271,4 @@ func test_workflow_prompt_completions_are_registered():
 			"argument": {"name": "target_dir", "value": "res://test/u"}
 		}
 	})
-	assert_eq(response.get("result", {}).get("completion", {}).get("values", []), ["res://test/unit/"])
+	assert_eq(response.get("result", {}).get("completion", {}).get("values", []), ["res://test/unit"])

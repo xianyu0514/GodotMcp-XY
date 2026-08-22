@@ -74,7 +74,7 @@ runtime-probe and verify domains moved into three dedicated modules:
 | `project_assets_tools.gd` | Project (assets: generate/3D/slice/glTF/gradient/drawable/PCK/render) | 9 |
 | `project_tileset_tools.gd` | Project (TileSet: create/layers/collision/terrain/inspect) | 5 |
 | `project_verification_tools.gd` | Project (verification: visual baseline/screenshot diff) | 2 |
-| `project_workflow_tools.gd` | Project (workflow: bump_version/theme/animation/task plan/localization) | 8 |
+| `project_workflow_tools.gd` | Project (workflow: atomic change sets/version/theme/animation/task plan/localization) | 9 |
 | `meta_tools_native.gd` | Meta | 4 |
 
 Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The category/group come from the single manifest (`native_mcp/tools_manifest.gd`), which the classifier reads to answer whether a tool is core, advanced or meta. `test_mcp_tool_classifier.gd` enforces that the manifest, the classifier and the runtime registry never drift (tool-name sets and per-tool category/group must match).
@@ -91,7 +91,7 @@ These hints flow to three places that agents already consume:
 
 ## Core, advanced and meta tiers
 
-- **Core:** 29 high-value tools enabled by default.
+- **Core:** 30 high-value tools enabled by default.
 - **Advanced:** 189 tools registered but hidden from `tools/list` until enabled.
 - **Meta:** 4 always-on discovery tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 

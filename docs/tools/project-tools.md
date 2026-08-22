@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**62 tools** — 4 core, 58 advanced.
+**63 tools** — 5 core, 58 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
@@ -15,10 +15,11 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 
 ## Tool list
 
-### Project (4 core)
+### Project (5 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
+| `apply_project_change_set` | core | Atomically preflight, revision-guard, apply and read-back-verify coordinated `file_write`, `project_setting` and `node_properties` changes. `dry_run` returns the revision and plan without mutation; conflicts reject before writing, and later failures restore prior file/settings changes plus UndoRedo-backed node updates. |
 | `get_project_info` | core | Get general information about the Godot project, including name, version, and description. |
 | `get_project_context` | core | Return a compact, revisioned orientation snapshot with selectable project, editor, autoload, input-action, global-class, task-plan and enabled-tool sections. The editor section includes current scene/script, selection and unsaved scene/script buffers. It does not scan full scene trees or script contents. A matching `known_revision` returns `changed=false` without repeating `context`. The same snapshot is available as the subscribable `godot://project/context` resource. |
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |

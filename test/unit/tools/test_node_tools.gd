@@ -297,6 +297,16 @@ func test_get_type_name_fallback():
 	var type_name: String = tool._get_type_name(9999)
 	assert_eq(type_name, "type_9999", "Unknown type should use type_N fallback")
 
+func test_batch_property_preview_reports_current_match_state():
+	var preview: Dictionary = NodeToolsNative._build_batch_property_preview([
+		{"node_path": "/root/Main", "property_name": "visible", "old_value": true, "new_value": true},
+		{"node_path": "/root/Main", "property_name": "name", "old_value": "Main", "new_value": "Menu"}
+	])
+	assert_eq(preview.get("change_count"), 2)
+	assert_false(bool(preview.get("matches_requested", true)))
+	assert_true(bool(preview.get("changes", [])[0].get("matches_requested", false)))
+	assert_false(bool(preview.get("changes", [])[1].get("matches_requested", true)))
+
 # --- batch_get_node_properties / batch_connect_signals ---
 
 func test_batch_get_node_properties_rejects_empty():

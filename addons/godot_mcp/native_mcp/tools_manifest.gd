@@ -10,7 +10,7 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 内容来源：与工具注册实现逐条一致（223 个工具：29 core + 190
+# 内容来源：与工具注册实现逐条一致（224 个工具：30 core + 190
 # supplementary + 4 meta）。
 #
 # 注意：
@@ -26,6 +26,7 @@ const TOOLS: Dictionary = {
 	"add_project_autoload": {"category": "supplementary", "group": "Project-Advanced"},
 	"add_resource": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"analyze_script": {"category": "supplementary", "group": "Script-Advanced"},
+	"apply_project_change_set": {"category": "core", "group": "Project"},
 	"apply_migration_fixes": {"category": "supplementary", "group": "Project-Advanced"},
 	"assert_no_runtime_errors": {"category": "supplementary", "group": "Debug-Advanced"},
 	"assert_performance_budget": {"category": "supplementary", "group": "Debug-Advanced"},

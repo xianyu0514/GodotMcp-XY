@@ -263,6 +263,8 @@ func test_resource_template_rejects_non_matching_uri():
 	assert_eq(read.get("error", {}).get("code"), MCPTypes.ERROR_RESOURCE_NOT_FOUND)
 
 func test_completion_filters_registered_values():
+	var prompt_arguments: Array[Dictionary] = []
+	_core.register_prompt("run_test_suite", "Run tests", prompt_arguments, func(_args): return {"messages": []})
 	_core.register_completion("ref/prompt", "run_test_suite", "target_dir", ["res://test", "res://test/unit", "res://demo"])
 	var response: Dictionary = await _core._handle_completion_complete({
 		"id": 3,

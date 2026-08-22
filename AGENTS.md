@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **223 个工具**（29 核心 + 190 补充 + 4 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **224 个工具**（30 核心 + 190 补充 + 4 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -49,7 +49,7 @@ addons/godot_mcp/
 │   ├── mcp_stdio_server.gd     # stdio 传输（供 Claude Desktop 等使用）
 │   ├── mcp_types.gd            # JSON-RPC 和 MCP 协议常量、MCPTool 数据类
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：223 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：224 个工具 name → {category, group}
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_auth_manager.gd     # HTTP Bearer Token 认证
 │   ├── config_manager.gd       # 插件配置读写
@@ -72,7 +72,7 @@ addons/godot_mcp/
 │   ├── project_assets_tools.gd  # 9 个工具 — 渐变/可绘制纹理、PCK 打包、渲染输出、generate_asset（占位程序化 + 外部 API 适配 + SSRF 护栏）、slice_sprite_sheet、inspect_gltf_asset、generate_3d_asset（文生3D 异步提交→轮询→下载→校验）
 │   ├── project_tileset_tools.gd # 5 个工具 — TileSet 创建/检查、图层配置（物理/导航/自定义数据/地形）、逐图块碰撞多边形、地形与 peering bits
 │   ├── project_verification_tools.gd # 2 个工具 — compare_render_screenshots、assert_visual_baseline（视觉回归门禁，差异热力图 + 容差判定）
-│   ├── project_workflow_tools.gd # 8 个工具 — bump_version（版本号递增 + changelog）、UI 主题创建/设置/默认主题、动画资源创建与关键帧插入、manage_task_plan（持久任务图 + DoD）、manage_localization（extract/import/export/list）
+│   ├── project_workflow_tools.gd # 9 个工具 — apply_project_change_set（跨域原子修改）、bump_version（版本号递增 + changelog）、UI 主题创建/设置/默认主题、动画资源创建与关键帧插入、manage_task_plan（持久任务图 + DoD）、manage_localization（extract/import/export/list）
 │   └── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
