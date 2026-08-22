@@ -1,10 +1,10 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for the manage_task_plan tool handler in project_tools_native.gd.
+# Unit tests for the manage_task_plan tool handler in project_workflow_tools.gd.
 # Exercises action dispatch, parameter validation and the file-backed round trip
 # end to end (using a per-test user:// plan path so runs stay isolated and clean).
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_workflow_tools.gd"
 
 var _tools: RefCounted = null
 var _plan_path: String = ""

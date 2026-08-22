@@ -1,6 +1,6 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for generate_3d_asset in project_tools_native.gd. These cover the
+# Unit tests for generate_3d_asset in project_assets_tools.gd. These cover the
 # offline/pure parts only (config resolution, JSON dot-path extraction, status
 # matching, glTF byte validation, and the unconfigured / missing-param / missing
 # env-var guard paths). The submit/poll/download HTTP flow is not exercised here
@@ -9,7 +9,7 @@ extends "res://addons/gut/test.gd"
 var _tools: RefCounted = null
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 
 func after_each() -> void:
 	_tools = null

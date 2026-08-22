@@ -1,14 +1,14 @@
 extends "res://addons/gut/test.gd"
 
 # Unit tests for the generate_asset asset-generation adapter tool in
-# project_tools_native.gd. Covers parameter validation, offline procedural
+# project_assets_tools.gd. Covers parameter validation, offline procedural
 # image/audio generation, deterministic seeding, the external-provider
 # unconfigured fall-back, byte validation, and the prompt manifest.
 #
 # Tests run headlessly (no editor), so reimport is always skipped with a
 # reason; success-path tests only assert the file lands on disk.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_assets_tools.gd"
 const TMP_DIR: String = "res://.test_tmp_generate_asset"
 
 var _tools: RefCounted = null

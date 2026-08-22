@@ -30,6 +30,11 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"res://addons/godot_mcp/tools/debug_tools_native.gd",
 	"res://addons/godot_mcp/tools/project_tools_native.gd",
+	"res://addons/godot_mcp/tools/project_resources_tools.gd",
+	"res://addons/godot_mcp/tools/project_assets_tools.gd",
+	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
+	"res://addons/godot_mcp/tools/project_verification_tools.gd",
+	"res://addons/godot_mcp/tools/project_workflow_tools.gd",
 	"res://addons/godot_mcp/tools/meta_tools_native.gd",
 ]
 

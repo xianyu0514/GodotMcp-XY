@@ -384,18 +384,18 @@ func _teardown_reverse_resource_fixture() -> void:
 	DirAccess.remove_absolute(_REVERSE_RES_DIR)
 
 func test_find_resource_usages_rejects_missing_param():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_resource_usages({})
 	assert_has(result, "error", "Missing resource_path should return an error")
 
 func test_find_resource_usages_rejects_missing_file():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_resource_usages({"resource_path": "res://.tmp_reverse_res_test/does_not_exist.tres"})
 	assert_has(result, "error", "A missing target file should be rejected")
 
 func test_find_resource_usages_reports_owner_scene():
 	_setup_reverse_resource_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_resource_usages({
 		"resource_path": _REVERSE_RES_DIR + "/used.tres",
 		"search_path": _REVERSE_RES_DIR
@@ -410,7 +410,7 @@ func test_find_resource_usages_reports_owner_scene():
 
 func test_find_resource_usages_reports_no_usages_for_orphan():
 	_setup_reverse_resource_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_resource_usages({
 		"resource_path": _REVERSE_RES_DIR + "/orphan.tres",
 		"search_path": _REVERSE_RES_DIR
@@ -421,7 +421,7 @@ func test_find_resource_usages_reports_no_usages_for_orphan():
 
 func test_list_unused_resources_flags_orphan_and_skips_referenced():
 	_setup_reverse_resource_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_list_unused_resources({"search_path": _REVERSE_RES_DIR})
 	assert_false(result.has("error"), "A valid unused-resource scan should not error")
 	var unused: Array = result.get("unused_resources", [])
@@ -430,12 +430,12 @@ func test_list_unused_resources_flags_orphan_and_skips_referenced():
 	_teardown_reverse_resource_fixture()
 
 func test_list_unused_resources_rejects_invalid_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_list_unused_resources({"search_path": "C:\\Windows"})
 	assert_has(result, "error", "An unsafe directory path should be rejected")
 
 func test_resolve_resource_root_path_strips_prefix_and_resolves_uid():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	assert_eq(project_tools._resolve_resource_root_path("res://scenes/main.tscn"), "res://scenes/main.tscn", "Plain res:// path should pass through")
 	assert_eq(project_tools._resolve_resource_root_path("*res://autoload/game.gd"), "res://autoload/game.gd", "Leading autoload '*' should be stripped")
 	assert_eq(project_tools._resolve_resource_root_path(""), "", "Empty value resolves to empty")
@@ -475,13 +475,13 @@ func _teardown_migration_fixture() -> void:
 	DirAccess.remove_absolute(_MIGRATION_DIR)
 
 func test_scan_migration_rejects_unsupported_version():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"target_version": "9.9"})
 	assert_has(result, "error", "Unsupported target_version should return an error")
 
 func test_scan_migration_flags_must_fix_and_behavior():
 	_setup_migration_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": _MIGRATION_DIR, "include_behavior": true})
 	assert_false(result.has("error"), "A valid scan should not error")
 	assert_eq(int(result.get("must_fix_count", 0)), 2, "Should flag the enum rename and the removed member as must_fix")
@@ -495,7 +495,7 @@ func test_scan_migration_flags_must_fix_and_behavior():
 
 func test_scan_migration_excludes_behavior_when_disabled():
 	_setup_migration_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": _MIGRATION_DIR, "include_behavior": false})
 	assert_false(result.has("error"), "A valid scan should not error")
 	assert_eq(int(result.get("review_count", 0)), 0, "Behavior issues should be excluded when include_behavior is false")
@@ -504,7 +504,7 @@ func test_scan_migration_excludes_behavior_when_disabled():
 
 func test_apply_migration_fixes_dry_run_does_not_write():
 	_setup_migration_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": true})
 	assert_false(result.has("error"), "A valid dry-run should not error")
 	assert_true(bool(result.get("dry_run", false)), "Result should report dry_run true")
@@ -515,7 +515,7 @@ func test_apply_migration_fixes_dry_run_does_not_write():
 
 func test_apply_migration_fixes_writes_enum_rename():
 	_setup_migration_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": false})
 	assert_false(result.has("error"), "A valid apply should not error")
 	assert_eq(int(result.get("change_count", 0)), 1, "Should apply exactly one rewrite")
@@ -526,13 +526,13 @@ func test_apply_migration_fixes_writes_enum_rename():
 
 func test_apply_migration_fixes_respects_rule_id_filter():
 	_setup_migration_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_apply_migration_fixes({"search_path": _MIGRATION_DIR, "dry_run": true, "rule_ids": ["audio_spectrum_tap_back_pos_removed"]})
 	assert_has(result, "error", "Selecting only a non-auto-fixable rule should yield no applicable fixes")
 	_teardown_migration_fixture()
 
 func test_scan_migration_excludes_plugin_own_source():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_scan_migration_compatibility({"search_path": "res://addons/godot_mcp"})
 	assert_false(result.has("error"), "Scanning the plugin directory should not error")
 	assert_eq(int(result.get("scanned_files", -1)), 0, "Plugin's own source must be excluded so its rule strings are not self-flagged")
@@ -566,13 +566,13 @@ func _teardown_hygiene_fixture() -> void:
 	DirAccess.remove_absolute(_HYGIENE_DIR)
 
 func test_find_deprecated_api_usage_rejects_invalid_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": "C:\\Windows"})
 	assert_has(result, "error", "An unsafe directory path should be rejected")
 
 func test_find_deprecated_api_usage_flags_legacy_and_skips_modern():
 	_setup_hygiene_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": _HYGIENE_DIR, "languages": ["gd"]})
 	assert_false(result.has("error"), "A valid scan should not error")
 	var rule_ids: Array = []
@@ -590,7 +590,7 @@ func test_find_deprecated_api_usage_flags_legacy_and_skips_modern():
 
 func test_find_deprecated_api_usage_enriches_with_classdb():
 	_setup_hygiene_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_deprecated_api_usage({"search_path": _HYGIENE_DIR, "languages": ["gd"]})
 	var checked: bool = false
 	for finding in result.get("findings", []):
@@ -602,13 +602,13 @@ func test_find_deprecated_api_usage_enriches_with_classdb():
 	_teardown_hygiene_fixture()
 
 func test_detect_gdextension_addons_rejects_invalid_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": "C:\\Windows"})
 	assert_has(result, "error", "An unsafe directory path should be rejected")
 
 func test_detect_gdextension_addons_reports_libraries_and_missing():
 	_setup_hygiene_fixture()
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": _HYGIENE_DIR})
 	assert_false(result.has("error"), "A valid detection scan should not error")
 	assert_true(bool(result.get("has_native_extensions", false)), "The .gdextension fixture should be detected")
@@ -622,7 +622,7 @@ func test_detect_gdextension_addons_reports_libraries_and_missing():
 	_teardown_hygiene_fixture()
 
 func test_detect_gdextension_addons_empty_when_none():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_detect_gdextension_addons({"search_path": _REVERSE_RES_DIR})
 	assert_false(result.has("error"), "Scanning a directory without extensions should not error")
 	assert_false(bool(result.get("has_native_extensions", true)), "No extensions should be reported for a plain directory")
@@ -630,18 +630,18 @@ func test_detect_gdextension_addons_empty_when_none():
 # --- create_gradient_texture ---
 
 func test_create_gradient_texture_missing_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_gradient_texture({})
 	assert_has(result, "error", "Missing resource_path should return error")
 
 func test_create_gradient_texture_invalid_fill():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_gradient_texture({"resource_path": "res://.tmp_grad.tres", "fill": "bogus"})
 	assert_has(result, "error", "An invalid fill mode should be rejected")
 
 func test_create_gradient_texture_linear_saves():
 	var out_path: String = "res://.tmp_grad_linear.tres"
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_gradient_texture({
 		"resource_path": out_path,
 		"fill": "linear",
@@ -658,7 +658,7 @@ func test_create_gradient_texture_linear_saves():
 
 func test_create_gradient_texture_conic_guarded():
 	var out_path: String = "res://.tmp_grad_conic.tres"
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_gradient_texture({
 		"resource_path": out_path,
 		"fill": "conic"
@@ -675,7 +675,7 @@ func test_create_gradient_texture_conic_guarded():
 # --- pack_pck ---
 
 func test_pack_pck_missing_params():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_pack_pck({"pck_path": "res://.tmp_out.pck"})
 	assert_has(result, "error", "Missing files array should return error")
 
@@ -683,7 +683,7 @@ func test_pack_pck_packs_existing_file():
 	var src_path: String = "res://.tmp_pack_src.txt"
 	var pck_path: String = "res://.tmp_pack_out.pck"
 	_write_text_file(src_path, "hello pck")
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_pack_pck({
 		"pck_path": pck_path,
 		"files": [{"target_path": "res://data/hello.txt", "source_path": src_path}]
@@ -696,7 +696,7 @@ func test_pack_pck_packs_existing_file():
 
 func test_pack_pck_skips_missing_source():
 	var pck_path: String = "res://.tmp_pack_missing.pck"
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_pack_pck({
 		"pck_path": pck_path,
 		"files": ["res://does_not_exist_12345.txt"]
@@ -708,7 +708,7 @@ func test_pack_pck_skips_missing_source():
 # --- configure_render_output ---
 
 func test_configure_render_output_requires_a_setting():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_configure_render_output({"persist": false})
 	assert_has(result, "error", "Calling with no settings should error")
 
@@ -716,7 +716,7 @@ func test_configure_render_output_sets_hdr_2d():
 	var key: String = "rendering/viewport/hdr_2d"
 	var had_setting: bool = ProjectSettings.has_setting(key)
 	var original: Variant = ProjectSettings.get_setting(key) if had_setting else null
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_configure_render_output({"hdr_2d": true, "persist": false})
 	assert_eq(result.get("status", ""), "success", "Configuring render output should succeed")
 	var change_status: String = ""
@@ -733,13 +733,13 @@ func test_configure_render_output_sets_hdr_2d():
 # --- create_drawable_texture / draw_on_texture (Godot 4.7) ---
 
 func test_create_drawable_texture_missing_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_drawable_texture({})
 	assert_has(result, "error", "Missing resource_path should return error")
 
 func test_create_drawable_texture_create_guarded():
 	var out_path: String = "res://.tmp_drawable.tres"
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_drawable_texture({
 		"resource_path": out_path,
 		"width": 32,
@@ -758,7 +758,7 @@ func test_create_drawable_texture_create_guarded():
 		assert_eq(result.get("status", ""), "unsupported", "DrawableTexture2D should be unsupported on older Godot")
 
 func test_create_drawable_texture_invalid_format_guarded():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_create_drawable_texture({
 		"resource_path": "res://.tmp_drawable_bad.tres",
 		"format": "bogus"
@@ -769,12 +769,12 @@ func test_create_drawable_texture_invalid_format_guarded():
 		assert_eq(result.get("status", ""), "unsupported", "DrawableTexture2D should be unsupported on older Godot")
 
 func test_draw_on_texture_missing_path():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var result: Dictionary = project_tools._tool_draw_on_texture({})
 	assert_has(result, "error", "Missing resource_path should return error")
 
 func test_draw_on_texture_blit_guarded():
-	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	if not ClassDB.class_exists("DrawableTexture2D"):
 		var unsupported: Dictionary = project_tools._tool_draw_on_texture({
 			"resource_path": "res://.tmp_missing_drawable.tres",

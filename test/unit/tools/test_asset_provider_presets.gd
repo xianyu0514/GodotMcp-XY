@@ -5,7 +5,7 @@ extends "res://addons/gut/test.gd"
 # layering (explicit params > preset template > config defaults) and the
 # {prompt}/{width}/{height} substitution. No network calls are made.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_assets_tools.gd"
 
 var _tools: RefCounted = null
 

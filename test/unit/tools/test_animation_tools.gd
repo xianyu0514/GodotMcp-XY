@@ -1,9 +1,9 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for the Batch 5 animation tools in project_tools_native.gd:
+# Unit tests for the Batch 5 animation tools in project_workflow_tools.gd:
 # create_animation, insert_animation_keys.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_workflow_tools.gd"
 const TMP_DIR: String = "res://.test_tmp_anim"
 
 var _tools: RefCounted = null
