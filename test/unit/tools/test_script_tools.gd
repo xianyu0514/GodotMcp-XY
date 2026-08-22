@@ -376,3 +376,35 @@ func test_verify_scripts_collect_skips_named_dirs():
 	for path in paths:
 		assert_false(String(path).contains("/utils/"), "Named dirs are skipped: " + str(path))
 	assert_true(paths.size() > 0, "Skipping one subdir still finds the rest")
+
+func test_verify_scripts_deduplicates_paths():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_verify_scripts({
+		"script_paths": [
+			"res://addons/godot_mcp/utils/path_validator.gd",
+			"res://addons/godot_mcp/utils/path_validator.gd",
+			""
+		]
+	})
+	assert_eq(result.get("total_checked", -1), 1, "Duplicate paths are checked once")
+	assert_eq(result.get("verified", -1), 1, "The single unique script verifies")
+
+func test_verify_scripts_collect_wrapper_skips_addons_and_test():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = []
+	tool._collect_verify_script_paths(paths)
+	# Headless（无 EditorInterface）时封装回退到 DirAccess，结果必须与直接扫描一致。
+	var expected: Array = []
+	tool._collect_gd_scripts_excluding("res://", expected, ["addons", "test", ".godot"])
+	assert_eq(paths, expected, "Wrapper scan matches the DirAccess fallback in headless mode")
+	for path in paths:
+		assert_false(String(path).begins_with("res://addons/"), "Wrapper scan skips addons/: " + str(path))
+		assert_false(String(path).begins_with("res://test/"), "Wrapper scan skips test/: " + str(path))
+
+func test_autoload_declarations_cached_returns_string():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var first: String = tool._get_autoload_declarations_cached()
+	var second: String = tool._get_autoload_declarations_cached()
+	assert_true(first is String, "Cached autoload declarations are a string")
+	assert_eq(first, second, "Cached declarations are stable across calls")
+	assert_eq(first, tool._build_autoload_declarations(), "Cache matches a fresh build")

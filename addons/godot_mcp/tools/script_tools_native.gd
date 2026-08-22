@@ -9,6 +9,12 @@ const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_pol
 
 var _editor_interface: EditorInterface = null
 
+# Autoload/全局类声明缓存：批量校验（verify_scripts）时避免对每个失败脚本重复
+# 遍历 ProjectSettings.get_property_list() / get_global_class_list()（TTL 到期自动重建）。
+var _autoload_decls_cache: String = ""
+var _autoload_decls_cache_ts: int = 0
+const AUTOLOAD_DECLS_CACHE_TTL_MS: int = 5000
+
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
 
@@ -2161,7 +2167,7 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 	var autoload_aware: bool = false
 
 	if reload_err != OK:
-		var autoload_decls: String = _build_autoload_declarations()
+		var autoload_decls: String = _get_autoload_declarations_cached()
 		if not autoload_decls.is_empty():
 			var retry_content: String = _insert_autoload_decls_after_extends(validation_content, autoload_decls)
 			var retry_script: GDScript = GDScript.new()
@@ -2284,6 +2290,16 @@ func _strip_class_names(source: String) -> String:
 		else:
 			result.append(line)
 	return "\n".join(result)
+
+# 带 TTL 的 Autoload/全局类声明缓存：批量校验场景（verify_scripts）下，多个失败脚本
+# 共享同一份声明，避免每个脚本都重新遍历 ProjectSettings（TTL 内 ProjectSettings 变更
+# 会在到期后自动感知；`_build_autoload_declarations` 本身保持不变，供直接调用）。
+func _get_autoload_declarations_cached() -> String:
+	var now: int = Time.get_ticks_msec()
+	if _autoload_decls_cache.is_empty() or now - _autoload_decls_cache_ts > AUTOLOAD_DECLS_CACHE_TTL_MS:
+		_autoload_decls_cache = _build_autoload_declarations()
+		_autoload_decls_cache_ts = now
+	return _autoload_decls_cache
 
 func _build_autoload_declarations() -> String:
 	var decls: PackedStringArray = []
@@ -2418,19 +2434,22 @@ func _tool_verify_scripts(params: Dictionary) -> Dictionary:
 	var check_warnings: bool = bool(params.get("check_warnings", true))
 	var max_scripts: int = max(1, int(params.get("max_scripts", 100)))
 
+	# 去重：同一路径只校验一次（显式路径可能重复，扫描结果天然无重复）。
+	var seen: Dictionary = {}
 	var requested: Array = []
 	var raw_paths: Variant = params.get("script_paths", [])
 	if raw_paths is Array:
 		for p in raw_paths:
 			var s: String = String(p).strip_edges()
-			if not s.is_empty():
+			if not s.is_empty() and not seen.has(s):
+				seen[s] = true
 				requested.append(s)
 
 	var paths: Array = []
 	if requested.is_empty():
 		# Default: scan the project, skipping the plugin's own addons/, the test
 		# suite and the engine cache to avoid false positives.
-		_collect_gd_scripts_excluding("res://", paths, ["addons", "test", ".godot"])
+		_collect_verify_script_paths(paths)
 	else:
 		paths = requested
 	paths.sort()
@@ -2525,6 +2544,30 @@ func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_d
 				result.append(full_path)
 		file_name = dir.get_next()
 	dir.list_dir_end()
+
+# 收集待校验脚本路径：编辑器模式优先用 EditorFileSystem 缓存索引（比 DirAccess
+# 递归扫描快一个量级，大项目尤其明显）；无编辑器接口（headless/CI）时回退 DirAccess。
+func _collect_verify_script_paths(result: Array) -> void:
+	var ei: EditorInterface = _get_editor_interface()
+	var efs: EditorFileSystem = ei.get_resource_filesystem() if ei else null
+	if efs and efs.get_filesystem() != null:
+		_walk_editor_filesystem(efs.get_filesystem(), result, ["addons", "test", ".godot"])
+		return
+	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot"])
+
+func _walk_editor_filesystem(dir: EditorFileSystemDirectory, result: Array, skip_dir_names: Array) -> void:
+	for i in range(dir.get_subdir_count()):
+		var sub: EditorFileSystemDirectory = dir.get_subdir(i)
+		if sub.get_name() in skip_dir_names:
+			continue
+		_walk_editor_filesystem(sub, result, skip_dir_names)
+	var dir_path: String = dir.get_path()
+	if dir_path.ends_with("/"):
+		dir_path = dir_path.trim_suffix("/")
+	for i in range(dir.get_file_count()):
+		var fname: String = dir.get_file(i)
+		if fname.ends_with(".gd"):
+			result.append(dir_path + "/" + fname)
 
 # ============================================================================
 # search_in_files - 在项目文件中搜索内容
