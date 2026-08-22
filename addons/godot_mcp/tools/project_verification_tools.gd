@@ -205,19 +205,19 @@ func _build_diff_image(baseline_image: Image, candidate_image: Image, per_pixel_
 
 func _register_assert_visual_baseline(server_core: RefCounted) -> void:
 	var tool_name: String = "assert_visual_baseline"
-	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return a pass/fail verdict against tolerances. If the baseline file does not exist (or update_baseline=true) the candidate is saved as the new baseline and the gate passes (golden-file bootstrap). Otherwise the images are diffed (a per-channel delta above per_pixel_threshold marks a pixel changed) and the gate passes only when every configured tolerance holds: diff_pixel_count <= max_diff_pixels (enforced when max_diff_pixels is given, or when no other tolerance is set), diff_ratio <= max_diff_ratio (when > 0), and rmse <= rmse_threshold (when > 0). Optionally writes a diff heatmap PNG to diff_output_path. Dimension mismatches fail the gate."
+	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and passes. Optionally writes a diff heatmap PNG. Dimension mismatches fail."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"candidate_path": {"type": "string", "description": "Candidate screenshot image path to test."},
-			"baseline_path": {"type": "string", "description": "Baseline (golden) image path. Created from the candidate when missing."},
-			"max_diff_pixels": {"type": "integer", "description": "Maximum differing pixels allowed for a pass. Default 0.", "default": 0},
-			"max_diff_ratio": {"type": "number", "description": "Maximum allowed fraction (0..1) of differing pixels. 0 disables this check.", "default": 0.0},
-			"rmse_threshold": {"type": "number", "description": "Maximum allowed RMSE across channels. 0 disables this check.", "default": 0.0},
-			"per_pixel_threshold": {"type": "number", "description": "Per-channel delta above which a pixel counts as different. Default 0.00001.", "default": 0.00001},
-			"update_baseline": {"type": "boolean", "description": "Overwrite the baseline with the candidate and pass.", "default": false},
-			"diff_output_path": {"type": "string", "description": "Optional .png path to write a diff heatmap image."}
+			"candidate_path": {"type": "string", "description": "Candidate screenshot path."},
+			"baseline_path": {"type": "string", "description": "Baseline (golden) image path."},
+			"max_diff_pixels": {"type": "integer", "description": "Max differing pixels for pass.", "default": 0},
+			"max_diff_ratio": {"type": "number", "description": "Max fraction (0..1) of differing pixels; 0 disables.", "default": 0.0},
+			"rmse_threshold": {"type": "number", "description": "Max RMSE; 0 disables.", "default": 0.0},
+			"per_pixel_threshold": {"type": "number", "description": "Per-channel delta marking a pixel different.", "default": 0.00001},
+			"update_baseline": {"type": "boolean", "description": "Overwrite baseline and pass.", "default": false},
+			"diff_output_path": {"type": "string", "description": "Diff heatmap PNG path (optional)."}
 		},
 		"required": ["candidate_path", "baseline_path"]
 	}

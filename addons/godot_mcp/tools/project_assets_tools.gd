@@ -633,36 +633,36 @@ static func _asset_seed_color(seed: int, salt: int) -> Color:
 
 func _register_generate_asset(server_core: RefCounted) -> void:
 	var tool_name: String = "generate_asset"
-	var description: String = "Generate a game asset (sprite/texture or sound effect) from a text prompt and land it into res://. provider 'placeholder' (default) synthesizes a deterministic procedural Image (PNG) or AudioStreamWAV (.tres/.wav) offline so prototypes never block on missing art; provider 'external' calls an external image/audio/TTS HTTP API, validates the bytes (image: PNG/JPEG/WEBP; audio: WAV/OGG/MP3), and saves them. With provider 'external' pass a 'preset' (openai_image, stability_image, elevenlabs_tts, local_sd_webui) to fill the endpoint/headers/body from a built-in template — the API key is read from an OS env var, never logged — or set endpoint/headers manually; use body_format 'multipart' for APIs that require multipart/form-data (e.g. Stability v2beta). A default preset and key env var can also be configured in the MCP panel. Returns status 'unconfigured' when no endpoint/preset is set so callers can fall back to placeholders. The result is reimported when an editor interface is available."
+	var description: String = "Generate an image/audio asset from a prompt into res://; key from env var. Returns 'unconfigured' when unset; reimports when possible."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"type": {"type": "string", "description": "Asset type. Image: texture, sprite, icon. Audio: audio, sfx, tone.", "enum": ["texture", "sprite", "icon", "audio", "sfx", "tone"]},
-			"prompt": {"type": "string", "description": "Text prompt describing the asset. Seeds deterministic placeholder generation and is sent to external providers."},
-			"resource_path": {"type": "string", "description": "Where to save (res:// or user://). Image: .png/.jpg/.webp. Audio: .tres/.wav (placeholder); external audio also .ogg/.mp3."},
-			"provider": {"type": "string", "description": "Generation provider. Default 'placeholder' (offline procedural). 'external' calls an HTTP API.", "enum": ["placeholder", "external"], "default": "placeholder"},
-			"preset": {"type": "string", "description": "External provider preset (provider=external). Fills endpoint/headers/body/response_field from a built-in template; the API key is read from the preset's env var. Explicit endpoint/headers/etc. override the preset. When omitted, the default preset configured in the MCP panel is used.", "enum": ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui"]},
-			"width": {"type": "integer", "description": "Image width in pixels. Default 64.", "default": 64},
-			"height": {"type": "integer", "description": "Image height in pixels. Default 64.", "default": 64},
-			"pattern": {"type": "string", "description": "Image pattern. Default 'auto' (derived from prompt).", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise"], "default": "auto"},
-			"colors": {"type": "array", "description": "Foreground colors (color string/array/{r,g,b,a}). Defaults derived from prompt."},
-			"background": {"description": "Background color. Defaults derived from prompt."},
-			"duration": {"type": "number", "description": "Audio duration in seconds. Default 0.5.", "default": 0.5},
-			"frequency": {"type": "number", "description": "Audio base frequency in Hz. Default 0 (auto from prompt).", "default": 0.0},
-			"waveform": {"type": "string", "description": "Audio waveform. Default 'auto'.", "enum": ["auto", "sine", "square", "saw", "triangle", "noise"], "default": "auto"},
-			"sample_rate": {"type": "integer", "description": "Audio sample rate in Hz. Default 22050.", "default": 22050},
-			"amplitude": {"type": "number", "description": "Audio amplitude 0..1. Default 0.6.", "default": 0.6},
-			"endpoint": {"type": "string", "description": "External provider URL (provider=external)."},
-			"api_key_env": {"type": "string", "description": "Name of an OS environment variable holding the API key for the external provider. The key value is never logged."},
-			"http_method": {"type": "string", "description": "External HTTP method. Default POST.", "enum": ["GET", "POST"], "default": "POST"},
-			"headers": {"type": "object", "description": "Extra HTTP headers for the external request."},
-			"request_body": {"description": "External request body. Object/array is sent as JSON; string is sent verbatim."},
-			"body_format": {"type": "string", "description": "How an object/array request_body is encoded for the external request. 'json' (default) or 'multipart' (multipart/form-data, e.g. Stability v2beta).", "enum": ["json", "multipart"], "default": "json"},
-			"response_field": {"type": "string", "description": "Dot path to a base64-encoded payload inside a JSON response (e.g. 'data.0.b64_json'). When omitted the raw response body is treated as the asset bytes."},
-			"timeout_sec": {"type": "number", "description": "External request timeout in seconds. Default 30.", "default": 30.0},
-			"record_prompt": {"type": "boolean", "description": "Write a '<resource_path>.gen.json' manifest with prompt + parameters for traceability. Default true.", "default": true},
-			"reimport": {"type": "boolean", "description": "Reimport the saved file via EditorFileSystem when available. Default true.", "default": true}
+			"type": {"type": "string", "description": "Image/audio.", "enum": ["texture", "sprite", "icon", "audio", "sfx", "tone"]},
+			"prompt": {"type": "string", "description": "Prompt text."},
+			"resource_path": {"type": "string", "description": "Save path."},
+			"provider": {"type": "string", "description": "Provider.", "enum": ["placeholder", "external"], "default": "placeholder"},
+			"preset": {"type": "string", "description": "External preset.", "enum": ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui"]},
+			"width": {"type": "integer", "description": "Width px.", "default": 64},
+			"height": {"type": "integer", "description": "Height px.", "default": 64},
+			"pattern": {"type": "string", "description": "Pattern.", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise"], "default": "auto"},
+			"colors": {"type": "array", "description": "Colors."},
+			"background": {"description": "Background."},
+			"duration": {"type": "number", "description": "Seconds.", "default": 0.5},
+			"frequency": {"type": "number", "description": "Freq Hz.", "default": 0.0},
+			"waveform": {"type": "string", "description": "Waveform.", "enum": ["auto", "sine", "square", "saw", "triangle", "noise"], "default": "auto"},
+			"sample_rate": {"type": "integer", "description": "Rate Hz.", "default": 22050},
+			"amplitude": {"type": "number", "description": "0..1.", "default": 0.6},
+			"endpoint": {"type": "string", "description": "External URL."},
+			"api_key_env": {"type": "string", "description": "Key env var."},
+			"http_method": {"type": "string", "description": "Method.", "enum": ["GET", "POST"], "default": "POST"},
+			"headers": {"type": "object", "description": "Headers."},
+			"request_body": {"description": "Body."},
+			"body_format": {"type": "string", "description": "Format.", "enum": ["json", "multipart"], "default": "json"},
+			"response_field": {"type": "string", "description": "Payload path."},
+			"timeout_sec": {"type": "number", "description": "Timeout s.", "default": 30.0},
+			"record_prompt": {"type": "boolean", "description": "Write manifest.", "default": true},
+			"reimport": {"type": "boolean", "description": "Reimport.", "default": true}
 		},
 		"required": ["type", "prompt", "resource_path"]
 	}
@@ -1515,22 +1515,22 @@ func _resolve_sprite_animations(animations_param: Variant, frame_count: int) -> 
 
 func _register_slice_sprite_sheet(server_core: RefCounted) -> void:
 	var tool_name: String = "slice_sprite_sheet"
-	var description: String = "Slice a sprite sheet texture into a SpriteFrames resource (.tres) so a generated or imported sheet becomes animation-ready in one step. Provide a grid as either {h_frames, v_frames} or {cell_width, cell_height}, with optional margin (border) and spacing (gap between cells); frames are indexed row-major from 0. Pass 'animations' (array of {name, frames:[...] OR start_frame+end_frame, fps, loop}) to define named clips; when omitted a single looping 'default' clip spanning every frame is created. Set create_scene=true to also save an AnimatedSprite2D scene wired to the SpriteFrames with the first clip set to autoplay."
+	var description: String = "Slice a sprite sheet texture into a SpriteFrames resource (.tres), animation-ready in one step. Grid = {h_frames, v_frames} or {cell_width, cell_height}, plus optional margin/spacing; frames row-major from 0. 'animations' (array of {name, frames or start_frame+end_frame, fps, loop}) defines named clips; omit for a looping 'default' clip over all frames. create_scene=true also saves an AnimatedSprite2D scene (first clip autoplays)."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"texture_path": {"type": "string", "description": "Sprite sheet image path (res:// .png/.jpg/.webp/.bmp)."},
-			"output_path": {"type": "string", "description": "Save path for the SpriteFrames resource (.tres/.res)."},
-			"h_frames": {"type": "integer", "description": "Number of columns. Use with v_frames."},
-			"v_frames": {"type": "integer", "description": "Number of rows. Use with h_frames."},
-			"cell_width": {"type": "integer", "description": "Frame width in pixels. Use with cell_height (alternative to h_frames/v_frames)."},
-			"cell_height": {"type": "integer", "description": "Frame height in pixels. Use with cell_width."},
-			"margin": {"type": "integer", "description": "Border (px) around the sheet before the first cell. Default 0.", "default": 0},
-			"spacing": {"type": "integer", "description": "Gap (px) between adjacent cells. Default 0.", "default": 0},
-			"animations": {"type": "array", "description": "Named clips: {name, frames:[...] OR start_frame+end_frame, fps, loop}. Omit for a single looping 'default' clip."},
-			"create_scene": {"type": "boolean", "description": "Also save an AnimatedSprite2D scene wired to the SpriteFrames. Default false.", "default": false},
-			"scene_output_path": {"type": "string", "description": "Save path for the AnimatedSprite2D scene (.tscn). Required when create_scene=true."}
+			"texture_path": {"type": "string", "description": "Sprite sheet image path (.png/.jpg/.webp/.bmp)."},
+			"output_path": {"type": "string", "description": "SpriteFrames save path (.tres/.res)."},
+			"h_frames": {"type": "integer", "description": "Columns (use with v_frames)."},
+			"v_frames": {"type": "integer", "description": "Rows (use with h_frames)."},
+			"cell_width": {"type": "integer", "description": "Frame width px (alt grid)."},
+			"cell_height": {"type": "integer", "description": "Frame height px (alt grid)."},
+			"margin": {"type": "integer", "description": "Border around the sheet.", "default": 0},
+			"spacing": {"type": "integer", "description": "Gap between cells.", "default": 0},
+			"animations": {"type": "array", "description": "Named clips; omit for looping 'default'."},
+			"create_scene": {"type": "boolean", "description": "Also save AnimatedSprite2D scene.", "default": false},
+			"scene_output_path": {"type": "string", "description": "Scene save path (required with create_scene)."}
 		},
 		"required": ["texture_path", "output_path"]
 	}
@@ -1837,28 +1837,28 @@ func _tool_inspect_gltf_asset(params: Dictionary) -> Dictionary:
 
 func _register_generate_3d_asset(server_core: RefCounted) -> void:
 	var tool_name: String = "generate_3d_asset"
-	var description: String = "Generate a 3D model (glTF/GLB) from a text prompt via an external text-to-3D provider and land it into res://. Asynchronous flow: submits a job, polls the provider's status endpoint until it succeeds or fails, downloads the resulting glTF/GLB, validates the bytes, and (by default) inspects the asset structure (mesh/material/animation counts). Pick a 'preset' (meshy_text_to_3d, tripo_text_to_3d) to fill the submit/status endpoints, request body and status/model-url field paths from a built-in template, or set them manually. Bring-your-own-key: the API key is read from an OS env var named by the preset (e.g. MESHY_API_KEY / TRIPO_API_KEY), never logged or stored, and the user pays their own provider quota. Returns status 'unconfigured' when no preset/submit_endpoint is set so callers can skip or fall back. The result is reimported when an editor interface is available."
+	var description: String = "Generate a 3D model (glTF/GLB) from a text prompt via an external provider into res://. Async: submit job, poll status, download, validate. API key from an OS env var (never logged). Returns 'unconfigured' when unset; reimports when possible."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"prompt": {"type": "string", "description": "Text prompt describing the 3D model to generate. Sent to the external provider."},
-			"resource_path": {"type": "string", "description": "Where to save the model (res:// or user://): .glb (binary glTF) or .gltf."},
-			"preset": {"type": "string", "description": "Text-to-3D provider preset. Fills submit/status endpoints, request body and field paths from a built-in template; the API key is read from the preset's env var. When omitted, a model3d default preset configured in the MCP panel is used.", "enum": ["meshy_text_to_3d", "tripo_text_to_3d"]},
-			"api_key_env": {"type": "string", "description": "Name of an OS env var holding the provider API key. Overrides the preset's env var. The key value is never logged. Pass an empty string to send no auth header."},
-			"request_body": {"description": "Override the submit request body (object sent as JSON, or string sent verbatim). {prompt} is substituted."},
-			"headers": {"type": "object", "description": "Extra HTTP headers merged into both the submit and status requests."},
-			"submit_endpoint": {"type": "string", "description": "Override the job-submit URL (use with a custom provider instead of a preset)."},
-			"status_endpoint": {"type": "string", "description": "Override the status-poll URL template; must contain {task_id}."},
-			"task_id_field": {"type": "string", "description": "Dot path to the job id in the submit response (e.g. 'result' or 'data.task_id')."},
-			"status_field": {"type": "string", "description": "Dot path to the status string in the status response (e.g. 'status' or 'data.status')."},
-			"model_url_field": {"type": "string", "description": "Dot path to the downloadable model URL in the status response (e.g. 'model_urls.glb')."},
-			"poll_interval_sec": {"type": "number", "description": "Seconds between status polls. Default 5 (clamped 1..30).", "default": 5.0},
-			"max_wait_sec": {"type": "number", "description": "Total seconds to wait for the job before timing out. Default 300 (clamped 5..1800).", "default": 300.0},
-			"timeout_sec": {"type": "number", "description": "Per-request HTTP timeout in seconds. Default 30 (clamped 1..120).", "default": 30.0},
-			"record_prompt": {"type": "boolean", "description": "Write a '<resource_path>.gen.json' manifest with prompt + parameters for traceability. Default true.", "default": true},
-			"reimport": {"type": "boolean", "description": "Reimport the saved file via EditorFileSystem when available. Default true.", "default": true},
-			"inspect": {"type": "boolean", "description": "Run inspect_gltf_asset on the downloaded model and attach the structural summary. Default true.", "default": true}
+			"prompt": {"type": "string", "description": "Prompt text."},
+			"resource_path": {"type": "string", "description": "Save path (.glb/.gltf)."},
+			"preset": {"type": "string", "description": "Provider preset.", "enum": ["meshy_text_to_3d", "tripo_text_to_3d"]},
+			"api_key_env": {"type": "string", "description": "Env var for API key."},
+			"request_body": {"description": "Override submit body."},
+			"headers": {"type": "object", "description": "Extra headers."},
+			"submit_endpoint": {"type": "string", "description": "Override submit URL."},
+			"status_endpoint": {"type": "string", "description": "Status URL ({task_id})."},
+			"task_id_field": {"type": "string", "description": "Dot path to job id."},
+			"status_field": {"type": "string", "description": "Dot path to status."},
+			"model_url_field": {"type": "string", "description": "Dot path to model URL."},
+			"poll_interval_sec": {"type": "number", "description": "Poll interval s.", "default": 5.0},
+			"max_wait_sec": {"type": "number", "description": "Max wait s.", "default": 300.0},
+			"timeout_sec": {"type": "number", "description": "Timeout s.", "default": 30.0},
+			"record_prompt": {"type": "boolean", "description": "Write .gen.json.", "default": true},
+			"reimport": {"type": "boolean", "description": "Reimport.", "default": true},
+			"inspect": {"type": "boolean", "description": "Inspect structure.", "default": true}
 		},
 		"required": ["prompt", "resource_path"]
 	}

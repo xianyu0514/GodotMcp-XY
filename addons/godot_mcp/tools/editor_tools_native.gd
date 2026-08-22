@@ -2256,24 +2256,24 @@ func _remove_dir_recursive(path: String) -> int:
 
 func _register_configure_android_export(server_core: RefCounted) -> void:
 	var tool_name: String = "configure_android_export"
-	var description: String = "Configure Android-specific options on an existing Android export preset in export_presets.cfg (e.g. package name, app name, version code/name, Gradle build, APK/AAB format, min/target SDK, target architectures, keystore file paths). Only sets the fields you provide; the preset's platform must be 'Android'. Keystore passwords are intentionally NOT written here — set them via the GODOT_ANDROID_KEYSTORE_* environment variables. Works on Godot 4.6+."
+	var description: String = "Configure Android options on an existing Android export preset in export_presets.cfg (package name, app name, version code/name, Gradle build, APK/AAB format, SDK levels, architectures, keystore paths). Only sets provided fields; preset platform must be Android. Keystore passwords are NOT written here (set via GODOT_ANDROID_KEYSTORE_* env vars). Godot 4.6+."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"preset": {"type": "string", "description": "Preset name or section (e.g. 'Android' or 'preset.0')."},
-			"config_path": {"type": "string", "description": "Path to export_presets.cfg. Default 'res://export_presets.cfg'.", "default": "res://export_presets.cfg"},
-			"package_name": {"type": "string", "description": "Reverse-DNS application id -> package/unique_name (e.g. 'com.example.game')."},
+			"preset": {"type": "string", "description": "Preset name or section."},
+			"config_path": {"type": "string", "description": "Path to export_presets.cfg.", "default": "res://export_presets.cfg"},
+			"package_name": {"type": "string", "description": "App id -> package/unique_name."},
 			"app_name": {"type": "string", "description": "Display name -> package/name."},
-			"version_code": {"type": "integer", "description": "Integer version code -> version/code."},
-			"version_name": {"type": "string", "description": "Human version string -> version/name."},
-			"use_gradle_build": {"type": "boolean", "description": "Toggle gradle_build/use_gradle_build."},
-			"export_format": {"type": "string", "enum": ["apk", "aab"], "description": "gradle_build/export_format (apk=0, aab=1)."},
-			"min_sdk": {"type": "string", "description": "gradle_build/min_sdk."},
-			"target_sdk": {"type": "string", "description": "gradle_build/target_sdk."},
-			"architectures": {"type": "array", "description": "Subset of ['arm64-v8a','armeabi-v7a','x86','x86_64']; listed archs are enabled, the rest disabled."},
-			"keystore_release": {"type": "string", "description": "Path to release keystore -> keystore/release (path only, no password)."},
-			"keystore_debug": {"type": "string", "description": "Path to debug keystore -> keystore/debug (path only, no password)."}
+			"version_code": {"type": "integer", "description": "Int version -> version/code."},
+			"version_name": {"type": "string", "description": "String version -> version/name."},
+			"use_gradle_build": {"type": "boolean", "description": "-> gradle_build/use_gradle_build."},
+			"export_format": {"type": "string", "enum": ["apk", "aab"], "description": "-> gradle_build/export_format."},
+			"min_sdk": {"type": "string", "description": "-> gradle_build/min_sdk."},
+			"target_sdk": {"type": "string", "description": "-> gradle_build/target_sdk."},
+			"architectures": {"type": "array", "description": "Enabled archs; rest disabled."},
+			"keystore_release": {"type": "string", "description": "-> keystore/release (path only)."},
+			"keystore_debug": {"type": "string", "description": "-> keystore/debug (path only)."}
 		},
 		"required": ["preset"]
 	}

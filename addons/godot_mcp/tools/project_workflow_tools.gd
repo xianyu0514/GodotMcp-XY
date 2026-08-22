@@ -753,30 +753,30 @@ const _TASK_PLAN_ACTIONS: Array = ["init", "add_task", "update_task", "set_statu
 
 func _register_manage_task_plan(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_task_plan"
-	var description: String = "Persist and query a durable task graph with Definition-of-Done (DoD) for AI-driven game production, stored as versioned JSON (default res://.mcp/task_plan.json) so plan -> execute -> run -> verify -> fix survives across sessions. action='init' creates/resets the plan with a goal (with reset=false it returns an error rather than overwriting an existing plan whose JSON is corrupt; use reset=true to discard it); 'add_task' appends a task (auto id, depends_on, dod criteria, tags) with cycle detection; 'update_task' edits fields; 'set_status' sets pending/in_progress/blocked/done (refuses 'done' unless every DoD criterion is met, unless force=true); 'set_dod' replaces the criteria list or updates one criterion's met/evidence/gate; 'get' returns the whole graph (or one task) plus progress; 'next' returns dependency-ready tasks, blocked tasks and progress; 'remove_task' deletes a task and strips dangling dependency references. A DoD criterion may carry a 'gate' {type, ...thresholds} so VERIFY decides 'met' objectively: type 'performance_budget' with a 'budget' (min_fps/max_frame_time_ms/max_physics_frame_time_ms/max_object_count/max_resource_count/max_rendered_objects/max_memory_mb/max_node_count), 'no_runtime_errors' with optional 'max_errors' (default 0), or 'visual_baseline' with 'max_diff_pixels' and/or 'max_diff_ratio'. On set_dod, pass 'observed' (a flat map of measured values keyed the same way, e.g. {min_fps:58} or {error_count:0} or {diff_pixels:12}) to auto-compute 'met' from the gate and record the verdict as evidence."
+	var description: String = "Persistent task graph + Definition-of-Done (DoD) in JSON (default res://.mcp/task_plan.json). Actions: init, add_task, update_task, set_status (done needs DoD unless force), set_dod, get, next, remove_task."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "enum": _TASK_PLAN_ACTIONS, "description": "Operation to perform."},
-			"plan_path": {"type": "string", "description": "Where the plan JSON lives (res:// or user://). Default res://.mcp/task_plan.json.", "default": _TASK_PLAN_DEFAULT_PATH},
-			"goal": {"type": "string", "description": "action='init': the overall goal/objective for this plan."},
-			"reset": {"type": "boolean", "description": "action='init': discard any existing plan and start empty. Default false.", "default": false},
-			"id": {"type": "string", "description": "Task id. For add_task it is optional (auto 't<N>' when omitted); required for update_task/set_status/set_dod/remove_task and optional for get."},
-			"title": {"type": "string", "description": "Task title (required for add_task)."},
-			"description": {"type": "string", "description": "Task description / the action to perform."},
-			"status": {"type": "string", "enum": TaskPlanStore.VALID_STATUSES, "description": "Task status for add_task/update_task/set_status."},
-			"depends_on": {"type": "array", "items": {"type": "string"}, "description": "Ids this task depends on. Validated for existence and cycles."},
-			"dod": {"type": "array", "description": "Definition-of-Done criteria: strings, or objects {criterion, met, evidence, gate}. The optional 'gate' makes a criterion machine-checkable (see tool description). For set_dod this replaces the whole list."},
-			"tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags."},
-			"journal": {"type": "string", "description": "A note to append to the task's journal (update_task / set_status)."},
-			"force": {"type": "boolean", "description": "action='set_status': allow marking 'done' even when DoD criteria are unmet. Default false.", "default": false},
-			"index": {"type": "integer", "description": "action='set_dod': index of the criterion to update."},
-			"criterion": {"type": "string", "description": "action='set_dod': criterion text to match (or add) when not using index."},
-			"met": {"type": "boolean", "description": "action='set_dod': whether the targeted criterion is met (ignored when 'observed' is supplied)."},
-			"evidence": {"type": "string", "description": "action='set_dod': evidence string for the targeted criterion (auto-filled when 'observed' is supplied)."},
-			"gate": {"type": "object", "description": "action='set_dod': attach/replace the gate on the targeted criterion (null clears it). Gate {type, ...thresholds}; see tool description."},
-			"observed": {"type": "object", "description": "action='set_dod': measured metrics to evaluate the criterion's gate, auto-setting 'met' objectively. Keyed like the gate thresholds, e.g. {min_fps:58, max_memory_mb:180} / {error_count:0} / {diff_pixels:12, diff_ratio:0.001}."}
+			"action": {"type": "string", "enum": _TASK_PLAN_ACTIONS, "description": "Operation."},
+			"plan_path": {"type": "string", "description": "Plan path.", "default": _TASK_PLAN_DEFAULT_PATH},
+			"goal": {"type": "string", "description": "Init goal."},
+			"reset": {"type": "boolean", "description": "Init: reset.", "default": false},
+			"id": {"type": "string", "description": "Task id."},
+			"title": {"type": "string", "description": "Title."},
+			"description": {"type": "string", "description": "Details."},
+			"status": {"type": "string", "enum": TaskPlanStore.VALID_STATUSES, "description": "Status."},
+			"depends_on": {"type": "array", "items": {"type": "string"}, "description": "Deps (cycle-checked)."},
+			"dod": {"type": "array", "description": "DoD criteria."},
+			"tags": {"type": "array", "items": {"type": "string"}, "description": "Tags."},
+			"journal": {"type": "string", "description": "Journal."},
+			"force": {"type": "boolean", "description": "Force done.", "default": false},
+			"index": {"type": "integer", "description": "set_dod index."},
+			"criterion": {"type": "string", "description": "set_dod text."},
+			"met": {"type": "boolean", "description": "set_dod met."},
+			"evidence": {"type": "string", "description": "set_dod evidence."},
+			"gate": {"type": "object", "description": "set_dod gate."},
+			"observed": {"type": "object", "description": "Metrics -> met."}
 		},
 		"required": ["action"]
 	}
@@ -920,19 +920,19 @@ const _I18N_TRANSLATABLE_PROPERTIES: Array = [
 
 func _register_manage_localization(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_localization"
-	var description: String = "Localization workflow in one tool (Godot 4.7 has no headless-drivable translation pipeline). action='extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title) and tr(\"...\") calls in .gd scripts, then writes/merges a standard CSV (first column 'keys', one column per locale), preserving existing translations and only adding new keys. action='import' reads that CSV, builds one .translation resource per locale, and registers them under internationalization/locale/translations. action='export' reads the registered (or explicitly given) .translation files back into a CSV for round-tripping/inspection. action='list' is read-only and reports registered locales with their key counts. All write actions support dry_run."
+	var description: String = "Localization workflow: 'extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title/hint_tooltip) and .gd tr()/atr() calls, merging new keys into a standard CSV (first column keys, one per locale) while preserving existing translations; 'import' builds one .translation per locale from the CSV and registers it in ProjectSettings; 'export' writes registered .translations back to CSV; 'list' shows registered locales. Write actions support dry_run."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"action": {"type": "string", "enum": ["list", "extract", "import", "export"], "description": "Which localization operation to run."},
-			"csv_path": {"type": "string", "description": "CSV path used by extract/import/export. Default res://localization/translations.csv.", "default": _I18N_DEFAULT_CSV},
-			"scan_dir": {"type": "string", "description": "extract: root directory to scan recursively. Default res://.", "default": "res://"},
-			"include_scripts": {"type": "boolean", "description": "extract: also scan .gd scripts for tr()/atr() calls. Default true.", "default": true},
-			"out_dir": {"type": "string", "description": "import: directory to write <locale>.translation files. Default: same directory as csv_path."},
-			"register": {"type": "boolean", "description": "import: register generated .translation files in ProjectSettings. Default true.", "default": true},
-			"translations_paths": {"type": "array", "items": {"type": "string"}, "description": "export: explicit list of .translation paths. Default: read from ProjectSettings."},
-			"dry_run": {"type": "boolean", "description": "Compute results without writing files or settings. Default false.", "default": false}
+			"action": {"type": "string", "enum": ["list", "extract", "import", "export"], "description": "Operation: list/extract/import/export."},
+			"csv_path": {"type": "string", "description": "CSV path.", "default": _I18N_DEFAULT_CSV},
+			"scan_dir": {"type": "string", "description": "extract: scan root (recursive).", "default": "res://"},
+			"include_scripts": {"type": "boolean", "description": "extract: also scan .gd scripts.", "default": true},
+			"out_dir": {"type": "string", "description": "import: output dir for .translation files."},
+			"register": {"type": "boolean", "description": "import: register in ProjectSettings.", "default": true},
+			"translations_paths": {"type": "array", "items": {"type": "string"}, "description": "export: explicit .translation paths."},
+			"dry_run": {"type": "boolean", "description": "Compute without writing.", "default": false}
 		},
 		"required": ["action"]
 	}
