@@ -7,8 +7,13 @@ extends RefCounted
 const MAX_CONCURRENT_TEST_JOBS: int = 4
 
 var _editor_interface: EditorInterface = null
-var _test_runner: AsyncJobRunner = AsyncJobRunner.new()
-var _batch_test_runner: AsyncJobRunner = AsyncJobRunner.new()
+# 统一异步 job 框架（AsyncJobManager，基于 WorkerThreadPool）：单测与批次测试
+# 各用一个 manager 实例，共享同一个 MAX_CONCURRENT_TEST_JOBS 预算；文生3D 生成
+# 独立管理。AsyncJobManager 兼容 AsyncJobRunner 的 start/poll/has_job/
+# active_count/elapsed_ms/flush API，因此旧的调用方无需改动。
+var _test_runner: AsyncJobManager = AsyncJobManager.new()
+var _batch_test_runner: AsyncJobManager = AsyncJobManager.new()
+var _gen_job_manager: AsyncJobManager = AsyncJobManager.new()
 # Reference to the owning MCPServerCore, captured at registration, so long-running
 # tools can emit progress notifications and observe client cancellation.
 var _server_core: RefCounted = null
@@ -905,33 +910,43 @@ func _tool_run_project_test(params: Dictionary) -> Dictionary:
 	if params.has("_meta") and params["_meta"] is Dictionary:
 		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
 
-	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。
+	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。取消时同时
+	# 标记底层 job，让后台 worker 尽快中止（协作式取消）。
 	if _tool_cancelled():
+		if _test_runner.has_job(test_path):
+			_test_runner.cancel_job(test_path)
 		return {"status": "cancelled", "test_path": test_path, "error": "cancelled by client"}
 
 	# A test run spawns a full subprocess (python, or a headless Godot for GUT)
-	# that can take seconds to minutes. Run it on a background thread so the
-	# editor stays responsive: the first call starts the run and returns
-	# "pending"; calling again with the same test_path polls for the result.
+	# that can take seconds to minutes. Run it on a worker thread so the editor
+	# stays responsive: the first call starts the run and returns "pending";
+	# calling again with the same test_path polls for the result.
 	if _test_runner.has_job(test_path):
-		var polled: Dictionary = _test_runner.poll(test_path)
-		if not bool(polled["finished"]):
+		var polled: Dictionary = _test_runner.poll_job(test_path)
+		var poll_status: String = str(polled.get("status", ""))
+		if poll_status == "pending":
 			# Report elapsed seconds as progress on each poll round.
-			_send_tool_progress(progress_token, int(_test_runner.elapsed_ms(test_path) / 1000), 0, "polling")
+			_send_tool_progress(progress_token, int(polled.get("elapsed_ms", 0) / 1000), 0, "polling")
 			return {
 				"status": "pending",
+				"job_id": test_path,
 				"test_path": test_path,
-				"elapsed_ms": _test_runner.elapsed_ms(test_path),
+				"elapsed_ms": polled.get("elapsed_ms", 0),
 				"message": "Test is still running; call run_project_test again with the same test_path to poll for the result."
 			}
-		return polled["result"]
+		if poll_status != "missing":
+			# "done"/"cancelled"：worker 结果原样返回（含 error / cancelled 标记）。
+			return polled.get("result", {})
+		# status == "missing"：另一个并发请求已经 poll 完成并取走了 job，
+		# 当作全新任务继续往下走。
 
 	if _active_test_job_count() >= MAX_CONCURRENT_TEST_JOBS:
 		return {"error": "Too many test runs in progress; poll the pending runs before starting another."}
 
-	_test_runner.start(test_path, Callable(self, "_execute_project_test_blocking").bind(test_path))
+	_test_runner.start_job(test_path, Callable(self, "_execute_project_test_blocking").bind(test_path))
 	return {
 		"status": "pending",
+		"job_id": test_path,
 		"test_path": test_path,
 		"message": "Test started on a background thread; call run_project_test again with the same test_path to poll for the result."
 	}
@@ -1006,29 +1021,37 @@ func _tool_run_project_tests(params: Dictionary) -> Dictionary:
 	if params.has("_meta") and params["_meta"] is Dictionary:
 		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
 
-	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。
-	if _tool_cancelled():
-		return {"status": "cancelled", "search_path": search_path, "error": "cancelled by client"}
-
 	# A batch can spawn many test subprocesses back to back and take minutes.
-	# Run the whole batch on a background thread so the editor stays responsive:
+	# Run the whole batch on a worker thread so the editor stays responsive:
 	# the first call starts the batch and returns "pending"; calling again with
 	# the same arguments polls for the aggregated result.
 	var job_key: String = search_path + "|" + framework + "|" + str(only_runnable)
 
+	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次。取消时同时
+	# 标记底层 job，让批次 worker 在两次测试之间尽早中止。
+	if _tool_cancelled():
+		if _batch_test_runner.has_job(job_key):
+			_batch_test_runner.cancel_job(job_key)
+		return {"status": "cancelled", "search_path": search_path, "error": "cancelled by client"}
+
 	if _batch_test_runner.has_job(job_key):
-		var polled: Dictionary = _batch_test_runner.poll(job_key)
-		if not bool(polled["finished"]):
+		var polled: Dictionary = _batch_test_runner.poll_job(job_key)
+		var poll_status: String = str(polled.get("status", ""))
+		if poll_status == "pending":
 			# Report elapsed seconds as progress on each poll round.
-			_send_tool_progress(progress_token, int(_batch_test_runner.elapsed_ms(job_key) / 1000), 0, "polling")
+			_send_tool_progress(progress_token, int(polled.get("elapsed_ms", 0) / 1000), 0, "polling")
 			return {
 				"status": "pending",
+				"job_id": job_key,
 				"search_path": search_path,
 				"framework": framework,
-				"elapsed_ms": _batch_test_runner.elapsed_ms(job_key),
+				"elapsed_ms": polled.get("elapsed_ms", 0),
 				"message": "Test batch is still running; call run_project_tests again with the same arguments to poll for the result."
 			}
-		return polled["result"]
+		if poll_status != "missing":
+			# "done"/"cancelled"：聚合结果（或 cancelled 标记）原样返回。
+			return polled.get("result", {})
+		# status == "missing"：并发请求已取走 job，当作全新任务继续往下走。
 
 	if _active_test_job_count() >= MAX_CONCURRENT_TEST_JOBS:
 		return {"error": "Too many test batches in progress; poll the pending runs before starting another."}
@@ -1038,17 +1061,21 @@ func _tool_run_project_tests(params: Dictionary) -> Dictionary:
 		"framework": framework,
 		"only_runnable": only_runnable
 	}
-	_batch_test_runner.start(job_key, Callable(self, "_execute_project_tests_blocking").bind(work_params))
+	_batch_test_runner.start_job(job_key, Callable(self, "_execute_project_tests_blocking").bind(job_key, work_params))
 	return {
 		"status": "pending",
+		"job_id": job_key,
 		"search_path": search_path,
 		"framework": framework,
 		"message": "Test batch started on a background thread; call run_project_tests again with the same arguments to poll for the result."
 	}
 
 # Blocking execution of a test batch. Used by the background worker thread for
-# run_project_tests. Discovers tests and runs each one synchronously.
-func _execute_project_tests_blocking(params: Dictionary) -> Dictionary:
+# run_project_tests. Discovers tests and runs each one synchronously. Checks
+# the manager's cooperative cancellation flag between tests so a cancelled
+# batch aborts early and reports a "cancelled" status instead of draining the
+# remaining tests.
+func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dictionary:
 	var list_result: Dictionary = _tool_list_project_tests({
 		"search_path": params.get("search_path", "res://test"),
 		"framework": params.get("framework", "")
@@ -1063,8 +1090,24 @@ func _execute_project_tests_blocking(params: Dictionary) -> Dictionary:
 	var failed_count: int = 0
 	var skipped_count: int = 0
 
+	var index: int = 0
 	for entry in discovered_tests:
+		# 协作式取消：批次在两条测试之间检查取消标记，尽早中止整批。
+		if _batch_test_runner.is_cancelled(job_id):
+			return {
+				"status": "cancelled",
+				"cancelled": true,
+				"error": "cancelled by client",
+				"search_path": str(params.get("search_path", "")),
+				"framework": str(params.get("framework", "")).strip_edges().to_lower(),
+				"total_count": results.size(),
+				"passed_count": passed_count,
+				"failed_count": failed_count,
+				"skipped_count": skipped_count,
+				"results": results
+			}
 		if not (entry is Dictionary):
+			index += 1
 			continue
 		var test_entry: Dictionary = entry
 		if only_runnable and not bool(test_entry.get("runnable", false)):
@@ -1075,6 +1118,7 @@ func _execute_project_tests_blocking(params: Dictionary) -> Dictionary:
 				"framework": String(test_entry.get("framework", "")),
 				"reason": "No available runner"
 			})
+			index += 1
 			continue
 		var test_result: Dictionary = _execute_project_test_blocking(String(test_entry.get("test_path", "")))
 		results.append(test_result)
@@ -1082,6 +1126,9 @@ func _execute_project_tests_blocking(params: Dictionary) -> Dictionary:
 			passed_count += 1
 		else:
 			failed_count += 1
+		index += 1
+		# 上报进度：已完成测试数 / 发现总数，主线程 poll 时转发给 MCP。
+		_batch_test_runner.update_progress(job_id, index, discovered_tests.size())
 
 	var aggregate_status: String = "passed"
 	if failed_count > 0:
@@ -7671,6 +7718,8 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	if params.has("_meta") and params["_meta"] is Dictionary:
 		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
 
+	# 以下校验全部同步完成：配置不合法（unconfigured / endpoint_blocked / 缺
+	# 密钥 / 预算超限）在启动后台 job 之前就即时报错，保持工具的错误语义。
 	var cfg: Dictionary = _resolve_3d_config(params)
 	if cfg.has("error"):
 		return cfg
@@ -7727,6 +7776,85 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	var poll_interval: float = clampf(float(params.get("poll_interval_sec", 5.0)), 1.0, 30.0)
 	var max_wait: float = clampf(float(params.get("max_wait_sec", 300.0)), 5.0, 1800.0)
 
+	# 异步 pending→poll：首次调用把 submit→轮询→下载→落盘整个流程放到
+	# AsyncJobManager 的 worker 线程（HTTP 轮询可能长达数分钟，不能阻塞编辑器
+	# 主线程）；再次以相同参数调用则轮询结果。job key 由请求参数稳定派生，
+	# 保证相同参数的重复调用命中同一个后台 job。
+	var job_key: String = _generate_3d_job_key(prompt, resource_path, cfg)
+
+	# 客户端取消检查：pending→poll 模式的每一轮调用都检查一次；取消时同时
+	# 标记底层 job，让 worker 在下一轮轮询循环中尽早中止（协作式取消）。
+	if _tool_cancelled():
+		if _gen_job_manager.has_job(job_key):
+			_gen_job_manager.cancel_job(job_key)
+		return {"status": "cancelled", "resource_path": resource_path, "prompt": prompt, "error": "cancelled by client"}
+
+	if _gen_job_manager.has_job(job_key):
+		var polled: Dictionary = _gen_job_manager.poll_job(job_key)
+		var poll_status: String = str(polled.get("status", ""))
+		if poll_status == "pending":
+			# 把 worker 上报的进度转发为 MCP progress 通知（主线程发送）。
+			_send_tool_progress(progress_token, int(polled.get("progress", 0)), int(polled.get("total", 0)), "polling 3D generation job")
+			return {
+				"status": "pending",
+				"job_id": job_key,
+				"resource_path": resource_path,
+				"prompt": prompt,
+				"elapsed_ms": polled.get("elapsed_ms", 0),
+				"message": "3D generation is still running; call generate_3d_asset again with the same arguments to poll for the result."
+			}
+		if poll_status != "missing":
+			# "done"/"cancelled"：worker 结果返回；下载成功的结果在主线程补做
+			# reimport + inspect（依赖 EditorInterface / ResourceLoader）。
+			return _finalize_generate_3d_asset(polled.get("result", {}), params)
+		# status == "missing"：并发请求已取走 job，当作全新任务继续往下走。
+
+	var context: Dictionary = {
+		"cfg": cfg,
+		"headers": headers,
+		"timeout_sec": timeout_sec,
+		"poll_interval": poll_interval,
+		"max_wait": max_wait,
+		"resource_path": resource_path,
+		"prompt": prompt,
+		"record_prompt": bool(params.get("record_prompt", true))
+	}
+	if not _gen_job_manager.start_job(job_key, Callable(self, "_execute_generate_3d_asset_blocking").bind(job_key, context)):
+		return {"error": "Failed to start 3D generation job"}
+	return {
+		"status": "pending",
+		"job_id": job_key,
+		"resource_path": resource_path,
+		"prompt": prompt,
+		"message": "3D generation submitted on a background thread; call generate_3d_asset again with the same arguments to poll for the result."
+	}
+
+# 由生成参数稳定派生的 job key：相同参数（prompt / 输出路径 / 预设 / 端点）
+# 的重复调用轮询同一个后台 job；参数变化则视为新任务。
+func _generate_3d_job_key(prompt: String, resource_path: String, cfg: Dictionary) -> String:
+	var key: String = "gen3d|" + resource_path + "|" + prompt
+	for fld in ["preset", "submit_endpoint", "status_endpoint", "task_id_field", "status_field"]:
+		key += "|" + str(cfg.get(fld, ""))
+	return key
+
+# Blocking text-to-3D flow run on a worker thread by AsyncJobManager. Only does
+# HTTP + file I/O (thread-safe); it never touches the editor/scene tree.
+# Editor-coupled finalization (reimport + inspect) is deferred to the main
+# thread via the "_needs_finalize" marker (see _finalize_generate_3d_asset).
+# Cancellation and progress go through the manager's job record.
+func _execute_generate_3d_asset_blocking(job_id: String, context: Dictionary) -> Dictionary:
+	var cfg: Dictionary = context.get("cfg", {})
+	var headers: PackedStringArray = context.get("headers", PackedStringArray())
+	var timeout_sec: float = float(context.get("timeout_sec", 30.0))
+	var poll_interval: float = float(context.get("poll_interval", 5.0))
+	var max_wait: float = float(context.get("max_wait", 300.0))
+	var resource_path: String = str(context.get("resource_path", ""))
+	var prompt: String = str(context.get("prompt", ""))
+	var record_prompt: bool = bool(context.get("record_prompt", true))
+
+	var submit_endpoint: String = str(cfg["submit_endpoint"]).strip_edges()
+	var task_id_field: String = str(cfg["task_id_field"]).strip_edges()
+
 	# 1) Submit the generation job.
 	var submit_endpoint_final: String = _subst_placeholders(submit_endpoint, prompt, 0, 0)
 	var submit_method: int = HTTPClient.METHOD_POST if str(cfg["submit_method"]).to_upper() == "POST" else HTTPClient.METHOD_GET
@@ -7771,14 +7899,15 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	var status_json: Variant = null
 	var poll_count: int = 0
 	while true:
-		# 客户端取消检查：轮询每一轮都检查，取消则中止任务。
-		if _tool_cancelled():
-			return {"error": "cancelled by client", "status": "cancelled", "task_id": task_id, "poll_count": poll_count}
+		# 协作式取消：客户端取消（cancel_job）后，worker 在下一轮轮询前中止。
+		if _gen_job_manager.is_cancelled(job_id):
+			return {"error": "cancelled by client", "status": "cancelled", "cancelled": true, "task_id": task_id, "poll_count": poll_count}
 		var st_res: Dictionary = _http_blocking_request(status_endpoint, status_method, headers, "", timeout_sec)
 		if st_res.has("error"):
 			return st_res
 		poll_count += 1
-		_send_tool_progress(progress_token, poll_count, 0, "polling 3D generation job")
+		# 进度存进 job 记录（主线程 poll 时转发为 MCP progress 通知）。
+		_gen_job_manager.update_progress(job_id, poll_count, 0)
 		status_json = JSON.parse_string((st_res["bytes"] as PackedByteArray).get_string_from_utf8())
 		if status_json == null:
 			return {"error": "Status response was not valid JSON"}
@@ -7819,7 +7948,7 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 	if not _validate_gltf_bytes(model_bytes):
 		return {"error": "Downloaded payload is not a valid glTF/GLB asset"}
 
-	# 4) Land the bytes into res:// and write metadata.
+	# 4) Land the bytes into res:// and write metadata (pure file I/O).
 	var dir_path: String = resource_path.get_base_dir()
 	if not dir_path.is_empty() and not DirAccess.dir_exists_absolute(dir_path):
 		if DirAccess.make_dir_recursive_absolute(dir_path) != OK:
@@ -7849,10 +7978,12 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 		"provider": "external",
 		"prompt": prompt,
 		"generator": generator,
-		"size_bytes": model_bytes.size()
+		"size_bytes": model_bytes.size(),
+		# reimport + inspect 依赖编辑器主线程，标记后由 poll 侧补做。
+		"_needs_finalize": true
 	}
 
-	if bool(params.get("record_prompt", true)):
+	if record_prompt:
 		var manifest_path: String = resource_path + ".gen.json"
 		var manifest: Dictionary = {
 			"prompt": prompt,
@@ -7866,6 +7997,17 @@ func _tool_generate_3d_asset(params: Dictionary) -> Dictionary:
 			mf.store_string(JSON.stringify(manifest, "\t"))
 			mf.close()
 			result["manifest_path"] = manifest_path
+
+	return result
+
+# 主线程收尾：下载成功后的 reimport + inspect 只能在主线程执行（依赖
+# EditorInterface / EditorFileSystem / ResourceLoader），因此从 worker 结果
+# 中剥离，在轮询返回给客户端之前完成并合并进结果。
+func _finalize_generate_3d_asset(result: Dictionary, params: Dictionary) -> Dictionary:
+	if not bool(result.get("_needs_finalize", false)):
+		return result
+	result.erase("_needs_finalize")
+	var resource_path: String = str(result.get("resource_path", ""))
 
 	if bool(params.get("reimport", true)):
 		var reimport: Dictionary = _reimport_asset(resource_path)

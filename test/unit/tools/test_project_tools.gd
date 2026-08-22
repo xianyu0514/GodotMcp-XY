@@ -259,6 +259,92 @@ func test_single_and_batch_runs_share_one_concurrency_budget():
 	project_tools._test_runner.flush()
 	project_tools._batch_test_runner.flush()
 
+# --- unified AsyncJobManager integration (job_id / cancel / progress) ---
+
+# Minimal stand-in for MCPServerCore: only the parts the tools touch
+# (is_current_tool_cancelled / send_progress_notification).
+class FakeServerCore:
+	extends RefCounted
+	var cancelled: bool = false
+	var sent_progress: Array = []
+	func is_current_tool_cancelled() -> bool:
+		return cancelled
+	func send_progress_notification(progress_token: Variant, progress: int, total: int = 0, message: String = "") -> void:
+		sent_progress.append({"token": progress_token, "progress": progress, "total": total, "message": message})
+
+func _fake_cancelled_worker() -> Dictionary:
+	return {"status": "cancelled", "cancelled": true, "error": "cancelled by client"}
+
+func _poll_single_tool_until_finished(project_tools: RefCounted, test_path: String) -> Dictionary:
+	var deadline: int = Time.get_ticks_msec() + 5000
+	while Time.get_ticks_msec() < deadline:
+		var result: Dictionary = project_tools._tool_run_project_test({"test_path": test_path})
+		if result.get("status", "") != "pending":
+			return result
+		OS.delay_msec(20)
+	return {}
+
+func test_run_project_test_pending_reports_job_id():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	project_tools._test_runner.start(_EXISTING_TEST_PATH, Callable(self, "_fake_slow_result"))
+	var result: Dictionary = project_tools._tool_run_project_test({"test_path": _EXISTING_TEST_PATH})
+	assert_eq(result.get("status"), "pending", "running job reports pending")
+	assert_eq(result.get("job_id"), _EXISTING_TEST_PATH, "pending response exposes the job id")
+	project_tools._test_runner.flush()
+
+func test_run_project_test_cancelled_by_client_cancels_job():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var fake: FakeServerCore = FakeServerCore.new()
+	project_tools._server_core = fake
+	project_tools._test_runner.start(_EXISTING_TEST_PATH, Callable(self, "_fake_slow_result"))
+	fake.cancelled = true
+	var result: Dictionary = project_tools._tool_run_project_test({"test_path": _EXISTING_TEST_PATH})
+	assert_eq(result.get("status"), "cancelled", "client cancellation aborts the tool call with a cancelled status")
+	assert_true(project_tools._test_runner.is_cancelled(_EXISTING_TEST_PATH), "the underlying job is marked for cooperative cancellation")
+	project_tools._test_runner.flush()
+
+func test_run_project_test_forwards_worker_cancelled_result():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	project_tools._test_runner.start_job(_EXISTING_TEST_PATH, Callable(self, "_fake_cancelled_worker"))
+	var result: Dictionary = _poll_single_tool_until_finished(project_tools, _EXISTING_TEST_PATH)
+	assert_eq(result.get("status"), "cancelled", "a worker that aborts via cancellation reports cancelled")
+	assert_true(bool(result.get("cancelled", false)), "the worker's cancelled marker is forwarded")
+
+func test_run_project_test_poll_emits_progress_notification():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var fake: FakeServerCore = FakeServerCore.new()
+	project_tools._server_core = fake
+	project_tools._test_runner.start(_EXISTING_TEST_PATH, Callable(self, "_fake_slow_result"))
+	var result: Dictionary = project_tools._tool_run_project_test({
+		"test_path": _EXISTING_TEST_PATH,
+		"_meta": {"progressToken": "tok-1"}
+	})
+	assert_eq(result.get("status"), "pending", "running job reports pending")
+	assert_true(fake.sent_progress.size() >= 1, "a pending poll round emits an MCP progress notification")
+	assert_eq(fake.sent_progress[0].get("token"), "tok-1", "progress notification uses the client's token")
+	project_tools._test_runner.flush()
+
+func test_run_project_tests_pending_reports_job_id():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var params: Dictionary = {"search_path": "res://test/unit", "framework": "gut"}
+	project_tools._batch_test_runner.start(_batch_job_key(params), Callable(self, "_fake_slow_result"))
+	var result: Dictionary = project_tools._tool_run_project_tests(params)
+	assert_eq(result.get("status"), "pending", "running batch reports pending")
+	assert_eq(result.get("job_id"), _batch_job_key(params), "pending batch response exposes the job id")
+	project_tools._batch_test_runner.flush()
+
+func test_run_project_tests_cancelled_by_client_cancels_batch():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var fake: FakeServerCore = FakeServerCore.new()
+	project_tools._server_core = fake
+	var params: Dictionary = {"search_path": "res://test/unit", "framework": "gut"}
+	project_tools._batch_test_runner.start(_batch_job_key(params), Callable(self, "_fake_slow_result"))
+	fake.cancelled = true
+	var result: Dictionary = project_tools._tool_run_project_tests(params)
+	assert_eq(result.get("status"), "cancelled", "client cancellation aborts the batch call")
+	assert_true(project_tools._batch_test_runner.is_cancelled(_batch_job_key(params)), "the batch job is marked for cancellation")
+	project_tools._batch_test_runner.flush()
+
 # --- reverse resource tools: find_resource_usages / list_unused_resources ---
 
 const _REVERSE_RES_DIR: String = "res://.tmp_reverse_res_test"
