@@ -30,9 +30,6 @@ var _mutex: Mutex = Mutex.new()
 ## 消息队列（存储待处理的消息）
 var _message_queue: Array[Dictionary] = []
 
-## 响应队列（存储待发送的响应）
-var _response_queue: Array[Dictionary] = []
-
 ## 日志回调
 var _log_callback: Callable = Callable()
 
@@ -82,7 +79,6 @@ func stop() -> void:
 	# 清空队列
 	_mutex.lock()
 	_message_queue.clear()
-	_response_queue.clear()
 	_mutex.unlock()
 	
 	server_stopped.emit()
@@ -155,9 +151,6 @@ func _parse_and_queue_message(raw_input: String) -> void:
 		
 		# 在主线程中处理消息（确保线程安全）
 		call_deferred("_process_next_message")
-	
-	# 处理响应队列
-	call_deferred("_process_response_queue")
 
 ## 处理下一个消息
 func _process_next_message() -> void:
@@ -173,21 +166,6 @@ func _process_next_message() -> void:
 	
 	# 发送信号到核心层处理
 	message_received.emit(message, null)  # context 为 null（stdio 不需要）
-
-## 处理响应队列（stdio 模式：直接输出到 stdout）
-func _process_response_queue() -> void:
-	_mutex.lock()
-	
-	if _response_queue.is_empty():
-		_mutex.unlock()
-		return
-	
-	var response: Dictionary = _response_queue.pop_front()
-	
-	_mutex.unlock()
-	
-	# 发送到 stdout
-	_send_response(response)
 
 ## 发送响应（stdio 模式：输出到 stdout）
 ## @param response: Dictionary - JSON-RPC 响应
@@ -216,15 +194,6 @@ func send_raw_message(message: Dictionary) -> void:
 	if _log_callback.is_valid():
 		_log_callback.call("DEBUG", "Sending raw message: " + json_string)
 	print(json_string)
-
-## 队列响应（供外部调用）
-## @param response: Dictionary - JSON-RPC 响应
-func queue_response(response: Dictionary) -> void:
-	_mutex.lock()
-	_response_queue.append(response)
-	_mutex.unlock()
-	
-	call_deferred("_process_response_queue")
 
 ## 在主线程中发送错误信号（线程安全）
 func _emit_error(id: Variant, code: int, message: String, data: Variant = null) -> void:

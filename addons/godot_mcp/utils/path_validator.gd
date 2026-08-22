@@ -38,10 +38,6 @@ var _allowed_extensions: Array[String] = []  # 允许的文件扩展名（空=�
 # 日志回调
 var _log_callback: Callable = Callable()
 
-## 设置日志回调函数
-func set_log_callback(callback: Callable) -> void:
-	_log_callback = callback
-
 # ===========================================
 # 路径验证主函数
 # ===========================================
@@ -223,33 +219,3 @@ func clear_allowed_extensions() -> void:
 	if _log_callback.is_valid():
 		_log_callback.call("INFO", "Cleared allowed extensions (no restriction)")
 
-# ===========================================
-# 调试功能
-# ===========================================
-
-## 测试路径验证（调试用）
-## 返回: Array[String] 验证结果文本
-static func test_validation() -> Array[String]:
-	var output: Array[String] = []
-	output.append("Testing path validation...")
-	
-	var test_paths: Array[String] = [
-		"res://test.tscn",
-		"user://save.dat",
-		"../../../etc/passwd",
-		"C:\\Windows\\System32",
-		"res://../escape.tscn",
-		"res://normal/path/script.gd"
-	]
-	
-	for path in test_paths:
-		var result: Dictionary = validate_path(path)
-		output.append("  Path: " + path)
-		output.append("    Valid: " + str(result["valid"]))
-		if not result["valid"]:
-			output.append("    Error: " + result["error"])
-		else:
-			output.append("    Sanitized: " + result["sanitized"])
-		output.append("")
-	
-	return output

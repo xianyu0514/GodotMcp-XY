@@ -124,8 +124,6 @@ const PLUGIN_CONFIG_PATH: String = "res://addons/godot_mcp/plugin.cfg"
 # ============================================================================
 
 var _active: bool = false
-var _thread: Thread = null
-var _mutex: Mutex = Mutex.new()
 
 # 传输方式相关变量（新增 - 支持多种传输方式）
 var _transport_type: TransportType = TransportType.TRANSPORT_STDIO
@@ -153,6 +151,11 @@ var _resources: Dictionary = {}  # String -> MCPResource
 var _prompts: Dictionary = {}  # String -> MCPPrompt
 var _resource_subscriptions: Dictionary = {}  # String (uri) -> true; active resource subscriptions
 var _tool_list_dirty: bool = false  # 工具列表变更标记
+# tools/list 服务端缓存：启用工具按名字排序后的 MCPTool.to_dict() 数组。
+# 列表只在注册/注销/启用状态变化时重建；重复请求直接复用，避免每轮重建
+# 30+ 个 schema Dictionary 并保证确定性排序（利于客户端 prompt cache）。
+var _tool_list_cache: Array[Dictionary] = []
+var _tool_list_cache_valid: bool = false
 
 var _classifier = null  # MCPToolClassifier (lazy-loaded for GUT CLI compat)
 var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat)
@@ -634,15 +637,10 @@ func _handle_cancelled_notification(message: Dictionary) -> Dictionary:
 func _handle_tools_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	
-	# 构建工具列表（根据mcp-builder，包含annotations和outputSchema）
-	var tools_list: Array[Dictionary] = []
+	if not _tool_list_cache_valid:
+		_rebuild_tool_list_cache()
 	
-	for tool_name in _tools:
-		var tool: MCPTypes.MCPTool = _tools[tool_name]
-		if tool and tool.is_valid() and tool.enabled:
-			tools_list.append(tool.to_dict())
-	
-	var result: Dictionary = {"tools": tools_list}
+	var result: Dictionary = {"tools": _tool_list_cache}
 	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope），Claude Code 缺失会拒绝。
 	result["_meta"] = {
 		"ttlMs": LIST_CACHE_TTL_MS,
@@ -650,12 +648,35 @@ func _handle_tools_list(message: Dictionary) -> Dictionary:
 	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 
-	_log_info("Tools list requested. Available tools: " + str(tools_list.size()) + " (registered: " + str(_tools.size()) + ")")
+	_log_info("Tools list requested. Available tools: " + str(_tool_list_cache.size()) + " (registered: " + str(_tools.size()) + ")")
 
 	if _debug_enabled():
 		_log_debug("Tools list response: " + JSON.stringify(response))
 
 	return response
+
+## Rebuild the cached tools/list payload: deterministic alphabetical order and
+## reuse of MCPTool.to_dict() output for subsequent requests until invalidated.
+func _rebuild_tool_list_cache() -> void:
+	var names: Array[String] = []
+	for tool_name in _tools:
+		names.append(str(tool_name))
+	names.sort()
+	
+	var tools_list: Array[Dictionary] = []
+	for tool_name in names:
+		var tool: MCPTypes.MCPTool = _tools[tool_name]
+		if tool and tool.is_valid() and tool.enabled:
+			tools_list.append(tool.to_dict())
+	
+	_tool_list_cache = tools_list
+	_tool_list_cache_valid = true
+
+## Drop the cached tools/list payload. Called whenever a registration,
+## unregistration or enable/disable change makes the previous payload stale.
+func _invalidate_tool_list_cache() -> void:
+	if _tool_list_cache_valid or not _tool_list_cache.is_empty():
+		_tool_list_cache_valid = false
 
 func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
@@ -1098,11 +1119,13 @@ func register_tool(name: String, description: String,
 		return
 	
 	_tools[name] = tool
+	_invalidate_tool_list_cache()
 	_log_info("Tool registered: " + name)
 
 func unregister_tool(name: String) -> void:
 	if _tools.has(name):
 		_tools.erase(name)
+		_invalidate_tool_list_cache()
 		_log_info("Tool unregistered: " + name)
 
 func get_tool(name: String) -> MCPTypes.MCPTool:
@@ -1140,10 +1163,12 @@ func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 			if not _tools[tool_name].enabled:
 				_tools[tool_name].enabled = true
 				_tool_list_dirty = true
+				_invalidate_tool_list_cache()
 			_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
 			return
 		_tools[tool_name].enabled = enabled
 		_tool_list_dirty = true
+		_invalidate_tool_list_cache()
 		if enabled:
 			_log_info("Tool enabled: " + tool_name)
 		else:
@@ -1172,6 +1197,7 @@ func set_group_enabled(group_name: String, enabled: bool) -> int:
 			changed_count += 1
 	if changed_count > 0:
 		_tool_list_dirty = true
+		_invalidate_tool_list_cache()
 		_log_info("Group '" + group_name + "' " + ("enabled" if enabled else "disabled") + ": " + str(changed_count) + " tools affected")
 	return changed_count
 

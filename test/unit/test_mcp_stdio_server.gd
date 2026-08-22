@@ -19,24 +19,6 @@ func test_active_flag_initially_false():
 func test_message_queue_initially_empty():
 	assert_eq(_stdio_server._message_queue.size(), 0, "Message queue should be empty initially")
 
-func test_response_queue_initially_empty():
-	assert_eq(_stdio_server._response_queue.size(), 0, "Response queue should be empty initially")
-
-func test_queue_response():
-	var test_response: Dictionary = {"jsonrpc": "2.0", "result": {"status": "ok"}, "id": 1}
-	_stdio_server.queue_response(test_response)
-	_stdio_server._mutex.lock()
-	assert_eq(_stdio_server._response_queue.size(), 1, "Response queue should have 1 item")
-	_stdio_server._mutex.unlock()
-
-func test_queue_multiple_responses():
-	_stdio_server.queue_response({"id": 1})
-	_stdio_server.queue_response({"id": 2})
-	_stdio_server.queue_response({"id": 3})
-	_stdio_server._mutex.lock()
-	assert_eq(_stdio_server._response_queue.size(), 3, "Response queue should have 3 items")
-	_stdio_server._mutex.unlock()
-
 func test_parse_and_queue_message_valid_json():
 	var valid_json: String = '{"jsonrpc":"2.0","method":"initialize","id":1}'
 	_stdio_server._parse_and_queue_message(valid_json)
