@@ -565,6 +565,10 @@ func _register_list_project_scenes(server_core: RefCounted) -> void:
 			"limit": {
 				"type": "integer",
 				"description": "Maximum number of scene paths to return. Default is 1000. Extra paths are omitted and 'truncated' is set true."
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Number of scene paths to skip before applying limit. Default 0."
 			}
 		}
 	}
@@ -615,6 +619,7 @@ func _tool_list_project_scenes(params: Dictionary) -> Dictionary:
 	var limit: int = int(params.get("limit", 1000))
 	if limit <= 0:
 		limit = 1000
+	var offset: int = int(params.get("offset", 0))
 	
 	# 使用DirAccess递归查找所�?tscn文件
 	var collected: Array[String] = []
@@ -623,7 +628,7 @@ func _tool_list_project_scenes(params: Dictionary) -> Dictionary:
 	# 排序
 	collected.sort()
 	
-	var page: Dictionary = PayloadUtils.truncate_list(collected, limit)
+	var page: Dictionary = PayloadUtils.paginate_list(collected, limit, offset)
 	var scenes: Array = page["items"]
 	
 	return {

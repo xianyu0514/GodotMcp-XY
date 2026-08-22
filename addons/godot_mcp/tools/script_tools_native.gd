@@ -73,6 +73,14 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "string",
 				"description": "Optional subpath to search (e.g. 'res://scripts/'). Default is 'res://'.",
 				"default": "res://"
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of script paths to return. Default is 1000. Extra paths are omitted and 'truncated' is set true."
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Number of script paths to skip before applying limit. Default 0."
 			}
 		}
 	}
@@ -85,7 +93,9 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"}
 			},
-			"count": {"type": "integer"}
+			"count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"}
 		}
 	}
 	
@@ -122,9 +132,18 @@ func _tool_list_project_scripts(params: Dictionary) -> Dictionary:
 	# 排序
 	scripts.sort()
 	
+	var limit: int = int(params.get("limit", 1000))
+	if limit <= 0:
+		limit = 1000
+	var offset: int = int(params.get("offset", 0))
+	var page: Dictionary = PayloadUtils.paginate_list(scripts, limit, offset)
+	var scripts_page: Array = page["items"]
+	
 	return {
-		"scripts": scripts,
-		"count": scripts.size()
+		"scripts": scripts_page,
+		"count": scripts_page.size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"]
 	}
 
 # ============================================================================
