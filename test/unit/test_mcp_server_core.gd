@@ -169,6 +169,18 @@ func test_disabled_tool_not_in_tools_list():
 	if tools_list.size() > 0:
 		assert_eq(tools_list[0].get("name", ""), "other_tool", "Only other_tool should appear")
 
+func test_tools_list_omits_output_schema():
+	# tools/list 精简下发：outputSchema 不得随列表下发（完整 schema 由
+	# get_tool_details 按需提供），inputSchema/annotations 等其余字段保留。
+	_core.register_tool("schema_tool", "A tool with output schema", {"type": "object"}, func(args): return {"status": "ok"}, {"type": "object", "properties": {"result": {"type": "string"}}})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+	var response: Dictionary = _core._handle_tools_list(msg)
+	var tools_list: Array = response.get("result", {}).get("tools", [])
+	assert_true(tools_list.size() >= 1, "Registered tool should appear in tools/list")
+	for tool_entry in tools_list:
+		assert_false(tool_entry.has("outputSchema"), "tools/list must not carry outputSchema: %s" % tool_entry.get("name", "?"))
+		assert_true(tool_entry.has("inputSchema"), "tools/list should keep inputSchema: %s" % tool_entry.get("name", "?"))
+
 func test_disabled_tool_call_returns_error():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.set_tool_enabled("test_tool", false)
@@ -588,6 +600,139 @@ func test_all_cacheable_read_tools_invalidated_by_mutation():
 		await _core._handle_request(mutate_msg)
 		await _core._handle_request(read_msg)
 		assert_eq(calls[0], 2, "%s must recompute after a mutating tool" % tool_name)
+
+# ============================================================================
+# 通用结果缓存（LRU + 确定性 key + 事件失效）
+# ============================================================================
+
+func test_result_cache_hit_serves_cached():
+	# A cacheable read tool's repeat call (same tool + same args) must be served
+	# straight from the result cache without re-executing the handler.
+	var calls: Array = [0]
+	_core.register_tool("get_project_structure", "Read structure", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"total_files": 42, "calls": calls[0]},
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_project_structure", "arguments": {}}}
+	var r1: Dictionary = await _core._handle_request(msg)
+	var r2: Dictionary = await _core._handle_request(msg)
+	assert_eq(calls[0], 1, "Repeat call must be served from the result cache")
+	assert_eq(JSON.stringify(r1), JSON.stringify(r2), "Cached response must match the first response")
+
+func test_result_cache_key_canonical():
+	# The cache key is built from canonical (key-sorted) JSON: two argument
+	# dicts with identical content but different insertion order must hit the
+	# same cache entry.
+	var args_a: Dictionary = {"filter": "a", "opts": {"z": 1, "y": 2, "x": 3}, "list": [1, {"k": "v"}]}
+	var args_b: Dictionary = {"list": [1, {"k": "v"}], "opts": {"x": 3, "y": 2, "z": 1}, "filter": "a"}
+	assert_eq(_core._canonical_json(args_a), _core._canonical_json(args_b),
+		"Canonical JSON must ignore dictionary insertion order")
+	var calls: Array = [0]
+	_core.register_tool("list_project_autoloads", "Read autoloads", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"count": calls[0]},
+		{}, {"readOnlyHint": true})
+	var msg_a: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_project_autoloads", "arguments": args_a}}
+	var msg_b: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_project_autoloads", "arguments": args_b}}
+	await _core._handle_request(msg_a)
+	await _core._handle_request(msg_b)
+	assert_eq(calls[0], 1, "Reordered arguments must share one cache entry")
+
+func test_mutating_tool_invalidates_cache():
+	# A mutating tool (readOnlyHint == false) clears the whole result cache, so
+	# the next read recomputes instead of serving the stale entry.
+	var calls: Array = [0]
+	_core.register_tool("get_scene_tree", "Read tree", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"nodes": ["A"], "calls": calls[0]},
+		{}, {"readOnlyHint": true})
+	_core.register_tool("rename_node", "Mutate", {"type": "object"},
+		func(args): return {"status": "ok"},
+		{}, {"readOnlyHint": false})
+	var read_msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_tree", "arguments": {}}}
+	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "rename_node", "arguments": {}}}
+	await _core._handle_request(read_msg)
+	await _core._handle_request(read_msg)
+	assert_eq(calls[0], 1, "Second read before mutation should be a cache hit")
+	await _core._handle_request(mutate_msg)
+	await _core._handle_request(read_msg)
+	assert_eq(calls[0], 2, "Read after a mutating tool must recompute, not serve stale cache")
+
+func test_cache_lru_eviction():
+	# Beyond RESULT_CACHE_MAX distinct keys, the least recently used entry must
+	# be evicted: re-calling the earliest key re-executes the handler.
+	var calls: Dictionary = {}
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"},
+		func(args):
+			var n: int = args.get("n", 0)
+			calls[n] = calls.get(n, 0) + 1
+			return {"n": n},
+		{}, {"readOnlyHint": true})
+	var max: int = _core.RESULT_CACHE_MAX
+	for n in range(max + 5):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": n, "method": "tools/call",
+			"params": {"name": "get_scene_structure", "arguments": {"n": n}}}
+		await _core._handle_request(msg)
+	assert_true(_core._result_cache.size() <= max,
+		"Cache must not exceed RESULT_CACHE_MAX entries (has %d)" % _core._result_cache.size())
+	assert_true(_core._result_cache_order.size() <= max,
+		"LRU order must not exceed RESULT_CACHE_MAX entries (has %d)" % _core._result_cache_order.size())
+	# The earliest key (n=0) fell off the LRU: re-calling it must recompute.
+	var before: int = calls.get(0, 0)
+	var msg0: Dictionary = {"jsonrpc": "2.0", "id": 900, "method": "tools/call",
+		"params": {"name": "get_scene_structure", "arguments": {"n": 0}}}
+	await _core._handle_request(msg0)
+	assert_eq(calls.get(0, 0), before + 1, "LRU-evicted entry must recompute on next access")
+
+func test_spill_large_result():
+	# A result whose JSON exceeds MAX_INLINE_RESULT_BYTES is spilled to disk and
+	# returned as a truncated head/tail preview — isError stays false and the
+	# spill file contains the full JSON.
+	var big_value: Dictionary = {"items": []}
+	for i in range(3000):
+		big_value["items"].append({"index": i, "payload": "x".repeat(40)})
+	_core.register_tool("big_result_tool", "Big result", {"type": "object"},
+		func(args): return big_value,
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "big_result_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_request(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_false(result.get("isError", false), "Spilled result must not be an error")
+	assert_false(result.has("structuredContent"), "Spilled result must not echo the full payload as structuredContent")
+	var text: String = result.get("content", [{}])[0].get("text", "")
+	var payload: Dictionary = JSON.parse_string(text)
+	assert_true(payload.has("truncated"), "Large result should carry the truncated flag")
+	assert_true(payload.get("truncated", false), "truncated must be true")
+	assert_true(payload.get("total_bytes", 0) > _core.MAX_INLINE_RESULT_BYTES,
+		"total_bytes must exceed the inline limit")
+	var path: String = payload.get("path", "")
+	assert_false(path.is_empty(), "Spill path must be non-empty")
+	assert_true(FileAccess.file_exists(path), "Spill file must exist on disk: " + path)
+	assert_true(FileAccess.get_file_as_string(path).length() > 0, "Spill file must contain the full JSON")
+	assert_false(str(payload.get("head", "")).is_empty(), "head preview must be non-empty")
+	assert_false(str(payload.get("tail", "")).is_empty(), "tail preview must be non-empty")
+	# Clean up the test artifact so the repo stays clean.
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+func test_spill_exempt_tools_not_spilled():
+	# File-content tools in SPILL_EXEMPT_TOOLS keep returning their content
+	# inline even when it exceeds the size limit (no spill ping-pong).
+	var big_content: String = "y".repeat(60000)
+	_core.register_tool("read_script", "Read script", {"type": "object"},
+		func(args): return {"script_path": "res://x.gd", "content": big_content, "line_count": 1},
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_script", "arguments": {"script_path": "res://x.gd"}}}
+	var response: Dictionary = await _core._handle_request(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_false(result.get("isError", false), "Exempt tool result must not be an error")
+	var text: String = result.get("content", [{}])[0].get("text", "")
+	var payload: Variant = JSON.parse_string(text)
+	assert_false(payload is Dictionary and payload.has("truncated"),
+		"Exempt tools must never spill: %s" % text.substr(0, 120))
 
 # ============================================================================
 # Progress 通知与取消支持（notifications/progress + notifications/cancelled）

@@ -75,6 +75,10 @@ class MCPTool:
 	var group: String = ""
 	
 	# 转换为Dictionary（用于JSON序列化）
+	# 注意：刻意不输出 outputSchema —— tools/list 精简下发（对齐 DSH 做法：模型
+	# 只见 name/description/inputSchema 等轻量字段），完整 schema（含 outputSchema）
+	# 由 get_tool_details 按需提供。MCPTool.output_schema 字段本身保留，
+	# get_tool_details 直接读取该字段，不受本方法影响。
 	func to_dict() -> Dictionary:
 		var result: Dictionary = {
 			"name": name,
@@ -83,9 +87,6 @@ class MCPTool:
 			"x_category": category,
 			"x_group": group
 		}
-		
-		if not output_schema.is_empty():
-			result["outputSchema"] = output_schema
 		
 		if not annotations.is_empty():
 			result["annotations"] = annotations

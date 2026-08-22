@@ -62,12 +62,50 @@ const MAX_QUEUE_WAIT_SECONDS: float = 30.0
 const MAX_WAITING_REQUESTS: int = 256
 
 ## Read-only tools whose (potentially expensive) results are cached and served
-## directly on a repeat call until a mutating tool invalidates the cache. The
-## cache is keyed by tool name plus its arguments, so different args cache apart.
-## Limited to structural reads (scene-tree walks, filesystem scans) whose result
-## changes only via MCP mutations, which clear the cache; a 5-minute TTL bounds
-## staleness from any out-of-band edit made outside the MCP server.
-const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure", "list_nodes", "list_project_scenes"]
+## directly on a repeat call until a mutating tool invalidates the cache. Keys
+## are deterministic: tool name + canonical (key-sorted) JSON of the arguments,
+## so identical calls share one cache entry regardless of argument insertion
+## order. Limited to structural reads (scene-tree walks, filesystem scans,
+## project metadata) whose result changes only via MCP mutations, which clear
+## the cache; the RESULT_CACHE_TTL_MS TTL bounds staleness from any out-of-band
+## edit made outside the MCP server.
+const CACHEABLE_READ_TOOLS: Array[String] = [
+	"get_scene_structure", "list_nodes", "list_project_scenes",
+	"list_project_scripts", "get_project_structure", "list_open_scenes",
+	"get_scene_tree", "get_node_properties", "batch_get_node_properties",
+	"list_project_resources", "list_project_input_actions",
+	"list_project_autoloads", "list_project_global_classes", "get_import_status"
+]
+
+## Maximum number of tool results kept in the in-memory LRU result cache. When
+## the cache would exceed this many entries, the least recently used entry is
+## evicted.
+const RESULT_CACHE_MAX: int = 64
+
+## TTL (ms) for cached tool results. Invalidation is primarily event-driven (any
+## mutating tool clears the whole cache); this TTL is only a bounded-staleness
+## backstop for out-of-band edits made outside the MCP server — deliberately
+## much shorter than the old 5-minute scene-structure TTL.
+const RESULT_CACHE_TTL_MS: int = 60000
+
+## Results whose JSON serialization exceeds this many UTF-8 bytes are spilled to
+## disk (res://.mcp/out/) and returned to the client as a truncated head/tail
+## preview plus a resume hint, instead of being inlined into the response.
+const MAX_INLINE_RESULT_BYTES: int = 50000
+
+## Preview sizes (characters) returned inline for spilled results: the head and
+## tail of the payload so the model can judge the content before reading the
+## spill file for the full result.
+const SPILL_PREVIEW_HEAD_CHARS: int = 4096
+const SPILL_PREVIEW_TAIL_CHARS: int = 1024
+
+## Directory (res:// path) where spilled large results are written.
+const SPILL_OUTPUT_DIR: String = "res://.mcp/out"
+
+## Tools whose results are never spilled: file-content/log readers where the
+## spill file would merely duplicate the same text and re-reading it through the
+## tool could ping-pong. These keep returning their content inline.
+const SPILL_EXEMPT_TOOLS: Array[String] = ["read_script", "batch_read_scripts", "get_editor_logs"]
 
 ## TTL (ms) advertised in the `_meta` of list responses. The 2026-07-28 MCP spec
 ## adds `_meta.ttlMs`/`cacheScope` for list caching; Claude Code validates these
@@ -133,9 +171,15 @@ var _server_version: String = "0.0.0"
 var _request_count: Dictionary = {}  # String (client_id) -> int
 var _request_timestamps: Dictionary = {}  # String (client_id) -> Array[int]
 
-# 缓存
-var _scene_structure_cache: Dictionary = {}  # String -> Dictionary
-var _cache_timestamp: Dictionary = {}  # String -> int
+# 结果缓存（LRU + 事件失效）
+# _result_cache: key -> {"value": Variant, "last_access": int (ms)}
+var _result_cache: Dictionary = {}
+# LRU 最近使用列表：下标 0 = 最常使用，与 _result_cache 的 key 一一对应
+var _result_cache_order: Array[String] = []
+# 单飞标记：正在执行的 key -> true（同一 key 并发时合并执行）
+var _cache_inflight: Dictionary = {}
+# 缓存失效代数：每次失效 +1；失效前已启动的读工具完成后不得写入（结果已过期）
+var _cache_generation: int = 0
 
 ## Requests the client asked to cancel via `notifications/cancelled`
 ## (request id -> true). Long-running tools poll `is_request_cancelled()` /
@@ -648,17 +692,32 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		}
 		return MCPTypes.create_response(id, error_result)
 	
-	# Read-through cache: serve a cached result for expensive read-only scene
-	# queries instead of re-walking the scene tree. The cache is invalidated below
-	# whenever a mutating tool runs, so a cache hit always reflects the live tree.
+	# Read-through cache: serve a cached result for expensive read-only queries
+	# instead of re-walking the scene tree / rescanning the project. Keys are
+	# deterministic (canonical JSON of the arguments) and the whole cache is
+	# dropped whenever a mutating tool runs below, so a hit always reflects the
+	# live tree. Single-flight dedupe: if the same key is already executing, wait
+	# a frame and reuse its result instead of running a duplicate (the serial
+	# request queue already prevents most overlap; this covers direct concurrent
+	# invocations).
 	var is_cacheable_read: bool = tool_name in CACHEABLE_READ_TOOLS
 	var cache_key: String = ""
+	var cache_generation_at_start: int = _cache_generation
 	if is_cacheable_read:
-		cache_key = tool_name + ":" + JSON.stringify(arguments)
-		var cached: Dictionary = get_cached_scene_structure(cache_key)
-		if not cached.is_empty():
+		cache_key = tool_name + ":" + _canonical_json(arguments)
+		var cached: Variant = _result_cache_get(cache_key)
+		if cached != null:
 			_log_info("Serving cached result for: " + tool_name)
 			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
+		if _cache_inflight.has(cache_key):
+			var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
+			if main_loop:
+				await main_loop.process_frame
+			var retried: Variant = _result_cache_get(cache_key)
+			if retried != null:
+				_log_info("Serving result from in-flight twin for: " + tool_name)
+				return MCPTypes.create_response(id, _format_tool_result(retried, tool))
+		_cache_inflight[cache_key] = true
 	
 	# 发送开始信号
 	tool_execution_started.emit(tool_name, arguments)
@@ -710,14 +769,18 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	var has_error: bool = result is Dictionary and result.has("error")
 
-	# Keep the read cache coherent: store successful cacheable reads, and drop the
-	# whole scene-structure cache when a mutating tool runs (readOnlyHint == false)
-	# so subsequent reads never serve a stale tree.
+	# Keep the result cache coherent: store successful cacheable reads, and drop
+	# the whole cache when a mutating tool runs (readOnlyHint == false) so
+	# subsequent reads never serve a stale tree. A read that started before a
+	# mutation invalidated the cache (cache_generation bumped) must not cache its
+	# now-stale result.
 	if is_cacheable_read:
-		if not has_error and result is Dictionary:
-			set_cached_scene_structure(cache_key, result)
+		if not has_error and result is Dictionary and cache_generation_at_start == _cache_generation:
+			_result_cache_put(cache_key, result)
+		else:
+			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)):
-		_invalidate_scene_structure_cache()
+		_invalidate_result_cache()
 
 	var response_result: Dictionary = _format_tool_result(result, tool)
 
@@ -731,18 +794,30 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	return response
 
-## Wrap a tool's raw result Dictionary into an MCP tool-call result payload.
-## Shared by live execution and cache hits so both produce identical responses.
+## Wrap a tool's raw result into an MCP tool-call result payload. Shared by live
+## execution and cache hits so both produce identical responses. Results whose
+## JSON serialization exceeds MAX_INLINE_RESULT_BYTES are spilled to disk and
+## returned as a truncated head/tail preview (never an error, per the DSH
+## "spill, don't fail" principle); file-content tools in SPILL_EXEMPT_TOOLS keep
+## returning inline content.
 func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 	var has_error: bool = result is Dictionary and result.has("error")
+	var json_text: String = JSON.stringify(result)
+	var spilled: Dictionary = {}
+	if not has_error:
+		spilled = _maybe_spill_result(json_text, tool)
+		if not spilled.is_empty():
+			json_text = JSON.stringify(spilled)
 	var response_result: Dictionary = {
 		"content": [{
 			"type": "text",
-			"text": JSON.stringify(result)
+			"text": json_text
 		}],
 		"isError": has_error
 	}
-	if not has_error and tool.output_schema.size() > 0:
+	# On a spill the full payload lives on disk; echoing it as structuredContent
+	# would defeat the size limit, so it is omitted for spilled results only.
+	if not has_error and tool.output_schema.size() > 0 and spilled.is_empty():
 		response_result["structuredContent"] = result
 	return response_result
 
@@ -1246,46 +1321,154 @@ func _check_rate_limit(client_id: String) -> bool:
 	return true
 
 # ============================================================================
-# 缓存机制（根据godot-dev-guide新增）
+# 结果缓存机制（LRU + 确定性 key + 事件失效）
 # ============================================================================
 
+## Deterministic JSON serialization used to build cache keys: dictionary keys are
+## sorted recursively so two argument dicts with identical content but different
+## insertion order produce the same key. Scalars fall back to JSON.stringify.
+static func _canonical_json(data: Variant) -> String:
+	match typeof(data):
+		TYPE_DICTIONARY:
+			var keys: Array = (data as Dictionary).keys()
+			var sorted_keys: Array[String] = []
+			var key_lookup: Dictionary = {}  # stringified key -> original key
+			for key in keys:
+				var skey: String = str(key)
+				sorted_keys.append(skey)
+				key_lookup[skey] = key
+			sorted_keys.sort()
+			var parts: Array[String] = []
+			for skey in sorted_keys:
+				parts.append(JSON.stringify(skey) + ":" + _canonical_json(data[key_lookup[skey]]))
+			return "{" + ",".join(parts) + "}"
+		TYPE_ARRAY:
+			var items: Array[String] = []
+			for item in data:
+				items.append(_canonical_json(item))
+			return "[" + ",".join(items) + "]"
+		_:
+			var encoded: String = JSON.stringify(data)
+			if encoded.is_empty():
+				encoded = JSON.stringify(str(data))
+			return encoded
+
+## Read a cache entry by key. Returns null on miss, on TTL expiry (the entry is
+## dropped), or for entries evicted by the LRU policy. On a hit the access time
+## is refreshed and the key is moved to the MRU position.
+func _result_cache_get(key: String) -> Variant:
+	if not _result_cache.has(key):
+		return null
+	var entry: Dictionary = _result_cache[key]
+	if Time.get_ticks_msec() - int(entry.get("last_access", 0)) > RESULT_CACHE_TTL_MS:
+		_result_cache.erase(key)
+		_result_cache_order.erase(key)
+		return null
+	entry["last_access"] = Time.get_ticks_msec()
+	_result_cache_touch(key)
+	return entry.get("value", null)
+
+## Store a result under key, refresh recency, and enforce the LRU capacity:
+## beyond RESULT_CACHE_MAX the least recently used entry is evicted.
+func _result_cache_put(key: String, value: Variant) -> void:
+	if _result_cache.has(key):
+		_result_cache.erase(key)
+		_result_cache_order.erase(key)
+	_result_cache[key] = {"value": value, "last_access": Time.get_ticks_msec()}
+	_cache_inflight.erase(key)
+	_result_cache_order.push_front(key)
+	while _result_cache_order.size() > RESULT_CACHE_MAX:
+		var evicted_key: String = _result_cache_order.pop_back()
+		_result_cache.erase(evicted_key)
+		_cache_inflight.erase(evicted_key)
+
+## Move a key to the most-recently-used position (index 0) of the LRU order.
+func _result_cache_touch(key: String) -> void:
+	var idx: int = _result_cache_order.find(key)
+	if idx > 0:
+		_result_cache_order.remove_at(idx)
+		_result_cache_order.push_front(key)
+
+## Drop the whole result cache. Called after any mutating tool so the next read
+## recomputes from the live tree instead of serving stale data. Also bumps the
+## generation counter so in-flight reads started before the invalidation never
+## cache their (now stale) results.
+func _invalidate_result_cache() -> void:
+	_cache_generation += 1
+	if _result_cache.is_empty() and _cache_inflight.is_empty():
+		return
+	_result_cache.clear()
+	_result_cache_order.clear()
+	_cache_inflight.clear()
+	_log_debug("Result cache invalidated")
+
+## Legacy scene-structure cache API, kept for backward compatibility as thin
+## wrappers over the shared LRU result cache (keys are used as-is, not
+## canonicalized).
 func get_cached_scene_structure(scene_path: String) -> Dictionary:
-	var cache_key: String = scene_path
-	var current_time: int = Time.get_unix_time_from_system()
-	
-	# 检查缓存是否有效（5分钟有效期）
-	if _scene_structure_cache.has(cache_key):
-		var cache_time: int = _cache_timestamp.get(cache_key, 0)
-		if current_time - cache_time < 300:  # 5分钟
-			_log_debug("Cache hit: " + scene_path)
-			return _scene_structure_cache[cache_key]
-	
-	# 缓存未命中或已过期
-	_log_debug("Cache miss: " + scene_path)
+	var value: Variant = _result_cache_get(scene_path)
+	if value is Dictionary:
+		return value
 	return {}
 
 func set_cached_scene_structure(scene_path: String, structure: Dictionary) -> void:
-	var cache_key: String = scene_path
-	var current_time: int = Time.get_unix_time_from_system()
-	
-	_scene_structure_cache[cache_key] = structure
-	_cache_timestamp[cache_key] = current_time
-	
-	_log_debug("Cache set: " + scene_path)
+	_result_cache_put(scene_path, structure)
 
 func clear_cache() -> void:
-	_scene_structure_cache.clear()
-	_cache_timestamp.clear()
+	_invalidate_result_cache()
 	_log_info("Cache cleared")
 
-## Drop all cached scene-structure results. Called after any mutating tool so the
-## next read recomputes from the live scene tree instead of serving stale data.
-func _invalidate_scene_structure_cache() -> void:
-	if _scene_structure_cache.is_empty():
-		return
-	_scene_structure_cache.clear()
-	_cache_timestamp.clear()
-	_log_debug("Scene structure cache invalidated")
+# ============================================================================
+# 结果体积控制（spill 落盘）
+# ============================================================================
+
+## If `json_text` exceeds MAX_INLINE_RESULT_BYTES (and the tool is not spill
+## exempt), write it to res://.mcp/out/ and return the truncated preview payload.
+## Returns {} when the result stays inline (small, exempt, or disk write failed —
+## a failed spill falls back to inline, never to an error).
+func _maybe_spill_result(json_text: String, tool: MCPTypes.MCPTool) -> Dictionary:
+	if json_text.is_empty() or tool.name in SPILL_EXEMPT_TOOLS:
+		return {}
+	var size_bytes: int = json_text.to_utf8_buffer().size()
+	if size_bytes <= MAX_INLINE_RESULT_BYTES:
+		return {}
+	var path: String = _spill_result_to_disk(json_text)
+	if path.is_empty():
+		return {}
+	return {
+		"truncated": true,
+		"total_bytes": size_bytes,
+		"path": path,
+		"head": json_text.substr(0, SPILL_PREVIEW_HEAD_CHARS),
+		"tail": json_text.substr(maxi(0, json_text.length() - SPILL_PREVIEW_TAIL_CHARS)),
+		"content_type": "application/json",
+		"resume_hint": "read the file at " + path + " with a script/resource tool for the full result"
+	}
+
+## Write `json_text` to <SPILL_OUTPUT_DIR>/<content_hash>.json and return the
+## path; returns "" on any failure (the caller then falls back to inline).
+func _spill_result_to_disk(json_text: String) -> String:
+	var err: Error = DirAccess.make_dir_recursive_absolute(SPILL_OUTPUT_DIR)
+	if err != OK:
+		var root: DirAccess = DirAccess.open("res://")
+		if root:
+			err = root.make_dir_recursive(SPILL_OUTPUT_DIR.trim_prefix("res://"))
+	if err != OK:
+		_log_warn("Spill: failed to create output dir " + SPILL_OUTPUT_DIR + " (error " + str(err) + ")")
+		return ""
+	var path: String = SPILL_OUTPUT_DIR + "/" + _hash_string(json_text) + ".json"
+	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		_log_warn("Spill: failed to open " + path + " for writing; falling back to inline")
+		return ""
+	file.store_string(json_text)
+	file.close()
+	_log_info("Spilled large result (%d bytes) to %s" % [json_text.to_utf8_buffer().size(), path])
+	return path
+
+## Deterministic short content hash used for spill filenames.
+static func _hash_string(value: String) -> String:
+	return "%08x" % (value.hash() & 0xFFFFFFFF)
 
 # ============================================================================
 # 配置方法
