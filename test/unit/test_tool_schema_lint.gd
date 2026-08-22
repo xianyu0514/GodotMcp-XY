@@ -29,6 +29,9 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/scene_tools_native.gd",
 	"res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"res://addons/godot_mcp/tools/debug_tools_native.gd",
+	"res://addons/godot_mcp/tools/debug_bridge_tools.gd",
+	"res://addons/godot_mcp/tools/debug_runtime_tools.gd",
+	"res://addons/godot_mcp/tools/debug_verify_tools.gd",
 	"res://addons/godot_mcp/tools/project_tools_native.gd",
 	"res://addons/godot_mcp/tools/project_resources_tools.gd",
 	"res://addons/godot_mcp/tools/project_assets_tools.gd",
@@ -134,7 +137,6 @@ const FULL_SET_TOKEN_BUDGET: int = 60000
 ## dsh-tool-token-economy-study.md §3.1 建议 B）建议的单工具预算，保留作为
 ## 回归线；这 8 个的描述/参数精简是独立工作项，禁止通过放宽预算来掩盖。
 const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
-	"play_and_verify": "编排工具：~2.2KB 描述 + 17 参数（历史基线，待精简）",
 	"generate_asset": "资产生成：~1.6KB 描述 + 20 参数（历史基线，待精简）",
 	"manage_task_plan": "任务图编排：~1.8KB 描述 + 富参数（历史基线，待精简）",
 	"generate_3d_asset": "文生 3D：~1.4KB 描述 + 富参数（历史基线，待精简）",

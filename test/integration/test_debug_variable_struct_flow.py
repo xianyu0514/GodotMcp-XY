@@ -403,7 +403,7 @@ def main() -> int:
             "execute_editor_script",
             {
                 "code": (
-                    'var tools := DebugToolsNative.new()\n'
+                    'var tools := DebugBridgeTools.new()\n'
                     'var bridge := MCPDebuggerBridge.new()\n'
                     'var helper_node := Node.new()\n'
                     'var helper_callable := Callable(helper_node, "queue_free")\n'
@@ -500,7 +500,7 @@ def main() -> int:
             "execute_editor_script",
             {
                 "code": (
-                    'var tools := DebugToolsNative.new()\n'
+                    'var tools := DebugBridgeTools.new()\n'
                     'var bridge := MCPDebuggerBridge.new()\n'
                     'var inspect_node := Node.new()\n'
                     'inspect_node.name = "InspectableNode"\n'

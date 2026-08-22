@@ -106,6 +106,10 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"SceneToolsNative": "res://addons/godot_mcp/tools/scene_tools_native.gd",
 	"EditorToolsNative": "res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"DebugToolsNative": "res://addons/godot_mcp/tools/debug_tools_native.gd",
+	# debug_tools_native.gd 按域拆分出的子模块（注册顺序与原文件分区顺序一致）
+	"DebugBridgeTools": "res://addons/godot_mcp/tools/debug_bridge_tools.gd",
+	"DebugRuntimeTools": "res://addons/godot_mcp/tools/debug_runtime_tools.gd",
+	"DebugVerifyTools": "res://addons/godot_mcp/tools/debug_verify_tools.gd",
 	"ProjectToolsNative": "res://addons/godot_mcp/tools/project_tools_native.gd",
 	# project_tools_native.gd 按域拆分出的子模块（注册顺序与原文件分区顺序一致）
 	"ProjectResourcesTools": "res://addons/godot_mcp/tools/project_resources_tools.gd",

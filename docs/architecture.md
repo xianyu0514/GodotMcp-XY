@@ -54,7 +54,10 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 Each category is implemented in one or more files under `addons/godot_mcp/tools/`. The
 Project category was split from the 9393-line `project_tools_native.gd` into one main
 module (shared helpers + project-info/config/input/autoload/class-metadata/test-runner
-tools) plus five domain modules (resources, assets, tileset, verification, workflow):
+tools) plus five domain modules (resources, assets, tileset, verification, workflow).
+The Debug category was split the same way: the 4480-line `debug_tools_native.gd` keeps
+the main class (shared static helpers + logs/misc + script execution) and the bridge,
+runtime-probe and verify domains moved into three dedicated modules:
 
 | File | Category | Tools |
 | --- | --- | ---: |
@@ -62,7 +65,10 @@ tools) plus five domain modules (resources, assets, tileset, verification, workf
 | `script_tools_native.gd` | Script | 18 |
 | `scene_tools_native.gd` | Scene | 12 |
 | `editor_tools_native.gd` | Editor | 27 |
-| `debug_tools_native.gd` | Debug & Runtime | 73 |
+| `debug_tools_native.gd` | Debug (main: logs/misc + shared static helpers) | 6 |
+| `debug_bridge_tools.gd` | Debug (bridge + execution control) | 28 |
+| `debug_runtime_tools.gd` | Debug (runtime probe) | 38 |
+| `debug_verify_tools.gd` | Debug (verify gates: play_and_verify/perf budget/runtime errors) | 3 |
 | `project_tools_native.gd` | Project (main: info/config/input/autoload/class metadata/tests) | 16 |
 | `project_resources_tools.gd` | Project (resources: create/read/update/deps/migration/UID) | 21 |
 | `project_assets_tools.gd` | Project (assets: generate/3D/slice/glTF/gradient/drawable/PCK/render) | 9 |

@@ -63,7 +63,10 @@ addons/godot_mcp/
 │   ├── script_tools_native.gd  # 18 个工具 — 读取/写入/创建/附加/分析/验证脚本、批量编译校验、校验着色器、符号索引、搜索
 │   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
 │   ├── editor_tools_native.gd  # 27 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟（产物校验 + 可选启动并断言退出码）
-│   ├── debug_tools_native.gd   # 73 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制、play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
+│   ├── debug_tools_native.gd   # 6 个工具（主类，保留共享辅助）— 日志（get_editor_logs/clear_output）、脚本执行（execute_script/execute_editor_script）、性能指标；跨域共享静态辅助（_get_debugger_bridge/运行时探针请求机制）
+│   ├── debug_bridge_tools.gd   # 28 个工具 — 调试器桥接（断点/线程/栈帧/变量/作用域/求值）、执行控制（单步/继续/等待、runtime probe 安装/移除、debugger 状态等待）
+│   ├── debug_runtime_tools.gd  # 38 个工具 — 运行时探针（场景树/节点 CRUD/表达式/输入模拟/动画/音频/着色器/瓦片地图/截图/条件断言）
+│   ├── debug_verify_tools.gd   # 3 个工具 — play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
 │   ├── project_tools_native.gd  # 16 个工具（主类，保留共享辅助）— 项目信息/设置、项目设置写入、输入映射、自动加载（读取/增删）、全局类、类元数据、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
 │   ├── project_resources_tools.gd # 21 个工具 — 资源创建/读取/更新/批量、依赖扫描（缺失/循环）、迁移检查/修复、弃用 API 扫描、GDExtension 检测、UID 查询/修复、反向依赖、未使用资源、脚本诊断、健康审计
 │   ├── project_assets_tools.gd  # 9 个工具 — 渐变/可绘制纹理、PCK 打包、渲染输出、generate_asset（占位程序化 + 外部 API 适配 + SSRF 护栏）、slice_sprite_sheet、inspect_gltf_asset、generate_3d_asset（文生3D 异步提交→轮询→下载→校验）
