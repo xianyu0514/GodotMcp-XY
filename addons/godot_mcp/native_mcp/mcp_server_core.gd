@@ -74,7 +74,8 @@ const CACHEABLE_READ_TOOLS: Array[String] = [
 	"list_project_scripts", "get_project_structure", "list_open_scenes",
 	"get_scene_tree", "get_node_properties", "batch_get_node_properties",
 	"list_project_resources", "list_project_input_actions",
-	"list_project_autoloads", "list_project_global_classes", "get_import_status"
+	"list_project_autoloads", "list_project_global_classes", "get_import_status",
+	"list_tool_catalog", "search_tools", "get_tool_details"
 ]
 
 ## Maximum number of tool results kept in the in-memory LRU result cache. When
@@ -1128,12 +1129,14 @@ func register_tool(name: String, description: String,
 	
 	_tools[name] = tool
 	_invalidate_tool_list_cache()
+	_invalidate_result_cache()
 	_log_info("Tool registered: " + name)
 
 func unregister_tool(name: String) -> void:
 	if _tools.has(name):
 		_tools.erase(name)
 		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		_log_info("Tool unregistered: " + name)
 
 func get_tool(name: String) -> MCPTypes.MCPTool:
@@ -1172,11 +1175,13 @@ func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 				_tools[tool_name].enabled = true
 				_tool_list_dirty = true
 				_invalidate_tool_list_cache()
+				_invalidate_result_cache()
 			_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
 			return
 		_tools[tool_name].enabled = enabled
 		_tool_list_dirty = true
 		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		if enabled:
 			_log_info("Tool enabled: " + tool_name)
 		else:
@@ -1206,6 +1211,7 @@ func set_group_enabled(group_name: String, enabled: bool) -> int:
 	if changed_count > 0:
 		_tool_list_dirty = true
 		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		_log_info("Group '" + group_name + "' " + ("enabled" if enabled else "disabled") + ": " + str(changed_count) + " tools affected")
 	return changed_count
 
