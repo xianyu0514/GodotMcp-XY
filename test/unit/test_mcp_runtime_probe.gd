@@ -174,3 +174,18 @@ func test_variant_to_float_invalid_string_returns_zero():
 
 func test_variant_to_float_unsupported_type_returns_zero():
 	assert_eq(_probe._variant_to_float(Vector2(1, 2)), 0.0, "unsupported type should return 0.0")
+
+
+
+func test_delete_runtime_probe_node_rejected():
+	# _handle_delete_node 必须拒绝删除探针自身；实现用 node == self 判断，
+	# 不依赖已被移除的 class_name MCPRuntimeProbe（否则脚本会解析失败）。
+	var probe_path: String = str(_probe.get_path())
+	var handled: bool = _probe._handle_delete_node([probe_path])
+	# 探针保护路径会调用 EngineDebugger.send_message；headless 下 debugger 未激活，
+	# 该引擎报错是预期副作用，标记为 handled。
+	for e in get_errors():
+		e.handled = true
+	assert_true(handled, "delete_node should handle the probe path")
+	assert_true(is_instance_valid(_probe), "Runtime probe must not free itself")
+	assert_true(_probe.get_parent() != null, "Runtime probe must remain in the tree")
