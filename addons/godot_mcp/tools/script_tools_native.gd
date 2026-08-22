@@ -47,6 +47,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_open_script_at_line(server_core)
 	_register_attach_script(server_core)
 	_register_validate_script(server_core)
+	_register_verify_scripts(server_core)
 	_register_validate_shader(server_core)
 	_register_search_in_files(server_core)
 
@@ -2350,6 +2351,180 @@ func _spaces_to_tabs(code: String) -> String:
 		var new_line: String = "\t".repeat(tab_count) + " ".repeat(remaining_spaces) + line.substr(leading_spaces)
 		result_lines.append(new_line)
 	return "\n".join(result_lines)
+
+# ============================================================================
+# verify_scripts - 批量校验项目脚本编译状态
+# ============================================================================
+
+func _register_verify_scripts(server_core: RefCounted) -> void:
+	var tool_name: String = "verify_scripts"
+	var description: String = "Batch-verify the compilation status of project scripts, returning per-script structured errors and warnings with line numbers. With no script_paths it scans the whole project for .gd scripts (skipping res://addons/ and res://test/ by default to avoid false positives from the plugin itself and the test suite), capped by max_scripts. Use after editing code as a verification step, complementing validate_script (single script) and execute_editor_script (full reload)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"script_paths": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Optional explicit script paths (.gd/.cs) to verify. When omitted, the project is scanned for .gd scripts under res:// (excluding res://addons/ and res://test/)."
+			},
+			"check_warnings": {
+				"type": "boolean",
+				"description": "Whether to check for warnings. Default is true."
+			},
+			"max_scripts": {
+				"type": "integer",
+				"description": "Maximum number of scripts to verify in one call (each GDScript.reload has cost). Default is 100."
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"verified": {"type": "integer"},
+			"failed": {"type": "integer"},
+			"results": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"path": {"type": "string"},
+						"valid": {"type": "boolean"},
+						"errors": {"type": "array"},
+						"warnings": {"type": "array"},
+						"error_count": {"type": "integer"},
+						"warning_count": {"type": "integer"}
+					}
+				}
+			},
+			"total_checked": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_verify_scripts"),
+		output_schema, annotations,
+		"supplementary", "Script-Advanced")
+
+func _tool_verify_scripts(params: Dictionary) -> Dictionary:
+	var check_warnings: bool = bool(params.get("check_warnings", true))
+	var max_scripts: int = max(1, int(params.get("max_scripts", 100)))
+
+	var requested: Array = []
+	var raw_paths: Variant = params.get("script_paths", [])
+	if raw_paths is Array:
+		for p in raw_paths:
+			var s: String = String(p).strip_edges()
+			if not s.is_empty():
+				requested.append(s)
+
+	var paths: Array = []
+	if requested.is_empty():
+		# Default: scan the project, skipping the plugin's own addons/, the test
+		# suite and the engine cache to avoid false positives.
+		_collect_gd_scripts_excluding("res://", paths, ["addons", "test", ".godot"])
+	else:
+		paths = requested
+	paths.sort()
+
+	var results: Array = []
+	var verified: int = 0
+	var failed: int = 0
+	var checked: int = 0
+	for script_path in paths:
+		if checked >= max_scripts:
+			break
+		checked += 1
+		var result: Dictionary = _verify_single_script(String(script_path), check_warnings)
+		results.append(result)
+		if bool(result.get("valid", false)):
+			verified += 1
+		else:
+			failed += 1
+
+	return {
+		"verified": verified,
+		"failed": failed,
+		"results": results,
+		"total_checked": checked
+	}
+
+# 校验单个脚本文件，返回与 validate_script 一致的结构化错误/警告。
+# 复用 _tool_validate_script 的同一套编译逻辑（class_name 剥离、Autoload/全局类
+# 感知重试、_collect_validation_error 错误提取），保证单脚本与批量结果一致。
+func _verify_single_script(script_path: String, check_warnings: bool) -> Dictionary:
+	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
+	if not validation["valid"]:
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Invalid script path: " + validation["error"]}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	if not FileAccess.file_exists(script_path):
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Script file not found: " + script_path}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+	if not file:
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	var content: String = file.get_as_text()
+	file.close()
+
+	var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
+	return {
+		"path": script_path,
+		"valid": bool(vr.get("valid", false)),
+		"errors": vr.get("errors", []),
+		"warnings": vr.get("warnings", []),
+		"error_count": int(vr.get("error_count", 0)),
+		"warning_count": int(vr.get("warning_count", 0))
+	}
+
+# 递归收集 .gd 脚本，跳过指定名称的子目录（如 addons/test/.godot）。
+func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_dir_names: Array) -> void:
+	var dir: DirAccess = DirAccess.open(directory_path)
+	if not dir:
+		return
+
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while not file_name.is_empty():
+		if file_name != "." and file_name != "..":
+			var full_path: String = directory_path
+			if not full_path.ends_with("/"):
+				full_path += "/"
+			full_path += file_name
+
+			if dir.current_is_dir():
+				if not (file_name in skip_dir_names):
+					_collect_gd_scripts_excluding(full_path, result, skip_dir_names)
+			elif file_name.ends_with(".gd"):
+				result.append(full_path)
+		file_name = dir.get_next()
+	dir.list_dir_end()
 
 # ============================================================================
 # search_in_files - 在项目文件中搜索内容

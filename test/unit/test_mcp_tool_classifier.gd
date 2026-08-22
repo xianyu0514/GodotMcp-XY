@@ -11,21 +11,32 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_215_tools_registered():
+func test_all_218_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 215, "Should have exactly 215 tools registered")
+	assert_eq(all_tools.size(), 218, "Should have exactly 218 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
-	assert_eq(meta_tools.size(), 2, "Should have exactly 2 meta tools")
+	assert_eq(meta_tools.size(), 4, "Should have exactly 4 meta tools")
 	assert_true("list_tool_catalog" in meta_tools, "list_tool_catalog should be a meta tool")
 	assert_true("enable_tools" in meta_tools, "enable_tools should be a meta tool")
+	assert_true("search_tools" in meta_tools, "search_tools should be a meta tool")
+	assert_true("get_tool_details" in meta_tools, "get_tool_details should be a meta tool")
 
 func test_meta_tools_are_not_core_or_supplementary():
 	assert_true(_classifier.is_meta_tool("list_tool_catalog"), "list_tool_catalog should be meta")
 	assert_false(_classifier.is_core_tool("enable_tools"), "enable_tools should not be core")
 	assert_false(_classifier.is_supplementary_tool("enable_tools"), "enable_tools should not be supplementary")
 	assert_eq(_classifier.get_tool_group("list_tool_catalog"), "Meta", "list_tool_catalog should be in Meta group")
+	assert_true(_classifier.is_meta_tool("search_tools"), "search_tools should be meta")
+	assert_false(_classifier.is_supplementary_tool("search_tools"), "search_tools should not be supplementary")
+	assert_true(_classifier.is_meta_tool("get_tool_details"), "get_tool_details should be meta")
+	assert_eq(_classifier.get_tool_group("get_tool_details"), "Meta", "get_tool_details should be in Meta group")
+
+func test_verify_scripts_is_supplementary_script_advanced():
+	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
+	assert_false(_classifier.is_core_tool("verify_scripts"), "verify_scripts should not be core")
+	assert_eq(_classifier.get_tool_group("verify_scripts"), "Script-Advanced", "verify_scripts should be in Script-Advanced group")
 
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
@@ -69,7 +80,7 @@ func test_core_tools_count_within_limit():
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 185, "Should have 185 supplementary tools")
+	assert_eq(supp_tools.size(), 186, "Should have 186 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -158,6 +169,7 @@ func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("find_nodes_in_group"), "find_nodes_in_group should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("analyze_script"), "analyze_script should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("validate_script"), "validate_script should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("search_in_files"), "search_in_files should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("list_project_scenes"), "list_project_scenes should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("get_scene_structure"), "get_scene_structure should be supplementary")

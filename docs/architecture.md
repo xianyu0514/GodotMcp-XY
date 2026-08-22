@@ -55,20 +55,20 @@ Each category is implemented in one file under `addons/godot_mcp/tools/`:
 | File | Category | Tools |
 | --- | --- | ---: |
 | `node_tools_native.gd` | Node | 26 |
-| `script_tools_native.gd` | Script | 17 |
+| `script_tools_native.gd` | Script | 18 |
 | `scene_tools_native.gd` | Scene | 12 |
 | `editor_tools_native.gd` | Editor | 24 |
 | `debug_tools_native.gd` | Debug & Runtime | 73 |
 | `project_tools_native.gd` | Project | 61 |
-| `meta_tools_native.gd` | Meta | 2 |
+| `meta_tools_native.gd` | Meta | 4 |
 
 Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The classifier controls whether a tool is core, advanced or meta.
 
 ## Core, advanced and meta tiers
 
 - **Core:** 28 high-value tools enabled by default.
-- **Advanced:** 185 tools registered but hidden from `tools/list` until enabled.
-- **Meta:** 2 always-on discovery tools: `list_tool_catalog` and `enable_tools`.
+- **Advanced:** 186 tools registered but hidden from `tools/list` until enabled.
+- **Meta:** 4 always-on discovery tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 
 This design keeps the default client context small without making specialized capabilities unavailable.
 

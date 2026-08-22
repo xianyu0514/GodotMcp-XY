@@ -225,6 +225,9 @@ func _build_classifications() -> void:
 		{"name": "manage_localization", "category": "supplementary", "group": "Project-Advanced"},
 		{"name": "list_tool_catalog", "category": "meta", "group": "Meta"},
 		{"name": "enable_tools", "category": "meta", "group": "Meta"},
+		{"name": "search_tools", "category": "meta", "group": "Meta"},
+		{"name": "get_tool_details", "category": "meta", "group": "Meta"},
+		{"name": "verify_scripts", "category": "supplementary", "group": "Script-Advanced"},
 	]
 
 	for item in classifications:

@@ -19,6 +19,8 @@ func initialize(_editor_interface: EditorInterface) -> void:
 func register_tools(server_core: RefCounted) -> void:
 	_server_core = server_core
 	_register_list_tool_catalog(server_core)
+	_register_search_tools(server_core)
+	_register_get_tool_details(server_core)
 	_register_enable_tools(server_core)
 
 func _get_preset_manager() -> RefCounted:
@@ -118,6 +120,141 @@ func _tool_list_tool_catalog(params: Dictionary) -> Dictionary:
 		"total_matched": total_matched,
 		"enabled_count": enabled_count
 	}
+
+# ============================================================================
+# search_tools - 关键词检索工具目录（渐进发现第二层）
+# ============================================================================
+
+func _register_search_tools(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"search_tools",
+		"Search the registered MCP tool catalog by keywords and/or group, returning each matching tool's name, group, category, enabled state and a one-line description. More focused than list_tool_catalog: supports multiple space-separated keywords with AND semantics (every keyword must appear in the tool name or description, case-insensitive). Use it to pinpoint the right tools for a task, then call get_tool_details for the exact schema or enable_tools to activate them.",
+		{
+			"type": "object",
+			"properties": {
+				"query": {"type": "string", "description": "Required. Space-separated keywords matched (case-insensitive) against tool name and description; all keywords must match (AND)."},
+				"group": {"type": "string", "description": "Filter to a single classifier group (e.g. 'Script-Advanced')."},
+				"enabled_only": {"type": "boolean", "default": false, "description": "Only include tools that are currently enabled (visible in tools/list)."},
+				"include_descriptions": {"type": "boolean", "default": true, "description": "Include a one-line description per tool. Set false for a name-only listing."},
+				"limit": {"type": "integer", "default": 30, "description": "Maximum number of matching tools to return. total_matched reports the full match count before truncation."}
+			},
+			"required": ["query"]
+		},
+		Callable(self, "_tool_search_tools"),
+		{"type": "object", "properties": {"tools": {"type": "array", "items": {"type": "object"}}, "total_matched": {"type": "integer"}, "query": {"type": "string"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"meta", "Meta"
+	)
+
+func _tool_search_tools(params: Dictionary) -> Dictionary:
+	if _server_core == null or not _server_core.has_method("get_registered_tools"):
+		return {"error": "Server core is not available"}
+
+	var query_raw: String = String(params.get("query", "")).strip_edges()
+	if query_raw.is_empty():
+		return {"error": "Missing required parameter: query"}
+
+	# Split on whitespace; every keyword must match (AND semantics).
+	var keywords: Array = []
+	for kw in query_raw.split(" "):
+		var k: String = String(kw).strip_edges().to_lower()
+		if not k.is_empty() and not keywords.has(k):
+			keywords.append(k)
+
+	var group_filter: String = String(params.get("group", "")).strip_edges()
+	var enabled_only: bool = bool(params.get("enabled_only", false))
+	var include_descriptions: bool = bool(params.get("include_descriptions", true))
+	var limit: int = max(1, int(params.get("limit", 30)))
+
+	var tools: Array = []
+	var total_matched: int = 0
+	for info in _server_core.get_registered_tools():
+		var name: String = String(info.get("name", ""))
+		var description: String = String(info.get("description", ""))
+		if not group_filter.is_empty() and String(info.get("group", "")) != group_filter:
+			continue
+		if enabled_only and not bool(info.get("enabled", false)):
+			continue
+
+		var haystack: String = (name + " " + description).to_lower()
+		var matched: bool = true
+		for kw in keywords:
+			if not haystack.contains(kw):
+				matched = false
+				break
+		if not matched:
+			continue
+
+		total_matched += 1
+		if tools.size() >= limit:
+			continue
+		var entry: Dictionary = {
+			"name": name,
+			"group": String(info.get("group", "")),
+			"category": String(info.get("category", "")),
+			"enabled": bool(info.get("enabled", false))
+		}
+		if include_descriptions:
+			entry["description"] = _short_description(description)
+		tools.append(entry)
+
+	return {
+		"tools": tools,
+		"total_matched": total_matched,
+		"query": query_raw
+	}
+
+# ============================================================================
+# get_tool_details - 单个工具完整 schema（渐进发现第三层）
+# ============================================================================
+
+func _register_get_tool_details(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_tool_details",
+		"Return the full registration record for one MCP tool — complete description, inputSchema, outputSchema, annotations, category, group and enabled state — so a client can fetch the exact schema before calling a tool without loading every tool. Use list_tool_catalog or search_tools to discover tool names first. Returns found=false with a hint when the name is not registered.",
+		{
+			"type": "object",
+			"properties": {
+				"name": {"type": "string", "description": "Exact registered tool name, e.g. 'modify_script'."}
+			},
+			"required": ["name"]
+		},
+		Callable(self, "_tool_get_tool_details"),
+		{"type": "object", "properties": {"name": {"type": "string"}, "description": {"type": "string"}, "inputSchema": {"type": "object"}, "outputSchema": {"type": "object"}, "annotations": {"type": "object"}, "category": {"type": "string"}, "group": {"type": "string"}, "enabled": {"type": "boolean"}, "found": {"type": "boolean"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"meta", "Meta"
+	)
+
+func _tool_get_tool_details(params: Dictionary) -> Dictionary:
+	if _server_core == null or not _server_core.has_method("get_tool"):
+		return {"error": "Server core is not available"}
+
+	var tool_name: String = String(params.get("name", "")).strip_edges()
+	if tool_name.is_empty():
+		return {"error": "Missing required parameter: name"}
+
+	var tool = _server_core.get_tool(tool_name)
+	if tool == null:
+		return {
+			"name": tool_name,
+			"found": false,
+			"hint": "Tool not found. Use list_tool_catalog or search_tools to discover registered tool names."
+		}
+
+	var details: Dictionary = {
+		"name": tool.name,
+		"description": tool.description,
+		"inputSchema": tool.input_schema,
+		"category": tool.category,
+		"group": tool.group,
+		"enabled": tool.enabled,
+		"found": true
+	}
+	if not tool.output_schema.is_empty():
+		details["outputSchema"] = tool.output_schema
+	if not tool.annotations.is_empty():
+		details["annotations"] = tool.annotations
+	return details
 
 # ============================================================================
 # enable_tools
