@@ -252,6 +252,99 @@ func test_handle_request_awaits_tool_call():
 	assert_false(response.get("result", {}).get("isError", true), "handle_request should await tool_call successfully")
 
 # ============================================================================
+# Protocol compliance: ping / notifications / list _meta / server version
+# ============================================================================
+
+func test_ping_returns_empty_result():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response.get("jsonrpc", ""), "2.0", "Ping response should be JSON-RPC 2.0")
+	assert_eq(response.get("id"), 1, "Ping response should echo the request id")
+	assert_has(response, "result", "Ping response should carry a result")
+	assert_eq(response.get("result", {}).size(), 0, "Ping result should be an empty dict")
+
+func test_initialized_notification_no_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Known notification must be handled without producing a response")
+
+func test_notification_gets_no_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Notification must never produce a response")
+
+func test_unknown_notification_no_error_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/unknown_method", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Unknown notification must not produce an error response")
+
+func test_rate_limit_skips_notifications():
+	_core.set_rate_limit(1)
+	# 消耗唯一的速率配额：一次带 id 的请求应通过。
+	var req: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+	var req_response: Dictionary = _core._handle_request(req)
+	assert_has(req_response, "result", "First request should pass the rate limit")
+	# 第二个带 id 的请求应被限流拒绝。
+	var second: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}}
+	var limited: Dictionary = _core._handle_request(second)
+	assert_true(limited.has("error"), "Second request should be rate limited")
+	# 通知不受限流影响：仍返回空字典，且不计入配额（不再触发限流错误响应）。
+	var notification: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var notif_response: Dictionary = _core._handle_request(notification)
+	assert_eq(notif_response, {}, "Notification must skip rate limiting and never produce a response")
+
+func test_tools_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+	var response: Dictionary = _core._handle_tools_list(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_has(result, "_meta", "tools/list result should include _meta")
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "toolSet", "_meta.cacheScope should be 'toolSet'")
+
+func test_resources_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "resources/list"}
+	var response: Dictionary = _core._handle_resources_list(msg)
+	var result: Dictionary = response.get("result", {})
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "resourceList", "_meta.cacheScope should be 'resourceList'")
+
+func test_prompts_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}
+	var response: Dictionary = _core._handle_prompts_list(msg)
+	var result: Dictionary = response.get("result", {})
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "promptList", "_meta.cacheScope should be 'promptList'")
+
+func test_initialize_default_server_version_fallback():
+	# start() 尚未调用时，_server_version 保持默认 "0.0.0"，且不再硬编码 "2.0.0"。
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	assert_eq(server_info.get("name", ""), "godot-native-mcp", "serverInfo.name should stay godot-native-mcp")
+	assert_eq(server_info.get("version", ""), "0.0.0", "Before start(), serverInfo.version should fall back to 0.0.0")
+
+func test_initialize_server_version_from_plugin_cfg():
+	# start() 会在 _active = true 之前调用 _load_plugin_version()；测试直接调用它，
+	# 避免启动 stdio 传输线程（headless 下会阻塞等待 stdin）。
+	_core._load_plugin_version()
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	var version: String = server_info.get("version", "")
+	assert_false(version.is_empty(), "serverInfo.version should be non-empty")
+	assert_ne(version, "2.0.0", "serverInfo.version should not be the old hardcoded 2.0.0")
+	var config: ConfigFile = ConfigFile.new()
+	assert_eq(config.load(_core.PLUGIN_CONFIG_PATH), OK, "plugin.cfg should load")
+	assert_eq(version, config.get_value("plugin", "version", ""), "serverInfo.version should equal plugin.cfg plugin/version")
+
+func test_set_server_version_override():
+	_core.set_server_version("9.9.9")
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	assert_eq(server_info.get("version", ""), "9.9.9", "set_server_version should override the reported version")
+
+# ============================================================================
 # Serial request queue
 # ============================================================================
 

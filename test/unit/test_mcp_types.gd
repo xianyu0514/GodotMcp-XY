@@ -185,3 +185,6 @@ func test_create_capabilities():
 
 func test_protocol_version():
 	assert_eq(MCPTypes.PROTOCOL_VERSION, "2025-11-25", "Protocol version should be 2025-11-25")
+
+func test_method_ping_constant():
+	assert_eq(MCPTypes.METHOD_PING, "ping", "METHOD_PING should be 'ping'")

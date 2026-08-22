@@ -26,6 +26,7 @@ const METHOD_RESOURCES_SUBSCRIBE: String = "resources/subscribe"
 const METHOD_RESOURCES_UNSUBSCRIBE: String = "resources/unsubscribe"
 const METHOD_PROMPTS_LIST: String = "prompts/list"
 const METHOD_PROMPTS_GET: String = "prompts/get"
+const METHOD_PING: String = "ping"
 
 # Server-initiated notifications
 const NOTIFICATION_RESOURCES_UPDATED: String = "notifications/resources/updated"

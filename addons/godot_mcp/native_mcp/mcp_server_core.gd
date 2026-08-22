@@ -69,6 +69,18 @@ const MAX_WAITING_REQUESTS: int = 256
 ## staleness from any out-of-band edit made outside the MCP server.
 const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure", "list_nodes", "list_project_scenes"]
 
+## TTL (ms) advertised in the `_meta` of list responses. The 2026-07-28 MCP spec
+## adds `_meta.ttlMs`/`cacheScope` for list caching; Claude Code validates these
+## fields and rejects list results that omit them.
+const LIST_CACHE_TTL_MS: int = 30000
+const TOOLS_LIST_CACHE_SCOPE: String = "toolSet"
+const RESOURCES_LIST_CACHE_SCOPE: String = "resourceList"
+const PROMPTS_LIST_CACHE_SCOPE: String = "promptList"
+
+## Path to the plugin manifest whose `plugin/version` key is the single source
+## of truth for the version reported in the `initialize` handshake.
+const PLUGIN_CONFIG_PATH: String = "res://addons/godot_mcp/plugin.cfg"
+
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
@@ -111,6 +123,11 @@ var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat
 var _log_level: int = MCPTypes.LogLevel.INFO
 var _security_level: int = MCPTypes.SecurityLevel.STRICT
 var _rate_limit: int = 1000  # Max requests per 60s window before throttling
+
+## Version reported in the `initialize` handshake (`serverInfo.version`). The
+## single source of truth is `plugin.cfg` (`plugin/version`), loaded by
+## `_load_plugin_version()` in `start()`; defaults to "0.0.0" before that.
+var _server_version: String = "0.0.0"
 
 # 速率限制跟踪
 var _request_count: Dictionary = {}  # String (client_id) -> int
@@ -319,6 +336,27 @@ func _on_transport_stopped() -> void:
 # 生命周期方法
 # ============================================================================
 
+## 覆盖服务器版本（优先于 plugin.cfg 自动读取的值）。
+## @param version: String - 版本号
+func set_server_version(version: String) -> void:
+	_server_version = version
+	_log_info("Server version set to: " + version)
+
+## 从 plugin.cfg 的 `plugin/version` 键读取插件版本，作为 serverInfo.version
+## 的唯一来源。读取失败或键缺失时保持当前 _server_version（默认 "0.0.0"）。
+func _load_plugin_version() -> void:
+	var config: ConfigFile = ConfigFile.new()
+	var err: Error = config.load(PLUGIN_CONFIG_PATH)
+	if err != OK:
+		_log_warn("Failed to load plugin config for server version: " + str(err))
+		return
+	var version: String = config.get_value("plugin", "version", "")
+	if version.is_empty():
+		_log_warn("plugin.cfg has no plugin/version key; keeping server version: " + _server_version)
+		return
+	_server_version = version
+	_log_info("Server version loaded from plugin.cfg: " + version)
+
 func start() -> bool:
 	if _active:
 		_log_warn("Server already running")
@@ -349,7 +387,10 @@ func start() -> bool:
 		if not saved_states.is_empty():
 			_state_manager.apply_states_to_server(self, saved_states)
 			_log_info("Applied saved tool states: " + str(saved_states.size()) + " tools")
-	
+
+	# 读取插件版本（plugin.cfg），使 initialize 握手报告与编辑器插件一致的版本。
+	_load_plugin_version()
+
 	_active = true
 	_log_info("MCP Server started successfully (transport: " + str(_transport_type) + ")")
 	
@@ -397,7 +438,19 @@ func _handle_request(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id", null)
 	var params: Dictionary = message.get("params", {})
 	
-	# 速率限制检查
+	# JSON-RPC 2.0: 通知（无 "id" 的消息）绝不产生响应。匹配已知通知方法处理
+	# （如 notifications/initialized），未知通知也静默返回空字典 —— 空字典为假值，
+	# _drain_request_queue 中的 `if response:` 判定为 false，因此永远不会发送响应。
+	var is_notification: bool = not message.has("id")
+	if is_notification:
+		match method:
+			MCPTypes.METHOD_NOTIFICATIONS_INITIALIZED:
+				return _handle_initialized_notification(message)
+		# 未知通知：忽略，不发送任何响应
+		_log_warn("Unknown notification ignored: " + method)
+		return {}
+	
+	# 速率限制仅对请求（带 id）生效：通知不计数，也不因限流返回错误响应。
 	if not _check_rate_limit("default"):
 		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INTERNAL_ERROR, "Rate limit exceeded")
 	
@@ -405,8 +458,9 @@ func _handle_request(message: Dictionary) -> Dictionary:
 		MCPTypes.METHOD_INITIALIZE:
 			return _handle_initialize(message)
 		
-		MCPTypes.METHOD_NOTIFICATIONS_INITIALIZED:
-			return _handle_initialized_notification(message)
+		MCPTypes.METHOD_PING:
+			# MCP 规范：ping 请求返回空 result
+			return MCPTypes.create_response(id, {})
 		
 		MCPTypes.METHOD_TOOLS_LIST:
 			return _handle_tools_list(message)
@@ -452,12 +506,15 @@ func _handle_initialize(message: Dictionary) -> Dictionary:
 	
 	var negotiated_version: String = _negotiate_protocol_version(client_protocol_version)
 	
+	# serverInfo.version 单一来源：start() 已从 plugin.cfg 读取；为空时回退 "0.0.0"。
+	var server_version: String = "0.0.0" if _server_version.is_empty() else _server_version
+	
 	var result: Dictionary = {
 		"protocolVersion": negotiated_version,
 		"capabilities": MCPTypes.create_capabilities(true, true, true, true),
 		"serverInfo": {
 			"name": "godot-native-mcp",
-			"version": "2.0.0"
+			"version": server_version
 		},
 		"instructions": SERVER_INSTRUCTIONS
 	}
@@ -502,6 +559,11 @@ func _handle_tools_list(message: Dictionary) -> Dictionary:
 			tools_list.append(tool.to_dict())
 	
 	var result: Dictionary = {"tools": tools_list}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope），Claude Code 缺失会拒绝。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": TOOLS_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 
 	_log_info("Tools list requested. Available tools: " + str(tools_list.size()) + " (registered: " + str(_tools.size()) + ")")
@@ -567,13 +629,7 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
-		var status: Error = OK
-		
-		# 捕获执行错误
-		if status == OK:
-			result = await tool.callable.call(arguments)
-		else:
-			error = "Tool execution failed with error: " + str(status)
+		result = await tool.callable.call(arguments)
 	
 	# 处理执行结果
 	if not error.is_empty():
@@ -640,6 +696,11 @@ func _handle_resources_list(message: Dictionary) -> Dictionary:
 			resources_list.append(resource.to_dict())
 	
 	var result: Dictionary = {"resources": resources_list}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": RESOURCES_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 	
 	if _debug_enabled():
@@ -761,6 +822,11 @@ func _handle_prompts_list(message: Dictionary) -> Dictionary:
 			prompts_list.append(prompt.to_dict())
 	
 	var result: Dictionary = {"prompts": prompts_list}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": PROMPTS_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 	
 	return response
