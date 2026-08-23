@@ -189,3 +189,22 @@ func test_delete_runtime_probe_node_rejected():
 	assert_true(handled, "delete_node should handle the probe path")
 	assert_true(is_instance_valid(_probe), "Runtime probe must not free itself")
 	assert_true(_probe.get_parent() != null, "Runtime probe must remain in the tree")
+
+func test_ui_semantics_returns_text_rect_and_point_hit():
+	var root := Control.new()
+	root.name = "HUD"
+	root.set_size(Vector2(400, 300))
+	add_child(root)
+	var button := Button.new()
+	button.name = "PlayButton"
+	button.text = "Play"
+	button.position = Vector2(20, 30)
+	button.size = Vector2(120, 40)
+	root.add_child(button)
+	var result: Dictionary = _probe._collect_ui_semantics(root, {"only_interactive": true, "point": {"x": 30, "y": 40}})
+	assert_eq(result.get("control_count"), 2)
+	var controls: Array = result.get("controls", [])
+	assert_eq(controls[1].get("text"), "Play")
+	assert_eq(controls[1].get("rect", {}).get("width"), 120.0)
+	assert_eq(result.get("hit_stack", []).size(), 2)
+	root.queue_free()

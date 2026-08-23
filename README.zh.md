@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-224-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-225-blue.svg)](docs/tools/README.md)
 
 > English documentation: [README.md](README.md)。
 
@@ -15,9 +15,10 @@
 
 - **原生服务器：** MCP 服务运行在 Godot 编辑器进程内，随插件一起发布。
 - **双传输模式：** 默认 HTTP/SSE（`http://localhost:9080/mcp`），也支持面向本地进程客户端的 stdio。
-- **224 个工具且默认面精简：** 30 个核心工具默认启用，190 个高级工具按需启用，另有 4 个常驻元工具负责发现和启用工具。
-- **跨域原子修改：** `apply_project_change_set` 预览并以 revision 保护文件、项目设置和节点属性的协同修改，最后统一验证或整体回滚。
-- **带版本的项目定向上下文：** `get_project_context` 与 `godot://project/context` 无需扫描完整场景或脚本即可汇总项目/编辑器状态；版本未变化时不重复返回正文。
+- **225 个工具且默认面精简：** 30 个核心工具默认启用，191 个高级工具按需启用，另有 4 个常驻元工具负责发现和启用工具。
+- **跨域原子修改：** `apply_project_change_set` 预览并以 revision 保护文件、项目设置、节点属性和场景结构的协同修改，最后统一验证或整体回滚。
+- **带版本的项目定向上下文：** `get_project_context` 与 `godot://project/context` 无需扫描完整场景或脚本即可汇总项目/编辑器状态；逐区段 revision 只返回变化正文。
+- **可恢复自主循环：** `manage_task_plan` 持久化领取租约、检查点、失败证据与续作状态；运行时 UI 语义提供稳定路径和屏幕矩形供视觉游测使用。
 - **单调用视觉结论：** `visual_playtest` 按需启动游戏，驱动运行时断言、截图、黄金基线门禁并自动清理。
 - **高效协议发现：** 列表接口确定性分页；资源模板与 `completion/complete` 可按项目脚本/场景动态读取，无需逐文件注册。
 - **运行时自动化：** Runtime Probe 可以检查实时场景树、求值表达式、注入输入、控制动画/音频/Shader/TileMap、截图并采集性能指标。
@@ -68,10 +69,10 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 | [Script](docs/tools/script-tools.md) | 18 | 6 | 12 | 读取/创建/修改/校验 GDScript 与 C#，Shader 校验、搜索、符号和引用 |
 | [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | 创建/打开/保存场景、结构检查、场景实例化和 TileMapLayer 单元格 |
 | [Editor](docs/tools/editor-tools.md) | 27 | 3 | 24 | 运行/停止、截图、选择、Inspector、导出模板、脚本缓冲区和撤销/重做 |
-| [Debug & Runtime](docs/tools/debug-tools.md) | 74 | 3 | 71 | 日志、调试器、性能分析、运行时探针、确定性游玩验证和单调用视觉回归门禁 |
+| [Debug & Runtime](docs/tools/debug-tools.md) | 75 | 3 | 72 | 日志、调试器、性能分析、运行时探针、UI 语义、确定性游玩验证和单调用视觉回归门禁 |
 | [Project](docs/tools/project-tools.md) | 63 | 5 | 58 | 原子修改集、紧凑上下文、设置、资源、输入映射、测试、迁移扫描、资产、TileSet、精灵表/glTF 和任务计划 |
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | 常驻工具发现和按需启用 |
-| **总计** | **224** | **30** | **190** | |
+| **总计** | **225** | **30** | **191** | |
 
 启动时只有核心工具和元工具会出现在 `tools/list` 中。需要更多能力时，可在 MCP 面板中开启，也可以调用 `enable_tools` 按工具、分组或预设启用。详见 [Tools Reference](docs/tools/README.md)。
 

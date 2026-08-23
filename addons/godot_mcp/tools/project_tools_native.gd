@@ -193,7 +193,7 @@ static func _parse_vector3(value: Variant) -> Variant:
 func _register_get_project_context(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"get_project_context",
-		"Get a compact, revisioned project orientation snapshot without scanning full scene trees or script contents. Sections: project, editor, autoloads, input_actions, global_classes, task_plan, tools. Pass known_revision to receive a minimal changed=false response when the selected context is unchanged.",
+		"Get a compact, revisioned project orientation snapshot without scanning full scene trees or script contents. Pass known_revision for an unchanged fast response, or known_section_revisions to return only sections whose content changed.",
 		{
 			"type": "object",
 			"properties": {
@@ -205,6 +205,10 @@ func _register_get_project_context(server_core: RefCounted) -> void:
 				"known_revision": {
 					"type": "string",
 					"description": "Revision from a previous call. Matching content returns changed=false without repeating context."
+				},
+				"known_section_revisions": {
+					"type": "object",
+					"description": "Section revisions from a previous response. When supplied, context contains only changed sections."
 				}
 			}
 		},
@@ -216,6 +220,8 @@ func _register_get_project_context(server_core: RefCounted) -> void:
 				"revision": {"type": "string"},
 				"sections": {"type": "array", "items": {"type": "string"}},
 				"section_count": {"type": "integer"},
+				"section_revisions": {"type": "object"},
+				"changed_sections": {"type": "array", "items": {"type": "string"}},
 				"context": {"type": "object"}
 			}
 		},
@@ -247,20 +253,42 @@ func _tool_get_project_context(params: Dictionary) -> Dictionary:
 				context[section] = _build_project_context_tools()
 
 	var revision: String = _project_context_revision(context)
+	var section_revisions: Dictionary = {}
+	for section in sections:
+		section_revisions[section] = _project_context_revision({section: context[section]})
 	var known_revision: String = str(params.get("known_revision", "")).strip_edges()
 	if not known_revision.is_empty() and known_revision == revision:
 		return {
 			"changed": false,
 			"revision": revision,
 			"sections": sections,
-			"section_count": sections.size()
+			"section_count": sections.size(),
+			"section_revisions": section_revisions,
+			"changed_sections": []
+		}
+	var known_section_revisions: Variant = params.get("known_section_revisions", {})
+	if not (known_section_revisions is Dictionary):
+		return {"error": "known_section_revisions must be an object"}
+	var changed_sections: Array[String] = []
+	var changed_context: Dictionary = {}
+	for section in sections:
+		if not known_section_revisions.has(section) or str(known_section_revisions[section]) != str(section_revisions[section]):
+			changed_sections.append(section)
+			changed_context[section] = context[section]
+	if not known_section_revisions.is_empty() and changed_sections.is_empty():
+		return {
+			"changed": false, "revision": revision, "sections": sections,
+			"section_count": sections.size(), "section_revisions": section_revisions,
+			"changed_sections": []
 		}
 	return {
-		"changed": true,
+		"changed": not changed_sections.is_empty(),
 		"revision": revision,
 		"sections": sections,
 		"section_count": sections.size(),
-		"context": context
+		"section_revisions": section_revisions,
+		"changed_sections": changed_sections,
+		"context": changed_context
 	}
 
 func _normalize_project_context_sections(raw_sections: Variant) -> Dictionary:

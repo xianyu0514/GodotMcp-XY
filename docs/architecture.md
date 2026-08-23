@@ -97,7 +97,7 @@ These hints flow to three places that agents already consume:
 
 This design keeps the default client context small without making specialized capabilities unavailable.
 
-The compact context loop exposes the same snapshot through the core `get_project_context` tool and the subscribable `godot://project/context` resource. The payload uses canonical section ordering and a SHA-256 content revision; clients can pass `known_revision` to suppress unchanged context. After any successful tool marked `readOnlyHint=false`, the server emits `notifications/resources/updated` for currently subscribed resources.
+The compact context loop exposes the same snapshot through the core `get_project_context` tool and the subscribable `godot://project/context` resource. The payload uses canonical ordering plus whole-content and per-section SHA-256 revisions; clients can suppress an unchanged snapshot or request only changed sections. After any successful tool marked `readOnlyHint=false`, the server emits `notifications/resources/updated` for subscribed resources.
 
 Protocol discovery is bounded and dynamic: `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list` return deterministic pages of at most 100 entries. `completion/complete` serves prompt arguments and the `godot://script/{path}` / `godot://scene/{path}` templates; template reads validate project-relative paths and load files only from `res://`.
 

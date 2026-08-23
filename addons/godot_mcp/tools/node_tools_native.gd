@@ -613,7 +613,8 @@ func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 						},
 						"required": ["type"]
 					}
-				}
+				},
+				"dry_run": {"type": "boolean", "default": false, "description": "Validate and preview the full structure transaction without mutating the scene."}
 			},
 			"required": ["operations"]
 		},
@@ -767,6 +768,13 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 	var label: String = str(params.get("label", "Batch Scene Node Edits")).strip_edges()
 	if label.is_empty():
 		label = "Batch Scene Node Edits"
+	var preview_operations: Array = _summarize_prepared_scene_node_operations(prepared_operations, scene_root)
+	if bool(params.get("dry_run", false)):
+		_free_prepared_scene_node_preview(prepared_operations)
+		return {
+			"status": "preview", "label": label,
+			"operation_count": preview_operations.size(), "operations": preview_operations
+		}
 
 	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
 	if not undo_redo:
@@ -841,6 +849,40 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 		"operation_count": result_operations.size(),
 		"operations": result_operations
 	}
+
+func _summarize_prepared_scene_node_operations(prepared_operations: Array, scene_root: Node) -> Array:
+	var result: Array = []
+	for prepared in prepared_operations:
+		match str(prepared.get("type", "")):
+			"create":
+				result.append({"type": "create", "node_path": _append_child_path(_make_friendly_path(prepared["parent"], scene_root), prepared["node_name"]), "node_type": prepared["node_type"]})
+			"delete":
+				result.append({"type": "delete", "node_path": prepared["node_path"], "node_type": prepared["node_type"]})
+			"rename":
+				result.append({
+					"type": "rename", "old_node_path": prepared["node_path"],
+					"node_path": _append_child_path(_make_friendly_path(prepared["node"].get_parent(), scene_root), prepared["new_name"]),
+					"old_name": prepared["old_name"], "new_name": prepared["new_name"], "node_type": prepared["node_type"]
+				})
+			"move":
+				var friendly_parent: String = _make_friendly_path(prepared["new_parent"], scene_root)
+				result.append({
+					"type": "move", "old_node_path": prepared["node_path"],
+					"node_path": _append_child_path(friendly_parent, prepared["node_name"]),
+					"new_parent_path": friendly_parent, "node_type": prepared["node_type"]
+				})
+	return result
+
+func _free_prepared_scene_node_preview(prepared_operations: Array) -> void:
+	for prepared in prepared_operations:
+		if str(prepared.get("type", "")) == "create":
+			var created: Node = prepared.get("node")
+			if is_instance_valid(created):
+				created.free()
+		elif str(prepared.get("type", "")) == "delete":
+			var snapshot: Node = prepared.get("node_snapshot")
+			if is_instance_valid(snapshot):
+				snapshot.free()
 
 func _register_audit_scene_node_persistence(server_core: RefCounted) -> void:
 	server_core.register_tool(

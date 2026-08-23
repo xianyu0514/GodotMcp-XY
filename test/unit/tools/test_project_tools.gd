@@ -34,6 +34,24 @@ func test_project_context_known_revision_uses_unchanged_fast_response():
 	assert_eq(second.get("revision"), first.get("revision"), "Revision remains stable across section order")
 	assert_eq(second.get("sections"), ["project", "editor"], "Sections use canonical order")
 
+func test_project_context_section_revisions_return_only_changed_sections():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var first: Dictionary = project_tools._tool_get_project_context({"sections": ["project", "editor"]})
+	assert_eq(first.get("section_revisions", {}).size(), 2)
+	var known: Dictionary = first.get("section_revisions", {}).duplicate(true)
+	known["editor"] = "stale"
+	var delta: Dictionary = project_tools._tool_get_project_context({
+		"sections": ["project", "editor"], "known_section_revisions": known
+	})
+	assert_eq(delta.get("changed_sections"), ["editor"])
+	assert_false(delta.get("context", {}).has("project"))
+	assert_true(delta.get("context", {}).has("editor"))
+
+func test_project_context_rejects_non_object_section_revisions():
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var result: Dictionary = project_tools._tool_get_project_context({"known_section_revisions": []})
+	assert_has(result, "error")
+
 func test_project_context_rejects_unknown_section():
 	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
 	var result: Dictionary = project_tools._tool_get_project_context({"sections": ["project", "expensive_scan"]})

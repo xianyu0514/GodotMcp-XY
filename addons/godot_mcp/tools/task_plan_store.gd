@@ -45,6 +45,7 @@ extends RefCounted
 const SCHEMA_VERSION: int = 1
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const VALID_STATUSES: Array = ["pending", "in_progress", "blocked", "done"]
+const DEFAULT_LEASE_SECONDS: int = 1800
 
 # A DoD criterion may carry an optional 'gate' so the VERIFY phase can decide
 # 'met' objectively from observed metrics instead of a self-asserted boolean.
@@ -405,6 +406,97 @@ func set_status(task_id: String, status: String, force: bool, journal: String) -
 	_touch()
 	return {"status": "ok", "task": task}
 
+func claim_task(task_id: String = "", worker: String = "", lease_seconds: int = DEFAULT_LEASE_SECONDS, force: bool = false) -> Dictionary:
+	var selected: Dictionary = {}
+	if not task_id.is_empty():
+		selected = get_task(task_id)
+		if selected.is_empty():
+			return {"error": "task '%s' not found" % task_id}
+	else:
+		for task in _tasks():
+			var candidate: Dictionary = task
+			if str(candidate.get("status", "pending")) != "pending":
+				continue
+			var dependencies_done: bool = true
+			for dep in candidate.get("depends_on", []):
+				var dependency: Dictionary = get_task(str(dep))
+				if dependency.is_empty() or str(dependency.get("status", "")) != "done":
+					dependencies_done = false
+					break
+			if dependencies_done:
+				selected = candidate
+				break
+		if selected.is_empty():
+			return {"error": "no ready task to claim", "ready": [], "progress": progress()}
+
+	var current_status: String = str(selected.get("status", "pending"))
+	if current_status == "done" or current_status == "blocked":
+		return {"error": "task '%s' is %s and cannot be claimed" % [selected.get("id", ""), current_status]}
+	if current_status == "pending":
+		var unmet_dependencies: Array = []
+		for dep in selected.get("depends_on", []):
+			var dependency: Dictionary = get_task(str(dep))
+			if dependency.is_empty() or str(dependency.get("status", "")) != "done":
+				unmet_dependencies.append(str(dep))
+		if not unmet_dependencies.is_empty():
+			return {"error": "task '%s' is blocked by unfinished dependencies" % selected.get("id", ""), "blocked_by": unmet_dependencies}
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var execution: Dictionary = selected.get("execution", {}) if selected.get("execution", {}) is Dictionary else {}
+	var lease_until: int = int(execution.get("lease_until_unix", 0))
+	var claimed_by: String = str(execution.get("claimed_by", ""))
+	if current_status == "in_progress" and lease_until > now_unix and not force:
+		if worker.is_empty() or worker != claimed_by:
+			return {"error": "task '%s' is already claimed by '%s' until %d" % [selected.get("id", ""), claimed_by, lease_until], "task": selected}
+
+	var normalized_lease: int = clampi(lease_seconds, 30, 86400)
+	execution["claimed_by"] = worker
+	execution["claimed_at"] = _now()
+	execution["lease_until_unix"] = now_unix + normalized_lease
+	execution["attempt"] = int(execution.get("attempt", 0)) + 1
+	execution.erase("last_failure")
+	selected["execution"] = execution
+	selected["status"] = "in_progress"
+	selected["updated_at"] = _now()
+	_append_journal(selected, "Claimed%s (attempt %d)" % [(" by " + worker) if not worker.is_empty() else "", execution["attempt"]])
+	_touch()
+	return {"status": "ok", "task": selected, "lease_until_unix": execution["lease_until_unix"]}
+
+func checkpoint_task(task_id: String, note: String, data: Dictionary = {}, extend_lease_seconds: int = 0) -> Dictionary:
+	var task: Dictionary = get_task(task_id)
+	if task.is_empty():
+		return {"error": "task '%s' not found" % task_id}
+	if str(task.get("status", "")) != "in_progress":
+		return {"error": "task '%s' must be in_progress before checkpointing" % task_id}
+	if note.strip_edges().is_empty() and data.is_empty():
+		return {"error": "checkpoint needs a note or data"}
+	var checkpoint: Dictionary = {"at": _now(), "note": note, "data": data.duplicate(true)}
+	var execution: Dictionary = task.get("execution", {}) if task.get("execution", {}) is Dictionary else {}
+	execution["checkpoint"] = checkpoint
+	if extend_lease_seconds > 0:
+		execution["lease_until_unix"] = int(Time.get_unix_time_from_system()) + clampi(extend_lease_seconds, 30, 86400)
+	task["execution"] = execution
+	task["updated_at"] = _now()
+	_append_journal(task, "Checkpoint: " + note)
+	_touch()
+	return {"status": "ok", "task": task, "checkpoint": checkpoint}
+
+func fail_task(task_id: String, error_message: String, retryable: bool, data: Dictionary = {}) -> Dictionary:
+	var task: Dictionary = get_task(task_id)
+	if task.is_empty():
+		return {"error": "task '%s' not found" % task_id}
+	if error_message.strip_edges().is_empty():
+		return {"error": "error is required for fail"}
+	var failure: Dictionary = {"at": _now(), "error": error_message, "retryable": retryable, "data": data.duplicate(true)}
+	var execution: Dictionary = task.get("execution", {}) if task.get("execution", {}) is Dictionary else {}
+	execution["last_failure"] = failure
+	execution["lease_until_unix"] = 0
+	task["execution"] = execution
+	task["status"] = "pending" if retryable else "blocked"
+	task["updated_at"] = _now()
+	_append_journal(task, "Failed%s: %s" % [" (retryable)" if retryable else "", error_message])
+	_touch()
+	return {"status": "ok", "task": task, "failure": failure}
+
 func set_dod(task_id: String, args: Dictionary) -> Dictionary:
 	var idx: int = _find_index(task_id)
 	if idx == -1:
@@ -608,6 +700,29 @@ func next_actionable() -> Dictionary:
 		"blocked": blocked,
 		"progress": progress()
 	}
+
+func resumable(worker: String = "") -> Dictionary:
+	var now_unix: int = int(Time.get_unix_time_from_system())
+	var active: Array = []
+	var expired: Array = []
+	for raw_task in _tasks():
+		var task: Dictionary = raw_task
+		if str(task.get("status", "")) != "in_progress":
+			continue
+		var execution: Dictionary = task.get("execution", {}) if task.get("execution", {}) is Dictionary else {}
+		if not worker.is_empty() and str(execution.get("claimed_by", "")) != worker:
+			continue
+		var summary: Dictionary = {
+			"id": task.get("id", ""), "title": task.get("title", ""),
+			"claimed_by": execution.get("claimed_by", ""),
+			"lease_until_unix": int(execution.get("lease_until_unix", 0)),
+			"checkpoint": execution.get("checkpoint", {})
+		}
+		if int(summary["lease_until_unix"]) > 0 and int(summary["lease_until_unix"]) <= now_unix:
+			expired.append(summary)
+		else:
+			active.append(summary)
+	return {"active": active, "expired": expired, "next": next_actionable(), "progress": progress()}
 
 # --- persistence ------------------------------------------------------------
 

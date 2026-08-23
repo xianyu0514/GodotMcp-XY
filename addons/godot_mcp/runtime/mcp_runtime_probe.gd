@@ -59,6 +59,13 @@ func _capture_mcp_message(message: String, data: Array) -> bool:
 				root = get_tree().root
 			EngineDebugger.send_message("mcp:scene_tree", [_serialize_node(root, 0, max_depth)])
 			return true
+		"get_ui_semantics":
+			var options: Dictionary = data[0] if not data.is_empty() and data[0] is Dictionary else {}
+			var ui_root: Node = get_tree().current_scene
+			if not ui_root:
+				ui_root = get_tree().root
+			EngineDebugger.send_message("mcp:ui_semantics", [_collect_ui_semantics(ui_root, options)])
+			return true
 		"inspect_node":
 			if data.is_empty():
 				EngineDebugger.send_message("mcp:error", [{"message": "inspect_node requires a NodePath string"}])
@@ -161,6 +168,73 @@ func _get_performance_snapshot() -> Dictionary:
 		"current_scene": str(get_tree().current_scene.get_path()) if get_tree().current_scene else "",
 		"node_count": _count_nodes(get_tree().root)
 	}
+
+func _collect_ui_semantics(root: Node, options: Dictionary = {}) -> Dictionary:
+	var controls: Array = []
+	var hit_stack: Array = []
+	var point_payload: Variant = options.get("point", null)
+	var has_point: bool = point_payload is Dictionary and point_payload.has("x") and point_payload.has("y")
+	var point := Vector2(float(point_payload.get("x", 0.0)), float(point_payload.get("y", 0.0))) if has_point else Vector2.ZERO
+	var filters: Dictionary = {
+		"include_hidden": bool(options.get("include_hidden", false)),
+		"only_interactive": bool(options.get("only_interactive", false)),
+		"name_contains": str(options.get("name_contains", "")).to_lower(),
+		"text_contains": str(options.get("text_contains", "")).to_lower(),
+		"class_name": str(options.get("class_name", "")),
+		"limit": clampi(int(options.get("limit", 300)), 1, 2000)
+	}
+	_collect_ui_controls_recursive(root, filters, controls, hit_stack, has_point, point)
+	return {
+		"root_path": str(root.get_path()), "control_count": controls.size(),
+		"controls": controls, "point": {"x": point.x, "y": point.y} if has_point else null,
+		"hit_stack": hit_stack
+	}
+
+func _collect_ui_controls_recursive(node: Node, filters: Dictionary, controls: Array, hit_stack: Array, has_point: bool, point: Vector2) -> void:
+	if controls.size() >= int(filters["limit"]):
+		return
+	if node is Control:
+		var control: Control = node
+		var visible: bool = control.is_visible_in_tree()
+		var semantic: Dictionary = _serialize_ui_control(control, visible)
+		var matches: bool = (visible or bool(filters["include_hidden"]))
+		matches = matches and (not bool(filters["only_interactive"]) or bool(semantic["interactive"]))
+		matches = matches and (str(filters["name_contains"]).is_empty() or str(control.name).to_lower().contains(str(filters["name_contains"])))
+		matches = matches and (str(filters["text_contains"]).is_empty() or str(semantic["text"]).to_lower().contains(str(filters["text_contains"])))
+		matches = matches and (str(filters["class_name"]).is_empty() or control.is_class(str(filters["class_name"])))
+		if matches:
+			controls.append(semantic)
+			if has_point and visible and Rect2(semantic["rect"]["x"], semantic["rect"]["y"], semantic["rect"]["width"], semantic["rect"]["height"]).has_point(point):
+				hit_stack.append(semantic)
+	for child in node.get_children():
+		_collect_ui_controls_recursive(child, filters, controls, hit_stack, has_point, point)
+
+func _serialize_ui_control(control: Control, visible: bool = true) -> Dictionary:
+	var rect: Rect2 = control.get_global_rect()
+	var text: String = ""
+	for property_name in ["text", "placeholder_text", "title"]:
+		if _has_object_property(control, property_name):
+			var value: Variant = control.get(property_name)
+			if value != null and not str(value).is_empty():
+				text = str(value)
+				break
+	var disabled: bool = bool(control.get("disabled")) if _has_object_property(control, "disabled") else false
+	var interactive: bool = control.mouse_filter != Control.MOUSE_FILTER_IGNORE or control is BaseButton
+	return {
+		"path": str(control.get_path()), "name": str(control.name), "class": control.get_class(),
+		"text": text, "tooltip": control.tooltip_text, "visible": visible,
+		"rect": {"x": rect.position.x, "y": rect.position.y, "width": rect.size.x, "height": rect.size.y},
+		"center": {"x": rect.get_center().x, "y": rect.get_center().y},
+		"interactive": interactive, "disabled": disabled,
+		"mouse_filter": int(control.mouse_filter), "focus_mode": int(control.focus_mode),
+		"z_index": control.z_index
+	}
+
+static func _has_object_property(object: Object, property_name: String) -> bool:
+	for property in object.get_property_list():
+		if str(property.get("name", "")) == property_name:
+			return true
+	return false
 
 func _get_memory_sample(sample_index: int) -> Dictionary:
 	var memory_static: float = float(Performance.get_monitor(Performance.MEMORY_STATIC))

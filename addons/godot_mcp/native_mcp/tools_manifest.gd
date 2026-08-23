@@ -10,7 +10,7 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 内容来源：与工具注册实现逐条一致（224 个工具：30 core + 190
+# 内容来源：与工具注册实现逐条一致（225 个工具：30 core + 191
 # supplementary + 4 meta）。
 #
 # 注意：
@@ -129,6 +129,7 @@ const TOOLS: Dictionary = {
 	"get_runtime_animation_tree_state": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_audio_bus": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_info": {"category": "supplementary", "group": "Debug-Advanced"},
+	"get_runtime_ui_semantics": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_material_state": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_memory_trend": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_performance_snapshot": {"category": "supplementary", "group": "Debug-Advanced"},

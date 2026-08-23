@@ -10,14 +10,14 @@
 
 | 维度 | 现状 | 评价 |
 | --- | --- | --- |
-| 工具面 | 224 工具（30 core + 190 supplementary + 4 meta），6 大类 + Meta（已加 revision 上下文、跨域原子修改、一键视觉 playtest、渐进发现与验证门禁） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
+| 工具面 | 225 工具（30 core + 191 supplementary + 4 meta），6 大类 + Meta（已加分段 revision、可恢复任务、场景事务、UI 语义和视觉 playtest） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
 | 架构 | 纯 GDScript 原生 EditorPlugin，零外部依赖 | 结构性优势：无"进程启动器+抓 stdout"的假成功问题 |
 | 传输 | HTTP/SSE(:9080) + stdio，手写 HTTP 服务器（独立线程 + call_deferred 回主线程） | 可用但未跟上 2025 标准 Streamable HTTP |
 | 协议面 | initialize/tools/resources/templates/prompts/completion + instructions 渐进披露 | 7 个工作流 prompt、补全、动态资源模板与确定性分页均已实现；按取舍不实现已弃用能力 |
 | 安全 | Bearer 认证、路径校验、脚本沙箱（能力黑名单）、速率限制、工具分级 | 分层合理；路径校验用黑名单而非规范化 |
 | 验证闭环 | play_and_verify / assert_performance_budget / assert_no_runtime_errors / assert_visual_baseline / smoke_test_export / manage_task_plan(DoD gates) | 业界领先的"工业化"闭环 |
 | 测试 | ~100 GUT 单测 + 40 集成测试 + CI（headless import + GUT） | 全量 0 失败（Godot 4.7.2 + GUT 9.7.1）；含 schema lint |
-| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（224/30/190 已核对） |
+| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（225/30/191 已核对） |
 
 ---
 

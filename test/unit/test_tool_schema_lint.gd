@@ -11,7 +11,7 @@ extends "res://addons/gut/test.gd"
 #
 # 基线（首次诊断快照，Godot 4.7.2 headless；数字随 schema 演进变化，
 # 本测试不锁定具体出现次数，只锁定“关键字集合 ⊆ 白名单”）：
-#   - 218+ 个工具全部注册成功（当前仓库 224 个）
+#   - 218+ 个工具全部注册成功（当前仓库 225 个）
 #   - 实际用到的关键字只有 7 个：
 #       type properties description required default items enum
 #   - 全部 input_schema 均为 {type:"object", properties:{...}}（含 17 个无参工具
@@ -113,7 +113,7 @@ const KNOWN_RISKY_KEYWORD_EXEMPTIONS: Dictionary = {
 ## 不强制 100% 覆盖。
 const MIN_DESCRIPTION_COVERAGE: float = 0.70
 
-## 工具数下限（历史基线 218；仓库演进中，当前为 224 = 30 核心 + 190 补充 +
+## 工具数下限（历史基线 218；仓库演进中，当前为 225 = 30 核心 + 191 补充 +
 ## 4 元）。不锁定具体总数，另行校验 server_core 与分类器注册数一致。
 const MIN_TOOL_COUNT: int = 218
 
@@ -122,7 +122,7 @@ const MIN_TOOL_COUNT: int = 218
 ## outputSchema 模型不可见，不计入）。工具 schema 每轮全额计费，三档预算：
 ##   - 单工具 ≤ TOOL_TOKEN_BUDGET（400 token ≈ 1600 字符）；
 ##   - 默认启用集（30 core + 4 meta）≤ DEFAULT_SET_TOKEN_BUDGET（15k token）；
-##   - 全量 224 工具 ≤ FULL_SET_TOKEN_BUDGET（60k token）。
+##   - 全量 225 工具 ≤ FULL_SET_TOKEN_BUDGET（60k token）。
 ## 预算值基于实测数据设定（见 test_tool_definitions_within_token_budget 的运行
 ## 输出）。若未来新增工具描述过长导致超限，须先登记进 KNOWN_OVER_BUDGET_TOOLS
 ## （注明原因），并将描述精简列为单独工作项；禁止直接放宽预算。

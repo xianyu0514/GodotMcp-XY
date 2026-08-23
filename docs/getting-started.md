@@ -1,5 +1,9 @@
 # Getting Started
 
+## Codex autonomous game-development skill
+
+Copy `skills/godot-mcp-game-development` into `$CODEX_HOME/skills/` (or `~/.codex/skills/`) to make the high-return Godot workflow automatically discoverable. The skill starts with revisioned project context, resumes durable task state, uses revision-guarded cross-domain edits, targets UI through runtime semantics, and closes work through objective verification gates.
+
 This guide takes a fresh Godot project from install to a working MCP connection.
 
 ## 1. Requirements

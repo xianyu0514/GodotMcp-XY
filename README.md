@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-224-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-225-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 
@@ -15,9 +15,10 @@ No Node.js bridge, no Python daemon and no separate server process are required.
 
 - **Native server:** the MCP server lives in the editor process and ships with the plugin.
 - **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
-- **224 tools with a small default surface:** 30 core tools are enabled immediately, 190 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
-- **Atomic cross-domain edits:** `apply_project_change_set` previews and revision-guards coordinated file, project-setting and node-property changes, then verifies or rolls back the whole set.
-- **Revisioned project orientation:** `get_project_context` and `godot://project/context` summarize project/editor state without scanning full scenes or scripts; unchanged revisions avoid repeating the payload.
+- **225 tools with a small default surface:** 30 core tools are enabled immediately, 191 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
+- **Atomic cross-domain edits:** `apply_project_change_set` previews and revision-guards coordinated file, project-setting, node-property and scene-structure changes, then verifies or rolls back the whole set.
+- **Revisioned project orientation:** `get_project_context` and `godot://project/context` summarize project/editor state without scanning full scenes or scripts; per-section revisions return only changed payloads.
+- **Recoverable autonomous loop:** `manage_task_plan` persists claim leases, checkpoints, failure evidence and resume state; runtime UI semantics provide stable paths and screen rectangles for visual playtests.
 - **One-call visual verdict:** `visual_playtest` launches when needed, drives runtime assertions, captures a screenshot, applies the golden-image gate and cleans up.
 - **Efficient protocol discovery:** list endpoints paginate deterministically; resource templates and `completion/complete` expose project scripts/scenes without pre-registering every file.
 - **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
@@ -68,10 +69,10 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Script](docs/tools/script-tools.md) | 18 | 6 | 12 | Read/write/validate GDScript and C#, shader validation, search, symbols and references |
 | [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | Create/open/save scenes, structure inspection, prefab-style instancing and TileMapLayer cells |
 | [Editor](docs/tools/editor-tools.md) | 27 | 3 | 24 | Run/stop, screenshots, selection, inspector state, export templates, script buffers and undo/redo |
-| [Debug & Runtime](docs/tools/debug-tools.md) | 74 | 3 | 71 | Logs, debugger control, profilers, runtime probe, deterministic play checks and one-call visual regression gates |
+| [Debug & Runtime](docs/tools/debug-tools.md) | 75 | 3 | 72 | Logs, debugger control, profilers, runtime probe, UI semantics, deterministic play checks and one-call visual regression gates |
 | [Project](docs/tools/project-tools.md) | 63 | 5 | 58 | Atomic change sets, compact context, settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | Always-on tool discovery and on-demand enablement |
-| **Total** | **224** | **30** | **190** | |
+| **Total** | **225** | **30** | **191** | |
 
 Only core and meta tools are visible to `tools/list` at startup. Use the MCP panel or the `enable_tools` meta tool to enable advanced tools by name, group or preset. See the [Tools Reference](docs/tools/README.md).
 

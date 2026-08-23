@@ -7,6 +7,8 @@ class FakeNodeTools:
 	extends RefCounted
 	var fail_apply: bool = false
 	var apply_calls: int = 0
+	var scene_apply_calls: int = 0
+	var resolved_node: Node = null
 
 	func _tool_batch_update_node_properties(params: Dictionary) -> Dictionary:
 		if bool(params.get("dry_run", false)):
@@ -15,6 +17,20 @@ class FakeNodeTools:
 		if fail_apply:
 			return {"error": "simulated node failure"}
 		return {"status": "success", "change_count": params.get("changes", []).size(), "changes": []}
+
+	func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
+		var operations: Array = params.get("operations", [])
+		var result_operations: Array = []
+		for operation in operations:
+			result_operations.append({"type": operation.get("type"), "node_path": operation.get("node_path", "/root/Main/Created"), "node_type": operation.get("node_type", "Node")})
+		if bool(params.get("dry_run", false)):
+			return {"status": "preview", "operations": result_operations}
+		scene_apply_calls += 1
+		resolved_node = Node.new()
+		return {"status": "success", "operations": result_operations}
+
+	func _resolve_node_path(_path: String) -> Node:
+		return resolved_node
 
 var tools: ProjectWorkflowTools
 
@@ -120,3 +136,32 @@ func test_late_failure_rolls_back_prior_file_write() -> void:
 	assert_has(result, "error")
 	assert_true(bool(result.get("rolled_back", false)))
 	assert_eq(FileAccess.get_file_as_string(TEMP_PATH), original)
+
+func test_scene_structure_change_is_included_in_revisioned_preview():
+	var fake_nodes := FakeNodeTools.new()
+	tools._node_tools = fake_nodes
+	var result: Dictionary = await tools._tool_apply_project_change_set({
+		"dry_run": true,
+		"changes": [{"type": "scene_nodes", "operations": [{"type": "create", "parent_path": "/root/Main", "node_type": "Node", "node_name": "Created"}]}]
+	})
+	assert_eq(result.get("status"), "preview")
+	assert_eq(result.get("plan", [])[0].get("type"), "scene_nodes")
+	assert_eq(fake_nodes.scene_apply_calls, 0)
+
+func test_scene_structure_change_applies_and_verifies():
+	var fake_nodes := FakeNodeTools.new()
+	tools._node_tools = fake_nodes
+	var result: Dictionary = await tools._tool_apply_project_change_set({
+		"changes": [{"type": "scene_nodes", "operations": [{"type": "create", "parent_path": "/root/Main", "node_type": "Node", "node_name": "Created"}]}]
+	})
+	assert_eq(result.get("status"), "success")
+	assert_true(bool(result.get("verified", false)))
+	assert_eq(fake_nodes.scene_apply_calls, 1)
+	if is_instance_valid(fake_nodes.resolved_node):
+		fake_nodes.resolved_node.free()
+
+func test_scene_structure_change_rejects_empty_operations():
+	var fake_nodes := FakeNodeTools.new()
+	tools._node_tools = fake_nodes
+	var result: Dictionary = await tools._tool_apply_project_change_set({"changes": [{"type": "scene_nodes", "operations": []}]})
+	assert_eq(result.get("stage"), "preflight")

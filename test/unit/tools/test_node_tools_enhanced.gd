@@ -575,3 +575,20 @@ func test_make_friendly_path_for_new_tools():
 	root.add_child(child)
 	var path: String = _node_tools._make_friendly_path(child, root)
 	assert_eq(path, "/root/SceneRoot/Child", "Should generate correct friendly path")
+
+func test_batch_scene_preview_summary_reports_result_paths():
+	var root: Node = Node.new()
+	root.name = "SceneRoot"
+	add_child_autofree(root)
+	var parent: Node = Node.new()
+	parent.name = "UI"
+	root.add_child(parent)
+	var created: Node = Node.new()
+	created.name = "Panel"
+	var operations: Array = _node_tools._summarize_prepared_scene_node_operations([{
+		"type": "create", "parent": parent, "node": created,
+		"node_name": "Panel", "node_type": "Node"
+	}], root)
+	assert_eq(operations.size(), 1)
+	assert_eq(operations[0].get("node_path"), "/root/SceneRoot/UI/Panel")
+	created.free()

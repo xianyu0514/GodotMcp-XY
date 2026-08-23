@@ -22,7 +22,7 @@ func after_each() -> void:
 
 func _catalog_handler(_args: Dictionary) -> Dictionary:
 	_catalog_calls += 1
-	return {"total_matched": 224, "calls": _catalog_calls}
+	return {"total_matched": 225, "calls": _catalog_calls}
 
 
 func _register_discovery_tools() -> void:

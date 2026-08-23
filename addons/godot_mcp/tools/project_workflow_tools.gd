@@ -40,14 +40,14 @@ func register_tools(server_core: RefCounted) -> void:
 func _register_apply_project_change_set(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"apply_project_change_set",
-		"Atomically apply a revision-guarded set of text/script file writes, ProjectSettings updates, and edited-scene node property updates. Preflights every change before mutation, supports dry-run previews, verifies read-back, and restores earlier changes if a later stage fails.",
+		"Atomically apply a revision-guarded set of text/script writes, ProjectSettings updates, edited-scene node properties, and scene structure edits. Preflights every change, verifies read-back, and rolls back on failure.",
 		{
 			"type": "object",
 			"properties": {
 				"changes": {
 					"type": "array",
 					"items": {"type": "object"},
-					"description": "Ordered changes. Types: file_write {path,content}; project_setting {setting,value,value_type?,require_existing?,persist?}; node_properties {changes:[{node_path,property_name,property_value}]}"
+					"description": "Ordered changes. Types: file_write, project_setting, node_properties, scene_nodes {operations:[create/delete/rename/move]}. Put scene_nodes after changes that address existing node paths."
 				},
 				"dry_run": {"type": "boolean", "default": false},
 				"expected_revision": {"type": "string", "description": "Revision returned by a dry-run with the same changes. A mismatch rejects the transaction before writing."},
@@ -138,7 +138,7 @@ func _tool_apply_project_change_set(params: Dictionary) -> Dictionary:
 			}
 		results.append(apply_result)
 		applied.append(entry)
-		if entry["type"] == "node_properties":
+		if entry["type"] in ["node_properties", "scene_nodes"]:
 			node_undo_count += 1
 
 	var persist_settings: bool = false
@@ -190,6 +190,8 @@ func _prepare_project_change_set(params: Dictionary) -> Dictionary:
 				entry = _prepare_change_set_setting(change)
 			"node_properties":
 				entry = _prepare_change_set_nodes(change, str(params.get("label", "Apply Project Change Set")))
+			"scene_nodes":
+				entry = _prepare_change_set_scene_nodes(change, str(params.get("label", "Apply Project Change Set")))
 			_:
 				return {"error": "Unsupported change type: " + change_type, "stage": "preflight", "failed_index": index}
 		if entry.has("error"):
@@ -288,6 +290,27 @@ func _prepare_change_set_nodes(change: Dictionary, label: String) -> Dictionary:
 		"revision": {"type": "node_properties", "preview": preview.get("changes", []), "requested": changes}
 	}
 
+func _prepare_change_set_scene_nodes(change: Dictionary, label: String) -> Dictionary:
+	var operations: Variant = change.get("operations", [])
+	if not (operations is Array) or operations.is_empty():
+		return {"error": "scene_nodes requires a non-empty operations array"}
+	var node_tools: RefCounted = _get_node_tools()
+	if node_tools == null:
+		return {"error": "Node tools are not available"}
+	var preview: Dictionary = node_tools._tool_batch_scene_node_edits({"operations": operations, "label": label, "dry_run": true})
+	if preview.has("error"):
+		return preview
+	var target_keys: Array[String] = []
+	for result in preview.get("operations", []):
+		var result_path: String = str(result.get("node_path", result.get("old_node_path", "")))
+		target_keys.append("scene_node:" + result_path)
+	return {
+		"type": "scene_nodes", "target_key": "scene_nodes:" + _change_set_hash(preview.get("operations", [])),
+		"target_keys": target_keys, "operations": operations.duplicate(true), "expected_operations": preview.get("operations", []).duplicate(true),
+		"summary": {"type": "scene_nodes", "operation_count": operations.size(), "operations": preview.get("operations", [])},
+		"revision": {"type": "scene_nodes", "preview": preview.get("operations", []), "requested": operations}
+	}
+
 func _apply_prepared_change(entry: Dictionary, label: String) -> Dictionary:
 	match str(entry["type"]):
 		"file_write":
@@ -302,6 +325,8 @@ func _apply_prepared_change(entry: Dictionary, label: String) -> Dictionary:
 			return {"type": "project_setting", "setting": entry["setting"], "changed": _change_set_value(entry["previous"]) != _change_set_value(entry["value"])}
 		"node_properties":
 			return _get_node_tools()._tool_batch_update_node_properties({"changes": entry["changes"], "label": label})
+		"scene_nodes":
+			return _get_node_tools()._tool_batch_scene_node_edits({"operations": entry["operations"], "label": label})
 	return {"error": "Unsupported prepared change"}
 
 func _verify_prepared_change_set(prepared: Array) -> Dictionary:
@@ -317,9 +342,29 @@ func _verify_prepared_change_set(prepared: Array) -> Dictionary:
 			"node_properties":
 				var preview: Dictionary = _get_node_tools()._tool_batch_update_node_properties({"changes": entry["changes"], "dry_run": true})
 				passed = not preview.has("error") and bool(preview.get("matches_requested", false))
+			"scene_nodes":
+				passed = _verify_scene_node_results(entry.get("expected_operations", []))
 		verified = verified and passed
 		checks.append({"type": entry["type"], "target": entry["target_key"], "passed": passed})
 	return {"verified": verified, "checks": checks}
+
+func _verify_scene_node_results(expected_operations: Array) -> bool:
+	var node_tools: RefCounted = _get_node_tools()
+	if node_tools == null:
+		return false
+	for result in expected_operations:
+		var operation_type: String = str(result.get("type", ""))
+		var target: Node = node_tools._resolve_node_path(str(result.get("node_path", "")))
+		if operation_type == "delete":
+			if target != null:
+				return false
+		else:
+			if target == null:
+				return false
+			var expected_type: String = str(result.get("node_type", ""))
+			if not expected_type.is_empty() and target.get_class() != expected_type:
+				return false
+	return true
 
 func _rollback_project_change_set(applied: Array, node_undo_count: int) -> bool:
 	var ok: bool = true
@@ -1088,11 +1133,11 @@ static func _parse_quaternion(value: Variant) -> Variant:
 # parameters, loads the plan, dispatches the action and saves the result.
 
 const _TASK_PLAN_DEFAULT_PATH: String = "res://.mcp/task_plan.json"
-const _TASK_PLAN_ACTIONS: Array = ["init", "add_task", "update_task", "set_status", "set_dod", "get", "next", "remove_task"]
+const _TASK_PLAN_ACTIONS: Array = ["init", "add_task", "update_task", "set_status", "set_dod", "get", "next", "claim", "checkpoint", "fail", "resume", "remove_task"]
 
 func _register_manage_task_plan(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_task_plan"
-	var description: String = "Persistent task graph + Definition-of-Done (DoD) in JSON (default res://.mcp/task_plan.json). Actions: init, add_task, update_task, set_status (done needs DoD unless force), set_dod, get, next, remove_task."
+	var description: String = "Persistent, recoverable task graph + Definition-of-Done (DoD) in JSON. Use claim/checkpoint/fail/resume to carry execution state across sessions; done still requires met DoD unless forced."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1115,7 +1160,14 @@ func _register_manage_task_plan(server_core: RefCounted) -> void:
 			"met": {"type": "boolean", "description": "set_dod met."},
 			"evidence": {"type": "string", "description": "set_dod evidence."},
 			"gate": {"type": "object", "description": "set_dod gate."},
-			"observed": {"type": "object", "description": "Metrics -> met."}
+			"observed": {"type": "object", "description": "Metrics -> met."},
+			"worker": {"type": "string", "description": "claim/resume worker identity."},
+			"lease_seconds": {"type": "integer", "description": "claim lease duration (30..86400).", "default": TaskPlanStore.DEFAULT_LEASE_SECONDS},
+			"extend_lease_seconds": {"type": "integer", "description": "checkpoint lease extension."},
+			"note": {"type": "string", "description": "checkpoint note."},
+			"data": {"type": "object", "description": "Structured checkpoint/failure evidence."},
+			"error_message": {"type": "string", "description": "fail error message."},
+			"retryable": {"type": "boolean", "description": "fail returns task to pending when true.", "default": true}
 		},
 		"required": ["action"]
 	}
@@ -1132,7 +1184,11 @@ func _register_manage_task_plan(server_core: RefCounted) -> void:
 			"ready": {"type": "array"},
 			"blocked": {"type": "array"},
 			"progress": {"type": "object"},
-			"removed": {"type": "string"}
+			"removed": {"type": "string"},
+			"checkpoint": {"type": "object"},
+			"failure": {"type": "object"},
+			"active": {"type": "array"},
+			"expired": {"type": "array"}
 		}
 	}
 
@@ -1217,6 +1273,33 @@ func _tool_manage_task_plan(params: Dictionary) -> Dictionary:
 		"next":
 			mutated = false
 			result = plan_store.next_actionable()
+			result["status"] = "ok"
+		"claim":
+			result = plan_store.claim_task(
+				str(params.get("id", "")).strip_edges(),
+				str(params.get("worker", "")).strip_edges(),
+				int(params.get("lease_seconds", TaskPlanStore.DEFAULT_LEASE_SECONDS)),
+				bool(params.get("force", false))
+			)
+		"checkpoint":
+			var checkpoint_id: String = str(params.get("id", "")).strip_edges()
+			if checkpoint_id.is_empty():
+				return {"error": "id is required for checkpoint"}
+			var checkpoint_data: Variant = params.get("data", {})
+			if not (checkpoint_data is Dictionary):
+				return {"error": "data must be an object"}
+			result = plan_store.checkpoint_task(checkpoint_id, str(params.get("note", "")), checkpoint_data, int(params.get("extend_lease_seconds", 0)))
+		"fail":
+			var failed_id: String = str(params.get("id", "")).strip_edges()
+			if failed_id.is_empty():
+				return {"error": "id is required for fail"}
+			var failure_data: Variant = params.get("data", {})
+			if not (failure_data is Dictionary):
+				return {"error": "data must be an object"}
+			result = plan_store.fail_task(failed_id, str(params.get("error_message", "")), bool(params.get("retryable", true)), failure_data)
+		"resume":
+			mutated = false
+			result = plan_store.resumable(str(params.get("worker", "")).strip_edges())
 			result["status"] = "ok"
 		"remove_task":
 			var rid: String = str(params.get("id", "")).strip_edges()

@@ -44,6 +44,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_runtime_performance_snapshot(server_core)
 	_register_get_runtime_memory_trend(server_core)
 	_register_get_runtime_scene_tree(server_core)
+	_register_get_runtime_ui_semantics(server_core)
 	_register_inspect_runtime_node(server_core)
 	_register_create_runtime_node(server_core)
 	_register_delete_runtime_node(server_core)
@@ -127,6 +128,28 @@ func _register_get_runtime_info(server_core: RefCounted) -> void:
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
 		"supplementary", "Debug-Advanced"
 	)
+
+func _register_get_runtime_ui_semantics(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_runtime_ui_semantics",
+		"Return visible runtime Controls as a compact semantic tree with paths, text, screen rectangles and interaction state. Optional point hit-testing provides reliable targets for input simulation and visual playtests.",
+		{"type": "object", "properties": {
+			"point": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}}, "required": ["x", "y"]},
+			"include_hidden": {"type": "boolean", "default": false}, "only_interactive": {"type": "boolean", "default": false},
+			"name_contains": {"type": "string"}, "text_contains": {"type": "string"}, "class_name": {"type": "string"},
+			"limit": {"type": "integer", "default": 300}, "session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 1500}
+		}},
+		Callable(self, "_tool_get_runtime_ui_semantics"),
+		{"type": "object", "properties": {"control_count": {"type": "integer"}, "controls": {"type": "array"}, "hit_stack": {"type": "array"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_get_runtime_ui_semantics(params: Dictionary) -> Dictionary:
+	if params.has("point"):
+		if not (params["point"] is Dictionary) or not params["point"].has("x") or not params["point"].has("y"):
+			return {"error": "point must be an object with x and y"}
+	return await DebugToolsNative._request_runtime_probe_poll("get_ui_semantics", [params], ["mcp:ui_semantics"], params)
 
 func _tool_get_runtime_info(params: Dictionary) -> Dictionary:
 	var result: Dictionary = await DebugToolsNative._request_runtime_probe_poll("get_runtime_info", [], ["mcp:runtime_info"], params)

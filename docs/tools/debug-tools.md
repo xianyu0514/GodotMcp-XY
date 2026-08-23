@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**74 tools** — 3 core, 71 advanced.
+**75 tools** — 3 core, 72 advanced.
 
 Debug edit-time logs and debugger sessions, then inspect and control a running game through the runtime probe. This is the largest category and includes deterministic play verification, performance budgets and runtime error gates.
 
@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (71 advanced)
+### Debug-Advanced (72 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -41,6 +41,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `request_debug_break` | advanced | Request the debugger to break at the current execution point. |
 | `send_debug_command` | advanced | Send a command to the debugger. |
 | `get_runtime_info` | advanced | Get runtime information about the running game. |
+| `get_runtime_ui_semantics` | advanced | Return runtime Control paths, semantic text, screen rectangles and interaction state, with filters and optional point hit-testing. |
 | `await_scene_ready` | advanced | Poll the runtime until the specified scene is loaded and ready. |
 | `get_runtime_scene_tree` | advanced | Get the scene tree from the running game. |
 | `inspect_runtime_node` | advanced | Inspect a node in the running game. |
