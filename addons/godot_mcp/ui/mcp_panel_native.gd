@@ -1104,6 +1104,7 @@ func _build_preset_row(content: VBoxContainer) -> void:
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
+			_preset_option.set_item_tooltip(_preset_option.item_count - 1, _tr("ui.preset_desc_" + preset_id))
 	_preset_option.item_selected.connect(_on_preset_selected)
 	selection_row.add_child(_preset_option)
 
@@ -2171,6 +2172,7 @@ func _refresh_translations() -> void:
 		for i in range(preset_ids.size()):
 			if i < _preset_option.item_count:
 				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
+				_preset_option.set_item_tooltip(i, _tr("ui.preset_desc_" + preset_ids[i]))
 		_on_preset_selected(_preset_option.selected)
 	for entry in _section_titles:
 		var label: Label = entry["label"]

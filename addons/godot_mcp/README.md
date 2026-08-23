@@ -11,7 +11,7 @@ This directory is the distributable Godot addon. Copy `addons/godot_mcp` into an
 - `ui/` — the MCP dock panel, tool manager and detail views.
 - `translations/` — panel text and tool descriptions.
 
-The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and release views. These views filter and toggle only their curated tools while preserving the existing core/extended tiers, groups and presets.
+The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and release views, plus 12 practical presets with purpose and tool-count previews. These views filter and toggle only their curated tools while preserving the existing core/extended tiers and groups.
 
 ## Quick start
 

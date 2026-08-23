@@ -68,7 +68,7 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | 常驻工具发现和按需启用 |
 | **总计** | **221** | **28** | **189** | |
 
-启动时只有核心工具和元工具会出现在 `tools/list` 中。需要更多能力时，可在 MCP 面板中开启，也可以调用 `enable_tools` 按工具、分组或预设启用。面板还提供 2D、3D、界面、资源与动画、调试与测试、发布与维护等任务视图，便于让无关工具保持关闭。详见 [Tools Reference](docs/tools/README.md)。
+启动时只有核心工具和元工具会出现在 `tools/list` 中。需要更多能力时，可在 MCP 面板中开启，也可以调用 `enable_tools` 按工具、分组或 12 个实用预设启用。面板会在套用前显示预设用途和工具数量，并提供 2D、3D、界面、资源与动画、调试与测试、发布与维护等任务视图，便于让无关工具保持关闭。详见 [Tools Reference](docs/tools/README.md)。
 
 ## 示例提示词
 

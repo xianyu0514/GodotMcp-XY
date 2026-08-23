@@ -269,7 +269,7 @@ func _register_enable_tools(server_core: RefCounted) -> void:
 			"properties": {
 				"tools": {"type": "array", "items": {"type": "string"}, "description": "Individual tool names to enable/disable."},
 				"groups": {"type": "array", "items": {"type": "string"}, "description": "Classifier groups to enable/disable (e.g. 'Debug-Advanced', 'Scene-Advanced')."},
-				"preset": {"type": "string", "description": "Apply a built-in preset wholesale (minimal_core, level_design, debugging, automation_qa, art_resources, all). When set, 'tools'/'groups'/'enabled'/'exclusive' are ignored."},
+				"preset": {"type": "string", "description": "Apply a focused built-in preset wholesale: game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core, or all. Prefer a focused preset because 'all' has the highest context cost. When set, 'tools'/'groups'/'enabled'/'exclusive' are ignored."},
 				"enabled": {"type": "boolean", "default": true, "description": "Whether to enable (true) or disable (false) the given tools/groups."},
 				"exclusive": {"type": "boolean", "default": false, "description": "When enabling, first reset to the core-only baseline (disable every supplementary tool) so only the requested set plus the always-on core/meta tools remain."}
 			}

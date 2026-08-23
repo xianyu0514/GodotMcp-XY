@@ -21,6 +21,7 @@ func test_preset_controls_live_in_a_responsive_card():
 	assert_true(panel._preset_option.size_flags_horizontal == Control.SIZE_EXPAND_FILL, "Dropdown expands in narrow docks")
 	assert_not_null(panel._preset_description_label, "Selected preset has an explanation")
 	assert_not_null(panel._preset_count_label, "Selected preset shows its tool count")
+	assert_false(panel._preset_option.get_item_tooltip(1).is_empty(), "Dropdown items explain the preset on hover")
 
 func test_selecting_preset_refreshes_explanation_and_count():
 	var panel: Node = _make_panel()
