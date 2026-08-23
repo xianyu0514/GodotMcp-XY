@@ -81,6 +81,8 @@ var _group_widgets: Dictionary = {}
 var _tools_search_edit: LineEdit = null
 var _core_group_names: Array = []
 var _supp_group_names: Array = []
+var _tool_classifier = null
+var _domain_names: Array[String] = []
 var _category_nav_container: VBoxContainer = null
 var _nav_group: ButtonGroup = null
 var _nav_items: Dictionary = {}
@@ -1532,6 +1534,8 @@ func _refresh_tools_list() -> void:
 	var classifier = null
 	if _server_core and _server_core.has_method("get_classifier"):
 		classifier = _server_core.get_classifier()
+	_tool_classifier = classifier
+	_domain_names = classifier.get_all_domains() if classifier and classifier.has_method("get_all_domains") else []
 
 	var tools_by_group: Dictionary = {}
 	for tool_info in tools:
@@ -1588,6 +1592,11 @@ func _build_category_nav() -> void:
 	_add_nav_item("__supplementary__", _tr("ui.extended_tools"), "Tools")
 	_add_nav_item("__all__", _tr("ui.all_tools"), "GuiTreeArrowDown")
 
+	if not _domain_names.is_empty():
+		_add_nav_section(_tr("ui.workflow_categories"))
+		for domain_name in _domain_names:
+			_add_nav_item("__domain__" + domain_name, _tr("domain." + domain_name), _domain_icon_name(domain_name))
+
 	if _core_group_names.size() > 0:
 		_add_nav_section(_tr("ui.core_tools"))
 		for group_name in _core_group_names:
@@ -1631,6 +1640,17 @@ func _group_icon_name(group_name: String) -> String:
 			return by_prefix[prefix]
 	return ""
 
+func _domain_icon_name(domain_name: String) -> String:
+	var icons: Dictionary = {
+		"2d": "Node2D",
+		"3d": "Node3D",
+		"ui": "Control",
+		"assets_animation": "Animation",
+		"debug_test": "Debug",
+		"shipping": "Export"
+	}
+	return icons.get(domain_name, "")
+
 func _group_icon_texture(group_name: String) -> Texture2D:
 	var icon_name: String = _group_icon_name(group_name)
 	if icon_name != "" and has_theme_icon(icon_name, "EditorIcons"):
@@ -1656,7 +1676,20 @@ func _groups_for_selection() -> Array:
 		"__all__":
 			return _core_group_names + _supp_group_names
 		_:
+			if _selected_category.begins_with("__domain__"):
+				return []
 			return [_selected_category]
+
+func _tools_for_selection() -> Array[String]:
+	if _selected_category.begins_with("__domain__") and _tool_classifier:
+		return _tool_classifier.get_domain_tools(_selected_category.trim_prefix("__domain__"))
+	var result: Array[String] = []
+	for group_name in _groups_for_selection():
+		var widget: MCPToolGroupItem = _group_widgets.get(group_name)
+		if widget:
+			for item in widget.get_tool_items():
+				result.append(item.get_tool_name())
+	return result
 
 func _select_category(key: String) -> void:
 	_selected_category = key
@@ -1703,6 +1736,9 @@ func _apply_view() -> void:
 	_ensure_tool_selection()
 
 func _apply_category_view() -> void:
+	if _selected_category.begins_with("__domain__"):
+		_apply_domain_view(_selected_category.trim_prefix("__domain__"))
+		return
 	var scope: Array = _groups_for_selection()
 	for group_name in _group_widgets:
 		var widget: MCPToolGroupItem = _group_widgets[group_name]
@@ -1724,6 +1760,15 @@ func _apply_category_view() -> void:
 		_:
 			_detail_title.text = _group_display_name(_selected_category)
 			_detail_desc.text = _group_description(_selected_category)
+
+func _apply_domain_view(domain_name: String) -> void:
+	var allowed: Array[String] = _tools_for_selection()
+	for group_name in _group_widgets:
+		var widget: MCPToolGroupItem = _group_widgets[group_name]
+		widget.visible = widget.apply_tool_names(allowed) > 0
+	_set_bulk_buttons_enabled(true)
+	_detail_title.text = _tr("domain." + domain_name)
+	_detail_desc.text = _tr("domaindesc." + domain_name)
 
 func _apply_search_view(query: String) -> void:
 	var total_matches: int = 0
@@ -1751,10 +1796,11 @@ func _on_disable_all_pressed() -> void:
 	_set_scope_enabled(false)
 
 func _set_scope_enabled(value: bool) -> void:
-	for group_name in _groups_for_selection():
-		var widget: MCPToolGroupItem = _group_widgets.get(group_name)
-		if widget:
-			widget.set_group_enabled(value)
+	var selected_tools: Array[String] = _tools_for_selection()
+	for widget in _group_widgets.values():
+		for item in widget.get_tool_items():
+			if item.get_tool_name() in selected_tools:
+				item.set_enabled(value)
 	_update_nav_counts()
 	_update_tools_count()
 	_update_detail_count()
@@ -1798,6 +1844,19 @@ func _update_nav_counts() -> void:
 		_nav_items["__supplementary__"].set_count(supp_enabled, supp_total)
 	if _nav_items.has("__all__"):
 		_nav_items["__all__"].set_count(core_enabled + supp_enabled, core_total + supp_total)
+	var enabled_by_name: Dictionary = {}
+	if _server_core and _server_core.has_method("get_registered_tools"):
+		for tool_info in _server_core.get_registered_tools():
+			enabled_by_name[tool_info.get("name", "")] = tool_info.get("enabled", true)
+	for domain_name in _domain_names:
+		var domain_tools: Array[String] = _tool_classifier.get_domain_tools(domain_name) if _tool_classifier else []
+		var domain_enabled: int = 0
+		for tool_name in domain_tools:
+			if enabled_by_name.get(tool_name, false):
+				domain_enabled += 1
+		var key: String = "__domain__" + domain_name
+		if _nav_items.has(key):
+			_nav_items[key].set_count(domain_enabled, domain_tools.size())
 	if _scope_chips.has("__recommended__"):
 		_scope_chips["__recommended__"].set_count(core_enabled, core_total)
 	if _scope_chips.has("__supplementary__"):
@@ -1811,13 +1870,15 @@ func _update_detail_count() -> void:
 	if _tools_search_edit and not _tools_search_edit.text.strip_edges().is_empty():
 		_detail_count.text = ""
 		return
-	var counts: Dictionary = _compute_group_counts()
 	var enabled: int = 0
 	var total: int = 0
-	for group_name in _groups_for_selection():
-		var c: Dictionary = counts.get(group_name, {"enabled": 0, "total": 0})
-		enabled += c["enabled"]
-		total += c["total"]
+	var selected_tools: Array[String] = _tools_for_selection()
+	for widget in _group_widgets.values():
+		for item in widget.get_tool_items():
+			if item.get_tool_name() in selected_tools:
+				total += 1
+				if item.is_enabled():
+					enabled += 1
 	_detail_count.text = _trf("ui.enabled_format", [enabled, total])
 
 func _on_tool_toggled(tool_name: String, enabled: bool) -> void:

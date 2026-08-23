@@ -382,6 +382,33 @@ func test_classifier_no_duplicate_tools():
 			unique.append(t)
 	assert_eq(tools.size(), unique.size(), "Tools should not contain duplicates")
 
+func test_human_friendly_domains_are_available():
+	var domains: Array[String] = _classifier.get_all_domains()
+	for expected in ["2d", "3d", "ui", "assets_animation", "debug_test", "shipping"]:
+		assert_true(expected in domains, "Domain should be discoverable: " + expected)
+
+func test_2d_domain_excludes_3d_only_tools():
+	var tools: Array[String] = _classifier.get_domain_tools("2d")
+	assert_true("create_tileset" in tools, "2D includes TileSet authoring")
+	assert_true("slice_sprite_sheet" in tools, "2D includes sprite sheet slicing")
+	assert_false("generate_3d_asset" in tools, "2D excludes 3D generation")
+	assert_false("inspect_gltf_asset" in tools, "2D excludes glTF inspection")
+
+func test_3d_domain_excludes_2d_only_tools():
+	var tools: Array[String] = _classifier.get_domain_tools("3d")
+	assert_true("generate_3d_asset" in tools, "3D includes 3D generation")
+	assert_true("inspect_gltf_asset" in tools, "3D includes glTF inspection")
+	assert_false("create_tileset" in tools, "3D excludes TileSet authoring")
+
+func test_domains_keep_shared_core_workflows():
+	for domain in ["2d", "3d", "ui"]:
+		var tools: Array[String] = _classifier.get_domain_tools(domain)
+		assert_true("create_scene" in tools, domain + " includes shared scene creation")
+		assert_true("modify_script" in tools, domain + " includes shared scripting")
+
+func test_unknown_domain_is_empty():
+	assert_eq(_classifier.get_domain_tools("unknown"), [], "Unknown domains do not broaden scope")
+
 # ----------------------------------------------------------------------------
 # 单一数据表一致性测试（MCPToolsManifest）
 # ----------------------------------------------------------------------------

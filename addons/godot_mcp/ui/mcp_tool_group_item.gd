@@ -217,6 +217,17 @@ func apply_filter(query: String) -> int:
 		_set_body_visible(visible_count > 0)
 	return visible_count
 
+## Show only tools in a curated cross-group scope. Returns visible row count.
+func apply_tool_names(tool_names: Array) -> int:
+	var visible_count: int = 0
+	for tool_item in get_tool_items():
+		var is_visible: bool = tool_item.get_tool_name() in tool_names
+		tool_item.visible = is_visible
+		if is_visible:
+			visible_count += 1
+	_set_body_visible(visible_count > 0)
+	return visible_count
+
 func _on_group_toggled(button_pressed: bool) -> void:
 	set_group_enabled(button_pressed)
 	group_toggled.emit(_group_name, button_pressed)

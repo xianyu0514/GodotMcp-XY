@@ -37,6 +37,12 @@ func test_group_name_match_reveals_all_tools():
 	var group: MCPToolGroupItem = _make_group()
 	assert_eq(group.apply_filter("write"), 2, "Group name match reveals all tools")
 
+func test_group_filters_by_curated_tool_names():
+	var group: MCPToolGroupItem = _make_group()
+	assert_eq(group.apply_tool_names(["create_node"]), 1, "Curated scope shows only included tools")
+	assert_true(group.get_tool_items()[0].visible, "Included tool remains visible")
+	assert_false(group.get_tool_items()[1].visible, "Excluded tool is hidden")
+
 func test_group_uses_card_container():
 	var group: MCPToolGroupItem = _make_group()
 	assert_eq(group.get_child_count(), 1, "Group wraps its content in a single card")

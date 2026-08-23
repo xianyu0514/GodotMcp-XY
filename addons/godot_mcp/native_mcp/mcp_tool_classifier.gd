@@ -2,6 +2,7 @@ class_name MCPToolClassifier
 extends RefCounted
 
 const CORE_MAX_COUNT: int = 30
+const ToolDomainsScript = preload("res://addons/godot_mcp/native_mcp/mcp_tool_domains.gd")
 
 var _tool_classifications: Dictionary = {}
 
@@ -87,3 +88,9 @@ func get_all_categories() -> Array[String]:
 		if not cat in categories:
 			categories.append(cat)
 	return categories
+
+func get_all_domains() -> Array[String]:
+	return ToolDomainsScript.get_all_domains()
+
+func get_domain_tools(domain_name: String) -> Array[String]:
+	return ToolDomainsScript.get_tools(domain_name, _tool_classifications)
