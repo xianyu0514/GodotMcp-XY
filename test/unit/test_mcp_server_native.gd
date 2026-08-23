@@ -132,9 +132,10 @@ func test_autoload_registered_in_enter_tree():
 	assert_true(register_pos < autoload_pos, "_ensure_runtime_probe_autoload should be called AFTER _register_all_tools")
 	assert_true(autoload_pos < panel_pos, "_ensure_runtime_probe_autoload should be called BEFORE _create_main_screen_panel")
 
-func test_autoload_removed_in_exit_tree():
+func test_autoload_removal_only_for_plugin_added_autoload():
 	var source_code: String = _plugin_script.source_code
-	assert_true(source_code.contains("_remove_runtime_probe_autoload"), "_exit_tree should call _remove_runtime_probe_autoload")
+	assert_true(source_code.contains("_probe_autoload_added_this_session"), "plugin should track whether it added the runtime probe autoload")
+	assert_true(source_code.contains("if _probe_autoload_added_this_session:"), "_exit_tree should guard _remove_runtime_probe_autoload so a pre-existing project.godot autoload is preserved")
 
 func test_plugin_has_apply_auth_config():
 	var methods: Array = _plugin_script.get_script_method_list()

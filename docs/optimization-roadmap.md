@@ -35,7 +35,7 @@
 | P2 | prompts 空壳：capabilities 声明 `prompts.listChanged` 但 `register_prompt` 零调用，`prompts/list` 返回空 | grep 全仓无 `register_prompt(` 调用点；`test_mcp_prompts_resources.gd` 存在但无真实 prompt | 注册 6~8 个高价值工作流 prompt（见 §3） |
 | P3 | 无 `completion/complete`（capabilities.completion 缺失） | 规范提供；对 prompts 参数/资源 URI 补全有用（支持面窄，P1 优先级） | 为 prompts 参数实现 completion |
 | P4 | 无 `notifications/progress`、无 `notifications/cancelled` | 长任务（export/烘焙/外部生成）无进度反馈，无法取消 | 长工具加 progress 上报；处理 cancelled；分钟级任务演进为 Tasks 扩展（`io.modelcontextprotocol/tasks`，适配 generate_3d_asset/play_and_verify/smoke_test_export） |
-| P5 | tools/list、resources/list、prompts/list 无分页（`nextCursor`） | 215 工具全量返回；规范支持分页 | 加 cursor 分页（>100 项时启用），配合 P0 的 ttlMs |
+| P5 | tools/list、resources/list、prompts/list 无分页（`nextCursor`） | 221 工具全量返回；规范支持分页 | 加 cursor 分页（>100 项时启用），配合 P0 的 ttlMs |
 | P6 | 无 `resources/templates/list` | 适合 `godot://scene/{path}` 模板 | 注册 URI 模板 |
 | P7 | `serverInfo.version` 为 `"2.0.0"`、HTTP GET / 返回 `"1.0.0"` + `"MCP 2025-03-26"`，与插件 1.0.7-pre1 不一致 | `mcp_server_core.gd` L460 / `mcp_http_server.gd` L517 | 统一从 plugin.cfg 读版本 |
 | P8 | stdio 传输 `stop()` 潜在死锁：线程阻塞在 `OS.read_string_from_stdin()` 时 `wait_to_finish()` 挂起 | `mcp_stdio_server.gd` L64-66 + L95 | 非阻塞读或超时退出机制；单测覆盖 |
@@ -101,7 +101,7 @@
 
 ### 4.1 Schema 严格化 + 客户端兼容矩阵
 
-第一手确认：215 工具 schema 中 `default` 关键字出现 **250+ 次**（`minimum`/`pattern` 等亦有）。Coding-Solo #55 实证 Copilot 会因不支持的关键字直接弃用工具。
+第一手确认：221 工具 schema 中 `default` 关键字出现 **250+ 次**（`minimum`/`pattern` 等亦有）。Coding-Solo #55 实证 Copilot 会因不支持的关键字直接弃用工具。
 
 方案：
 1. 新增 GUT 回归：遍历全部工具 schema，断言只含 MCP JSON Schema 允许的关键字（或显式维护"允许关键字"白名单）；
@@ -110,7 +110,7 @@
 
 ### 4.2 核心工具再收敛 + 目录语义化（对齐官方渐进发现三层模式）
 
-- 默认 tools/list 目标 ≤ 20（当前 28 core + 2 meta）；
+- 默认 tools/list 目标 ≤ 20（当前 28 core + 4 meta）；
 - **补齐三层发现**：`list_tool_catalog`（已有，名称+一行描述）→ `search_tools`（新增，关键词匹配+分组过滤）→ `get_tool_details`（新增，单工具完整 schema）→ `enable_tools`（已有）+ list_changed；
 - `tools/list` **确定性排序**（利于 prompt cache）；描述按"何时用/何时别用/前置条件/示例/返回体积"模板重写（回应 #103、#128 与 Anthropic 工具写作规范）；
 - 命名审计按 **SEP-986**（ASCII 字母数字 `_-.`、1-128 字符、动词开头、分组前缀一致、名字里不放参数）；inputSchema 避免 oneOf/anyOf，能用 enum 用 enum，`additionalProperties: false`；

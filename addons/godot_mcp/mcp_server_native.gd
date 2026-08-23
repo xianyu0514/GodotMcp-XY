@@ -99,6 +99,9 @@ var _mcp_server_mode: bool = false
 var _tool_instances: Dictionary = {}
 var _debugger_bridge: MCPDebuggerBridge = null
 var _prompt_workflows: RefCounted = null  # prompt_workflows.gd 实例（MCP prompts 工作流模板）
+# 本次插件会话是否由 _ensure_runtime_probe_autoload() 新增了 runtime probe autoload。
+# 若 project.godot 本来就声明了该 autoload（当前仓库正是如此），退出时不得删除它。
+var _probe_autoload_added_this_session: bool = false
 
 const TOOL_SCRIPT_PATHS: Dictionary = {
 	"NodeToolsNative": "res://addons/godot_mcp/tools/node_tools_native.gd",
@@ -202,7 +205,10 @@ func _enter_tree() -> void:
 	# 注册所有工具
 	_register_all_tools()
 	
-	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication
+	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
+	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot
+	# 静态声明的 autoload 必须保留，避免无头导入/编辑器退出时破坏项目配置。
+	_probe_autoload_added_this_session = not ProjectSettings.has_setting("autoload/MCPRuntimeProbe")
 	_ensure_runtime_probe_autoload()
 	
 	# 注册所有资源
@@ -244,8 +250,10 @@ func _exit_tree() -> void:
 		_main_panel.queue_free()
 		_main_panel = null
 
-	# Remove MCPRuntimeProbe autoload on plugin exit
-	_remove_runtime_probe_autoload()
+	# 仅在本次插件会话真正新增了 autoload 时才移除；项目静态声明的
+	# MCPRuntimeProbe autoload 属于 project.godot，退出时不得删除。
+	if _probe_autoload_added_this_session:
+		_remove_runtime_probe_autoload()
 
 	if _debugger_bridge:
 		remove_debugger_plugin(_debugger_bridge)

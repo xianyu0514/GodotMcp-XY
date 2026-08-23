@@ -109,6 +109,8 @@ var _asset_endpoint_edit: LineEdit = null
 var _preset_manager = null
 var _preset_label: Label = null
 var _preset_option: OptionButton = null
+var _preset_description_label: Label = null
+var _preset_count_label: Label = null
 var _apply_preset_button: Button = null
 var _export_preset_button: Button = null
 var _import_preset_button: Button = null
@@ -1079,41 +1081,79 @@ func _panel_card_style() -> StyleBoxFlat:
 	return style
 
 func _build_preset_row(content: VBoxContainer) -> void:
-	var row: HBoxContainer = HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	content.add_child(row)
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _panel_card_style())
+	content.add_child(card)
+
+	var body: VBoxContainer = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 7)
+	card.add_child(body)
 
 	_preset_label = Label.new()
 	_preset_label.text = _tr("ui.preset_label")
+	_preset_label.add_theme_font_size_override("font_size", 14)
 	_preset_label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
-	row.add_child(_preset_label)
+	body.add_child(_preset_label)
+
+	var selection_row: HBoxContainer = HBoxContainer.new()
+	selection_row.add_theme_constant_override("separation", 8)
+	body.add_child(selection_row)
 
 	_preset_option = OptionButton.new()
+	_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
-	row.add_child(_preset_option)
+	_preset_option.item_selected.connect(_on_preset_selected)
+	selection_row.add_child(_preset_option)
 
 	_apply_preset_button = Button.new()
 	_apply_preset_button.text = _tr("ui.preset_apply")
 	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
-	row.add_child(_apply_preset_button)
+	selection_row.add_child(_apply_preset_button)
 
-	var spacer: Control = Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
+	_preset_description_label = Label.new()
+	_preset_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_preset_description_label.add_theme_font_size_override("font_size", 11)
+	_preset_description_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
+	body.add_child(_preset_description_label)
+
+	var manage_row: HBoxContainer = HBoxContainer.new()
+	manage_row.add_theme_constant_override("separation", 4)
+	body.add_child(manage_row)
+
+	_preset_count_label = Label.new()
+	_preset_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_count_label.add_theme_font_size_override("font_size", 10)
+	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.62, 0.72))
+	manage_row.add_child(_preset_count_label)
 
 	_export_preset_button = Button.new()
 	_export_preset_button.text = _tr("ui.preset_export")
 	_export_preset_button.flat = true
 	_export_preset_button.pressed.connect(_on_export_preset_pressed)
-	row.add_child(_export_preset_button)
+	manage_row.add_child(_export_preset_button)
 
 	_import_preset_button = Button.new()
 	_import_preset_button.text = _tr("ui.preset_import")
 	_import_preset_button.flat = true
 	_import_preset_button.pressed.connect(_on_import_preset_pressed)
-	row.add_child(_import_preset_button)
+	manage_row.add_child(_import_preset_button)
+
+	_on_preset_selected(_preset_option.selected)
+
+func _on_preset_selected(index: int) -> void:
+	if _preset_manager == null or _preset_option == null:
+		return
+	var ids: Array = _preset_manager.get_preset_ids()
+	if index < 0 or index >= ids.size():
+		return
+	var preset_id: String = ids[index]
+	if _preset_description_label:
+		_preset_description_label.text = _tr("ui.preset_desc_" + preset_id)
+	if _preset_count_label:
+		var count: int = _preset_manager.get_preset_enabled_count(preset_id)
+		_preset_count_label.text = _trf("ui.preset_tool_count", [count])
 
 func _registered_tool_names() -> Array:
 	var names: Array = []
@@ -2131,6 +2171,7 @@ func _refresh_translations() -> void:
 		for i in range(preset_ids.size()):
 			if i < _preset_option.item_count:
 				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
+		_on_preset_selected(_preset_option.selected)
 	for entry in _section_titles:
 		var label: Label = entry["label"]
 		if is_instance_valid(label):

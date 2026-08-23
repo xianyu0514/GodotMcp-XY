@@ -70,7 +70,7 @@
   "find_nodes_in_group": "Find all nodes in a specific group.",
   "audit_scene_node_persistence": "Audit node owner and persistence state for the currently edited scene. Reports missing or invalid owner relationships that affect scene saving and inheritance.",
   "audit_scene_inheritance": "Audit inherited or instanced scene structure for the current scene. Classifies local nodes, instance roots, inherited instance content, and local additions inside instanced subtrees.",
-  "list_project_scripts": "List all GDScript files (.gd) in the project. Returns paths relative to res://.",
+  "list_project_scripts": "List GDScript (.gd) and C# (.cs) script files in the project. Supports limit/offset pagination; count is the page size and total_count is the full total. Returns paths relative to res://.",
   "list_project_script_symbols": "Index script symbols across project GDScript and C# files. Returns class, extends, functions, signals, properties, and constants.",
   "find_script_symbol_definition": "Find definition locations for a script symbol across GDScript and C# project files.",
   "find_script_symbol_references": "Find textual project references to a script symbol across GDScript, C#, and scene files.",

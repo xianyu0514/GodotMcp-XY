@@ -63,7 +63,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_list_project_scripts(server_core: RefCounted) -> void:
 	var tool_name: String = "list_project_scripts"
-	var description: String = "List all GDScript (.gd) and C# (.cs) script files in the project. Returns paths relative to res://."
+	var description: String = "List GDScript (.gd) and C# (.cs) script files in the project. Supports limit/offset pagination; count is the page size and total_count is the full total. Returns paths relative to res://."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -93,9 +93,9 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"}
 			},
-			"count": {"type": "integer"},
-			"total_count": {"type": "integer"},
-			"truncated": {"type": "boolean"}
+			"count": {"type": "integer", "description": "Number of script paths in this page."},
+			"total_count": {"type": "integer", "description": "Total number of script paths before limit/offset pagination."},
+			"truncated": {"type": "boolean", "description": "True when more script paths remain after this page."}
 		}
 	}
 	

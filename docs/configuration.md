@@ -180,7 +180,7 @@ Use the same auth header pattern if `auth_enabled` is on.
 
 ## Tool presets
 
-The default surface is intentionally small: 28 core tools and 2 meta tools. Advanced tools are available but hidden until enabled.
+The default surface is intentionally small: 28 core tools and 4 meta tools. Advanced tools are available but hidden until enabled.
 
 | Preset/workflow | Use when |
 | --- | --- |
@@ -201,5 +201,5 @@ Typical model workflow:
 - Keep the server on localhost unless remote access is required.
 - Enable auth before using Cloudflare, Tailscale, ngrok or any public tunnel.
 - Leave `security_level = 1` unless you are diagnosing a specific local issue. STRICT mode also enables the script sandbox guard that blocks `execute_editor_script` / `evaluate_*` calls referencing OS process execution, out-of-project filesystem paths, networking or other dangerous APIs.
-- Prefer enabling advanced tools by group/task rather than exposing all 215 tools all the time.
+- Prefer enabling advanced tools by group/task rather than exposing all 221 tools all the time.
 - Review tool calls that modify scenes, resources, project settings or exports.

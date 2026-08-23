@@ -12,6 +12,12 @@ extends RefCounted
 
 const PRESET_IDS: Array[String] = [
 	"minimal_core",
+	"game_2d",
+	"game_3d",
+	"ui_localization",
+	"gameplay_scripting",
+	"animation_audio",
+	"release_export",
 	"level_design",
 	"debugging",
 	"automation_qa",
@@ -25,11 +31,35 @@ const PRESET_EXPORT_VERSION: int = 1
 # included on top of these (except "all", which enables every registered tool).
 const PRESET_GROUPS: Dictionary = {
 	"minimal_core": [],
+	"game_2d": [],
+	"game_3d": [],
+	"ui_localization": [],
+	"gameplay_scripting": ["Script-Advanced"],
+	"animation_audio": [],
+	"release_export": [],
 	"level_design": ["Node-Write-Advanced", "Node-Advanced", "Scene-Advanced", "Editor-Advanced"],
 	"debugging": ["Debug-Advanced"],
 	"automation_qa": ["Debug-Advanced", "Project-Advanced"],
 	"art_resources": ["Project-Advanced", "Scene-Advanced", "Node-Write-Advanced"],
 	"all": [],
+}
+
+# Task domains can cross the legacy one-group-per-tool hierarchy without
+# enabling unrelated tools from a large advanced group.
+const PRESET_DOMAINS: Dictionary = {
+	"game_2d": ["2d"],
+	"game_3d": ["3d"],
+	"ui_localization": ["ui"],
+	"animation_audio": ["assets_animation"],
+	"release_export": ["shipping"],
+}
+
+const PRESET_TOOLS: Dictionary = {
+	"gameplay_scripting": [
+		"list_project_input_actions", "upsert_project_input_action",
+		"remove_project_input_action", "list_runtime_input_actions",
+		"simulate_runtime_input_action", "simulate_runtime_input_event"
+	]
 }
 
 var _classifier = null
@@ -69,10 +99,25 @@ func resolve_preset_states(preset_id: String, all_tool_names: Array) -> Dictiona
 		for group_name in PRESET_GROUPS.get(preset_id, []):
 			for tool_name in _classifier.get_group_tools(group_name):
 				enabled[tool_name] = true
+		for domain_name in PRESET_DOMAINS.get(preset_id, []):
+			for tool_name in _classifier.get_domain_tools(domain_name):
+				enabled[tool_name] = true
+		for tool_name in PRESET_TOOLS.get(preset_id, []):
+			enabled[tool_name] = true
 	for tool_name in all_tool_names:
 		if enabled.has(tool_name):
 			states[tool_name] = true
 	return states
+
+func get_preset_enabled_count(preset_id: String) -> int:
+	if _classifier == null:
+		return 0
+	var states: Dictionary = resolve_preset_states(preset_id, _classifier.get_all_tools())
+	var count: int = 0
+	for enabled in states.values():
+		if enabled:
+			count += 1
+	return count
 
 ## Serialize an enabled-state map to a shareable JSON string.
 static func states_to_json(states: Dictionary) -> String:

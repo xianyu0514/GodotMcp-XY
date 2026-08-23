@@ -68,8 +68,8 @@ Each category page lists every tool with tier and description:
 | Script | `addons/godot_mcp/tools/script_tools_native.gd` |
 | Scene | `addons/godot_mcp/tools/scene_tools_native.gd` |
 | Editor | `addons/godot_mcp/tools/editor_tools_native.gd` |
-| Debug & Runtime | `addons/godot_mcp/tools/debug_tools_native.gd` |
-| Project | `addons/godot_mcp/tools/project_tools_native.gd` |
+| Debug & Runtime | `debug_tools_native.gd`（主）+ `debug_bridge_tools.gd` / `debug_runtime_tools.gd` / `debug_verify_tools.gd` |
+| Project | `project_tools_native.gd`（主）+ `project_resources_tools.gd` / `project_assets_tools.gd` / `project_tileset_tools.gd` / `project_verification_tools.gd` / `project_workflow_tools.gd` |
 | Meta | `addons/godot_mcp/tools/meta_tools_native.gd` |
 
 To add or change a tool, follow [Contributing → Adding a new MCP tool](../contributing.md#adding-a-new-mcp-tool).

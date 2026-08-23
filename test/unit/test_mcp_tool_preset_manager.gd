@@ -26,7 +26,27 @@ func _count_enabled(states: Dictionary) -> int:
 	return n
 
 func test_preset_ids_count():
-	assert_eq(_manager.get_preset_ids().size(), 6, "Should expose 6 built-in presets")
+	assert_eq(_manager.get_preset_ids().size(), 12, "Should expose 12 practical built-in presets")
+
+func test_game_creation_presets_are_dimension_specific():
+	var two_d: Dictionary = _manager.resolve_preset_states("game_2d", _all_names)
+	var three_d: Dictionary = _manager.resolve_preset_states("game_3d", _all_names)
+	assert_true(two_d["create_tileset"], "2D preset includes TileSet authoring")
+	assert_false(two_d["generate_3d_asset"], "2D preset excludes 3D-only generation")
+	assert_true(three_d["generate_3d_asset"], "3D preset includes 3D generation")
+	assert_false(three_d["create_tileset"], "3D preset excludes 2D-only TileSet authoring")
+
+func test_ui_preset_includes_ui_without_unrelated_export_tools():
+	var states: Dictionary = _manager.resolve_preset_states("ui_localization", _all_names)
+	assert_true(states["create_theme"], "UI preset includes theme creation")
+	assert_true(states["manage_localization"], "UI preset includes localization")
+	assert_false(states["run_export"], "UI preset excludes release tooling")
+
+func test_release_preset_is_focused():
+	var states: Dictionary = _manager.resolve_preset_states("release_export", _all_names)
+	assert_true(states["run_export"], "Release preset includes export")
+	assert_true(states["smoke_test_export"], "Release preset includes smoke testing")
+	assert_false(states["generate_3d_asset"], "Release preset excludes asset generation")
 
 func test_has_preset():
 	assert_true(_manager.has_preset("minimal_core"), "minimal_core should exist")
@@ -39,7 +59,7 @@ func test_minimal_core_enables_core_plus_meta_tools():
 	assert_false(states["reload_project"], "Supplementary tool should be disabled in minimal_core")
 
 func test_meta_tools_survive_every_preset():
-	for preset_id in ["minimal_core", "level_design", "debugging", "automation_qa", "art_resources", "all"]:
+	for preset_id in _manager.get_preset_ids():
 		var states: Dictionary = _manager.resolve_preset_states(preset_id, _all_names)
 		assert_true(states["list_tool_catalog"], "list_tool_catalog should stay enabled under " + preset_id)
 		assert_true(states["enable_tools"], "enable_tools should stay enabled under " + preset_id)

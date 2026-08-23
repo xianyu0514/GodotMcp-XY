@@ -493,12 +493,15 @@ func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 	if not scene_root:
 		return {"error": "No scene is currently open"}
 	
-	# 构建场景结构（一次遍历同时得到树与节点总数，避免二次 _count_nodes 遍历）
+	# 构建场景结构（一次遍历同时得到树与可见节点数，避免默认情况下二次 _count_nodes 遍历）
 	var built: Dictionary = _build_node_tree_with_count(scene_root, 0, max_depth, scene_root)
+	# max_depth 截断时 built["count"] 只统计可见部分的节点，而 total_nodes
+	# 的语义是完整场景节点总数，此时回退到全量统计。
+	var total_nodes: int = built["count"] if max_depth < 0 else _count_nodes(scene_root)
 	var scene_structure: Dictionary = {
 		"scene_name": scene_root.name,
 		"root_node": built["tree"],
-		"total_nodes": built["count"]
+		"total_nodes": total_nodes
 	}
 	
 	return scene_structure
@@ -518,7 +521,8 @@ static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 static func _build_node_tree(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
 	return _build_node_tree_with_count(node, current_depth, max_depth, scene_root)["tree"]
 
-## 单次遍历构建节点树并统计节点总数。返回 {"tree": Dictionary, "count": int}。
+## 单次遍历构建节点树并统计已展开部分的节点数；max_depth 截断时 count
+## 只包含可见节点，不包含被 children_truncated 隐藏的子树。返回 {"tree": Dictionary, "count": int}。
 static func _build_node_tree_with_count(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
 	var node_info: Dictionary = {
 		"name": node.name,

@@ -19,7 +19,7 @@ Read, create, modify, validate and search project scripts. The category supports
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `list_project_scripts` | core | List all GDScript files (.gd) in the project. Returns paths relative to res://. |
+| `list_project_scripts` | core | List GDScript (.gd) and C# (.cs) script files in the project. Supports `limit`/`offset` pagination; `count` is the page size and `total_count` is the full total. Returns paths relative to res://. |
 | `read_script` | core | Read the content of a GDScript file (.gd). Returns the complete script source code. |
 | `create_script` | core | Create a new GDScript file with optional template. GDScript files are complete programs, not resource files. |
 | `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. |
