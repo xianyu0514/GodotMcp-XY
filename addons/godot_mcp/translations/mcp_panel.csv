@@ -85,6 +85,8 @@ ui.all_tools,All tools,All tools,全部工具
 ui.all_tools_desc,"Browse every tool, grouped by category","Browse every tool, grouped by category",按分类浏览全部工具
 ui.enable_all,Enable all,Enable all,全选
 ui.disable_all,Disable all,Disable all,全不选
+ui.enable_current_category,Enable this category,Enable this category,启用当前分类
+ui.disable_current_category,Disable this category,Disable this category,停用当前分类
 ui.no_results,No tools match your search,No tools match your search,没有匹配的工具
 ui.search_results,Search results,Search results,搜索结果
 ui.detail_select_hint,Select a tool to view its details,Select a tool to view its details,选择左侧工具查看详情

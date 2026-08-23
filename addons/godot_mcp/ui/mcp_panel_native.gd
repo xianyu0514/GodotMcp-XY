@@ -1282,12 +1282,12 @@ func _create_tools_tab() -> VBoxContainer:
 	header_box.add_child(action_row)
 
 	_enable_all_button = Button.new()
-	_enable_all_button.text = _tr("ui.enable_all")
+	_enable_all_button.text = _tr("ui.enable_current_category")
 	_enable_all_button.pressed.connect(_on_enable_all_pressed)
 	action_row.add_child(_enable_all_button)
 
 	_disable_all_button = Button.new()
-	_disable_all_button.text = _tr("ui.disable_all")
+	_disable_all_button.text = _tr("ui.disable_current_category")
 	_disable_all_button.pressed.connect(_on_disable_all_pressed)
 	action_row.add_child(_disable_all_button)
 
@@ -2053,9 +2053,9 @@ func _refresh_translations() -> void:
 	if _tools_search_edit:
 		_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	if _enable_all_button:
-		_enable_all_button.text = _tr("ui.enable_all")
+		_enable_all_button.text = _tr("ui.enable_current_category")
 	if _disable_all_button:
-		_disable_all_button.text = _tr("ui.disable_all")
+		_disable_all_button.text = _tr("ui.disable_current_category")
 	if _open_log_button:
 		_open_log_button.text = _tr("ui.open_log")
 	if _clear_log_button:
