@@ -43,8 +43,12 @@
 - `resources/read` 通过 `godot-mcp://result/<sha256>` 返回 UTF-8 安全的 16 KiB 固定页；跟随 `_meta.nextUri` 并顺序拼接可逐字节还原原 JSON。动态结果不加入 `resources/list`，也不新增工具/Schema。
 - **功能收益优先**：错误结果与源码/日志读取完整内联；hash/写盘失败时回退完整内联，不转 error、不丢字段。204,211-byte Unicode 门禁首包节省 95.62%，13 页 SHA-256 完整重建。
 
-### M5. 读工具 limit/offset/summary 规范（文档+抽查）
-- 高返回工具（list_nodes/get_scene_structure/list_project_resources 等）统一 `limit`/`offset`/`summary` 参数语义并写入 docs；抽查补缺。
+### M5. 读工具无损分页与扫描复用
+- 高返回稳定读工具统一 `limit`/`offset` 与 `returned_count`/`total_count`/`has_more`/`next_offset` 语义。
+- `list_project_resources`、两个 debugger stack 读工具和四个项目扫描工具已补齐；项目扫描把与视图无关的完整结果按查询参数与依赖 revision 缓存，跨页只扫描一次。
+- 快照独立限制为最多 8 项、单项 4 MiB；超限时只是不缓存，本次结果仍完整可用。现有领域计数已经承担 summary 职责，不为所有工具强加新的模式参数。
+- `apply_migration_fixes` 等带状态写工具不按重复执行方式分页，避免后续页基于已修改项目而产生不一致；大结果继续走 M4 无损资源读取。
+- 与合入基线 `3421e6b` 的同一 token 门禁对比，全量 221 工具定义仅增加 266 估算 token（30,626 → 30,892，+0.87%），默认 32 工具增加 79（3,855 → 3,934）；代表性工作流的 Schema 节省率保持 98.12%（基线 98.11%）。
 
 ### M6. 精简（非破坏性）
 - 巨型文件拆分（project_tools_native.gd 364KB→按域 4-6 文件）——架构精简，纯机械。
@@ -84,5 +88,6 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已完成 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（LRU 结果缓存）+ M4（无损、可寻址 spill） | ✅ 全量 GUT 0 失败 + token 预算断言；204,211-byte 结果首包减少 95.62%，逐页 SHA-256 精确重建 |
 | 已完成 | M6（巨型文件拆分 / 死代码 / 单一数据表 tools_manifest） | ✅ 导入门禁 + 计数一致（381e472 / dd0ecd5 / f26fdde） |
 | 已追加 | tools/list 服务端缓存 + 确定性排序；结果缓存同时保存 formatted payload（命中跳过 JSON.stringify/spill 检查）；meta 发现工具（list_tool_catalog/search_tools/get_tool_details）纳入只读结果缓存；HTTP 轮询去除每轮 `_connections.duplicate()` | ✅ 全量 GUT 0 失败（678006f / f630cc9 / 3530489 / 7c67f8e） |
-| 下轮 | M5（读工具 limit/offset/summary 规范补缺） | 按高返回工具逐个审计 |
+| 已完成 | M5（无损 list 分页 + revision 安全扫描快照） | ✅ 7 条稳定读路径补齐；跨页单扫描；8 项 / 4 MiB 门禁；写工具不以重执行换分页 |
+| 下轮 | P3.3 工作流路由质量门禁 | 用真实游戏制作任务语料验证原子工具覆盖率、Top-k 成功率与增量 Schema token，不靠扩大默认工具集换命中 |
 | 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |

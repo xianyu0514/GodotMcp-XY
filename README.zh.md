@@ -72,6 +72,8 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 
 超大成功结果无需在首包支付全文上下文成本，但仍可无损取回。响应保留兼容的 head/tail 预览，并追加标准 MCP `resource_link`；`resources/read` 按完整内容的 SHA-256 寻址，以 UTF-8 安全的 16 KiB 固定页返回，持续跟随 `_meta.nextUri` 即可精确还原原始 JSON。动态结果链接不会进入 `resources/list`。关键错误以及源码/日志读取始终完整内联，落盘失败也会回退到完整内联结果。204 KiB Unicode 回归样本的首包减少 95.62%，同时校验逐字节完整重建。
 
+高返回量的稳定读工具统一提供无损续页字段：`total_count`、`returned_count`、`has_more`、`next_offset`。项目资源和源码扫描的所有页面复用同一份 revision 安全快照，因此响应变小不会导致重复扫描；快照池最多 8 项、单项 4 MiB。带状态的写操作不会为了分页而重新执行，始终把正确性和功能收益放在 token、延迟优化之前。
+
 ## 示例提示词
 
 ```text

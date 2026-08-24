@@ -72,6 +72,8 @@ Only core and meta tools are visible to `tools/list` at startup. The fastest pat
 
 Oversized successful results remain fully recoverable without paying their full context cost up front. The response keeps the compatible head/tail preview and adds a standard MCP `resource_link`; `resources/read` then serves deterministic, UTF-8-safe 16 KiB pages addressed by the complete payload's SHA-256. Following `_meta.nextUri` reconstructs the exact JSON, while dynamic result links never enter `resources/list`. Critical errors and source/log readers stay complete inline, and any spill failure falls back to the complete inline result. The 204 KiB Unicode regression fixture avoids 95.62% of initial response bytes while verifying exact reconstruction.
 
+High-volume stable reads expose the same lossless continuation contract: `total_count`, `returned_count`, `has_more` and `next_offset`. Project resource and source scans reuse one revision-safe snapshot across pages, so smaller responses do not repeat filesystem work; the snapshot pool is capped at 8 entries and 4 MiB per entry. Stateful mutation results are not re-executed for pagination, preserving correctness before token or latency savings.
+
 ## Example prompts
 
 ```text
