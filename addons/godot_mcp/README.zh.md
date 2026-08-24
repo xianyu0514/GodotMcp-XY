@@ -38,7 +38,7 @@
 - 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 4 个常驻元工具：`list_tool_catalog`、`search_tools`、`get_tool_details` 与 `enable_tools`。
 
-工具发现采用渐进且缓存友好的流程：`search_tools` 既可排序单项能力，也能在本地把复杂中英文目标压缩为有界的“检查/执行/验证”路线。自适应路线覆盖全部 217 个非 Meta 原子工具，只返回名称且默认限制为 8 个工具。目录 revision 与依赖标签结果 revision 不会清空无关的场景、脚本和资源读取；脚本和资源按精确路径懒失效。
+工具发现采用渐进且缓存友好的流程：把中英文目标作为 `workflow_query` 交给一次 `enable_tools` 调用，即可在本地完成路由，并原子启用有界的“检查/执行/验证”工具集。自适应路线覆盖全部 217 个非 Meta 原子工具，只返回名称且默认限制为 8 个工具；核心/元工具始终保留，上一任务的高级工具默认被替换，`replace_supplementary=false` 可显式增量装载。目录 revision 与依赖标签结果 revision 不会清空无关的场景、脚本和资源读取；脚本和资源按精确路径懒失效。
 
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。
 

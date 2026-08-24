@@ -344,6 +344,15 @@ func test_schema_is_object_with_properties() -> void:
 	assert_eq(bad.size(), 0, "input_schema 不符合 {type:object, properties:{...}} 的工具: " + str(bad))
 
 
+func test_enable_tools_schema_exposes_one_call_workflow_activation() -> void:
+	assert_true(_tools.has("enable_tools"), "enable_tools 应保持为常驻元工具")
+	var properties: Dictionary = _tools["enable_tools"].input_schema.get("properties", {})
+	assert_true(properties.has("workflow_query"), "ChatGPT 应能直接提交自然语言任务目标")
+	assert_true(properties.has("replace_supplementary"), "客户端应能显式选择任务替换或增量装载")
+	assert_eq(properties.get("replace_supplementary", {}).get("default", false), true,
+		"默认替换旧任务工具以限制后续 tools/list 大小")
+
+
 ## 官方建议 inputSchema 避免 oneOf/anyOf（部分客户端不兼容）；outputSchema 允许。
 func test_no_oneof_in_input_schema() -> void:
 	var sorted_input: Array = _input_oneof.duplicate()
