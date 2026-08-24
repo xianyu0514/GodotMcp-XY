@@ -88,7 +88,9 @@ Tool registration uses `server_core.register_tool(...)` with name, description, 
 
 This design keeps the default client context small without making specialized capabilities unavailable.
 
-`native_mcp/workflow_router.gd` is a pure-logic discovery layer used by `search_tools(mode="workflow")`. It does not register another MCP tool or duplicate schemas. A deterministic single catalog scan combines 11 small curated game-development seeds with an adaptive fallback over every non-meta tool, greedily covers intent terms, and emits only a bounded list of names grouped into inspect/execute/verify stages. Exact tool-name queries have strict priority, which makes all 217 atomic capabilities routable while the default workflow payload remains capped at 8 names (hard maximum 10).
+`native_mcp/workflow_router.gd` is a pure-logic discovery layer shared by `enable_tools(workflow_query=...)` and `search_tools(mode="workflow")`. It does not register another MCP tool or duplicate schemas. A deterministic catalog scan combines 11 small curated game-development seeds with an adaptive fallback over every non-meta tool, greedily covers intent terms, and emits only a bounded list of names grouped into inspect/execute/verify stages. Exact tool-name queries have strict priority, which makes all 217 atomic capabilities routable while the default workflow payload remains capped at 8 names (hard maximum 10).
+
+The direct `enable_tools` path routes and applies the result in one MCP call. Its default task-switch behavior preserves core/meta, disables only currently enabled supplementary tools outside the new route, and enables the selected route through one `apply_tool_states` batch. This produces at most one catalog revision and one `tools/list_changed` notification, avoids rebuilding state once per tool, and keeps the visible schema set stable for subsequent prompt-cache hits. `replace_supplementary=false` provides an explicit additive mode.
 
 ## Result cache and revisions
 

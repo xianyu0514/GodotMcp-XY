@@ -150,12 +150,12 @@ List the current scene tree and summarize the top-level nodes.
 At startup, the client sees the 28 core tools plus 4 meta tools. For specialized workflows:
 
 - In the editor, open the tool manager in the MCP panel and toggle a group.
-- From the client, call `list_tool_catalog` to discover tools and `enable_tools` to enable names, groups or presets.
+- From the client, pass the task directly to `enable_tools` as `workflow_query`; it locally routes and activates the minimum bounded set in one call. Manual names, groups and presets remain available.
 
 Example workflow:
 
 ```text
-Use list_tool_catalog to show Debug-Advanced tools, then enable the debugging preset.
+Use enable_tools with workflow_query="debug the running game and verify the fix", then continue with the refreshed tools.
 ```
 
 ## Troubleshooting

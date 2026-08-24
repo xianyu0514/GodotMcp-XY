@@ -184,6 +184,7 @@ The default surface is intentionally small: 28 core tools and 4 meta tools. Adva
 
 | Preset/workflow | Use when |
 | --- | --- |
+| `workflow_query` | You want the fastest one-call local route for a natural-language task; old supplementary task tools are replaced by default. |
 | `minimal_core` | You want the smallest context footprint. |
 | `debugging` | You need debugger, runtime probe and performance tools. |
 | Category/group enablement | You need one functional area, such as `Project-Advanced` or `Debug-Advanced`. |
@@ -191,10 +192,10 @@ The default surface is intentionally small: 28 core tools and 4 meta tools. Adva
 
 Typical model workflow:
 
-1. Call `list_tool_catalog` with a `group` or `query` filter.
-2. Enable only the required tools or groups with `enable_tools`.
-3. Let the client refresh after `notifications/tools/list_changed`.
-4. Disable advanced groups when the task no longer needs them.
+1. Call `enable_tools` once with `workflow_query` for the task goal.
+2. Let the client refresh after `notifications/tools/list_changed`.
+3. Use `search_tools` only to preview/compare candidates; use manual tools/groups/presets only when deliberately overriding the route.
+4. Set `replace_supplementary=false` only when extending the same task instead of switching task context.
 
 ## Security checklist
 

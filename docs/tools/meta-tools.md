@@ -8,21 +8,19 @@ Always-on discovery and enablement tools. They keep the default tool list small 
 
 ## Recommended workflow
 
-1. For one capability, call `search_tools` with `mode="tools"` (the default). It ranks a maximum of 12 candidates without embeddings or another model call.
-2. For a multi-step goal, call `search_tools` with `mode="workflow"`. A single local catalog scan greedily covers the intent with an `inspect → execute → verify` route. The default budget is 8 tool names and the hard maximum is 10; no tool schema is copied into the result.
-3. Flatten the returned stage names into one `enable_tools` call. All visibility changes are applied atomically.
-4. The server emits `notifications/tools/list_changed` only when visibility actually changed; use the refreshed `tools/list` schemas directly. Call `get_tool_details` only when comparing candidates or when the client cannot refresh.
+1. Fast path: pass the task goal directly to `enable_tools` as `workflow_query`. The server routes and activates a bounded `inspect → execute → verify` set in the same call, with no embedding/model/network request and no copied schema.
+2. Workflow activation keeps core/meta tools and, by default, removes supplementary tools left by the previous task. This bounds every following `tools/list`; use `replace_supplementary=false` only when intentionally extending the same task.
+3. Use `search_tools` only to preview a route or compare candidates. `mode="tools"` ranks at most 12 single capabilities; `mode="workflow"` previews at most 10 names. Exact atomic names route to one tool.
+4. The server applies all visibility changes as one catalog revision and emits `notifications/tools/list_changed` only when something changed. Use the refreshed schemas directly; call `get_tool_details` only when the client cannot refresh.
 5. Use `list_tool_catalog({"summary_only": true})` only to browse group counts and the compact `workflow_coverage` report. Reuse its `catalog_revision` as `known_revision` to avoid retransmitting an unchanged catalog.
 
 The adaptive workflow index includes every non-meta atomic tool (217/217). Eleven small curated workflow seeds improve common gameplay, UI, asset, animation/audio, level, debugging, performance, QA, localization, release and project-health goals; any long-tail capability falls back to the same deterministic atomic index instead of adding another permanent workflow or model call.
 
 ```json
 {
-  "name": "search_tools",
+  "name": "enable_tools",
   "arguments": {
-    "query": "build a 2D player controller and verify it runs",
-    "mode": "workflow",
-    "workflow_tool_budget": 8
+    "workflow_query": "build a 2D player controller and verify it runs"
   }
 }
 ```
@@ -46,4 +44,4 @@ Tool-state changes invalidate only the three discovery cache entries. Cached sce
 | `list_tool_catalog` | meta | Browse deterministic group summaries or filtered per-tool entries. `summary_only=true` omits tool arrays, while `known_revision` returns a minimal `not_modified` response when the catalog is unchanged. |
 | `search_tools` | meta | `mode=tools` ranks exact candidates; `mode=workflow` builds a compact inspect/execute/verify minimum-tool route. Both paths are deterministic and local. Workflow results contain names only, default to 8 tools, hard-cap at 10 and cover all 217 non-meta atomic tools through the adaptive fallback. |
 | `get_tool_details` | meta | Return the full registration record for one MCP tool — complete description, inputSchema, outputSchema, annotations, category, group and enabled state — so a client can fetch the exact schema before calling a tool without loading every tool. Use list_tool_catalog or search_tools to discover tool names first. Returns found=false with a hint when the name is not registered. |
-| `enable_tools` | meta | Apply tools, groups or one of 12 presets as one atomic visibility transition. Returns compact `changed_tools`/counts by default; use `include_enabled_tools=true` only when the complete enabled list is needed. No-op calls do not trigger a client refresh. |
+| `enable_tools` | meta | Fast path: `workflow_query` locally routes and activates the minimum bounded task set in this one call. Core/meta stay visible and old supplementary tools are replaced by default; set `replace_supplementary=false` to extend the current task. Manual tools, groups and 12 presets remain supported. Returns compact changes/counts; no-op calls do not refresh the client. |

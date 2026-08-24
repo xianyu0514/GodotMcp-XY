@@ -326,20 +326,22 @@ func _tool_get_tool_details(params: Dictionary) -> Dictionary:
 func _register_enable_tools(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"enable_tools",
-		"Enable or disable MCP tools on demand so only needed schemas are visible in tools/list. A request is applied as one atomic catalog transition and emits tools/list_changed only when something actually changed. Pass tools/groups or a focused preset; core and meta tools stay enabled. The compact response omits the full enabled list unless requested.",
+		"Route and activate the minimum tools for workflow_query in one call, replacing old supplementary task tools by default. Or change explicit tools, groups or a preset. Core/meta stay on; the response is compact.",
 		{
 			"type": "object",
 			"properties": {
+				"workflow_query": {"type": "string", "description": "English/Chinese goal. Locally routes to at most 8 inspect/execute/verify tools; exclusive with tools/groups/preset."},
+				"replace_supplementary": {"type": "boolean", "default": true, "description": "workflow_query only. Replace old supplementary task tools; false adds."},
 				"tools": {"type": "array", "items": {"type": "string"}, "description": "Individual tool names to enable/disable."},
-				"groups": {"type": "array", "items": {"type": "string"}, "description": "Classifier groups to enable/disable (e.g. 'Debug-Advanced', 'Scene-Advanced')."},
-				"preset": {"type": "string", "description": "Apply a focused built-in preset wholesale: game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core, or all. Prefer a focused preset because 'all' has the highest context cost. When set, 'tools'/'groups'/'enabled'/'exclusive' are ignored."},
-				"enabled": {"type": "boolean", "default": true, "description": "Whether to enable (true) or disable (false) the given tools/groups."},
-				"exclusive": {"type": "boolean", "default": false, "description": "When enabling, first reset to the core-only baseline (disable every supplementary tool) so only the requested set plus the always-on core/meta tools remain."},
-				"include_enabled_tools": {"type": "boolean", "default": false, "description": "Include the complete enabled tool-name list in the response. Leave false to minimize tokens; changed_tools and enabled_count are always returned."}
+				"groups": {"type": "array", "items": {"type": "string"}, "description": "Groups to enable/disable."},
+				"preset": {"type": "string", "description": "Focused preset ID; 'all' costs most context. Overrides manual selection."},
+				"enabled": {"type": "boolean", "default": true, "description": "Enable or disable manual tools/groups."},
+				"exclusive": {"type": "boolean", "default": false, "description": "When manually enabling, disable all supplementary tools first."},
+				"include_enabled_tools": {"type": "boolean", "default": false, "description": "Return all enabled names; false returns only changes/counts."}
 			}
 		},
 		Callable(self, "_tool_enable_tools"),
-		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
+		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "workflow_query": {"type": "string"}, "workflow": {"type": "object"}, "replaced_supplementary": {"type": "boolean"}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
 		"meta", "Meta"
 	)
@@ -350,20 +352,54 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 
 	var registered: Array = _sorted_registered_tools()
 	var all_names: Array = []
+	var known_names: Dictionary = {}
 	var previous_states: Dictionary = {}
 	for info in registered:
 		var registered_name: String = String(info.get("name", ""))
 		all_names.append(registered_name)
+		known_names[registered_name] = true
 		previous_states[registered_name] = bool(info.get("enabled", false))
 
 	var classifier: RefCounted = _get_classifier()
 	var applied_preset: String = ""
+	var workflow: Dictionary = {}
+	var workflow_query: String = String(params.get("workflow_query", "")).strip_edges()
+	var has_workflow_query: bool = params.has("workflow_query")
+	var replaced_supplementary: bool = false
 	var unknown_tools: Array = []
 	var unknown_groups: Array = []
 	var desired_states: Dictionary = {}
 
 	var preset: String = String(params.get("preset", "")).strip_edges()
-	if not preset.is_empty():
+	var requested_groups: Array = params.get("groups", []) if params.get("groups", []) is Array else []
+	var requested_tools: Array = params.get("tools", []) if params.get("tools", []) is Array else []
+	if has_workflow_query:
+		if workflow_query.is_empty():
+			return {"error": "workflow_query must not be blank"}
+		if not preset.is_empty() or not requested_groups.is_empty() or not requested_tools.is_empty():
+			return {"error": "workflow_query cannot be combined with tools, groups, or preset"}
+		if bool(params.get("exclusive", false)) or (params.has("enabled") and not bool(params.get("enabled", true))):
+			return {"error": "workflow_query cannot be combined with exclusive=true or enabled=false"}
+		workflow = _workflow_router.route(workflow_query, registered)
+		if workflow.has("error"):
+			return {"error": String(workflow.get("error", "Unable to route workflow intent"))}
+		var routed_tools: Array[String] = []
+		for stage_value in workflow.get("stages", []):
+			var stage: Dictionary = stage_value
+			for tool_name_value in stage.get("tools", []):
+				var routed_name: String = String(tool_name_value)
+				if not routed_name.is_empty() and routed_name not in routed_tools:
+					routed_tools.append(routed_name)
+		if routed_tools.is_empty():
+			return {"error": "No registered tools matched workflow_query"}
+		replaced_supplementary = bool(params.get("replace_supplementary", true))
+		if replaced_supplementary:
+			for info in registered:
+				if String(info.get("category", "")) == "supplementary" and bool(info.get("enabled", false)):
+					desired_states[String(info.get("name", ""))] = false
+		for routed_name in routed_tools:
+			desired_states[routed_name] = true
+	elif not preset.is_empty():
 		var pm: RefCounted = _get_preset_manager()
 		if pm == null or not pm.has_method("has_preset") or not pm.has_preset(preset):
 			var valid_ids: Array = pm.get_preset_ids() if pm and pm.has_method("get_preset_ids") else []
@@ -380,8 +416,7 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 				var cat: String = String(info.get("category", ""))
 				desired_states[n] = cat == "core" or cat == "meta"
 
-		var groups: Array = params.get("groups", []) if params.get("groups", []) is Array else []
-		for group_name in groups:
+		for group_name in requested_groups:
 			var group_str: String = String(group_name)
 			if classifier and classifier.has_method("get_all_groups") and not (group_str in classifier.get_all_groups()):
 				unknown_groups.append(group_str)
@@ -390,10 +425,9 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 				if String(info.get("group", "")) == group_str:
 					desired_states[String(info.get("name", ""))] = enabled
 
-		var tools: Array = params.get("tools", []) if params.get("tools", []) is Array else []
-		for tool_name in tools:
+		for tool_name in requested_tools:
 			var name_str: String = String(tool_name)
-			if not (name_str in all_names):
+			if not known_names.has(name_str):
 				unknown_tools.append(name_str)
 				continue
 			desired_states[name_str] = enabled
@@ -402,7 +436,7 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	# loses the ability to re-discover and re-enable tools.
 	if classifier and classifier.has_method("get_meta_tools"):
 		for meta_name in classifier.get_meta_tools():
-			if meta_name in all_names:
+			if known_names.has(meta_name):
 				desired_states[meta_name] = true
 
 	var apply_result: Dictionary = {}
@@ -419,9 +453,11 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	unknown_tools.sort()
 	unknown_groups.sort()
 
+	var include_enabled_tools: bool = bool(params.get("include_enabled_tools", false))
 	var enabled_tools: Array = []
+	var enabled_count: int = 0
 	var changed_tools: Array = apply_result.get("changed_tools", [])
-	var current_registered: Array = _sorted_registered_tools()
+	var current_registered: Array = _server_core.get_registered_tools()
 	if not _server_core.has_method("apply_tool_states"):
 		changed_tools = []
 		for info in current_registered:
@@ -431,15 +467,18 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	changed_tools.sort()
 	for info in current_registered:
 		if bool(info.get("enabled", false)):
-			enabled_tools.append(String(info.get("name", "")))
-	enabled_tools.sort()
+			enabled_count += 1
+			if include_enabled_tools:
+				enabled_tools.append(String(info.get("name", "")))
+	if include_enabled_tools:
+		enabled_tools.sort()
 
 	if not changed_tools.is_empty() and _server_core.has_method("notify_tool_list_changed"):
 		_server_core.notify_tool_list_changed()
 
 	var response: Dictionary = {
 		"status": "success",
-		"enabled_count": enabled_tools.size(),
+		"enabled_count": enabled_count,
 		"total_registered": all_names.size(),
 		"changed_count": changed_tools.size(),
 		"changed_tools": changed_tools,
@@ -448,6 +487,10 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 		"unknown_tools": unknown_tools,
 		"unknown_groups": unknown_groups
 	}
-	if bool(params.get("include_enabled_tools", false)):
+	if has_workflow_query:
+		response["workflow_query"] = workflow_query
+		response["workflow"] = workflow
+		response["replaced_supplementary"] = replaced_supplementary
+	if include_enabled_tools:
 		response["enabled_tools"] = enabled_tools
 	return response

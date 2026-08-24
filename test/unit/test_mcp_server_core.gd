@@ -25,6 +25,9 @@ func test_initialize_includes_instructions():
 	var instructions: String = result.get("instructions", "")
 	assert_true(instructions.contains("list_tool_catalog"), "Instructions should mention list_tool_catalog")
 	assert_true(instructions.contains("enable_tools"), "Instructions should mention enable_tools")
+	assert_true(instructions.contains("workflow_query"), "Instructions should teach the one-call workflow fast path")
+	assert_true(instructions.contains("replace_supplementary=false"),
+		"Instructions should explain when additive task activation is appropriate")
 
 func test_register_tool():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})

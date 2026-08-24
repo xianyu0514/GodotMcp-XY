@@ -27,14 +27,13 @@ This keeps the initial tool list small enough for AI clients while preserving ac
 
 ## Discovery workflow
 
-Progressive discovery mirrors the official MCP pattern: catalog → route/search → enable → refreshed schema.
+Progressive discovery uses a one-call fast path while retaining preview and manual controls.
 
 1. Start with core tools and meta tools.
-2. For one capability use `search_tools` with `mode="tools"`; for a multi-step goal use `mode="workflow"` to receive a bounded inspect/execute/verify route containing tool names only.
-3. Call `enable_tools` once with the exact returned names. Call `get_tool_details` only to compare ambiguous candidates or when the client cannot refresh.
+2. For a goal that needs more capability, call `enable_tools` once with `workflow_query`. Local routing and activation happen together; the result contains at most 8 inspect/execute/verify names and no schemas.
+3. By default the call preserves core/meta and replaces the previous task's supplementary set, keeping later prompts small and stable. Set `replace_supplementary=false` only to extend the same task.
 4. Wait for `notifications/tools/list_changed` and let the client refresh the enabled schemas.
-5. Use `list_tool_catalog` with `summary_only=true` only to browse groups and the 217/217 adaptive-workflow coverage summary.
-6. Disable advanced groups when the task is complete if you want to shrink the tool surface again.
+5. Use `search_tools` only to preview/compare, `get_tool_details` only when the client cannot refresh, and `list_tool_catalog(summary_only=true)` only to browse groups and the 217/217 coverage summary.
 
 Example:
 
@@ -42,8 +41,7 @@ Example:
 {
   "name": "enable_tools",
   "arguments": {
-    "groups": ["Debug-Advanced"],
-    "enabled": true
+    "workflow_query": "debug the running player and verify the fix"
   }
 }
 ```

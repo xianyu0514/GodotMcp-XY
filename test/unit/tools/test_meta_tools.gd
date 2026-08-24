@@ -238,6 +238,45 @@ func test_enable_tools_rejects_unknown_preset():
 	var result: Dictionary = _tool._tool_enable_tools({"preset": "does_not_exist"})
 	assert_has(result, "error", "Unknown preset should return an error")
 
+func test_enable_tools_activates_exact_workflow_and_replaces_old_task_tools():
+	_core.set_tool_enabled("run_export", true)
+	var result: Dictionary = _tool._tool_enable_tools({"workflow_query": "get_runtime_info"})
+	assert_eq(result.get("status", ""), "success", "A workflow intent activates in one call")
+	assert_true(_core.is_enabled("get_runtime_info"), "The routed atomic tool becomes visible")
+	assert_false(_core.is_enabled("run_export"), "Unrelated supplementary residue is removed by default")
+	assert_true(_core.is_enabled("create_node"), "Core tools remain visible")
+	assert_eq(result.get("workflow", {}).get("tool_count", 0), 1,
+		"Exact atomic intent keeps the activated surface minimal")
+	assert_eq(result.get("workflow_query", ""), "get_runtime_info", "The normalized task intent is echoed")
+	assert_true(result.get("replaced_supplementary", false), "Response makes replacement semantics explicit")
+	assert_eq(_core.bulk_apply_calls, 1, "Activation and stale-tool cleanup share one atomic transition")
+	assert_eq(result.get("catalog_revision", 0), 8, "A multi-tool transition advances the catalog only once")
+	assert_eq(_core.notified, 1, "The client receives one tools/list_changed notification")
+
+func test_enable_tools_workflow_can_preserve_enabled_supplementary_tools():
+	_core.set_tool_enabled("run_export", true)
+	var result: Dictionary = _tool._tool_enable_tools({
+		"workflow_query": "get_runtime_info",
+		"replace_supplementary": false
+	})
+	assert_true(_core.is_enabled("get_runtime_info"), "The routed tool is enabled")
+	assert_true(_core.is_enabled("run_export"), "Incremental mode preserves an earlier task tool")
+	assert_false(result.get("replaced_supplementary", true), "Response reports incremental activation")
+	assert_eq(_core.bulk_apply_calls, 1, "Incremental activation remains one bulk transition")
+
+func test_enable_tools_workflow_rejects_blank_intent():
+	var result: Dictionary = _tool._tool_enable_tools({"workflow_query": "   "})
+	assert_has(result, "error", "An explicitly blank workflow intent must fail closed")
+	assert_eq(_core.bulk_apply_calls, 0, "Invalid intent must not mutate the catalog")
+
+func test_enable_tools_workflow_rejects_conflicting_manual_selectors():
+	var result: Dictionary = _tool._tool_enable_tools({
+		"workflow_query": "get_runtime_info",
+		"tools": ["run_export"]
+	})
+	assert_has(result, "error", "Automatic and manual selection cannot silently override each other")
+	assert_eq(_core.bulk_apply_calls, 0, "Conflicting selection must not mutate the catalog")
+
 # --- search_tools ---
 
 func test_search_tools_requires_query():
