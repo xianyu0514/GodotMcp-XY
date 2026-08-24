@@ -1,0 +1,338 @@
+[
+  {
+    "id": "gameplay_player_controller_en",
+    "language": "en",
+    "goal": "Create a 2D player controller script, attach it to the character, run the game, and verify there are no runtime errors",
+    "required": [["create_script"], ["attach_script"], ["run_project", "play_and_verify"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "forbidden": ["create_tileset", "configure_android_export"],
+    "requires_verify": true
+  },
+  {
+    "id": "gameplay_scene_signals_en",
+    "language": "en",
+    "goal": "Build an enemy scene with nodes, connect its hit signal, save the scene, and verify the scripts",
+    "required": [["create_scene"], ["create_node", "batch_scene_node_edits"], ["connect_signal", "batch_connect_signals"], ["save_scene"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "gameplay_player_controller_zh",
+    "language": "zh",
+    "goal": "创建二维玩家控制器脚本并挂到角色节点，运行游戏后确认没有运行时错误",
+    "required": [["create_script"], ["attach_script"], ["run_project", "play_and_verify"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "gameplay_scene_signals_zh",
+    "language": "zh",
+    "goal": "制作敌人场景和节点，连接受击信号，保存场景并验证脚本",
+    "required": [["create_scene"], ["create_node", "batch_scene_node_edits"], ["connect_signal", "batch_connect_signals"], ["save_scene"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "ui_pause_menu_en",
+    "language": "en",
+    "goal": "Create a responsive pause menu, apply anchors and a theme, then run it and check a visual baseline",
+    "required": [["create_node", "batch_scene_node_edits"], ["set_anchor_preset"], ["create_theme", "set_theme_item", "set_default_theme"], ["assert_visual_baseline", "play_and_verify"]],
+    "forbidden": ["debug_continue_and_wait", "run_project_tests"],
+    "requires_verify": true
+  },
+  {
+    "id": "ui_regression_en",
+    "language": "en",
+    "goal": "Restyle the settings interface and compare the rendered screenshot with the approved reference image",
+    "required": [["set_theme_item", "set_default_theme", "create_theme"], ["compare_render_screenshots", "assert_visual_baseline"]],
+    "requires_verify": true
+  },
+  {
+    "id": "ui_settings_panel_zh",
+    "language": "zh",
+    "goal": "创建响应式设置界面，配置控件锚点和主题，然后执行视觉回归验证",
+    "required": [["create_node", "batch_scene_node_edits"], ["set_anchor_preset"], ["create_theme", "set_theme_item", "set_default_theme"], ["assert_visual_baseline", "compare_render_screenshots"]],
+    "requires_verify": true
+  },
+  {
+    "id": "ui_default_theme_zh",
+    "language": "zh",
+    "goal": "为整个项目创建并设置默认UI主题，运行游戏并检查界面截图",
+    "required": [["create_theme"], ["set_default_theme"], ["run_project", "play_and_verify"], ["get_runtime_screenshot", "assert_visual_baseline", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "asset_sprite_sheet_en",
+    "language": "en",
+    "goal": "Slice a sprite sheet into frames, reimport the generated textures, and check their import status",
+    "required": [["slice_sprite_sheet"], ["reimport_resources"], ["get_import_status", "get_import_metadata"]],
+    "forbidden": ["inspect_gltf_asset"]
+  },
+  {
+    "id": "asset_gltf_en",
+    "language": "en",
+    "goal": "Inspect a GLB character for meshes, materials, and animations before instancing the asset into the scene",
+    "required": [["inspect_gltf_asset"], ["instantiate_scene", "create_node"]]
+  },
+  {
+    "id": "asset_texture_zh",
+    "language": "zh",
+    "goal": "生成角色贴图资源，重新导入项目并检查资源健康状态",
+    "required": [["generate_asset", "create_drawable_texture"], ["reimport_resources"], ["audit_project_health", "get_import_status"]]
+  },
+  {
+    "id": "asset_usage_zh",
+    "language": "zh",
+    "goal": "查找目标资源被哪些场景引用，并列出项目中真正未使用的资源",
+    "required": [["find_resource_usages"], ["list_unused_resources"]]
+  },
+  {
+    "id": "animation_create_en",
+    "language": "en",
+    "goal": "Create a character animation, insert keyframes, play the scene, and verify the animation at runtime",
+    "required": [["create_animation"], ["insert_animation_keys"], ["play_runtime_animation", "play_and_verify"], ["get_runtime_animation_state", "play_and_verify"]],
+    "forbidden": ["create_tileset"],
+    "requires_verify": true
+  },
+  {
+    "id": "animation_audio_runtime_en",
+    "language": "en",
+    "goal": "Inspect and update a runtime audio bus while playing the character animation, then verify the result",
+    "required": [["get_runtime_audio_bus", "list_runtime_audio_buses"], ["update_runtime_audio_bus"], ["play_runtime_animation"], ["play_and_verify", "assert_runtime_condition"]],
+    "requires_verify": true
+  },
+  {
+    "id": "animation_tree_zh",
+    "language": "zh",
+    "goal": "启用运行时动画树，切换到奔跑状态并读取动画树当前状态",
+    "required": [["set_runtime_animation_tree_active"], ["travel_runtime_animation_tree"], ["get_runtime_animation_tree_state"]]
+  },
+  {
+    "id": "audio_bus_zh",
+    "language": "zh",
+    "goal": "列出运行时音频总线，调整音乐总线音量并验证游戏运行正常",
+    "required": [["list_runtime_audio_buses", "get_runtime_audio_bus"], ["update_runtime_audio_bus"], ["play_and_verify", "assert_no_runtime_errors"]],
+    "requires_verify": true
+  },
+  {
+    "id": "tileset_level_en",
+    "language": "en",
+    "goal": "Create a TileSet, configure physics and terrain layers, add tile collision, paint the TileMapLayer, and play-test the level",
+    "required": [["create_tileset"], ["configure_tileset_layers"], ["set_tile_collision_polygon"], ["set_tilemap_layer_cells"], ["play_and_verify"]],
+    "forbidden": ["configure_render_output"],
+    "requires_verify": true
+  },
+  {
+    "id": "tileset_repair_en",
+    "language": "en",
+    "goal": "Inspect the TileSet and painted TileMapLayer cells, then repair the terrain assignment and verify the level",
+    "required": [["inspect_tileset_resource"], ["get_tilemap_layer_cells"], ["set_tile_terrain", "set_tilemap_layer_cells"], ["play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "tileset_level_zh",
+    "language": "zh",
+    "goal": "创建瓦片集，配置物理和地形图层，设置碰撞多边形，绘制关卡并试玩验证",
+    "required": [["create_tileset"], ["configure_tileset_layers"], ["set_tile_collision_polygon"], ["set_tilemap_layer_cells"], ["play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "tileset_runtime_zh",
+    "language": "zh",
+    "goal": "读取运行中游戏的瓦片地图单元，修改指定单元后验证运行时关卡状态",
+    "required": [["get_runtime_tilemap_cell"], ["set_runtime_tilemap_cell"], ["assert_runtime_condition", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "debug_breakpoint_en",
+    "language": "en",
+    "goal": "Set a debugger breakpoint, inspect stack-frame variables, step over the current line, and wait for the debugger to pause again",
+    "required": [["set_debugger_breakpoint"], ["get_debug_stack_variables", "get_debug_stack_frames"], ["debug_step_over_and_wait"], ["await_debugger_state", "debug_step_over_and_wait"]],
+    "forbidden": ["inspect_export_templates", "validate_export_preset"]
+  },
+  {
+    "id": "debug_runtime_probe_en",
+    "language": "en",
+    "goal": "Install the runtime probe, inspect the live player node, assert its health value, and confirm no runtime errors",
+    "required": [["install_runtime_probe"], ["inspect_runtime_node"], ["assert_runtime_condition"], ["assert_no_runtime_errors"]],
+    "requires_verify": true
+  },
+  {
+    "id": "debug_scripts_zh",
+    "language": "zh",
+    "goal": "读取编辑器错误日志，检测损坏脚本，修复代码并重新验证脚本",
+    "required": [["get_editor_logs"], ["detect_broken_scripts"], ["modify_script"], ["validate_script", "verify_scripts"]],
+    "requires_verify": true
+  },
+  {
+    "id": "debug_expression_zh",
+    "language": "zh",
+    "goal": "在断点处计算调试表达式，读取局部变量，然后继续执行并等待游戏恢复",
+    "required": [["evaluate_debug_expression"], ["get_debug_stack_variables", "get_debug_variables"], ["debug_continue_and_wait", "debug_continue"]]
+  },
+  {
+    "id": "performance_budget_en",
+    "language": "en",
+    "goal": "Measure runtime FPS and memory, collect a performance snapshot, and fail the play-test if the frame budget is exceeded",
+    "required": [["get_runtime_performance_snapshot", "get_performance_metrics"], ["get_runtime_memory_trend"], ["assert_performance_budget"], ["play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "performance_profiler_en",
+    "language": "en",
+    "goal": "Enable the debugger profiler, capture frame performance and memory trends, then verify the optimization budget",
+    "required": [["toggle_debugger_profiler"], ["get_performance_metrics", "get_runtime_performance_snapshot"], ["get_runtime_memory_trend"], ["assert_performance_budget"]],
+    "forbidden": ["get_editor_screenshot", "get_runtime_screenshot"],
+    "requires_verify": true
+  },
+  {
+    "id": "performance_budget_zh",
+    "language": "zh",
+    "goal": "采集运行时帧率和内存趋势，设置性能预算门禁并完成确定性试玩验证",
+    "required": [["get_runtime_performance_snapshot", "get_performance_metrics"], ["get_runtime_memory_trend"], ["assert_performance_budget"], ["play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "performance_profiler_zh",
+    "language": "zh",
+    "goal": "开启调试器性能分析器，检查帧耗时并确认运行时没有错误",
+    "required": [["toggle_debugger_profiler"], ["get_performance_metrics", "get_runtime_performance_snapshot"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "qa_full_gate_en",
+    "language": "en",
+    "goal": "Verify every script, run the project tests, play the game, and enforce runtime-error and visual-regression gates",
+    "required": [["verify_scripts"], ["run_project_tests", "run_project_test"], ["play_and_verify"], ["assert_no_runtime_errors"], ["assert_visual_baseline"]],
+    "requires_verify": true
+  },
+  {
+    "id": "qa_screenshot_en",
+    "language": "en",
+    "goal": "Capture the running game screenshot, compare it with the golden image, and reject any runtime errors",
+    "required": [["get_runtime_screenshot", "play_and_verify"], ["compare_render_screenshots", "assert_visual_baseline"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "qa_full_gate_zh",
+    "language": "zh",
+    "goal": "验证全部脚本，运行项目测试，试玩游戏并执行运行时错误和视觉回归门禁",
+    "required": [["verify_scripts"], ["run_project_tests", "run_project_test"], ["play_and_verify"], ["assert_no_runtime_errors"], ["assert_visual_baseline"]],
+    "requires_verify": true
+  },
+  {
+    "id": "qa_visual_zh",
+    "language": "zh",
+    "goal": "获取运行时截图，与视觉基准图比较并生成差异验证结果",
+    "required": [["get_runtime_screenshot", "play_and_verify"], ["compare_render_screenshots", "assert_visual_baseline"]],
+    "requires_verify": true
+  },
+  {
+    "id": "localization_menu_en",
+    "language": "en",
+    "goal": "Extract menu translation keys, import the localized CSV, run the game, and check the localized interface visually",
+    "required": [["manage_localization"], ["run_project", "play_and_verify"], ["assert_visual_baseline", "play_and_verify"]],
+    "forbidden": ["generate_3d_asset", "get_import_status"],
+    "requires_verify": true
+  },
+  {
+    "id": "localization_export_en",
+    "language": "en",
+    "goal": "List registered locales and export the project translations back to a CSV for review",
+    "required": [["manage_localization"]]
+  },
+  {
+    "id": "localization_menu_zh",
+    "language": "zh",
+    "goal": "提取菜单翻译键，导入中英文翻译CSV，运行游戏并验证本地化界面",
+    "required": [["manage_localization"], ["run_project", "play_and_verify"], ["assert_visual_baseline", "play_and_verify"]],
+    "requires_verify": true
+  },
+  {
+    "id": "localization_search_zh",
+    "language": "zh",
+    "goal": "搜索脚本和场景里的翻译键，更新本地化资源并导出CSV复查",
+    "required": [["search_in_files"], ["manage_localization"]]
+  },
+  {
+    "id": "release_android_en",
+    "language": "en",
+    "goal": "Configure the Android export preset, validate it, export the build, and run a post-export smoke test",
+    "required": [["configure_android_export"], ["validate_export_preset"], ["run_export"], ["smoke_test_export"]],
+    "forbidden": ["play_runtime_animation"],
+    "requires_verify": true
+  },
+  {
+    "id": "release_version_en",
+    "language": "en",
+    "goal": "Bump the game version, inspect the export presets, package the PCK, and smoke-test the release artifact",
+    "required": [["bump_version"], ["list_export_presets"], ["pack_pck", "run_export"], ["smoke_test_export"]],
+    "requires_verify": true
+  },
+  {
+    "id": "release_android_zh",
+    "language": "zh",
+    "goal": "配置安卓导出预设，验证配置，导出安装包并执行发布后冒烟测试",
+    "required": [["configure_android_export"], ["validate_export_preset"], ["run_export"], ["smoke_test_export"]],
+    "requires_verify": true
+  },
+  {
+    "id": "release_pck_zh",
+    "language": "zh",
+    "goal": "递增游戏版本，打包PCK资源，导出发行版本并验证产物可以启动",
+    "required": [["bump_version"], ["pack_pck"], ["run_export"], ["smoke_test_export"]],
+    "requires_verify": true
+  },
+  {
+    "id": "health_dependencies_en",
+    "language": "en",
+    "goal": "Audit project health, scan for missing and cyclic resource dependencies, and list unused resources",
+    "required": [["audit_project_health"], ["scan_missing_resource_dependencies"], ["scan_cyclic_resource_dependencies"], ["list_unused_resources"]],
+    "forbidden": ["create_theme", "configure_render_output"]
+  },
+  {
+    "id": "health_migration_en",
+    "language": "en",
+    "goal": "Find deprecated API usage, scan migration compatibility, preview migration fixes, and verify scripts afterward",
+    "required": [["find_deprecated_api_usage"], ["scan_migration_compatibility"], ["apply_migration_fixes"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "health_scripts_uid_zh",
+    "language": "zh",
+    "goal": "审计项目健康状态，检测损坏脚本，查找资源UID问题并修复后验证",
+    "required": [["audit_project_health"], ["detect_broken_scripts"], ["get_resource_uid_info", "fix_resource_uid"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "health_resource_usage_zh",
+    "language": "zh",
+    "goal": "扫描资源反向引用、缺失依赖和循环依赖，然后列出未使用资源",
+    "required": [["find_resource_usages"], ["scan_missing_resource_dependencies"], ["scan_cyclic_resource_dependencies"], ["list_unused_resources"]]
+  },
+  {
+    "id": "script_refactor_en",
+    "language": "en",
+    "goal": "Find every reference to the player health symbol, preview a safe rename, apply the refactor, and verify all scripts",
+    "required": [["find_script_symbol_references"], ["rename_script_symbol"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "script_batch_en",
+    "language": "en",
+    "goal": "Read several gameplay scripts, modify the controller implementation, save all scripts, and validate the project",
+    "required": [["batch_read_scripts"], ["modify_script"], ["save_all_scripts"], ["verify_scripts", "validate_script"]],
+    "requires_verify": true
+  },
+  {
+    "id": "shader_runtime_zh",
+    "language": "zh",
+    "goal": "验证角色着色器，读取运行时Shader参数，修改发光强度并确认运行正常",
+    "required": [["validate_shader"], ["get_runtime_shader_parameters"], ["set_runtime_shader_parameter"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "forbidden": ["get_tilemap_layer_cells"],
+    "requires_verify": true
+  },
+  {
+    "id": "project_setup_zh",
+    "language": "zh",
+    "goal": "添加全局自动加载，创建玩家输入动作，运行项目并验证没有错误",
+    "required": [["add_project_autoload"], ["upsert_project_input_action"], ["run_project", "play_and_verify"], ["assert_no_runtime_errors", "play_and_verify"]],
+    "requires_verify": true
+  }
+]
