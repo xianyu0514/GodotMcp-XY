@@ -33,16 +33,21 @@ func test_profile_controls_live_in_one_compact_toolbar():
 	var content: VBoxContainer = VBoxContainer.new()
 	autofree(content)
 	panel._build_preset_row(content)
-	assert_eq(content.get_child_count(), 1, "Profile controls are one cohesive surface")
-	assert_true(content.get_child(0) is PanelContainer, "Profile controls use a subtle panel")
+	assert_eq(content.get_child_count(), 1, "Tool commands are one cohesive surface")
+	assert_true(content.get_child(0) is HBoxContainer, "Commands use a native flat toolbar without a nested card")
 	assert_true(panel._preset_bar is HBoxContainer, "Every profile control shares one horizontal toolbar")
+	assert_not_null(panel._refresh_tools_button, "Refresh lives in the same toolbar as the profile controls")
+	assert_not_null(panel._tools_count_label, "Tool totals live in the same toolbar as the profile controls")
+	assert_eq(panel._refresh_tools_button.get_parent(), panel._preset_bar, "Refresh does not consume a separate row")
+	assert_eq(panel._tools_count_label.get_parent(), panel._preset_bar, "Tool totals do not consume a separate row")
 	assert_eq(panel._preset_description_label.get_parent(), panel._preset_bar, "Description does not create a second row")
 	assert_true(panel._preset_option.size_flags_horizontal == Control.SIZE_EXPAND_FILL, "Dropdown expands in narrow docks")
 	assert_not_null(panel._preset_description_label, "Selected preset has an explanation")
 	assert_not_null(panel._preset_count_label, "Selected preset shows its tool count")
 	assert_false(panel._preset_option.get_item_tooltip(1).is_empty(), "Dropdown items explain the preset on hover")
 	assert_false(panel._preset_option.get_item_text(1).contains("\n"), "Profiles use concise single-line labels")
-	assert_lte(panel._preset_option.custom_minimum_size.y, 42.0, "Larger profile selector stays compact")
+	assert_lte(panel._preset_bar.custom_minimum_size.y, 38.0, "Native command toolbar stays compact")
+	assert_lte(panel._preset_option.custom_minimum_size.y, 36.0, "Profile selector matches Godot toolbar density")
 	assert_gte(panel._preset_option.get_theme_font_size("font_size"), 15, "Profile selection matches editor text scale")
 	assert_gte(panel._preset_description_label.get_theme_font_size("font_size"), 14, "Profile guidance remains legible")
 
@@ -92,6 +97,32 @@ func test_tools_workspace_gives_detail_pane_a_real_sidebar_share():
 	assert_lte(panel._tool_list_pane.size_flags_stretch_ratio, 3.0, "Right sidebar is not squeezed below roughly one quarter")
 	var sidebar_share: float = panel._tool_detail_panel.size.x / panel._tools_middle_split.size.x
 	assert_between(sidebar_share, 0.24, 0.38, "Desktop layout gives the detail sidebar about one quarter to one third")
+	var chrome_height: float = panel._tools_middle_split.global_position.y - tools_tab.global_position.y
+	assert_lte(chrome_height, 92.0, "Command and search bars leave most vertical space to tools")
+
+func test_category_header_is_one_native_toolbar_row():
+	var panel: Node = _make_panel()
+	var tools_tab: VBoxContainer = panel._create_tools_tab()
+	add_child_autofree(tools_tab)
+	tools_tab.size = Vector2(1600, 900)
+	await get_tree().process_frame
+	assert_not_null(panel._tools_header_bar, "Category context uses an explicit header toolbar")
+	assert_eq(panel._detail_title.get_parent(), panel._tools_header_bar, "Category title stays on the header row")
+	assert_eq(panel._detail_desc.get_parent(), panel._tools_header_bar, "Category description stays on the header row")
+	assert_eq(panel._enable_all_button.get_parent(), panel._tools_header_bar, "Bulk actions stay on the header row")
+	assert_eq(panel._disable_all_button.get_parent(), panel._tools_header_bar, "Both bulk actions stay on the header row")
+	assert_lte(panel._tools_header_bar.custom_minimum_size.y, 38.0, "Category context does not become a banner")
+	for chip in panel._scope_chips.values():
+		assert_lte(chip.custom_minimum_size.y, 36.0, "Scope chips use compact toolbar density")
+
+func test_status_bar_keeps_native_editor_height():
+	var panel: Node = _make_panel()
+	var status_bar: Control = panel._create_status_bar()
+	autofree(status_bar)
+	assert_lte(panel._start_button.custom_minimum_size.y, 36.0, "Primary action fits a native editor toolbar")
+	assert_lte(panel._stop_button.custom_minimum_size.y, 36.0, "Secondary action fits a native editor toolbar")
+	var style: StyleBox = status_bar.get_theme_stylebox("panel")
+	assert_lte(style.content_margin_top + style.content_margin_bottom, 8.0, "Status chrome uses restrained vertical padding")
 
 func test_profile_toolbar_applies_a_task_without_unrelated_tools():
 	var panel: Node = _make_panel()

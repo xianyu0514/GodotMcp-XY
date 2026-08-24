@@ -10,6 +10,7 @@ var _enabled: int = 0
 var _total: int = 0
 var _body_font_size: int = 15
 var _ui_scale: float = 1.0
+var _compact: bool = false
 
 func setup(
 	key: String,
@@ -17,20 +18,22 @@ func setup(
 	icon_tex: Texture2D,
 	group: ButtonGroup,
 	body_font_size: int = 15,
-	ui_scale: float = 1.0
+	ui_scale: float = 1.0,
+	compact: bool = false
 ) -> void:
 	category_key = key
 	_base_label = label
 	_body_font_size = maxi(body_font_size, 15)
 	_ui_scale = maxf(ui_scale, 0.75)
+	_compact = compact
 	toggle_mode = true
 	flat = true
 	focus_mode = Control.FOCUS_NONE
 	alignment = HORIZONTAL_ALIGNMENT_LEFT
 	clip_text = true
 	button_group = group
-	custom_minimum_size = Vector2(0, _s(44))
-	add_theme_font_size_override("font_size", _body_font_size)
+	custom_minimum_size = Vector2(0, _s(36 if _compact else 44))
+	add_theme_font_size_override("font_size", maxi(_body_font_size - 1, 14) if _compact else _body_font_size)
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if icon_tex:
 		icon = icon_tex
@@ -66,10 +69,10 @@ func _style(bg: Color, accent: bool) -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
 	style.bg_color = bg
 	style.set_corner_radius_all(int(_s(5)))
-	style.content_margin_left = _s(10)
-	style.content_margin_right = _s(10)
-	style.content_margin_top = _s(8)
-	style.content_margin_bottom = _s(8)
+	style.content_margin_left = _s(9 if _compact else 10)
+	style.content_margin_right = _s(9 if _compact else 10)
+	style.content_margin_top = _s(5 if _compact else 8)
+	style.content_margin_bottom = _s(5 if _compact else 8)
 	if accent:
 		style.border_width_left = int(_s(3))
 		style.border_color = Color(0.40, 0.62, 1.0, 0.95)
