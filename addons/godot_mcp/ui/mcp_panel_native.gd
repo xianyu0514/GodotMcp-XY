@@ -1,6 +1,15 @@
 @tool
 extends VBoxContainer
 
+const QUICK_START_PRESETS: Array[String] = [
+	"game_2d",
+	"game_3d",
+	"ui_localization",
+	"gameplay_scripting",
+	"debugging",
+	"release_export",
+]
+
 var _plugin: EditorPlugin = null
 var _server_core: RefCounted = null
 
@@ -116,6 +125,10 @@ var _export_preset_button: Button = null
 var _import_preset_button: Button = null
 var _preset_file_dialog: FileDialog = null
 var _preset_dialog_save: bool = false
+var _quick_start_title_label: Label = null
+var _quick_start_hint_label: Label = null
+var _quick_start_status_label: Label = null
+var _quick_start_buttons: Dictionary = {}
 
 var _log_file_path: String = "user://mcp_server.log"
 var _log_file_flush_count: int = 10
@@ -193,6 +206,7 @@ func _create_ui() -> void:
 	_tab_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tab_container.add_theme_font_size_override("font_size", 14)
 	add_child(_tab_container)
 
 	var settings_tab: VBoxContainer = _create_settings_tab()
@@ -203,6 +217,9 @@ func _create_ui() -> void:
 
 	_tab_container.set_tab_title(0, _tr("ui.settings"))
 	_tab_container.set_tab_title(1, _tr("ui.tool_manager"))
+	# Tool selection is the first question for new users, so open the guided
+	# quick-start surface instead of dropping them into transport settings.
+	_tab_container.current_tab = 1
 
 	_update_ui_state()
 	_refresh_tools_list()
@@ -223,7 +240,7 @@ func _create_status_bar() -> Control:
 
 	_status_label = Label.new()
 	_status_label.text = _tr("ui.status_unknown")
-	_status_label.add_theme_font_size_override("font_size", 14)
+	_status_label.add_theme_font_size_override("font_size", 16)
 	_status_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	bar.add_child(_status_label)
 
@@ -231,21 +248,30 @@ func _create_status_bar() -> Control:
 	_connection_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_connection_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_connection_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_connection_info_label.add_theme_font_size_override("font_size", 13)
+	_connection_info_label.add_theme_color_override("font_color", Color(0.72, 0.74, 0.80))
 	bar.add_child(_connection_info_label)
 
 	_self_check_button = Button.new()
 	_self_check_button.text = _tr("ui.self_check")
 	_self_check_button.flat = true
+	_self_check_button.custom_minimum_size = Vector2(0, 36)
+	_self_check_button.add_theme_font_size_override("font_size", 13)
 	_self_check_button.pressed.connect(_on_self_check_pressed)
 	bar.add_child(_self_check_button)
 
 	_start_button = Button.new()
 	_start_button.text = _tr("ui.start_server")
+	_start_button.custom_minimum_size = Vector2(132, 38)
+	_start_button.add_theme_font_size_override("font_size", 15)
+	_make_primary_button(_start_button)
 	_start_button.pressed.connect(_on_start_pressed)
 	bar.add_child(_start_button)
 
 	_stop_button = Button.new()
 	_stop_button.text = _tr("ui.stop_server")
+	_stop_button.custom_minimum_size = Vector2(100, 38)
+	_stop_button.add_theme_font_size_override("font_size", 14)
 	_stop_button.pressed.connect(_on_stop_pressed)
 	bar.add_child(_stop_button)
 
@@ -1048,7 +1074,7 @@ func _settings_card(content: VBoxContainer, title: Label) -> VBoxContainer:
 	box.add_theme_constant_override("separation", 8)
 	card.add_child(box)
 
-	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_font_size_override("font_size", 16)
 	title.add_theme_color_override("font_color", Color(0.62, 0.74, 1.0))
 	box.add_child(title)
 	return box
@@ -1059,8 +1085,13 @@ func _settings_row(parent: VBoxContainer, label: Label, control: Control, expand
 	parent.add_child(row)
 
 	label.custom_minimum_size = Vector2(120, 0)
+	label.add_theme_font_size_override("font_size", 14)
 	label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
 	row.add_child(label)
+	var control_minimum: Vector2 = control.custom_minimum_size
+	control_minimum.y = maxf(control_minimum.y, 34.0)
+	control.custom_minimum_size = control_minimum
+	control.add_theme_font_size_override("font_size", 14)
 
 	if expand:
 		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1080,6 +1111,111 @@ func _panel_card_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
+func _quick_start_card_style() -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = Color(0.30, 0.50, 0.95, 0.10)
+	style.border_color = Color(0.40, 0.62, 1.0, 0.52)
+	style.set_border_width_all(1)
+	style.border_width_left = 4
+	style.set_corner_radius_all(8)
+	style.content_margin_left = 16
+	style.content_margin_right = 16
+	style.content_margin_top = 14
+	style.content_margin_bottom = 14
+	return style
+
+func _quick_task_button_style(bg: Color, border: Color) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg
+	style.border_color = border
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 12
+	style.content_margin_right = 12
+	style.content_margin_top = 9
+	style.content_margin_bottom = 9
+	return style
+
+func _build_quick_start(content: VBoxContainer) -> void:
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _quick_start_card_style())
+	content.add_child(card)
+
+	var body: VBoxContainer = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 9)
+	card.add_child(body)
+
+	_quick_start_title_label = Label.new()
+	_quick_start_title_label.text = _tr("ui.quick_start_title")
+	_quick_start_title_label.add_theme_font_size_override("font_size", 20)
+	_quick_start_title_label.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
+	body.add_child(_quick_start_title_label)
+
+	_quick_start_hint_label = Label.new()
+	_quick_start_hint_label.text = _tr("ui.quick_start_hint")
+	_quick_start_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_quick_start_hint_label.add_theme_font_size_override("font_size", 14)
+	_quick_start_hint_label.add_theme_color_override("font_color", Color(0.76, 0.80, 0.88))
+	body.add_child(_quick_start_hint_label)
+
+	var grid: GridContainer = GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	body.add_child(grid)
+
+	_quick_start_buttons.clear()
+	for preset_id in QUICK_START_PRESETS:
+		var button: Button = Button.new()
+		var count: int = _preset_manager.get_preset_enabled_count(preset_id) if _preset_manager else 0
+		button.text = "%s\n%s" % [
+			_tr("ui.preset_" + preset_id),
+			_trf("ui.quick_start_tool_count", [count]),
+		]
+		button.tooltip_text = _tr("ui.preset_desc_" + preset_id)
+		button.custom_minimum_size = Vector2(0, 58)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override("font_size", 14)
+		button.add_theme_stylebox_override("normal", _quick_task_button_style(Color(1, 1, 1, 0.035), Color(1, 1, 1, 0.10)))
+		button.add_theme_stylebox_override("hover", _quick_task_button_style(Color(0.40, 0.62, 1.0, 0.18), Color(0.46, 0.68, 1.0, 0.70)))
+		button.add_theme_stylebox_override("pressed", _quick_task_button_style(Color(0.30, 0.50, 0.95, 0.25), Color(0.46, 0.68, 1.0, 0.90)))
+		button.pressed.connect(_on_quick_start_pressed.bind(preset_id))
+		grid.add_child(button)
+		_quick_start_buttons[preset_id] = button
+
+	_quick_start_status_label = Label.new()
+	_quick_start_status_label.text = _tr("ui.quick_start_status")
+	_quick_start_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_quick_start_status_label.add_theme_font_size_override("font_size", 13)
+	_quick_start_status_label.add_theme_color_override("font_color", Color(0.58, 0.76, 1.0))
+	body.add_child(_quick_start_status_label)
+
+func _on_quick_start_pressed(preset_id: String) -> void:
+	if _preset_manager == null or not _preset_manager.has_preset(preset_id):
+		return
+	_select_preset_option(preset_id)
+	_apply_preset_id(preset_id)
+	var count: int = _preset_manager.get_preset_enabled_count(preset_id)
+	if _quick_start_status_label:
+		_quick_start_status_label.text = _trf("ui.quick_start_applied", [
+			_tr("ui.preset_" + preset_id), count,
+		])
+		_quick_start_status_label.add_theme_color_override("font_color", Color(0.42, 0.86, 0.54))
+
+func _select_preset_option(preset_id: String) -> void:
+	if _preset_manager == null or _preset_option == null:
+		return
+	var index: int = _preset_manager.get_preset_ids().find(preset_id)
+	if index >= 0:
+		_preset_option.select(index)
+		_on_preset_selected(index)
+
+func _apply_preset_id(preset_id: String) -> void:
+	if _preset_manager == null:
+		return
+	var states: Dictionary = _preset_manager.resolve_preset_states(preset_id, _registered_tool_names())
+	_apply_states(states)
+
 func _build_preset_row(content: VBoxContainer) -> void:
 	var card: PanelContainer = PanelContainer.new()
 	card.add_theme_stylebox_override("panel", _panel_card_style())
@@ -1091,7 +1227,7 @@ func _build_preset_row(content: VBoxContainer) -> void:
 
 	_preset_label = Label.new()
 	_preset_label.text = _tr("ui.preset_label")
-	_preset_label.add_theme_font_size_override("font_size", 14)
+	_preset_label.add_theme_font_size_override("font_size", 16)
 	_preset_label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
 	body.add_child(_preset_label)
 
@@ -1101,6 +1237,8 @@ func _build_preset_row(content: VBoxContainer) -> void:
 
 	_preset_option = OptionButton.new()
 	_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_option.custom_minimum_size.y = 38
+	_preset_option.add_theme_font_size_override("font_size", 14)
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
@@ -1110,12 +1248,15 @@ func _build_preset_row(content: VBoxContainer) -> void:
 
 	_apply_preset_button = Button.new()
 	_apply_preset_button.text = _tr("ui.preset_apply")
+	_apply_preset_button.custom_minimum_size.y = 38
+	_apply_preset_button.add_theme_font_size_override("font_size", 14)
+	_make_primary_button(_apply_preset_button)
 	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
 	selection_row.add_child(_apply_preset_button)
 
 	_preset_description_label = Label.new()
 	_preset_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_preset_description_label.add_theme_font_size_override("font_size", 11)
+	_preset_description_label.add_theme_font_size_override("font_size", 13)
 	_preset_description_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
 	body.add_child(_preset_description_label)
 
@@ -1125,7 +1266,7 @@ func _build_preset_row(content: VBoxContainer) -> void:
 
 	_preset_count_label = Label.new()
 	_preset_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_preset_count_label.add_theme_font_size_override("font_size", 10)
+	_preset_count_label.add_theme_font_size_override("font_size", 12)
 	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.62, 0.72))
 	manage_row.add_child(_preset_count_label)
 
@@ -1181,8 +1322,14 @@ func _on_apply_preset_pressed() -> void:
 	var idx: int = _preset_option.selected
 	if idx < 0 or idx >= ids.size():
 		return
-	var states: Dictionary = _preset_manager.resolve_preset_states(ids[idx], _registered_tool_names())
-	_apply_states(states)
+	var preset_id: String = ids[idx]
+	_apply_preset_id(preset_id)
+	if _quick_start_status_label:
+		_quick_start_status_label.text = _trf("ui.quick_start_applied", [
+			_tr("ui.preset_" + preset_id),
+			_preset_manager.get_preset_enabled_count(preset_id),
+		])
+		_quick_start_status_label.add_theme_color_override("font_color", Color(0.42, 0.86, 0.54))
 
 func _ensure_preset_file_dialog() -> void:
 	if _preset_file_dialog and is_instance_valid(_preset_file_dialog):
@@ -1246,15 +1393,19 @@ func _create_tools_tab() -> VBoxContainer:
 
 	_refresh_tools_button = Button.new()
 	_refresh_tools_button.text = _tr("ui.refresh_tools")
+	_refresh_tools_button.custom_minimum_size.y = 34
+	_refresh_tools_button.add_theme_font_size_override("font_size", 13)
 	_refresh_tools_button.pressed.connect(_refresh_tools_list)
 	toolbar.add_child(_refresh_tools_button)
 
 	_tools_count_label = Label.new()
 	_tools_count_label.text = _tr("ui.tools_init")
 	_tools_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_count_label.add_theme_font_size_override("font_size", 13)
 	_tools_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	toolbar.add_child(_tools_count_label)
 
+	_build_quick_start(content)
 	_build_preset_row(content)
 
 	var search_row: HBoxContainer = HBoxContainer.new()
@@ -1265,6 +1416,8 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	_tools_search_edit.clear_button_enabled = true
 	_tools_search_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_search_edit.custom_minimum_size.y = 38
+	_tools_search_edit.add_theme_font_size_override("font_size", 14)
 	_tools_search_edit.text_changed.connect(_on_tools_search_changed)
 	search_row.add_child(_tools_search_edit)
 
@@ -1277,7 +1430,7 @@ func _create_tools_tab() -> VBoxContainer:
 	content.add_child(split)
 
 	var nav_scroll: ScrollContainer = ScrollContainer.new()
-	nav_scroll.custom_minimum_size = Vector2(190, 0)
+	nav_scroll.custom_minimum_size = Vector2(215, 0)
 	nav_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	nav_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	split.add_child(nav_scroll)
@@ -1314,7 +1467,7 @@ func _create_tools_tab() -> VBoxContainer:
 
 	_detail_desc = Label.new()
 	_detail_desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_detail_desc.add_theme_font_size_override("font_size", 12)
+	_detail_desc.add_theme_font_size_override("font_size", 14)
 	_detail_desc.add_theme_color_override("font_color", Color(0.6, 0.6, 0.64))
 	header_box.add_child(_detail_desc)
 
@@ -1324,11 +1477,15 @@ func _create_tools_tab() -> VBoxContainer:
 
 	_enable_all_button = Button.new()
 	_enable_all_button.text = _tr("ui.enable_current_category")
+	_enable_all_button.custom_minimum_size.y = 34
+	_enable_all_button.add_theme_font_size_override("font_size", 13)
 	_enable_all_button.pressed.connect(_on_enable_all_pressed)
 	action_row.add_child(_enable_all_button)
 
 	_disable_all_button = Button.new()
 	_disable_all_button.text = _tr("ui.disable_current_category")
+	_disable_all_button.custom_minimum_size.y = 34
+	_disable_all_button.add_theme_font_size_override("font_size", 13)
 	_disable_all_button.pressed.connect(_on_disable_all_pressed)
 	action_row.add_child(_disable_all_button)
 
@@ -1337,7 +1494,7 @@ func _create_tools_tab() -> VBoxContainer:
 	action_row.add_child(action_spacer)
 
 	_detail_count = Label.new()
-	_detail_count.add_theme_font_size_override("font_size", 11)
+	_detail_count.add_theme_font_size_override("font_size", 13)
 	_detail_count.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	action_row.add_child(_detail_count)
 
@@ -1449,7 +1606,7 @@ func _update_ui_state() -> void:
 		elif mode == "stdio" and is_running:
 			_connection_info_label.text = _tr("ui.connection_stdio")
 		else:
-			_connection_info_label.text = ""
+			_connection_info_label.text = _tr("ui.start_flow_hint")
 
 func _set_controls_disabled(container: Container, disabled: bool) -> void:
 	for child in container.get_children():
@@ -1656,7 +1813,7 @@ func _build_category_nav() -> void:
 func _add_nav_section(title: String) -> void:
 	var label: Label = Label.new()
 	label.text = title
-	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_font_size_override("font_size", 12)
 	label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.54))
 	label.add_theme_constant_override("margin_top", 8)
 	_category_nav_container.add_child(label)
@@ -2180,6 +2337,22 @@ func _refresh_translations() -> void:
 				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
 				_preset_option.set_item_tooltip(i, _tr("ui.preset_desc_" + preset_ids[i]))
 		_on_preset_selected(_preset_option.selected)
+	if _quick_start_title_label:
+		_quick_start_title_label.text = _tr("ui.quick_start_title")
+	if _quick_start_hint_label:
+		_quick_start_hint_label.text = _tr("ui.quick_start_hint")
+	if _quick_start_status_label:
+		_quick_start_status_label.text = _tr("ui.quick_start_status")
+		_quick_start_status_label.add_theme_color_override("font_color", Color(0.58, 0.76, 1.0))
+	if _preset_manager:
+		for preset_id in _quick_start_buttons:
+			var button: Button = _quick_start_buttons[preset_id]
+			if is_instance_valid(button):
+				button.text = "%s\n%s" % [
+					_tr("ui.preset_" + preset_id),
+					_trf("ui.quick_start_tool_count", [_preset_manager.get_preset_enabled_count(preset_id)]),
+				]
+				button.tooltip_text = _tr("ui.preset_desc_" + preset_id)
 	for entry in _section_titles:
 		var label: Label = entry["label"]
 		if is_instance_valid(label):
@@ -2224,7 +2397,7 @@ func _update_connection_info() -> void:
 	elif mode == "stdio" and is_running:
 		_connection_info_label.text = _tr("ui.connection_stdio")
 	else:
-		_connection_info_label.text = ""
+		_connection_info_label.text = _tr("ui.start_flow_hint")
 
 func _load_settings() -> void:
 	if not _settings_manager:

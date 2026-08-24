@@ -32,6 +32,7 @@ func test_show_empty_renders_hint():
 	var panel: MCPToolDetailPanel = _make_panel()
 	panel.show_empty()
 	assert_gt(panel._content.get_child_count(), 0, "Empty state still renders a hint")
+	assert_gte(panel._content.get_child(0).get_theme_font_size("font_size"), 14, "Empty-state guidance is readable")
 
 func test_show_tool_populates_content():
 	var panel: MCPToolDetailPanel = _make_panel()
