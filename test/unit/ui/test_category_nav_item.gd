@@ -13,8 +13,8 @@ func test_setup_stores_key():
 	var item: MCPCategoryNavItem = _make_item("Node-Read", "Nodes")
 	assert_eq(item.category_key, "Node-Read", "Nav item remembers its category key")
 	assert_true(item.toggle_mode, "Nav item is a toggle so selection sticks")
-	assert_gte(item.custom_minimum_size.y, 36.0, "Navigation targets are large enough to scan and click")
-	assert_gte(item.get_theme_font_size("font_size"), 13, "Navigation labels remain readable")
+	assert_gte(item.custom_minimum_size.y, 42.0, "Navigation targets match the editor's click scale")
+	assert_gte(item.get_theme_font_size("font_size"), 15, "Navigation labels match the editor text scale")
 
 func test_count_appears_in_text():
 	var item: MCPCategoryNavItem = _make_item("Node-Read", "Nodes")

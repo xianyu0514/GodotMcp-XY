@@ -28,8 +28,9 @@ func _left_click() -> InputEventMouseButton:
 func test_set_selected_tracks_state():
 	var item: MCPToolItem = _make_item("create_node")
 	assert_false(item.is_selected(), "Rows start unselected")
-	assert_gte(item.custom_minimum_size.y, 42.0, "Tool rows provide a readable click target")
-	assert_gte(item.get_child(1).get_theme_font_size("font_size"), 13, "Tool names use a readable font size")
+	assert_gte(item.custom_minimum_size.y, 50.0, "Tool rows match the editor's readable click target")
+	assert_gte(item.get_child(1).get_theme_font_size("font_size"), 15, "Tool names match the editor text scale")
+	assert_gte(item.get_child(3).get_theme_font_size("font_size"), 14, "Tool descriptions remain readable")
 	item.set_selected(true)
 	assert_true(item.is_selected(), "set_selected(true) marks the row selected")
 	item.set_selected(false)
@@ -49,6 +50,8 @@ func test_set_selected_does_not_emit():
 
 func test_group_lists_its_tool_items():
 	var group: MCPToolGroupItem = _make_group()
+	assert_gte(group._group_check.get_theme_font_size("font_size"), 16, "Group headings stay above body text")
+	assert_gte(group._count_label.get_theme_font_size("font_size"), 14, "Group counts do not shrink into metadata noise")
 	var items: Array = group.get_tool_items()
 	assert_eq(items.size(), 2, "get_tool_items returns every tool row")
 	var names: Array = [items[0].get_tool_name(), items[1].get_tool_name()]
