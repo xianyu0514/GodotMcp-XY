@@ -123,9 +123,11 @@ func test_autoload_registered_in_enter_tree():
 	# Verify _ensure_runtime_probe_autoload is called in _enter_tree
 	assert_true(source_code.contains("_ensure_runtime_probe_autoload"), "_enter_tree should call _ensure_runtime_probe_autoload")
 	# Verify correct ordering: _register_all_tools -> _ensure_runtime_probe_autoload -> _create_main_screen_panel
-	var register_pos: int = source_code.find("_register_all_tools")
-	var autoload_pos: int = source_code.find("_ensure_runtime_probe_autoload")
-	var panel_pos: int = source_code.find("_create_main_screen_panel")
+	# Match the indented calls inside _enter_tree rather than the first textual
+	# occurrence, which may be a method definition elsewhere in the file.
+	var register_pos: int = source_code.find("\t_register_all_tools()")
+	var autoload_pos: int = source_code.find("\t_ensure_runtime_probe_autoload()")
+	var panel_pos: int = source_code.find("\t_create_main_screen_panel()")
 	assert_true(register_pos >= 0, "_register_all_tools should exist in source")
 	assert_true(autoload_pos >= 0, "_ensure_runtime_probe_autoload should exist in source")
 	assert_true(panel_pos >= 0, "_create_main_screen_panel should exist in source")

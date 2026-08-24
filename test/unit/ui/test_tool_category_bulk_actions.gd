@@ -57,3 +57,12 @@ func test_enable_all_only_changes_current_group_category():
 	assert_true(node_group.get_tool_items()[0].is_enabled(), "Current group tool is enabled")
 	assert_false(project_group.get_tool_items()[0].is_enabled(), "Other category remains unchanged")
 	panel.free()
+
+func test_domain_lists_use_type_safe_assignment():
+	# Dynamically dispatched classifier methods return Variant/Array at the call
+	# site. Assigning that value directly to Array[String] fails under Godot 4.7,
+	# including when a conditional expression has an untyped [] fallback.
+	var panel_script: GDScript = PanelScript
+	var source: String = panel_script.source_code
+	assert_true(source.contains("_domain_names.assign("), "Domain names should be copied into the typed array with assign()")
+	assert_true(source.contains("domain_tools.assign("), "Per-domain tool names should be copied into the typed array with assign()")
