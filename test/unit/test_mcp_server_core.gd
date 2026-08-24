@@ -730,8 +730,8 @@ func test_cache_lru_eviction():
 
 func test_spill_large_result():
 	# A result whose JSON exceeds MAX_INLINE_RESULT_BYTES is spilled to disk and
-	# returned as a truncated head/tail preview — isError stays false and the
-	# spill file contains the full JSON.
+	# returned as a truncated head/tail preview plus a standard resource_link —
+	# isError stays false and the spill file contains the full JSON.
 	var big_value: Dictionary = {"items": []}
 	for i in range(3000):
 		big_value["items"].append({"index": i, "payload": "x".repeat(40)})
@@ -755,9 +755,141 @@ func test_spill_large_result():
 	assert_true(FileAccess.get_file_as_string(path).length() > 0, "Spill file must contain the full JSON")
 	assert_false(str(payload.get("head", "")).is_empty(), "head preview must be non-empty")
 	assert_false(str(payload.get("tail", "")).is_empty(), "tail preview must be non-empty")
+	var content: Array = result.get("content", [])
+	assert_eq(content.size(), 2, "Spilled results expose preview text plus one lossless resource link")
+	if content.size() >= 2:
+		var link: Dictionary = content[1]
+		assert_eq(link.get("type", ""), "resource_link", "Full result uses the standard MCP content type")
+		assert_eq(link.get("uri", ""), payload.get("resource_uri", ""),
+			"Preview and resource link must advertise the same stable URI")
+		assert_eq(int(link.get("size", 0)), int(payload.get("total_bytes", -1)),
+			"Resource link reports the exact raw result size")
+		assert_eq(link.get("mimeType", ""), "text/plain; charset=utf-8",
+			"Paged JSON fragments are correctly identified as UTF-8 text")
+		var handle: String = String(link.get("uri", "")).trim_prefix(_core.RESULT_RESOURCE_URI_PREFIX)
+		assert_eq(handle.length(), 64, "Result link uses a full SHA-256 content handle")
+		assert_eq(FileAccess.get_sha256(path), handle,
+			"Advertised handle must verify the exact immutable spill file")
+	var list_response: Dictionary = _core._handle_resources_list({"jsonrpc": "2.0", "id": 2})
+	assert_eq(list_response.get("result", {}).get("resources", []).size(), 0,
+		"Dynamic result links never bloat or invalidate resources/list")
 	# Clean up the test artifact so the repo stays clean.
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+func test_spilled_result_resource_pages_reconstruct_exact_unicode_json() -> void:
+	var big_value: Dictionary = {"status": "complete", "items": []}
+	for i in range(2400):
+		big_value["items"].append({"index": i, "label": "场景🎮-%d" % i, "payload": "x".repeat(32)})
+	var expected_json: String = JSON.stringify(big_value)
+	_core.register_tool("paged_result_tool", "Paged result", {"type": "object"},
+		func(args): return big_value, {}, {"readOnlyHint": true})
+	var call_response: Dictionary = await _core._handle_request({
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": {"name": "paged_result_tool", "arguments": {}}
+	})
+	var call_result: Dictionary = call_response.get("result", {})
+	var preview_text: String = String(call_result.get("content", [{}])[0].get("text", "{}"))
+	var preview: Dictionary = JSON.parse_string(preview_text)
+	var resource_uri: String = String(preview.get("resource_uri", ""))
+	assert_false(resource_uri.is_empty(), "Oversized payload must expose a directly readable resource URI")
+	if resource_uri.is_empty():
+		return
+	var inline_bytes: int = JSON.stringify(call_result).to_utf8_buffer().size()
+	var full_bytes: int = expected_json.to_utf8_buffer().size()
+	assert_lte(inline_bytes, int(full_bytes * 0.10),
+		"Initial response should avoid at least 90% of full-result bytes without deleting access")
+
+	var reconstructed: String = ""
+	var current_uri: String = resource_uri
+	var page_count: int = 0
+	while not current_uri.is_empty() and page_count < 100:
+		var page_response: Dictionary = await _core._handle_request({
+			"jsonrpc": "2.0", "id": page_count + 2,
+			"method": "resources/read",
+			"params": {"uri": current_uri}
+		})
+		assert_false(page_response.has("error"), "Every advertised result page URI must remain readable")
+		if page_response.has("error"):
+			break
+		var page_result: Dictionary = page_response.get("result", {})
+		var contents: Array = page_result.get("contents", [])
+		assert_eq(contents.size(), 1, "Each resource read returns one deterministic JSON fragment")
+		if contents.is_empty():
+			break
+		var page_meta: Dictionary = page_result.get("_meta", {})
+		var fragment: String = String((contents[0] as Dictionary).get("text", ""))
+		assert_eq(fragment.to_utf8_buffer().size(), int(page_meta.get("returnedBytes", -1)),
+			"Page metadata reports its exact UTF-8 byte count")
+		assert_lte(int(page_meta.get("returnedBytes", 999999)), _core.RESULT_RESOURCE_PAGE_BYTES,
+			"Every page remains within the fixed context budget")
+		reconstructed += fragment
+		page_count += 1
+		if bool(page_meta.get("hasMore", false)):
+			current_uri = String(page_meta.get("nextUri", ""))
+			assert_false(current_uri.is_empty(), "A non-final page must provide its exact continuation URI")
+		else:
+			current_uri = ""
+	assert_gt(page_count, 1, "The fixture must exercise multiple bounded resource pages")
+	assert_eq(_core._hash_string(reconstructed), _core._hash_string(expected_json),
+		"Concatenating advertised pages must reproduce the original result SHA-256")
+	assert_eq(reconstructed.to_utf8_buffer().size(), int(preview.get("total_bytes", -1)),
+		"Preview byte count must describe the complete lossless payload")
+	print("[LosslessResult] inline=%d full=%d avoided=%.2f%% pages=%d sha256=%s" % [
+		inline_bytes, full_bytes, (1.0 - float(inline_bytes) / float(full_bytes)) * 100.0,
+		page_count, _core._hash_string(reconstructed)
+	])
+	var path: String = String(preview.get("path", ""))
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+func test_spilled_result_resource_rejects_invalid_cursor_without_path_access() -> void:
+	var big_value: Dictionary = {"items": []}
+	for i in range(1800):
+		big_value["items"].append({"index": i, "payload": "z".repeat(40)})
+	_core.register_tool("cursor_result_tool", "Cursor result", {"type": "object"},
+		func(args): return big_value, {}, {"readOnlyHint": true})
+	var response: Dictionary = await _core._handle_request({
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": {"name": "cursor_result_tool", "arguments": {}}
+	})
+	var preview: Dictionary = JSON.parse_string(String(
+		response.get("result", {}).get("content", [{}])[0].get("text", "{}")))
+	var uri: String = String(preview.get("resource_uri", ""))
+	assert_false(uri.is_empty(), "Fixture must spill before cursor validation")
+	if uri.is_empty():
+		return
+	var invalid_cursor: Dictionary = await _core._handle_request({
+		"jsonrpc": "2.0", "id": 2, "method": "resources/read",
+		"params": {"uri": uri + "?cursor=-1"}
+	})
+	assert_eq(invalid_cursor.get("error", {}).get("code", 0), MCPTypes.ERROR_INVALID_PARAMS,
+		"Negative cursors fail closed as invalid params")
+	var traversal: Dictionary = await _core._handle_request({
+		"jsonrpc": "2.0", "id": 3, "method": "resources/read",
+		"params": {"uri": _core.RESULT_RESOURCE_URI_PREFIX + "../project.godot"}
+	})
+	assert_eq(traversal.get("error", {}).get("code", 0), MCPTypes.ERROR_INVALID_PARAMS,
+		"Result handles cannot escape the spill directory")
+	var path: String = String(preview.get("path", ""))
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+func test_large_tool_error_stays_complete_and_inline() -> void:
+	var full_error: String = "critical validation detail ".repeat(3000)
+	_core.register_tool("large_error_tool", "Large error", {"type": "object"},
+		func(args): return {"error": full_error, "status": "failed"})
+	var response: Dictionary = await _core._handle_request({
+		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": {"name": "large_error_tool", "arguments": {}}
+	})
+	var result: Dictionary = response.get("result", {})
+	assert_true(result.get("isError", false), "Large business errors remain actionable tool errors")
+	assert_eq(result.get("content", []).size(), 1, "Errors never replace details with a resource link")
+	var payload: Dictionary = JSON.parse_string(String(
+		result.get("content", [{}])[0].get("text", "{}")))
+	assert_eq(String(payload.get("error", "")), full_error,
+		"Performance controls must never truncate critical failure information")
 
 func test_spill_exempt_tools_not_spilled():
 	# File-content tools in SPILL_EXEMPT_TOOLS keep returning their content

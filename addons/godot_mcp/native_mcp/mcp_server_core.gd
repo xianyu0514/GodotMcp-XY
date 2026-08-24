@@ -110,6 +110,16 @@ const SPILL_PREVIEW_TAIL_CHARS: int = 1024
 ## Directory (res:// path) where spilled large results are written.
 const SPILL_OUTPUT_DIR: String = "res://.mcp/out"
 
+## Standard MCP resource URI used to retrieve every byte of a spilled result.
+## The content-addressed handle is a SHA-256 digest, so the URI is deterministic
+## and cannot be used to escape SPILL_OUTPUT_DIR.
+const RESULT_RESOURCE_URI_PREFIX: String = "godot-mcp://result/"
+const RESULT_RESOURCE_HANDLE_LENGTH: int = 64
+
+## Maximum raw UTF-8 bytes returned by one resources/read call. Pages are cut
+## only on code-point boundaries; clients concatenate their text in URI order.
+const RESULT_RESOURCE_PAGE_BYTES: int = 16384
+
 ## Tools whose results are never spilled: file-content/log readers where the
 ## spill file would merely duplicate the same text and re-reading it through the
 ## tool could ping-pong. These keep returning their content inline.
@@ -864,11 +874,14 @@ func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 		spilled = _maybe_spill_result(json_text, tool)
 		if not spilled.is_empty():
 			json_text = JSON.stringify(spilled)
-	var response_result: Dictionary = {
-		"content": [{
+	var content_blocks: Array[Dictionary] = [{
 			"type": "text",
 			"text": json_text
-		}],
+		}]
+	if not spilled.is_empty():
+		content_blocks.append(_build_spilled_result_resource_link(spilled, tool))
+	var response_result: Dictionary = {
+		"content": content_blocks,
 		"isError": has_error
 	}
 	# On a spill the full payload lives on disk; echoing it as structuredContent
@@ -909,6 +922,12 @@ func _handle_resource_read(message: Dictionary) -> Dictionary:
 	var uri: String = params.get("uri", "")
 	
 	_log_info("Resource read: " + uri)
+
+	# Spilled tool results are content-addressed dynamic resources. They are
+	# linked directly from CallToolResult and intentionally do not bloat
+	# resources/list or tools/list.
+	if uri.begins_with(RESULT_RESOURCE_URI_PREFIX):
+		return _handle_spilled_result_resource_read(id, uri)
 	
 	# 检查资源是否存在
 	if not _resources.has(uri):
@@ -1618,25 +1637,50 @@ func clear_cache() -> void:
 func _maybe_spill_result(json_text: String, tool: MCPTypes.MCPTool) -> Dictionary:
 	if json_text.is_empty() or tool.name in SPILL_EXEMPT_TOOLS:
 		return {}
-	var size_bytes: int = json_text.to_utf8_buffer().size()
+	var json_bytes: PackedByteArray = json_text.to_utf8_buffer()
+	var size_bytes: int = json_bytes.size()
 	if size_bytes <= MAX_INLINE_RESULT_BYTES:
 		return {}
-	var path: String = _spill_result_to_disk(json_text)
+	var content_sha256: String = _hash_bytes(json_bytes)
+	if content_sha256.is_empty():
+		return {}
+	var path: String = _spill_result_to_disk(json_bytes, content_sha256)
 	if path.is_empty():
 		return {}
+	var resource_uri: String = RESULT_RESOURCE_URI_PREFIX + content_sha256
 	return {
 		"truncated": true,
 		"total_bytes": size_bytes,
 		"path": path,
+		"resource_uri": resource_uri,
+		"page_bytes": RESULT_RESOURCE_PAGE_BYTES,
+		"content_sha256": content_sha256,
 		"head": json_text.substr(0, SPILL_PREVIEW_HEAD_CHARS),
 		"tail": json_text.substr(maxi(0, json_text.length() - SPILL_PREVIEW_TAIL_CHARS)),
 		"content_type": "application/json",
-		"resume_hint": "read the file at " + path + " with a script/resource tool for the full result"
+		"resume_hint": "Follow the resource_link with resources/read, then follow result._meta.nextUri while hasMore=true. Concatenating page text reconstructs the exact application/json payload. Legacy file: " + path
 	}
 
-## Write `json_text` to <SPILL_OUTPUT_DIR>/<content_hash>.json and return the
-## path; returns "" on any failure (the caller then falls back to inline).
-func _spill_result_to_disk(json_text: String) -> String:
+func _build_spilled_result_resource_link(spilled: Dictionary, tool: MCPTypes.MCPTool) -> Dictionary:
+	return {
+		"type": "resource_link",
+		"uri": String(spilled.get("resource_uri", "")),
+		"name": tool.name + "-full-result.json",
+		"title": "Full result from " + tool.name,
+		"description": "Lossless paged JSON source. Read this URI, then follow result._meta.nextUri until hasMore is false; concatenate page text in order.",
+		"mimeType": "text/plain; charset=utf-8",
+		"size": int(spilled.get("total_bytes", 0)),
+		"_meta": {
+			"contentType": "application/json",
+			"contentSha256": String(spilled.get("content_sha256", "")),
+			"pageBytes": RESULT_RESOURCE_PAGE_BYTES
+		}
+	}
+
+## Write `json_bytes` to <SPILL_OUTPUT_DIR>/<sha256>.json and return the path.
+## Identical content reuses its existing immutable file without another write;
+## returns "" on failure so callers can preserve the complete inline response.
+func _spill_result_to_disk(json_bytes: PackedByteArray, content_sha256: String) -> String:
 	var err: Error = DirAccess.make_dir_recursive_absolute(SPILL_OUTPUT_DIR)
 	if err != OK:
 		var root: DirAccess = DirAccess.open("res://")
@@ -1645,19 +1689,130 @@ func _spill_result_to_disk(json_text: String) -> String:
 	if err != OK:
 		_log_warn("Spill: failed to create output dir " + SPILL_OUTPUT_DIR + " (error " + str(err) + ")")
 		return ""
-	var path: String = SPILL_OUTPUT_DIR + "/" + _hash_string(json_text) + ".json"
+	var path: String = SPILL_OUTPUT_DIR + "/" + content_sha256 + ".json"
+	if FileAccess.file_exists(path):
+		# Do not trust a same-sized file: project-local output can be edited out of
+		# band. Reuse only when its digest still matches the content-addressed URI.
+		if FileAccess.get_sha256(path) == content_sha256:
+			return path
 	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
 	if not file:
 		_log_warn("Spill: failed to open " + path + " for writing; falling back to inline")
 		return ""
-	file.store_string(json_text)
+	file.store_buffer(json_bytes)
 	file.close()
-	_log_info("Spilled large result (%d bytes) to %s" % [json_text.to_utf8_buffer().size(), path])
+	_log_info("Spilled large result (%d bytes) to %s" % [json_bytes.size(), path])
 	return path
 
-## Deterministic short content hash used for spill filenames.
+## Deterministic cryptographic content hash used for immutable result handles.
+static func _hash_bytes(value: PackedByteArray) -> String:
+	var context: HashingContext = HashingContext.new()
+	if context.start(HashingContext.HASH_SHA256) != OK:
+		return ""
+	if context.update(value) != OK:
+		return ""
+	return context.finish().hex_encode()
+
 static func _hash_string(value: String) -> String:
-	return "%08x" % (value.hash() & 0xFFFFFFFF)
+	return _hash_bytes(value.to_utf8_buffer())
+
+func _handle_spilled_result_resource_read(id: Variant, uri: String) -> Dictionary:
+	var parsed: Dictionary = _parse_result_resource_uri(uri)
+	if parsed.has("error"):
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_INVALID_PARAMS, String(parsed.get("error", "Invalid result resource URI")))
+	var handle: String = String(parsed.get("handle", ""))
+	var cursor: int = int(parsed.get("cursor", 0))
+	var path: String = SPILL_OUTPUT_DIR + "/" + handle + ".json"
+	if not FileAccess.file_exists(path):
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_RESOURCE_NOT_FOUND, "Result resource is unavailable: " + handle)
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_RESOURCE_NOT_FOUND, "Result resource could not be opened: " + handle)
+	var total_bytes: int = file.get_length()
+	if cursor < 0 or cursor > total_bytes:
+		file.close()
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_INVALID_PARAMS, "Result cursor is outside the payload")
+	file.seek(cursor)
+	# Read a few lookahead bytes so the page can back up to a UTF-8 boundary
+	# without loading or decoding the complete spilled result.
+	var read_size: int = mini(total_bytes - cursor, RESULT_RESOURCE_PAGE_BYTES + 4)
+	var buffer: PackedByteArray = file.get_buffer(read_size)
+	file.close()
+	if cursor < total_bytes and not buffer.is_empty() and (int(buffer[0]) & 0xC0) == 0x80:
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_INVALID_PARAMS, "Result cursor must come from an advertised nextUri")
+	var page_size: int = mini(RESULT_RESOURCE_PAGE_BYTES, buffer.size())
+	if cursor + page_size < total_bytes:
+		while page_size > 0 and page_size < buffer.size() and (int(buffer[page_size]) & 0xC0) == 0x80:
+			page_size -= 1
+	if page_size == 0 and cursor < total_bytes:
+		return MCPTypes.create_error_response(
+			id, MCPTypes.ERROR_INTERNAL_ERROR, "Could not find a UTF-8 page boundary")
+	var fragment_bytes: PackedByteArray = buffer.slice(0, page_size)
+	var fragment: String = fragment_bytes.get_string_from_utf8()
+	var next_cursor: int = cursor + page_size
+	var has_more: bool = next_cursor < total_bytes
+	var meta: Dictionary = {
+		"contentType": "application/json",
+		"contentSha256": handle,
+		"cursor": str(cursor),
+		"returnedBytes": page_size,
+		"totalBytes": total_bytes,
+		"pageBytes": RESULT_RESOURCE_PAGE_BYTES,
+		"hasMore": has_more
+	}
+	if has_more:
+		meta["nextCursor"] = str(next_cursor)
+		meta["nextUri"] = RESULT_RESOURCE_URI_PREFIX + handle + "?cursor=" + str(next_cursor)
+	var contents_meta: Dictionary = meta.duplicate(true)
+	return MCPTypes.create_response(id, {
+		"contents": [{
+			"uri": uri,
+			"mimeType": "text/plain; charset=utf-8",
+			"text": fragment,
+			"_meta": contents_meta
+		}],
+		"_meta": meta
+	})
+
+func _parse_result_resource_uri(uri: String) -> Dictionary:
+	if not uri.begins_with(RESULT_RESOURCE_URI_PREFIX):
+		return {"error": "Unsupported result resource URI"}
+	var suffix: String = uri.trim_prefix(RESULT_RESOURCE_URI_PREFIX)
+	var query_at: int = suffix.find("?")
+	var handle: String = suffix if query_at < 0 else suffix.substr(0, query_at)
+	if not _is_valid_result_handle(handle):
+		return {"error": "Invalid result resource handle"}
+	var cursor: int = 0
+	if query_at >= 0:
+		var query: String = suffix.substr(query_at + 1)
+		if query.is_empty():
+			return {"error": "Empty result resource query"}
+		var cursor_seen: bool = false
+		for pair_value in query.split("&", false):
+			var pair: String = String(pair_value)
+			var parts: PackedStringArray = pair.split("=", true, 1)
+			if parts.size() != 2 or parts[0] != "cursor" or cursor_seen:
+				return {"error": "Only one cursor query parameter is supported"}
+			var cursor_text: String = parts[1]
+			if not cursor_text.is_valid_int():
+				return {"error": "Result cursor must be an integer"}
+			cursor = int(cursor_text)
+			cursor_seen = true
+	return {"handle": handle, "cursor": cursor}
+
+static func _is_valid_result_handle(handle: String) -> bool:
+	if handle.length() != RESULT_RESOURCE_HANDLE_LENGTH:
+		return false
+	for index in range(handle.length()):
+		var code: int = handle.unicode_at(index)
+		if not (code >= 48 and code <= 57) and not (code >= 97 and code <= 102):
+			return false
+	return true
 
 # ============================================================================
 # 配置方法
