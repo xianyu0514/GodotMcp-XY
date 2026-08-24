@@ -11,6 +11,7 @@ class FakeServerCore:
 	var notified: int = 0
 	var bulk_apply_calls: int = 0
 	var catalog_revision: int = 7
+	var registry_revision: int = 0
 
 	func _init() -> void:
 		classifier = ClassifierScript.new()
@@ -26,6 +27,7 @@ class FakeServerCore:
 			"output_schema": {"type": "object", "properties": {"result": {"type": "string"}}},
 			"annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 		}
+		registry_revision += 1
 
 	func get_tool(name: String):
 		return tools.get(name, null)
@@ -83,6 +85,9 @@ class FakeServerCore:
 
 	func get_tool_catalog_revision() -> int:
 		return catalog_revision
+
+	func get_tool_registry_revision() -> int:
+		return registry_revision
 
 	func notify_tool_list_changed() -> void:
 		notified += 1
@@ -272,6 +277,11 @@ func test_enable_tools_repeated_workflow_keeps_catalog_revision_stable():
 	assert_eq(repeated.get("catalog_revision", 0), first_revision,
 		"A repeated task must preserve the tools/list cache key")
 	assert_eq(_core.notified, 1, "Only the first activation should refresh client schemas")
+	var diagnostics: Dictionary = _tool._workflow_router.get_diagnostics()
+	assert_eq(diagnostics.get("route_computations", -1), 1,
+		"Repeated workflow activation must reuse the route computation")
+	assert_eq(diagnostics.get("route_cache_hits", -1), 1,
+		"Visibility changes must preserve the immutable workflow route cache")
 
 func test_enable_tools_workflow_rejects_blank_intent():
 	var result: Dictionary = _tool._tool_enable_tools({"workflow_query": "   "})

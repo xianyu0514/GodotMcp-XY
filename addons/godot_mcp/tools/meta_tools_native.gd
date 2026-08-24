@@ -10,12 +10,15 @@ extends RefCounted
 
 const PRESET_MANAGER_PATH: String = "res://addons/godot_mcp/native_mcp/mcp_tool_preset_manager.gd"
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
+const TranslationManagerScript = preload("res://addons/godot_mcp/native_mcp/translation_manager.gd")
 const SEARCH_LIMIT_DEFAULT: int = 12
 const SEARCH_LIMIT_MAX: int = 50
 
 var _server_core: RefCounted = null
 var _preset_manager: RefCounted = null
 var _workflow_router: RefCounted = WorkflowRouterScript.new()
+var _routing_hints: Dictionary = {}
+var _routing_hints_loaded: bool = false
 
 func initialize(_editor_interface: EditorInterface) -> void:
 	pass
@@ -52,6 +55,17 @@ func _get_catalog_revision() -> int:
 	if _server_core and _server_core.has_method("get_tool_catalog_revision"):
 		return int(_server_core.get_tool_catalog_revision())
 	return 0
+
+func _get_registry_revision() -> int:
+	if _server_core and _server_core.has_method("get_tool_registry_revision"):
+		return int(_server_core.get_tool_registry_revision())
+	return -1
+
+func _get_routing_hints() -> Dictionary:
+	if not _routing_hints_loaded:
+		_routing_hints = TranslationManagerScript.new().load_locale("zh")
+		_routing_hints_loaded = true
+	return _routing_hints
 
 func _sorted_registered_tools() -> Array:
 	var registered: Array = _server_core.get_registered_tools()
@@ -219,8 +233,14 @@ func _tool_search_tools(params: Dictionary) -> Dictionary:
 		registered.append(info)
 	if mode == "workflow":
 		var workflow_budget: int = int(params.get("workflow_tool_budget", 8))
+		# Only the complete immutable catalog may share the persistent capability
+		# index. Filtered searches build a short-lived local index instead.
+		var route_revision: int = -1
+		if group_filter.is_empty() and not enabled_only:
+			route_revision = _get_registry_revision()
 		return {
-			"workflow": _workflow_router.route(query_raw, registered, workflow_budget),
+			"workflow": _workflow_router.route(
+				query_raw, registered, workflow_budget, route_revision, _get_routing_hints()),
 			"query": query_raw,
 			"catalog_revision": _get_catalog_revision()
 		}
@@ -380,7 +400,8 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 			return {"error": "workflow_query cannot be combined with tools, groups, or preset"}
 		if bool(params.get("exclusive", false)) or (params.has("enabled") and not bool(params.get("enabled", true))):
 			return {"error": "workflow_query cannot be combined with exclusive=true or enabled=false"}
-		workflow = _workflow_router.route(workflow_query, registered)
+		workflow = _workflow_router.route(
+			workflow_query, registered, 8, _get_registry_revision(), _get_routing_hints())
 		if workflow.has("error"):
 			return {"error": String(workflow.get("error", "Unable to route workflow intent"))}
 		var routed_tools: Array[String] = []

@@ -164,6 +164,9 @@ var _tool_list_dirty: bool = false  # 工具列表变更标记
 var _tool_list_cache: Array[Dictionary] = []
 var _tool_list_cache_valid: bool = false
 var _tool_catalog_revision: int = 0
+# Definition-only revision for immutable routing/search indices. Unlike the
+# catalog revision, visibility changes do not advance this value.
+var _tool_registry_revision: int = 0
 
 var _classifier = null  # MCPToolClassifier (lazy-loaded for GUT CLI compat)
 var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat)
@@ -1148,6 +1151,7 @@ func register_tool(name: String, description: String,
 	_tools[name] = tool
 	_invalidate_tool_list_cache()
 	_tool_catalog_revision += 1
+	_tool_registry_revision += 1
 	_invalidate_tool_discovery_cache(name)
 	_log_info("Tool registered: " + name)
 
@@ -1156,6 +1160,7 @@ func unregister_tool(name: String) -> void:
 		_tools.erase(name)
 		_invalidate_tool_list_cache()
 		_tool_catalog_revision += 1
+		_tool_registry_revision += 1
 		_invalidate_tool_discovery_cache(name)
 		_log_info("Tool unregistered: " + name)
 
@@ -1255,6 +1260,9 @@ func apply_tool_states(states: Dictionary) -> Dictionary:
 
 func get_tool_catalog_revision() -> int:
 	return _tool_catalog_revision
+
+func get_tool_registry_revision() -> int:
+	return _tool_registry_revision
 
 func _commit_tool_state_changes(changed_tools: Array) -> void:
 	if changed_tools.is_empty():
