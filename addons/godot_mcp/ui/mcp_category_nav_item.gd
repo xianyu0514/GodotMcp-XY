@@ -18,7 +18,8 @@ func setup(key: String, label: String, icon_tex: Texture2D, group: ButtonGroup) 
 	alignment = HORIZONTAL_ALIGNMENT_LEFT
 	clip_text = true
 	button_group = group
-	custom_minimum_size = Vector2(0, 30)
+	custom_minimum_size = Vector2(0, 38)
+	add_theme_font_size_override("font_size", 13)
 	if icon_tex:
 		icon = icon_tex
 	add_theme_stylebox_override("normal", _style(Color(1, 1, 1, 0.0), false))
@@ -55,8 +56,8 @@ func _style(bg: Color, accent: bool) -> StyleBoxFlat:
 	style.set_corner_radius_all(4)
 	style.content_margin_left = 8
 	style.content_margin_right = 8
-	style.content_margin_top = 4
-	style.content_margin_bottom = 4
+	style.content_margin_top = 7
+	style.content_margin_bottom = 7
 	if accent:
 		style.border_width_left = 2
 		style.border_color = Color(0.40, 0.62, 1.0, 0.95)

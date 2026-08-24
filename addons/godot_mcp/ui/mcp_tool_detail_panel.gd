@@ -36,6 +36,7 @@ func show_empty() -> void:
 	hint.text = _tr("ui.detail_select_hint")
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", FAINT)
 	hint.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_content.add_child(hint)
@@ -74,7 +75,7 @@ func _build_header(info: Dictionary) -> void:
 
 	var title: Label = Label.new()
 	title.text = info.get("name", "")
-	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_font_size_override("font_size", 20)
 	title.add_theme_color_override("font_color", Color(0.95, 0.95, 0.98))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.clip_text = true
@@ -82,7 +83,8 @@ func _build_header(info: Dictionary) -> void:
 
 	var copy_name: Button = Button.new()
 	copy_name.text = _tr("ui.detail_copy_name")
-	copy_name.add_theme_font_size_override("font_size", 10)
+	copy_name.add_theme_font_size_override("font_size", 12)
+	copy_name.custom_minimum_size.y = 32
 	copy_name.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	copy_name.pressed.connect(
 		_on_copy_pressed.bind(info.get("name", ""), copy_name, _tr("ui.detail_copy_name"))
@@ -111,13 +113,13 @@ func _build_meta(info: Dictionary) -> void:
 func _meta_row(grid: GridContainer, key: String, value: String, value_color: Color) -> void:
 	var key_label: Label = Label.new()
 	key_label.text = key
-	key_label.add_theme_font_size_override("font_size", 11)
+	key_label.add_theme_font_size_override("font_size", 13)
 	key_label.add_theme_color_override("font_color", FAINT)
 	grid.add_child(key_label)
 
 	var value_label: Label = Label.new()
 	value_label.text = value
-	value_label.add_theme_font_size_override("font_size", 12)
+	value_label.add_theme_font_size_override("font_size", 14)
 	value_label.add_theme_color_override("font_color", value_color)
 	grid.add_child(value_label)
 
@@ -126,7 +128,7 @@ func _build_description(info: Dictionary) -> void:
 	var label: Label = Label.new()
 	label.text = info.get("description", "")
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	label.add_theme_font_size_override("font_size", 12)
+	label.add_theme_font_size_override("font_size", 14)
 	label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
 	body.add_child(label)
 
@@ -151,7 +153,7 @@ func _build_params(schema: Dictionary) -> void:
 	if props.is_empty():
 		var none: Label = Label.new()
 		none.text = _tr("ui.detail_no_params")
-		none.add_theme_font_size_override("font_size", 12)
+		none.add_theme_font_size_override("font_size", 14)
 		none.add_theme_color_override("font_color", FAINT)
 		body.add_child(none)
 		return
@@ -172,12 +174,13 @@ func _make_param_card(pname: String, prop: Dictionary, is_required: bool) -> Pan
 
 	var name_label: Label = Label.new()
 	name_label.text = pname
+	name_label.add_theme_font_size_override("font_size", 14)
 	name_label.add_theme_color_override("font_color", Color(0.88, 0.88, 0.92))
 	head.add_child(name_label)
 
 	var type_label: Label = Label.new()
 	type_label.text = str(prop.get("type", "any"))
-	type_label.add_theme_font_size_override("font_size", 10)
+	type_label.add_theme_font_size_override("font_size", 12)
 	type_label.add_theme_color_override("font_color", ACCENT)
 	head.add_child(type_label)
 
@@ -189,7 +192,7 @@ func _make_param_card(pname: String, prop: Dictionary, is_required: bool) -> Pan
 	var badge_color: Color = Color(0.82, 0.46, 0.42) if is_required else FAINT
 	var badge: Label = Label.new()
 	badge.text = badge_text
-	badge.add_theme_font_size_override("font_size", 10)
+	badge.add_theme_font_size_override("font_size", 12)
 	badge.add_theme_color_override("font_color", badge_color)
 	head.add_child(badge)
 
@@ -198,7 +201,7 @@ func _make_param_card(pname: String, prop: Dictionary, is_required: bool) -> Pan
 		var desc_label: Label = Label.new()
 		desc_label.text = desc
 		desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-		desc_label.add_theme_font_size_override("font_size", 11)
+		desc_label.add_theme_font_size_override("font_size", 13)
 		desc_label.add_theme_color_override("font_color", DIM)
 		inner.add_child(desc_label)
 
@@ -206,7 +209,7 @@ func _make_param_card(pname: String, prop: Dictionary, is_required: bool) -> Pan
 	if not hint.is_empty():
 		var hint_label: Label = Label.new()
 		hint_label.text = hint
-		hint_label.add_theme_font_size_override("font_size", 10)
+		hint_label.add_theme_font_size_override("font_size", 12)
 		hint_label.add_theme_color_override("font_color", FAINT)
 		inner.add_child(hint_label)
 	return card
@@ -225,7 +228,7 @@ func _build_returns(schema: Dictionary) -> void:
 	if props.is_empty():
 		var none: Label = Label.new()
 		none.text = _tr("ui.detail_no_returns")
-		none.add_theme_font_size_override("font_size", 12)
+		none.add_theme_font_size_override("font_size", 14)
 		none.add_theme_color_override("font_color", FAINT)
 		body.add_child(none)
 		return
@@ -234,12 +237,12 @@ func _build_returns(schema: Dictionary) -> void:
 		row.add_theme_constant_override("separation", 6)
 		var key_label: Label = Label.new()
 		key_label.text = rname
-		key_label.add_theme_font_size_override("font_size", 11)
+		key_label.add_theme_font_size_override("font_size", 13)
 		key_label.add_theme_color_override("font_color", Color(0.82, 0.82, 0.86))
 		row.add_child(key_label)
 		var type_label: Label = Label.new()
 		type_label.text = str((props[rname] as Dictionary).get("type", "any"))
-		type_label.add_theme_font_size_override("font_size", 10)
+		type_label.add_theme_font_size_override("font_size", 12)
 		type_label.add_theme_color_override("font_color", FAINT)
 		row.add_child(type_label)
 		body.add_child(row)
@@ -270,7 +273,7 @@ func _build_ai_prompt(info: Dictionary) -> void:
 
 	var title: Label = Label.new()
 	title.text = _tr("ui.detail_ai_prompt")
-	title.add_theme_font_size_override("font_size", 12)
+	title.add_theme_font_size_override("font_size", 14)
 	title.add_theme_color_override("font_color", ACCENT)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
@@ -278,13 +281,15 @@ func _build_ai_prompt(info: Dictionary) -> void:
 	var copy_label: String = _tr("ui.detail_copy_prompt")
 	var copy_button: Button = Button.new()
 	copy_button.text = copy_label
+	copy_button.custom_minimum_size.y = 32
+	copy_button.add_theme_font_size_override("font_size", 12)
 	copy_button.pressed.connect(_on_copy_pressed.bind(prompt, copy_button, copy_label))
 	head.add_child(copy_button)
 
 	var text_label: Label = Label.new()
 	text_label.text = prompt
 	text_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	text_label.add_theme_font_size_override("font_size", 12)
+	text_label.add_theme_font_size_override("font_size", 14)
 	text_label.add_theme_color_override("font_color", Color(0.88, 0.9, 0.96))
 	box.add_child(text_label)
 
@@ -339,7 +344,7 @@ func _section(title: String) -> VBoxContainer:
 	_content.add_child(box)
 	var label: Label = Label.new()
 	label.text = title
-	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_font_size_override("font_size", 13)
 	label.add_theme_color_override("font_color", ACCENT)
 	box.add_child(label)
 	return box
@@ -349,7 +354,7 @@ func _make_chip(text: String) -> PanelContainer:
 	chip.add_theme_stylebox_override("panel", _row_style())
 	var label: Label = Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", 10)
+	label.add_theme_font_size_override("font_size", 12)
 	label.add_theme_color_override("font_color", Color(0.82, 0.78, 0.7))
 	chip.add_child(label)
 	return chip
@@ -363,13 +368,15 @@ func _make_code_block(text: String) -> Control:
 	code.editable = false
 	code.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	code.scroll_fit_content_height = true
-	code.add_theme_font_size_override("font_size", 11)
+	code.add_theme_font_size_override("font_size", 13)
 	code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	code.custom_minimum_size = Vector2(0, 40)
 	wrap.add_child(code)
 
 	var copy_button: Button = Button.new()
 	copy_button.text = _tr("ui.detail_copy")
+	copy_button.custom_minimum_size.y = 32
+	copy_button.add_theme_font_size_override("font_size", 12)
 	copy_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	copy_button.pressed.connect(_on_copy_pressed.bind(text, copy_button, _tr("ui.detail_copy")))
 	wrap.add_child(copy_button)

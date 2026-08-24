@@ -1,6 +1,6 @@
 key,source,en,zh
 ui.settings,Settings,Settings,设置
-ui.tool_manager,Tool Manager,Tool Manager,工具管理器
+ui.tool_manager,Tools & Quick Start,Tools & Quick Start,工具与快速启动
 ui.status_unknown,Status: Unknown,Status: Unknown,状态：未知
 ui.status_running,Status: Running,Status: Running,状态：运行中
 ui.status_stopped,Status: Stopped,Status: Stopped,状态：已停止
@@ -135,8 +135,8 @@ ui.check_not_running,Server is not running.,Server is not running.,服务器未�
 ui.check_stdio,stdio transport has no HTTP endpoint to probe.,stdio transport has no HTTP endpoint to probe.,stdio 传输模式没有可探测的 HTTP 端点。
 ui.check_ok,Server reachable (HTTP %d).,Server reachable (HTTP %d).,服务器可达（HTTP %d）。
 ui.check_failed,Server unreachable.,Server unreachable.,服务器不可达。
-ui.preset_label,Preset:,Preset:,预设档：
-ui.preset_apply,Apply,Apply,套用
+ui.preset_label,Advanced tool profile,Advanced tool profile,工具方案（高级调整）
+ui.preset_apply,Enable this profile,Enable this profile,启用此方案
 ui.preset_export,Export,Export,导出
 ui.preset_import,Import,Import,导入
 ui.preset_export_title,Export tool preset,Export tool preset,导出工具预设
@@ -166,6 +166,12 @@ ui.preset_desc_automation_qa,"Runtime assertions, visual checks, project audits 
 ui.preset_desc_art_resources,"Broad resource, scene and node tooling for asset-heavy authoring workflows.","Broad resource, scene and node tooling for asset-heavy authoring workflows.",面向资源密集型创作的完整资源、场景与节点工具。
 ui.preset_desc_all,"Enables all tools. Highest context cost; use only when a focused preset is insufficient.","Enables all tools. Highest context cost; use only when a focused preset is insufficient.",启用全部工具，上下文开销最高；仅在专用预设不足时使用。
 ui.preset_tool_count,%d tools will be enabled,%d tools will be enabled,将启用 %d 个工具
+ui.quick_start_title,What do you want AI to help with?,What do you want AI to help with?,想让 AI 帮你做什么？
+ui.quick_start_hint,"1. Choose a task   2. Required tools are enabled automatically   3. Click Start Server above","1. Choose a task   2. Required tools are enabled automatically   3. Click Start Server above","1. 选择任务   2. 自动启用所需工具   3. 点击上方“启动服务器”"
+ui.quick_start_status,"Choose the task closest to what you are doing. You can fine-tune the tools below.","Choose the task closest to what you are doing. You can fine-tune the tools below.",选择最接近当前工作的任务；之后仍可在下方微调工具。
+ui.quick_start_tool_count,%d tools,%d tools,%d 个工具
+ui.quick_start_applied,"Ready: %s (%d tools). Click Start Server above.","Ready: %s (%d tools). Click Start Server above.","已准备：%s（%d 个工具）。现在点击上方“启动服务器”。"
+ui.start_flow_hint,"1 Choose tools below  ·  2 Start server  ·  3 Connect your AI client","1 Choose tools below  ·  2 Start server  ·  3 Connect your AI client","1 在下方选择工具  ·  2 启动服务器  ·  3 连接 AI 客户端"
 ui.section_connection,Connection,Connection,连接
 ui.connection_hint,"Copy a ready-to-use endpoint or client config for your local MCP server.","Copy a ready-to-use endpoint or client config for your local MCP server.",复制可直接使用的本地 MCP 服务器端点或客户端配置。
 ui.local_endpoint,Local endpoint,Local endpoint,本地地址
