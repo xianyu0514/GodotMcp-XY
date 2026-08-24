@@ -164,6 +164,15 @@ func test_catalog_known_revision_returns_minimal_not_modified_response():
 	assert_eq(result, {"not_modified": true, "catalog_revision": 7},
 		"A matching revision should avoid retransmitting the unchanged catalog")
 
+func test_catalog_reports_compact_workflow_coverage():
+	var result: Dictionary = _tool._tool_list_tool_catalog({"summary_only": true})
+	var coverage: Dictionary = result.get("workflow_coverage", {})
+	assert_eq(coverage.get("total_atomic", -1), 3,
+		"Only non-meta tools count as workflow-routable atomic capabilities")
+	assert_eq(coverage.get("coverage_ratio", 0.0), 1.0,
+		"Adaptive routing covers every registered atomic tool")
+	assert_false(coverage.has("tools"), "Coverage summary must not copy the tool catalog")
+
 # --- enable_tools ---
 
 func test_enable_tools_by_name():
@@ -299,6 +308,42 @@ func test_search_tools_clamps_large_limit():
 	var result: Dictionary = _tool._tool_search_tools({"query": "demo", "limit": 999})
 	assert_eq(result.get("total_matched", -1), 60, "Full match count remains visible")
 	assert_eq(result.get("tools", []).size(), 50, "Returned results are hard-capped to protect context")
+
+func test_search_tools_workflow_mode_returns_only_bounded_stages():
+	_core.seed("run_project", true, "core", "Editor", "Run the game project.")
+	_core.seed("assert_no_runtime_errors", false, "supplementary", "Debug-Advanced",
+		"Verify the running game has no runtime errors.")
+	var result: Dictionary = _tool._tool_search_tools({
+		"query": "创建 2D 游戏角色并验证运行",
+		"mode": "workflow",
+		"workflow_tool_budget": 3
+	})
+	assert_false(result.has("tools"), "Workflow mode avoids duplicating ranked tool entries")
+	var workflow: Dictionary = result.get("workflow", {})
+	assert_lte(workflow.get("tool_count", 99), 3, "Workflow respects the requested context budget")
+	var routed_names: Array = []
+	for stage in workflow.get("stages", []):
+		routed_names.append_array(stage.get("tools", []))
+	assert_true("run_project" in routed_names,
+		"Multi-step run intent includes the executable run tool")
+
+func test_search_tools_workflow_respects_enabled_only_filter():
+	_core.seed("run_project", true, "core", "Editor", "Run the game project.")
+	_core.seed("assert_no_runtime_errors", false, "supplementary", "Debug-Advanced",
+		"Verify the running game has no runtime errors.")
+	var result: Dictionary = _tool._tool_search_tools({
+		"query": "创建 2D 游戏角色并验证运行",
+		"mode": "workflow",
+		"enabled_only": true
+	})
+	for stage in result.get("workflow", {}).get("stages", []):
+		for tool_name in stage.get("tools", []):
+			assert_true(_core.is_enabled(String(tool_name)),
+				"enabled_only workflow must not reintroduce a filtered curated seed")
+
+func test_search_tools_rejects_unknown_mode():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime", "mode": "huge_catalog"})
+	assert_has(result, "error", "Unknown discovery modes are rejected instead of returning a large payload")
 
 # --- get_tool_details ---
 
