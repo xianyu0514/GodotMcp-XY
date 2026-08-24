@@ -38,7 +38,7 @@ The addon registers 221 tools:
 - 189 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 4 always-on meta tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 
-Discovery is progressive and cache-friendly: `search_tools` ranks short English/Chinese task intents locally, catalog summaries support revision checks, and bulk enablement invalidates discovery data once without flushing unrelated project reads.
+Discovery is progressive and cache-friendly: `search_tools` either ranks one capability or locally builds a bounded inspect/execute/verify route for a multi-step English/Chinese goal. The adaptive route covers all 217 non-meta atomic tools, returns names without schemas and defaults to an 8-tool budget. Catalog revision checks and atomic enablement avoid flushing unrelated project reads.
 
 See the project-level [Tools Reference](../../docs/tools/README.md).
 

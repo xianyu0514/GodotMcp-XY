@@ -27,13 +27,13 @@ This keeps the initial tool list small enough for AI clients while preserving ac
 
 ## Discovery workflow
 
-Progressive discovery mirrors the official MCP pattern: catalog → search → details → enable.
+Progressive discovery mirrors the official MCP pattern: catalog → route/search → enable → refreshed schema.
 
 1. Start with core tools and meta tools.
-2. Prefer `search_tools` with a short English or Chinese task intent; it returns a small relevance-ranked candidate list. Use `list_tool_catalog` with `summary_only=true` only to browse groups.
-3. Call `get_tool_details` for the exact schema of a specific tool before invoking it.
-4. Call `enable_tools` with explicit `tools`, `groups` or a preset.
-5. Wait for `notifications/tools/list_changed` and let the client refresh.
+2. For one capability use `search_tools` with `mode="tools"`; for a multi-step goal use `mode="workflow"` to receive a bounded inspect/execute/verify route containing tool names only.
+3. Call `enable_tools` once with the exact returned names. Call `get_tool_details` only to compare ambiguous candidates or when the client cannot refresh.
+4. Wait for `notifications/tools/list_changed` and let the client refresh the enabled schemas.
+5. Use `list_tool_catalog` with `summary_only=true` only to browse groups and the 217/217 adaptive-workflow coverage summary.
 6. Disable advanced groups when the task is complete if you want to shrink the tool surface again.
 
 Example:

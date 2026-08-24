@@ -87,6 +87,8 @@ Tool registration uses `server_core.register_tool(...)` with name, description, 
 
 This design keeps the default client context small without making specialized capabilities unavailable.
 
+`native_mcp/workflow_router.gd` is a pure-logic discovery layer used by `search_tools(mode="workflow")`. It does not register another MCP tool or duplicate schemas. A deterministic single catalog scan combines 11 small curated game-development seeds with an adaptive fallback over every non-meta tool, greedily covers intent terms, and emits only a bounded list of names grouped into inspect/execute/verify stages. Exact tool-name queries have strict priority, which makes all 217 atomic capabilities routable while the default workflow payload remains capped at 8 names (hard maximum 10).
+
 ## Runtime probe
 
 `runtime/mcp_runtime_probe.gd` is an Autoload used by runtime tools. It lets the MCP server inspect and drive a running game without relying solely on edit-time state.
