@@ -37,7 +37,7 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 | Component | Responsibility |
 | --- | --- |
 | `mcp_server_native.gd` | EditorPlugin entry point, settings wiring, panel registration and server lifecycle. |
-| `native_mcp/mcp_server_core.gd` | JSON-RPC/MCP method handling, tool registry, notifications and server-wide options. |
+| `native_mcp/mcp_server_core.gd` | JSON-RPC/MCP method handling, tool registry, notifications, result caching and lossless large-result resources. |
 | `native_mcp/cache_revision_index.gd` | Dependency-tagged result-cache revisions and mutation impact routing; enables O(1) lazy invalidation instead of whole-cache flushes. |
 | `native_mcp/mcp_http_server.gd` | HTTP endpoint and SSE transport. |
 | `native_mcp/mcp_stdio_server.gd` | stdio transport for clients that spawn the server process. |
@@ -101,6 +101,10 @@ The direct `enable_tools` path routes and applies the result in one MCP call. It
 Expensive deterministic reads use a 64-entry in-memory LRU with canonical argument keys, preformatted MCP payloads, single-flight deduplication and a 60-second out-of-band edit backstop. `cache_revision_index.gd` assigns each cached read a compact dependency snapshot (scene content, file catalogs, project settings, import state, tool catalog, or exact script/resource paths).
 
 Mutating tools advance only the revisions they can affect. The write path therefore touches a bounded number of integers and never scans or clears the LRU. Stale entries are removed lazily when their key is requested, while unrelated entries stay hot. Script and resource reads are path-scoped; runtime-only debugger writes preserve all editor/project entries. Unknown or plugin-defined writers fail safe by advancing the global revision. This increases hit rate without weakening correctness, and the existing TTL still bounds changes made outside MCP.
+
+Successful JSON payloads above 50,000 UTF-8 bytes use lossless late materialization. The normal tool result retains the existing head/tail preview and appends an MCP [`resource_link`](https://modelcontextprotocol.io/specification/2025-11-25/schema#resourcelink) whose `godot-mcp://result/<sha256>` URI addresses the immutable spill file. A client retrieves it through standard [`resources/read`](https://modelcontextprotocol.io/specification/2025-11-25/server/resources#reading-resources); each response contains at most 16 KiB, ends on a UTF-8 code-point boundary and advertises the exact next URI in `_meta.nextUri`. Concatenating pages yields the byte-identical JSON and the advertised SHA-256 provides an end-to-end integrity check.
+
+This path adds no MCP tool, no tool schema and no `resources/list` entry, so it does not enlarge the persistent model prefix or churn discovery caches. Content addressing reuses an existing verified spill file for identical results. Actionable errors and source/log readers remain complete inline, and hashing, directory or write failures return the complete inline result instead of sacrificing functionality. The regression gate uses a 204,211-byte multilingual payload: its initial MCP result is 8,951 bytes (95.62% avoided), while 13 bounded reads reconstruct the exact original.
 
 ## Runtime probe
 

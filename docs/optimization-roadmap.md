@@ -40,6 +40,7 @@
 | P7 | `serverInfo.version` 为 `"2.0.0"`、HTTP GET / 返回 `"1.0.0"` + `"MCP 2025-03-26"`，与插件 1.0.7-pre1 不一致 | `mcp_server_core.gd` L460 / `mcp_http_server.gd` L517 | 统一从 plugin.cfg 读版本 |
 | P8 | stdio 传输 `stop()` 潜在死锁：线程阻塞在 `OS.read_string_from_stdin()` 时 `wait_to_finish()` 挂起 | `mcp_stdio_server.gd` L64-66 + L95 | 非阻塞读或超时退出机制；单测覆盖 |
 | P9 | **缺少 `search_tools`/`get_tool_details` 元工具** | 官方渐进发现三层模式：catalog（search_tools）→ details（get_tool_details）→ execute；现有 `list_tool_catalog` 已对齐第一层 | meta 工具补齐三层；`tools/list` 保持确定性排序（利于 prompt cache） |
+| P10 | **超大工具结果只有预览与本地路径，AI 无标准无损恢复路径** | head/tail 能省首包但可能隐藏后续工作需要的字段；要求性能优化不能降低任务完成率 | ✅ 追加标准 `resource_link`；`resources/read` 用 SHA-256 内容地址和 UTF-8 安全的 16 KiB 页无损恢复；错误/源码/日志保持完整内联，失败回退全文，不增加工具 Schema |
 
 ---
 
@@ -222,7 +223,7 @@
 | --- | --- | --- |
 | Phase 0（1-2 天） | **P0 ttlMs/cacheScope/resultType**（Claude Code 已强制）、P1 ping、P7 版本统一、P8 stdio 死锁、死代码清理、editor_log 版本硬编码修复 | GUT 全绿 + curl 冒烟 + Claude Code 实测加载 |
 | Phase 1（1 周） | **安全 S1-S7**（127.0.0.1 绑定/默认认证/CORS/execute_* 降级/环境变量白名单）、编译错误反馈（verify_scripts + 日志源修复 + i18n）、schema lint 测试、核心收敛 | GUT 全绿 + 401 端到端测试 + 客户端冒烟 |
-| Phase 2（1-2 周） | 真实 prompts、search_tools/get_tool_details、completion、progress/cancelled、分页、资源模板、P1b/P1c/P1d 协议合规 | 协议面测试 + 真实客户端验证 |
+| Phase 2（1-2 周） | 真实 prompts、search_tools/get_tool_details、completion、progress/cancelled、分页、资源模板、P1b/P1c/P1d 协议合规、P10 无损大结果资源（✅） | 协议面测试 + 真实客户端验证 |
 | Phase 3（2-4 周） | Streamable HTTP（stateless 风格）+ server/discover 双兼容、错误模型统一（isError+可行动文本）、async_job 统一框架、undo/redo 工具 | Codex/Claude Desktop/Cursor 实测矩阵 |
 | Phase 4（1-2 月） | 引擎能力扩展（3D 烘焙/导航/物理/动画树/LSP 诊断，Top 20 清单）、巨型文件拆分 + 单一数据表、Agent Skills、AssetLib 上架、工具目录站、Tasks 扩展 | 完整闭环 demo（GDD→可玩切片→视觉基线） |
 
