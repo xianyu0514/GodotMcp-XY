@@ -1,10 +1,10 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for the manage_task_plan tool handler in project_tools_native.gd.
+# Unit tests for the manage_task_plan tool handler in project_workflow_tools.gd.
 # Exercises action dispatch, parameter validation and the file-backed round trip
 # end to end (using a per-test user:// plan path so runs stay isolated and clean).
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_workflow_tools.gd"
 
 var _tools: RefCounted = null
 var _plan_path: String = ""
@@ -57,6 +57,10 @@ func test_init_no_reset_preserves_corrupt_plan():
 	f.close()
 	var r: Dictionary = _call({"action": "init", "goal": "G"})
 	assert_has(r, "error", "corrupt plan should surface a load error, not be overwritten")
+	# The corrupt JSON surfaces an engine parse error when load_plan reads it;
+	# mark it handled so GUT does not count it as an unexpected error.
+	for e in get_errors():
+		e.handled = true
 	# The corrupt bytes must remain on disk (no data loss).
 	var raw: String = FileAccess.get_file_as_string(abs_path)
 	assert_eq(raw, "{ this is not valid json ]", "corrupt file must be left untouched")

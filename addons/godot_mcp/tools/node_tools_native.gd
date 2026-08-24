@@ -1075,6 +1075,10 @@ func _register_list_nodes(server_core: RefCounted) -> void:
 				"limit": {
 					"type": "integer",
 					"description": "Maximum number of nodes to return. Default is 1000. Extra nodes are omitted and 'truncated' is set true."
+				},
+				"offset": {
+					"type": "integer",
+					"description": "Number of nodes to skip before applying limit. Default 0."
 				}
 			}
 		},
@@ -1098,6 +1102,7 @@ func _tool_list_nodes(params: Dictionary) -> Dictionary:
 	var limit: int = int(params.get("limit", 1000))
 	if limit <= 0:
 		limit = 1000
+	var offset: int = int(params.get("offset", 0))
 	
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
@@ -1119,7 +1124,7 @@ func _tool_list_nodes(params: Dictionary) -> Dictionary:
 	var collected: Array[String] = []
 	_collect_nodes(start_node, "", recursive, collected, scene_root)
 	
-	var page: Dictionary = PayloadUtils.truncate_list(collected, limit)
+	var page: Dictionary = PayloadUtils.paginate_list(collected, limit, offset)
 	var nodes_list: Array = page["items"]
 	
 	return {

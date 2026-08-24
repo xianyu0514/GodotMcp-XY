@@ -132,6 +132,53 @@ func test_autoload_registered_in_enter_tree():
 	assert_true(register_pos < autoload_pos, "_ensure_runtime_probe_autoload should be called AFTER _register_all_tools")
 	assert_true(autoload_pos < panel_pos, "_ensure_runtime_probe_autoload should be called BEFORE _create_main_screen_panel")
 
-func test_autoload_removed_in_exit_tree():
+func test_autoload_removal_only_for_plugin_added_autoload():
 	var source_code: String = _plugin_script.source_code
-	assert_true(source_code.contains("_remove_runtime_probe_autoload"), "_exit_tree should call _remove_runtime_probe_autoload")
+	assert_true(source_code.contains("_probe_autoload_added_this_session"), "plugin should track whether it added the runtime probe autoload")
+	assert_true(source_code.contains("if _probe_autoload_added_this_session:"), "_exit_tree should guard _remove_runtime_probe_autoload so a pre-existing project.godot autoload is preserved")
+
+func test_plugin_has_apply_auth_config():
+	var methods: Array = _plugin_script.get_script_method_list()
+	var method_names: Array = methods.map(func(m): return m["name"])
+	assert_true(method_names.has("_apply_auth_config"), "Should have _apply_auth_config method")
+
+func test_plugin_has_should_enable_auth():
+	var methods: Array = _plugin_script.get_script_method_list()
+	var method_names: Array = methods.map(func(m): return m["name"])
+	assert_true(method_names.has("should_enable_auth"), "Should have should_enable_auth static method")
+
+func test_should_enable_auth_gating():
+	assert_true(_plugin_script.should_enable_auth(true, "http"), "Enabled + http transport should enable auth")
+	assert_false(_plugin_script.should_enable_auth(false, "http"), "Disabled auth should not enable auth")
+	assert_false(_plugin_script.should_enable_auth(true, "stdio"), "stdio transport should not enable HTTP auth")
+	assert_false(_plugin_script.should_enable_auth(false, "stdio"), "Disabled + stdio should not enable auth")
+
+func test_apply_auth_config_called_in_start_path():
+	var source_code: String = _plugin_script.source_code
+	var start_pos: int = source_code.find("func _start_native_server")
+	assert_true(start_pos >= 0, "_start_native_server should exist")
+	var overrides_pos: int = source_code.find("_apply_cmdline_overrides()", start_pos)
+	var apply_pos: int = source_code.find("_apply_auth_config()", start_pos)
+	var start_call_pos: int = source_code.find("_native_server.start()", start_pos)
+	assert_true(overrides_pos >= 0, "cmdline overrides should be applied in start path")
+	assert_true(apply_pos >= 0, "_apply_auth_config() should be called in _start_native_server")
+	assert_true(start_call_pos >= 0, "server start() should be called in start path")
+	assert_true(overrides_pos < apply_pos, "_apply_auth_config() should run AFTER cmdline overrides")
+	assert_true(apply_pos < start_call_pos, "_apply_auth_config() should run BEFORE server start()")
+
+func test_enter_tree_calls_apply_auth_config():
+	var source_code: String = _plugin_script.source_code
+	var enter_pos: int = source_code.find("func _enter_tree")
+	var exit_pos: int = source_code.find("func _exit_tree")
+	var apply_pos: int = source_code.find("_apply_auth_config()", enter_pos)
+	assert_true(enter_pos >= 0 and exit_pos >= 0, "enter/exit tree methods should exist")
+	assert_true(apply_pos >= 0 and apply_pos < exit_pos, "_enter_tree should call _apply_auth_config()")
+
+func test_apply_auth_config_sets_or_clears_auth_manager():
+	var source_code: String = _plugin_script.source_code
+	var apply_pos: int = source_code.find("func _apply_auth_config")
+	assert_true(apply_pos >= 0, "_apply_auth_config should exist")
+	var body: String = source_code.substr(apply_pos, 900)
+	assert_true(body.contains("McpAuthManager.new()"), "_apply_auth_config should create McpAuthManager when applicable")
+	assert_true(body.contains("set_auth_manager(null)"), "_apply_auth_config should clear the auth manager when not applicable")
+	assert_true(body.contains("set_token(auth_token)"), "_apply_auth_config should apply the current auth token")

@@ -4,10 +4,10 @@ extends "res://addons/gut/test.gd"
 # trajectory accumulation, metric aggregation, and metric-based assertions.
 # These are pure logic and do not require a running game / runtime probe.
 
-var tools: DebugToolsNative
+var tools: DebugVerifyTools
 
 func before_each() -> void:
-	tools = DebugToolsNative.new()
+	tools = DebugVerifyTools.new()
 
 func after_each() -> void:
 	tools = null

@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **215 个工具**（30 核心 + 183 补充 + 2 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **221 个工具**（28 核心 + 189 补充 + 4 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -48,8 +48,8 @@ addons/godot_mcp/
 │   ├── mcp_http_server.gd      # HTTP/SSE 传输（默认端口 9080）
 │   ├── mcp_stdio_server.gd     # stdio 传输（供 Claude Desktop 等使用）
 │   ├── mcp_types.gd            # JSON-RPC 和 MCP 协议常量、MCPTool 数据类
-│   ├── mcp_tool_classifier.gd  # 工具分类映射：{core/supplementary, group}（CORE_MAX_COUNT=30）
-│   ├── mcp_resource_manager.gd # 资源读取/列表/订阅
+│   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：221 个工具 name → {category, group}
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_auth_manager.gd     # HTTP Bearer Token 认证
 │   ├── config_manager.gd       # 插件配置读写
@@ -60,12 +60,20 @@ addons/godot_mcp/
 │   └── mcp_runtime_probe.gd    # Autoload 单例，用于运行时检查（动画、音频、着色器、瓦片地图、输入）
 ├── tools/                      # 工具实现（每个分类一个文件）
 │   ├── node_tools_native.gd    # 26 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计、内联子资源设置/读取
-│   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、校验着色器、符号索引、搜索
+│   ├── script_tools_native.gd  # 18 个工具 — 读取/写入/创建/附加/分析/验证脚本、批量编译校验、校验着色器、符号索引、搜索
 │   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
-│   ├── editor_tools_native.gd  # 24 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、smoke_test_export 导出冒烟（产物校验 + 可选启动并断言退出码）
-│   ├── debug_tools_native.gd   # 73 个工具 — 日志、断点、栈帧/变量、性能分析器、运行时探针、动画/音频/着色器/瓦片地图运行时控制、play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
-│   ├── project_tools_native.gd # 61 个工具（3 核心 + 58 补充）— 项目信息/设置、设置写入、资源、自定义/批量资源创建与属性读写、输入映射、自动加载（读取/增删）、全局类、测试运行器、诊断、反向资源依赖、迁移检查、弃用 API 扫描、GDExtension 检测、渐变/可绘制纹理、generate_asset 资产生成（占位程序化 + 外部 API 适配）、PCK 打包、渲染输出、UI 主题创建与设置、项目设置写入、自动加载增删、动画资源创建与关键帧插入、TileSet 创建与图层配置（物理/地形/导航/自定义数据层、逐图块碰撞多边形/地形）、manage_task_plan 持久任务图 + 完成定义（DoD）存储（编排 plan→execute→run→verify→fix 闭环，依赖/循环检测、可执行任务查询、进度统计，落盘到 res://.mcp/task_plan.json）、assert_visual_baseline 视觉回归门禁（截图与基线（黄金文件）差异比较 + 容差判定 + 可选差异热力图）、slice_sprite_sheet 精灵图切片（按网格切成 SpriteFrames 资源 + 命名动画 + 可选 AnimatedSprite2D 场景）、inspect_gltf_asset glTF/GLB 导入校验（结构摘要 + 校验警告，只读）、generate_3d_asset 文生3D 外部生成（异步提交→轮询→下载 glTF/GLB→校验→自动 inspect，BYO-key 自带密钥/自付额度，Meshy/Tripo 预设）、bump_version 版本号递增 + changelog 自动追加（语义化 major/minor/patch 或显式版本，支持 dry_run）、manage_localization 本地化工作流（list 列出已注册 .translation、extract 从场景/脚本提取可翻译键合并进 CSV、import 由 CSV 生成 .translation 并注册到 ProjectSettings、export 回读 .translation 为 CSV 往返校验，写操作均支持 dry_run）
-│   └── meta_tools_native.gd    # 2 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
+│   ├── editor_tools_native.gd  # 27 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟（产物校验 + 可选启动并断言退出码）
+│   ├── debug_tools_native.gd   # 6 个工具（主类，保留共享辅助）— 日志（get_editor_logs/clear_output）、脚本执行（execute_script/execute_editor_script）、性能指标；跨域共享静态辅助（_get_debugger_bridge/运行时探针请求机制）
+│   ├── debug_bridge_tools.gd   # 28 个工具 — 调试器桥接（断点/线程/栈帧/变量/作用域/求值）、执行控制（单步/继续/等待、runtime probe 安装/移除、debugger 状态等待）
+│   ├── debug_runtime_tools.gd  # 38 个工具 — 运行时探针（场景树/节点 CRUD/表达式/输入模拟/动画/音频/着色器/瓦片地图/截图/条件断言）
+│   ├── debug_verify_tools.gd   # 3 个工具 — play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
+│   ├── project_tools_native.gd  # 16 个工具（主类，保留共享辅助）— 项目信息/设置、项目设置写入、输入映射、自动加载（读取/增删）、全局类、类元数据、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
+│   ├── project_resources_tools.gd # 21 个工具 — 资源创建/读取/更新/批量、依赖扫描（缺失/循环）、迁移检查/修复、弃用 API 扫描、GDExtension 检测、UID 查询/修复、反向依赖、未使用资源、脚本诊断、健康审计
+│   ├── project_assets_tools.gd  # 9 个工具 — 渐变/可绘制纹理、PCK 打包、渲染输出、generate_asset（占位程序化 + 外部 API 适配 + SSRF 护栏）、slice_sprite_sheet、inspect_gltf_asset、generate_3d_asset（文生3D 异步提交→轮询→下载→校验）
+│   ├── project_tileset_tools.gd # 5 个工具 — TileSet 创建/检查、图层配置（物理/导航/自定义数据/地形）、逐图块碰撞多边形、地形与 peering bits
+│   ├── project_verification_tools.gd # 2 个工具 — compare_render_screenshots、assert_visual_baseline（视觉回归门禁，差异热力图 + 容差判定）
+│   ├── project_workflow_tools.gd # 8 个工具 — bump_version（版本号递增 + changelog）、UI 主题创建/设置/默认主题、动画资源创建与关键帧插入、manage_task_plan（持久任务图 + DoD）、manage_localization（extract/import/export/list）
+│   └── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
 │   ├── mcp_tool_item.gd        # 单个工具开关 UI
@@ -112,13 +120,13 @@ addons/godot_mcp/
 创建新 MCP 工具时，必须按顺序完成所有步骤。完整参考指南见 `docs/contributing.md`（“Adding a new tool”章节）。
 
 1. **实现处理器** — 在对应的 `*_tools_native.gd` 中创建 `_register_<name>()` 和 `_tool_<name>()` 函数，用 8 个参数调用 `server_core.register_tool()`（name, desc, input_schema, Callable, output_schema, annotations, category, group）
-2. **注册到分类器** — 在 `mcp_tool_classifier.gd` 的 `_build_classifications()` 中添加条目，然后更新 `test_mcp_tool_classifier.gd` 中的工具总数和 supplementary 计数
+2. **登记到 manifest** — 在 `tools_manifest.gd` 的 `MCPToolsManifest.TOOLS` 中添加该工具条目（`{name: {category, group}}`，唯一权威来源；`mcp_tool_classifier.gd` 自动从中生成分类），然后更新 `test_mcp_tool_classifier.gd` 中的工具总数和 supplementary 计数（manifest/classifier/注册三方一致性由 manifest 测试强制）
 3. **添加单元测试** — 在 `test/unit/tools/` 中覆盖缺失参数/无效参数/边界情况
 4. **更新翻译文件** — 在 `translations/tool_descriptions.json` 和 `translations/tool_descriptions.csv` 中添加工具描述（中英文）
 5. **更新文档** — `docs/tools/<category>-tools.md`（对应分类页，新增工具行 + 更新分组计数）、`docs/tools/README.md`（分类总数表）、根与 `addons/godot_mcp/` 下的 `README.md` / `README.zh.md`
 6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
-**注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
+**注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`search_tools`、`get_tool_details`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
 
 ### 修改已有工具后的文档更新流程
 

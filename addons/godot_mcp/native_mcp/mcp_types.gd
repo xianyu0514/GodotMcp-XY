@@ -18,6 +18,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 # 标准MCP方法
 const METHOD_INITIALIZE: String = "initialize"
 const METHOD_NOTIFICATIONS_INITIALIZED: String = "notifications/initialized"
+const METHOD_NOTIFICATIONS_CANCELLED: String = "notifications/cancelled"
 const METHOD_TOOLS_LIST: String = "tools/list"
 const METHOD_TOOLS_CALL: String = "tools/call"
 const METHOD_RESOURCES_LIST: String = "resources/list"
@@ -26,9 +27,11 @@ const METHOD_RESOURCES_SUBSCRIBE: String = "resources/subscribe"
 const METHOD_RESOURCES_UNSUBSCRIBE: String = "resources/unsubscribe"
 const METHOD_PROMPTS_LIST: String = "prompts/list"
 const METHOD_PROMPTS_GET: String = "prompts/get"
+const METHOD_PING: String = "ping"
 
 # Server-initiated notifications
 const NOTIFICATION_RESOURCES_UPDATED: String = "notifications/resources/updated"
+const NOTIFICATION_PROGRESS: String = "notifications/progress"
 
 # JSON-RPC错误码
 const ERROR_PARSE_ERROR: int = -32700
@@ -72,6 +75,10 @@ class MCPTool:
 	var group: String = ""
 	
 	# 转换为Dictionary（用于JSON序列化）
+	# 注意：刻意不输出 outputSchema —— tools/list 精简下发（对齐 DSH 做法：模型
+	# 只见 name/description/inputSchema 等轻量字段），完整 schema（含 outputSchema）
+	# 由 get_tool_details 按需提供。MCPTool.output_schema 字段本身保留，
+	# get_tool_details 直接读取该字段，不受本方法影响。
 	func to_dict() -> Dictionary:
 		var result: Dictionary = {
 			"name": name,
@@ -80,9 +87,6 @@ class MCPTool:
 			"x_category": category,
 			"x_group": group
 		}
-		
-		if not output_schema.is_empty():
-			result["outputSchema"] = output_schema
 		
 		if not annotations.is_empty():
 			result["annotations"] = annotations

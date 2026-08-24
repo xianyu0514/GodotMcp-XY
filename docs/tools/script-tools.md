@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**17 tools** — 7 core, 10 advanced.
+**18 tools** — 6 core, 12 advanced.
 
 Read, create, modify, validate and search project scripts. The category supports GDScript, C# project inspection, shader validation and symbol/reference workflows.
 
@@ -15,25 +15,26 @@ Read, create, modify, validate and search project scripts. The category supports
 
 ## Tool list
 
-### Script (7 core)
+### Script (6 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `list_project_scripts` | core | List all GDScript files (.gd) in the project. Returns paths relative to res://. |
+| `list_project_scripts` | core | List GDScript (.gd) and C# (.cs) script files in the project. Supports `limit`/`offset` pagination; `count` is the page size and `total_count` is the full total. Returns paths relative to res://. |
 | `read_script` | core | Read the content of a GDScript file (.gd). Returns the complete script source code. |
 | `create_script` | core | Create a new GDScript file with optional template. GDScript files are complete programs, not resource files. |
 | `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
 | `attach_script` | core | Attach a script to a node. |
-| `execute_script` | core | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
+| `execute_script` | advanced | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
 
-### Script-Advanced (10 advanced)
+### Script-Advanced (12 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `batch_read_scripts` | advanced | Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts. |
 | `analyze_script` | advanced | Analyze a GDScript file and report code quality issues. |
-| `validate_script` | advanced | Validate a script file for syntax errors. |
+| `validate_script` | advanced | Validate a script file for syntax errors. Returns structured compile errors with line numbers. |
+| `verify_scripts` | advanced | Batch-verify the compilation status of project scripts, returning per-script structured errors and warnings with line numbers. With no script_paths it scans the whole project for .gd scripts (skipping res://addons/ and res://test/ by default to avoid false positives from the plugin itself and the test suite), capped by max_scripts. Use after editing code as a verification step, complementing validate_script (single script) and execute_editor_script (full reload). |
 | `validate_shader` | advanced | Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether it parses plus shader_type render_modes and uniforms and structural issues (missing/invalid shader_type unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+. |
 | `search_in_files` | advanced | Search for text in project files. |
 | `list_project_script_symbols` | advanced | Index script symbols across project GDScript and C# files. Returns class, extends, functions, signals, properties, and constants. |

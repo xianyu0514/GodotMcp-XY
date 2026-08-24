@@ -1,7 +1,8 @@
 extends "res://addons/gut/test.gd"
 
 # Tests for prompts/get and resources/subscribe + resources/unsubscribe +
-# notifications/resources/updated handling in mcp_server_core.gd.
+# notifications/resources/updated handling in mcp_server_core.gd, plus the
+# real workflow prompts registered by native_mcp/prompt_workflows.gd.
 
 var _core: RefCounted = null
 
@@ -146,3 +147,71 @@ func test_notify_resource_updated_skips_when_not_subscribed():
 	var sent: bool = _core.notify_resource_updated("godot://dummy")
 	assert_false(sent, "Should not notify when not subscribed")
 	assert_eq(fake.sent.size(), 0, "No notification should be sent")
+
+# ---------------------------------------------------------------------------
+# Real workflow prompts (native_mcp/prompt_workflows.gd)
+# ---------------------------------------------------------------------------
+
+func _new_workflows() -> RefCounted:
+	return load("res://addons/godot_mcp/native_mcp/prompt_workflows.gd").new()
+
+func test_prompts_registered():
+	var workflows: RefCounted = _new_workflows()
+	var prompts: Array[Dictionary] = workflows.get_prompts()
+	assert_gte(prompts.size(), 6, "Should register at least 6 workflow prompts")
+	var names: Array = []
+	for p in prompts:
+		var pname: String = String(p.get("name", ""))
+		assert_false(pname.is_empty(), "Prompt name should not be empty")
+		assert_false(String(p.get("description", "")).is_empty(), "Prompt description should not be empty")
+		assert_true(p.get("arguments", null) is Array, "Prompt arguments should be an array")
+		for arg in p["arguments"]:
+			assert_false(String(arg.get("name", "")).is_empty(), "Argument name should not be empty")
+			assert_true(arg.has("required"), "Argument should declare 'required'")
+		names.append(pname)
+	assert_true("plan_game_feature" in names, "plan_game_feature should be registered")
+	assert_true("debug_runtime_error" in names, "debug_runtime_error should be registered")
+	assert_true("onboard_new_project" in names, "onboard_new_project should be registered")
+
+func test_prompt_plan_game_feature_messages():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("plan_game_feature").call({
+		"gdd_summary": "A 2D platformer with 3 levels",
+		"goal": "2D platformer vertical slice"
+	})
+	assert_true(result.has("messages"), "Should return messages")
+	var messages: Array = result["messages"]
+	assert_gte(messages.size(), 1, "Messages should be non-empty")
+	var text: String = str(messages[0]["content"]["text"])
+	assert_true(text.contains("manage_task_plan"), "Messages should reference manage_task_plan")
+	assert_true(text.contains("A 2D platformer with 3 levels"), "gdd_summary should be embedded in the template")
+
+func test_prompt_debug_runtime_error_messages():
+	var workflows: RefCounted = _new_workflows()
+	var error_text: String = "Invalid get index 'x' (on base: 'Nil')"
+	var result: Dictionary = workflows.get_callable("debug_runtime_error").call({"error_text": error_text})
+	assert_true(result.has("messages"), "Should return messages")
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains(error_text), "error_text should be embedded in the template")
+	assert_true(text.contains("get_editor_logs"), "Template should reference get_editor_logs")
+
+func test_prompt_requires_arguments():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("plan_game_feature").call({"goal": "slice"})
+	assert_true(result.has("error"), "Missing required argument should produce an error dictionary")
+	assert_true(str(result["error"]).contains("gdd_summary"), "Error should name the missing argument")
+	# With the argument present the same callable renders normally.
+	var ok: Dictionary = workflows.get_callable("plan_game_feature").call({"gdd_summary": "s", "goal": "g"})
+	assert_true(ok.has("messages"), "With arguments present the prompt should render")
+
+func test_prompt_get_via_server_core():
+	var workflows: RefCounted = _new_workflows()
+	var count: int = workflows.register_to_server(_core)
+	assert_gte(count, 6, "Should register prompts to the server core")
+	var resp: Dictionary = await _core._handle_prompt_get({"id": 1, "params": {"name": "plan_game_feature", "arguments": {"gdd_summary": "s", "goal": "g"}}})
+	assert_true(resp.has("result"), "prompts/get should succeed for a workflow prompt")
+	assert_gte(resp["result"]["messages"].size(), 1, "prompts/get should return messages")
+	assert_eq(resp["result"]["description"], "Turn a one-sentence GDD / feature request into an executable manage_task_plan task graph with gated Definition-of-Done, then hand off the first ready task.", "Description should fall back to the registered prompt description")
+	var list_resp: Dictionary = await _core._handle_prompts_list({"id": 2, "params": {}})
+	assert_true(list_resp.has("result"), "prompts/list should succeed")
+	assert_gte(list_resp["result"]["prompts"].size(), 6, "prompts/list should expose the registered prompts")

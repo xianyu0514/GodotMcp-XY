@@ -7,7 +7,7 @@ extends "res://addons/gut/test.gd"
 var _tools: RefCounted = null
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_workflow_tools.gd").new()
 
 func after_each() -> void:
 	_tools = null

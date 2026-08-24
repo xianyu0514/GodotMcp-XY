@@ -154,6 +154,21 @@ func _tr(key: String) -> String:
 		return _translation_manager.get_text(key)
 	return key
 
+## Format a translated string with args. Defensive: when the translation is
+## missing (returns the key itself) or the placeholder count does not match the
+## args, return the raw text instead of crashing on '%' formatting.
+func _trf(key: String, args: Array) -> String:
+	var text: String = _tr(key)
+	var placeholder_count: int = 0
+	for i in text.length():
+		if text[i] == "%":
+			i += 1
+			if i < text.length() and text[i] in "dsf":
+				placeholder_count += 1
+	if placeholder_count > 0 and placeholder_count == args.size():
+		return text % args
+	return text
+
 func _get_group_display_name() -> String:
 	var key: String = "group." + _group_name
 	var translated: String = _tr(key)
@@ -202,6 +217,17 @@ func apply_filter(query: String) -> int:
 		_set_body_visible(visible_count > 0)
 	return visible_count
 
+## Show only tools in a curated cross-group scope. Returns visible row count.
+func apply_tool_names(tool_names: Array) -> int:
+	var visible_count: int = 0
+	for tool_item in get_tool_items():
+		var is_visible: bool = tool_item.get_tool_name() in tool_names
+		tool_item.visible = is_visible
+		if is_visible:
+			visible_count += 1
+	_set_body_visible(visible_count > 0)
+	return visible_count
+
 func _on_group_toggled(button_pressed: bool) -> void:
 	set_group_enabled(button_pressed)
 	group_toggled.emit(_group_name, button_pressed)
@@ -228,7 +254,7 @@ func _update_count() -> void:
 				enabled += 1
 
 	if _count_label:
-		_count_label.text = _tr("ui.enabled_format") % [enabled, total]
+		_count_label.text = _trf("ui.enabled_format", [enabled, total])
 
 	if _group_check:
 		_group_check.set_block_signals(true)

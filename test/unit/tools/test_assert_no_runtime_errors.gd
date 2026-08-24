@@ -33,7 +33,7 @@ class FakePlugin:
 var _tools: RefCounted = null
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	if Engine.has_meta("GodotMCPPlugin"):
 		Engine.remove_meta("GodotMCPPlugin")
 

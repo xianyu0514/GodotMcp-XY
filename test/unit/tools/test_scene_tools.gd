@@ -118,6 +118,24 @@ func test_count_nodes_counts_subtree():
 	assert_eq(_scene_tools._count_nodes(root), 4, "Should count root plus 3 descendants")
 	root.free()
 
+
+func test_build_node_tree_with_count_single_pass():
+	var root: Node = Node.new()
+	var a: Node = Node.new()
+	var b: Node = Node.new()
+	var c: Node = Node.new()
+	root.add_child(a)
+	root.add_child(b)
+	a.add_child(c)
+	add_child(root)
+	var built: Dictionary = _scene_tools._build_node_tree_with_count(root, 0, -1, root)
+	assert_eq(int(built.get("count", 0)), 4, "Single-pass builder should count root plus 3 descendants")
+	var tree: Dictionary = built.get("tree", {})
+	assert_eq(tree.get("name", ""), root.name, "Tree root should be the input root")
+	assert_eq(tree.get("children", []).size(), 2, "Tree should contain both root children")
+	remove_child(root)
+	root.free()
+
 func test_assign_owner_recursive_sets_owner():
 	var root: Node = Node.new()
 	var child: Node = Node.new()

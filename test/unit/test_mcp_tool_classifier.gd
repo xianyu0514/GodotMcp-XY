@@ -1,31 +1,89 @@
 extends "res://addons/gut/test.gd"
 
+# 单一数据表（MCPToolsManifest）与 classifier / server_core 注册的一致性测试：
+#   - test_manifest_matches_classifier：manifest 工具集 == classifier 工具集（含分类/分组）
+#   - test_manifest_matches_registered_tools：运行时注册校验 —— 每个注册工具的
+#     category/group 必须与 manifest 一致（防“新增工具忘改 manifest / register 与
+#     manifest 不一致”漂移）
+#   - test_manifest_counts：manifest 计数（221/28/189/4）
+
+const ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+
+const TOOL_MODULE_PATHS: Array[String] = [
+	"res://addons/godot_mcp/tools/node_tools_native.gd",
+	"res://addons/godot_mcp/tools/script_tools_native.gd",
+	"res://addons/godot_mcp/tools/scene_tools_native.gd",
+	"res://addons/godot_mcp/tools/editor_tools_native.gd",
+	"res://addons/godot_mcp/tools/debug_tools_native.gd",
+	"res://addons/godot_mcp/tools/debug_bridge_tools.gd",
+	"res://addons/godot_mcp/tools/debug_runtime_tools.gd",
+	"res://addons/godot_mcp/tools/debug_verify_tools.gd",
+	"res://addons/godot_mcp/tools/project_tools_native.gd",
+	"res://addons/godot_mcp/tools/project_resources_tools.gd",
+	"res://addons/godot_mcp/tools/project_assets_tools.gd",
+	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
+	"res://addons/godot_mcp/tools/project_verification_tools.gd",
+	"res://addons/godot_mcp/tools/project_workflow_tools.gd",
+	"res://addons/godot_mcp/tools/meta_tools_native.gd",
+]
+
 var _classifier = null
+var _core = null
 
 func before_each():
 	_classifier = load("res://addons/godot_mcp/native_mcp/mcp_tool_classifier.gd").new()
+	_core = null
 
 func after_each():
 	_classifier = null
+	if _core != null:
+		# 解除注册表对（绑定到模块实例的）callable 的引用，避免 headless 退出时
+		# ObjectDB 泄漏告警（同 test_tool_schema_lint.gd）。
+		var names: Array = _core.get_all_tools().keys()
+		for name in names:
+			_core.unregister_tool(name)
+	_core = null
 
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_215_tools_registered():
+func test_all_221_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 215, "Should have exactly 215 tools registered")
+	assert_eq(all_tools.size(), 221, "Should have exactly 221 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
-	assert_eq(meta_tools.size(), 2, "Should have exactly 2 meta tools")
+	assert_eq(meta_tools.size(), 4, "Should have exactly 4 meta tools")
 	assert_true("list_tool_catalog" in meta_tools, "list_tool_catalog should be a meta tool")
 	assert_true("enable_tools" in meta_tools, "enable_tools should be a meta tool")
+	assert_true("search_tools" in meta_tools, "search_tools should be a meta tool")
+	assert_true("get_tool_details" in meta_tools, "get_tool_details should be a meta tool")
 
 func test_meta_tools_are_not_core_or_supplementary():
 	assert_true(_classifier.is_meta_tool("list_tool_catalog"), "list_tool_catalog should be meta")
 	assert_false(_classifier.is_core_tool("enable_tools"), "enable_tools should not be core")
 	assert_false(_classifier.is_supplementary_tool("enable_tools"), "enable_tools should not be supplementary")
 	assert_eq(_classifier.get_tool_group("list_tool_catalog"), "Meta", "list_tool_catalog should be in Meta group")
+	assert_true(_classifier.is_meta_tool("search_tools"), "search_tools should be meta")
+	assert_false(_classifier.is_supplementary_tool("search_tools"), "search_tools should not be supplementary")
+	assert_true(_classifier.is_meta_tool("get_tool_details"), "get_tool_details should be meta")
+	assert_eq(_classifier.get_tool_group("get_tool_details"), "Meta", "get_tool_details should be in Meta group")
+
+func test_verify_scripts_is_supplementary_script_advanced():
+	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
+	assert_false(_classifier.is_core_tool("verify_scripts"), "verify_scripts should not be core")
+	assert_eq(_classifier.get_tool_group("verify_scripts"), "Script-Advanced", "verify_scripts should be in Script-Advanced group")
+
+func test_undo_redo_history_tools_are_supplementary_editor_advanced():
+	for tool_name in ["undo", "redo", "get_undo_history"]:
+		assert_true(_classifier.is_supplementary_tool(tool_name), tool_name + " should be supplementary")
+		assert_false(_classifier.is_core_tool(tool_name), tool_name + " should not be core")
+		assert_false(_classifier.is_meta_tool(tool_name), tool_name + " should not be meta")
+		assert_eq(_classifier.get_tool_group(tool_name), "Editor-Advanced", tool_name + " should be in Editor-Advanced group")
+
+func test_editor_advanced_group_count():
+	var tools: Array = _classifier.get_group_tools("Editor-Advanced")
+	assert_eq(tools.size(), 23, "Editor-Advanced should have 23 tools")
 
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
@@ -65,11 +123,11 @@ func test_generate_3d_asset_is_supplementary_project_advanced():
 
 func test_core_tools_count_within_limit():
 	var core_tools: Array = _classifier.get_core_tools()
-	assert_eq(core_tools.size(), 30, "Should have exactly 30 core tools")
+	assert_eq(core_tools.size(), 28, "Should have exactly 28 core tools")
 
 func test_supplementary_tools_count():
 	var supp_tools: Array = _classifier.get_supplementary_tools()
-	assert_eq(supp_tools.size(), 183, "Should have 183 supplementary tools")
+	assert_eq(supp_tools.size(), 189, "Should have 189 supplementary tools")
 
 func test_get_tool_category_create_node():
 	var cat: String = _classifier.get_tool_category("create_node")
@@ -77,7 +135,17 @@ func test_get_tool_category_create_node():
 
 func test_get_tool_category_execute_editor_script():
 	var cat: String = _classifier.get_tool_category("execute_editor_script")
-	assert_eq(cat, "core", "execute_editor_script should be core")
+	assert_eq(cat, "supplementary", "execute_editor_script should be supplementary")
+
+func test_execute_script_now_supplementary():
+	assert_true(_classifier.is_supplementary_tool("execute_script"), "execute_script should be supplementary after security downgrade")
+	assert_false(_classifier.is_core_tool("execute_script"), "execute_script should not be core after security downgrade")
+	assert_eq(_classifier.get_tool_group("execute_script"), "Script", "execute_script should stay in Script group")
+
+func test_execute_editor_script_now_supplementary():
+	assert_true(_classifier.is_supplementary_tool("execute_editor_script"), "execute_editor_script should be supplementary after security downgrade")
+	assert_false(_classifier.is_core_tool("execute_editor_script"), "execute_editor_script should not be core after security downgrade")
+	assert_eq(_classifier.get_tool_group("execute_editor_script"), "Editor", "execute_editor_script should stay in Editor group")
 
 func test_get_tool_category_unknown():
 	var cat: String = _classifier.get_tool_category("non_existent_tool")
@@ -133,8 +201,8 @@ func test_get_group_tools_script():
 
 func test_is_core_tool():
 	assert_true(_classifier.is_core_tool("create_node"), "create_node should be core")
-	assert_true(_classifier.is_core_tool("execute_editor_script"), "execute_editor_script should be core")
-	assert_true(_classifier.is_core_tool("execute_script"), "execute_script should be core")
+	assert_true(_classifier.is_core_tool("list_project_scripts"), "list_project_scripts should be core")
+	assert_true(_classifier.is_core_tool("read_script"), "read_script should be core")
 
 func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("reload_project"), "reload_project should be supplementary")
@@ -148,6 +216,7 @@ func test_is_supplementary_tool():
 	assert_true(_classifier.is_supplementary_tool("find_nodes_in_group"), "find_nodes_in_group should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("analyze_script"), "analyze_script should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("validate_script"), "validate_script should be supplementary")
+	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("search_in_files"), "search_in_files should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("list_project_scenes"), "list_project_scenes should be supplementary")
 	assert_true(_classifier.is_supplementary_tool("get_scene_structure"), "get_scene_structure should be supplementary")
@@ -312,3 +381,125 @@ func test_classifier_no_duplicate_tools():
 		if not t in unique:
 			unique.append(t)
 	assert_eq(tools.size(), unique.size(), "Tools should not contain duplicates")
+
+func test_human_friendly_domains_are_available():
+	var domains: Array[String] = _classifier.get_all_domains()
+	for expected in ["2d", "3d", "ui", "assets_animation", "debug_test", "shipping"]:
+		assert_true(expected in domains, "Domain should be discoverable: " + expected)
+
+func test_2d_domain_excludes_3d_only_tools():
+	var tools: Array[String] = _classifier.get_domain_tools("2d")
+	assert_true("create_tileset" in tools, "2D includes TileSet authoring")
+	assert_true("slice_sprite_sheet" in tools, "2D includes sprite sheet slicing")
+	assert_false("generate_3d_asset" in tools, "2D excludes 3D generation")
+	assert_false("inspect_gltf_asset" in tools, "2D excludes glTF inspection")
+
+func test_3d_domain_excludes_2d_only_tools():
+	var tools: Array[String] = _classifier.get_domain_tools("3d")
+	assert_true("generate_3d_asset" in tools, "3D includes 3D generation")
+	assert_true("inspect_gltf_asset" in tools, "3D includes glTF inspection")
+	assert_false("create_tileset" in tools, "3D excludes TileSet authoring")
+
+func test_domains_keep_shared_core_workflows():
+	for domain in ["2d", "3d", "ui"]:
+		var tools: Array[String] = _classifier.get_domain_tools(domain)
+		assert_true("create_scene" in tools, domain + " includes shared scene creation")
+		assert_true("modify_script" in tools, domain + " includes shared scripting")
+
+func test_unknown_domain_is_empty():
+	assert_eq(_classifier.get_domain_tools("unknown"), [], "Unknown domains do not broaden scope")
+
+# ----------------------------------------------------------------------------
+# 单一数据表一致性测试（MCPToolsManifest）
+# ----------------------------------------------------------------------------
+
+## manifest 工具名集合 == classifier 工具名集合，且每个工具的 category/group 逐条一致。
+## 防“改了一边忘改另一边”漂移。
+func test_manifest_matches_classifier():
+	var manifest_names: Array[String] = ManifestScript.tool_names()
+	var classifier_names: Array = _classifier.get_all_tools()
+	assert_eq(manifest_names.size(), classifier_names.size(),
+		"manifest 工具数 %d 应等于 classifier 工具数 %d" % [manifest_names.size(), classifier_names.size()])
+
+	var classifier_set: Dictionary = {}
+	for tool_name in classifier_names:
+		classifier_set[str(tool_name)] = true
+
+	var missing_in_classifier: Array[String] = []
+	for tool_name in manifest_names:
+		if not classifier_set.has(tool_name):
+			missing_in_classifier.append(tool_name)
+	assert_eq(missing_in_classifier.size(), 0,
+		"manifest 有但 classifier 没有的工具: " + str(missing_in_classifier))
+
+	var missing_in_manifest: Array[String] = []
+	for tool_name in classifier_names:
+		if not ManifestScript.TOOLS.has(str(tool_name)):
+			missing_in_manifest.append(str(tool_name))
+	assert_eq(missing_in_manifest.size(), 0,
+		"classifier 有但 manifest 没有的工具: " + str(missing_in_manifest))
+
+	# 分类/分组逐条一致。
+	var mismatches: Array[String] = []
+	for tool_name in classifier_names:
+		var name_str: String = str(tool_name)
+		var classifier_category: String = _classifier.get_tool_category(name_str)
+		var classifier_group: String = _classifier.get_tool_group(name_str)
+		var manifest_category: String = ManifestScript.category_of(name_str)
+		var manifest_group: String = ManifestScript.group_of(name_str)
+		if classifier_category != manifest_category or classifier_group != manifest_group:
+			mismatches.append("%s: classifier=(%s,%s) manifest=(%s,%s)" % [
+				name_str, classifier_category, classifier_group, manifest_category, manifest_group])
+	assert_eq(mismatches.size(), 0,
+		"classifier 与 manifest 分类/分组不一致的工具: " + str(mismatches))
+
+## 运行时注册校验：实例化全部工具模块注册进 server_core，断言每个注册工具的
+## category/group 与 manifest 一致。防“新增工具忘改 manifest / register_tool 与
+## manifest 不一致”漂移（注册参数无法直接读取，但可通过 get_all_tools() 拿
+## MCPTool.category/group 对比）。
+func test_manifest_matches_registered_tools():
+	_core = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var load_failures: Array[String] = []
+	for path in TOOL_MODULE_PATHS:
+		var script: GDScript = load(path)
+		if script == null:
+			load_failures.append(path)
+			continue
+		var instance: RefCounted = script.new()
+		instance.register_tools(_core)
+	assert_eq(load_failures.size(), 0, "工具模块加载失败: " + str(load_failures))
+
+	var registered: Dictionary = _core.get_all_tools()
+	assert_eq(registered.size(), ManifestScript.TOOLS.size(),
+		"注册工具数 %d 应等于 manifest 工具数 %d" % [registered.size(), ManifestScript.TOOLS.size()])
+
+	var missing_in_manifest: Array[String] = []
+	var mismatches: Array[String] = []
+	for tool_name in registered:
+		var name_str: String = str(tool_name)
+		var tool = registered[tool_name]
+		if not ManifestScript.TOOLS.has(name_str):
+			missing_in_manifest.append(name_str)
+			continue
+		var manifest_category: String = ManifestScript.category_of(name_str)
+		var manifest_group: String = ManifestScript.group_of(name_str)
+		if str(tool.category) != manifest_category or str(tool.group) != manifest_group:
+			mismatches.append("%s: registered=(%s,%s) manifest=(%s,%s)" % [
+				name_str, str(tool.category), str(tool.group), manifest_category, manifest_group])
+	assert_eq(missing_in_manifest.size(), 0,
+		"已注册但不在 manifest 的工具（新增工具忘改 manifest）: " + str(missing_in_manifest))
+	assert_eq(mismatches.size(), 0,
+		"register_tool 与 manifest 分类/分组不一致的工具: " + str(mismatches))
+
+## manifest 计数基线：221 总 / 28 core / 189 supplementary / 4 meta。
+func test_manifest_counts():
+	assert_eq(ManifestScript.TOOLS.size(), 221, "manifest 应包含 221 个工具")
+	assert_eq(ManifestScript.count_by_category("core"), 28, "manifest 应有 28 个 core 工具")
+	assert_eq(ManifestScript.count_by_category("supplementary"), 189, "manifest 应有 189 个 supplementary 工具")
+	assert_eq(ManifestScript.count_by_category("meta"), 4, "manifest 应有 4 个 meta 工具")
+	# meta 工具必须包含（classifier 依赖 manifest 提供 meta 特殊处理数据）。
+	var meta_names: Array[String] = ManifestScript.tool_names()
+	assert_true("list_tool_catalog" in meta_names, "manifest 应包含 list_tool_catalog")
+	assert_true("search_tools" in meta_names, "manifest 应包含 search_tools")
+	assert_true("get_tool_details" in meta_names, "manifest 应包含 get_tool_details")
+	assert_true("enable_tools" in meta_names, "manifest 应包含 enable_tools")

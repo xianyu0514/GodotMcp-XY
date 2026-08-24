@@ -251,3 +251,160 @@ func test_validate_shader_ignores_commented_render_mode():
 	var modes: Array = result.get("render_modes", [])
 	assert_true(modes.has("unshaded"), "The real render_mode is parsed")
 	assert_false(modes.has("blend_add"), "The commented-out render_mode is ignored")
+
+# ============================================================================
+# validate_script 错误提取增强测试
+# ============================================================================
+
+func test_extract_error_line_from_text():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	assert_eq(tool._extract_error_line("Parse Error: Expected ')' at line 12"), 12, "Extracts line from 'at line N' parse error text")
+	assert_eq(tool._extract_error_line("Line 7: Variable lacks type hint"), 7, "Extracts line from 'Line N:' format")
+	assert_eq(tool._extract_error_line("Parse Error: Expected end of statement (script.gd)"), 0, "No line number returns 0")
+	assert_eq(tool._extract_error_line("解析错误：第 12 行"), 0, "Chinese error text without 'line' keyword returns 0 without crashing")
+	assert_eq(tool._extract_error_line(""), 0, "Empty text returns 0")
+
+func test_validate_script_error_has_line():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# Deliberately broken GDScript: the print statement is missing its closing parenthesis.
+	var broken_code: String = "extends Node\n\nfunc _ready() -> void:\n\tprint(\"hello\"\n"
+	var result: Dictionary = tool._tool_validate_script({"content": broken_code})
+	# The engine prints the expected parse error to the console; mark it handled
+	# so GUT does not treat the expected SCRIPT ERROR as an unexpected failure.
+	for e in get_errors():
+		e.handled = true
+	assert_false(result.get("valid", true), "Broken script is reported as invalid")
+	var errors: Array = result.get("errors", [])
+	assert_true(errors.size() > 0, "At least one error is reported for the broken script")
+	assert_true(errors[0].has("line"), "Error entry carries a line field")
+	assert_true(errors[0].has("column"), "Error entry carries a column field")
+	assert_true(errors[0].has("message"), "Error entry carries a message field")
+	# Headless compilation may not expose a reliable error text in every build;
+	# only require the message to be non-empty (line may be 0 in fallback mode).
+	assert_true(str(errors[0].get("message", "")).length() > 0, "Error message is non-empty")
+
+# ============================================================================
+# verify_scripts 批量校验测试
+# ============================================================================
+
+func test_verify_scripts_single_valid_script():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_verify_scripts({
+		"script_paths": ["res://addons/godot_mcp/utils/path_validator.gd"]
+	})
+	assert_eq(result.get("verified", -1), 1, "The valid script is counted as verified")
+	assert_eq(result.get("failed", -1), 0, "No failures")
+	assert_eq(result.get("total_checked", -1), 1, "One script checked")
+	var results: Array = result.get("results", [])
+	assert_eq(results.size(), 1, "One result entry")
+	assert_true(results[0].get("valid", false), "path_validator.gd compiles cleanly")
+	assert_eq(results[0].get("path"), "res://addons/godot_mcp/utils/path_validator.gd", "Entry carries its path")
+	assert_true(results[0].has("errors"), "Entry carries errors array")
+	assert_true(results[0].has("warnings"), "Entry carries warnings array")
+
+func test_verify_scripts_multiple_paths():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = [
+		"res://addons/godot_mcp/utils/path_validator.gd",
+		"res://addons/godot_mcp/utils/payload_utils.gd"
+	]
+	var result: Dictionary = tool._tool_verify_scripts({"script_paths": paths})
+	assert_eq(result.get("verified", -1), 2, "Both valid scripts verified")
+	assert_eq(result.get("failed", -1), 0, "No failures")
+	assert_eq(result.get("results", []).size(), 2, "One entry per requested path")
+
+func test_verify_scripts_missing_file_reports_failed():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_verify_scripts({"script_paths": ["res://does/not/exist.gd"]})
+	assert_eq(result.get("verified", -1), 0, "Nothing verified")
+	assert_eq(result.get("failed", -1), 1, "Missing file counts as failed")
+	var results: Array = result.get("results", [])
+	assert_false(results[0].get("valid", true), "Missing file is invalid")
+	assert_eq(results[0].get("error_count", 0), 1, "One error entry for the missing file")
+	assert_true(str(results[0]["errors"][0].get("message", "")).contains("not found"), "Error message names the missing file")
+
+func test_verify_scripts_broken_content_reports_errors():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	# Write a deliberately broken script into user:// so we can exercise the file path.
+	var broken_path: String = "user://verify_broken_test.gd"
+	var file: FileAccess = FileAccess.open(broken_path, FileAccess.WRITE)
+	file.store_string("extends Node\n\nfunc _ready() -> void:\n\tprint(\"hello\"\n")
+	file.close()
+	var result: Dictionary = tool._tool_verify_scripts({"script_paths": [broken_path]})
+	# The engine prints the expected parse error to the console; mark it handled
+	# so GUT does not treat the expected SCRIPT ERROR as an unexpected failure.
+	for e in get_errors():
+		e.handled = true
+	assert_eq(result.get("failed", -1), 1, "Broken script is reported as failed")
+	var results: Array = result.get("results", [])
+	assert_false(results[0].get("valid", true), "Broken script is invalid")
+	assert_true(int(results[0].get("error_count", 0)) > 0, "At least one error entry")
+	assert_true(results[0]["errors"][0].has("line"), "Error entry carries a line")
+	assert_true(results[0]["errors"][0].has("message"), "Error entry carries a message")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(broken_path))
+
+func test_verify_scripts_max_scripts_truncates():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = [
+		"res://addons/godot_mcp/utils/path_validator.gd",
+		"res://addons/godot_mcp/utils/payload_utils.gd"
+	]
+	var result: Dictionary = tool._tool_verify_scripts({"script_paths": paths, "max_scripts": 1})
+	assert_eq(result.get("total_checked", -1), 1, "max_scripts caps how many scripts are checked")
+	assert_eq(result.get("results", []).size(), 1, "Only one result returned")
+
+func test_verify_scripts_default_scan_skips_addons_and_test():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_verify_scripts({})
+	assert_eq(result.get("total_checked", -1), result.get("results", []).size(), "Every checked script has a result entry")
+	for entry in result.get("results", []):
+		var path: String = str(entry.get("path", ""))
+		assert_false(path.begins_with("res://addons/"), "Default scan skips addons/: " + path)
+		assert_false(path.begins_with("res://test/"), "Default scan skips test/: " + path)
+
+func test_verify_scripts_collect_finds_gd_scripts():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = []
+	tool._collect_gd_scripts_excluding("res://addons/godot_mcp/tools", paths, [])
+	assert_true(paths.size() > 0, "Should find scripts under res://addons/godot_mcp/tools")
+	assert_true("res://addons/godot_mcp/tools/script_tools_native.gd" in paths, "script_tools_native.gd should be found")
+
+func test_verify_scripts_collect_skips_named_dirs():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = []
+	tool._collect_gd_scripts_excluding("res://addons/godot_mcp", paths, ["utils"])
+	for path in paths:
+		assert_false(String(path).contains("/utils/"), "Named dirs are skipped: " + str(path))
+	assert_true(paths.size() > 0, "Skipping one subdir still finds the rest")
+
+func test_verify_scripts_deduplicates_paths():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_verify_scripts({
+		"script_paths": [
+			"res://addons/godot_mcp/utils/path_validator.gd",
+			"res://addons/godot_mcp/utils/path_validator.gd",
+			""
+		]
+	})
+	assert_eq(result.get("total_checked", -1), 1, "Duplicate paths are checked once")
+	assert_eq(result.get("verified", -1), 1, "The single unique script verifies")
+
+func test_verify_scripts_collect_wrapper_skips_addons_and_test():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var paths: Array = []
+	tool._collect_verify_script_paths(paths)
+	# Headless（无 EditorInterface）时封装回退到 DirAccess，结果必须与直接扫描一致。
+	var expected: Array = []
+	tool._collect_gd_scripts_excluding("res://", expected, ["addons", "test", ".godot"])
+	assert_eq(paths, expected, "Wrapper scan matches the DirAccess fallback in headless mode")
+	for path in paths:
+		assert_false(String(path).begins_with("res://addons/"), "Wrapper scan skips addons/: " + str(path))
+		assert_false(String(path).begins_with("res://test/"), "Wrapper scan skips test/: " + str(path))
+
+func test_autoload_declarations_cached_returns_string():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var first: String = tool._get_autoload_declarations_cached()
+	var second: String = tool._get_autoload_declarations_cached()
+	assert_true(first is String, "Cached autoload declarations are a string")
+	assert_eq(first, second, "Cached declarations are stable across calls")
+	assert_eq(first, tool._build_autoload_declarations(), "Cache matches a fresh build")

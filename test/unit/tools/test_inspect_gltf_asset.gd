@@ -1,6 +1,6 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for inspect_gltf_asset in project_tools_native.gd. Writes a minimal
+# Unit tests for inspect_gltf_asset in project_assets_tools.gd. Writes a minimal
 # valid glTF 2.0 document to a temp dir under user:// and parses it with the
 # engine's GLTFDocument, so the happy path runs headless (no game required).
 
@@ -8,7 +8,7 @@ var _tools: RefCounted = null
 var _tmp_dir: String = "user://.tmp_inspect_gltf_test"
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var dir: DirAccess = DirAccess.open("user://")
 	if dir and not dir.dir_exists(_tmp_dir):
 		dir.make_dir_recursive(_tmp_dir)

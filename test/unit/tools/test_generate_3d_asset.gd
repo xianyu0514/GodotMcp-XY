@@ -1,6 +1,6 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for generate_3d_asset in project_tools_native.gd. These cover the
+# Unit tests for generate_3d_asset in project_assets_tools.gd. These cover the
 # offline/pure parts only (config resolution, JSON dot-path extraction, status
 # matching, glTF byte validation, and the unconfigured / missing-param / missing
 # env-var guard paths). The submit/poll/download HTTP flow is not exercised here
@@ -9,7 +9,7 @@ extends "res://addons/gut/test.gd"
 var _tools: RefCounted = null
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 
 func after_each() -> void:
 	_tools = null
@@ -131,3 +131,104 @@ func test_validate_rejects_short():
 func test_url_host():
 	assert_eq(_tools._url_host("https://assets.meshy.ai/path/model.glb"), "assets.meshy.ai", "host parsed")
 	assert_eq(_tools._url_host("not-a-url"), "", "no scheme -> empty host")
+
+# --- unified AsyncJobManager pipeline (pending -> poll -> cancel) ----------
+# The full submit/poll/download HTTP flow still needs a live provider, but the
+# async plumbing around it (job start, job_id, cooperative cancellation, result
+# forwarding, main-thread finalize) is covered here offline.
+
+func _fake_gen_cancelled_worker() -> Dictionary:
+	return {"status": "cancelled", "cancelled": true, "error": "cancelled by client"}
+
+func test_generate_3d_asset_async_pending_then_cancel():
+	# A valid config (meshy preset, no key needed via api_key_env="") starts a
+	# background job and returns pending; cancellation flips the job flag and
+	# the worker aborts at its next check (submit HTTP round-trip is bounded by
+	# timeout_sec = 1s).
+	var params: Dictionary = {
+		"prompt": "a low-poly tree",
+		"resource_path": "res://.tmp_gen_async_test.glb",
+		"preset": "meshy_text_to_3d",
+		"api_key_env": "",
+		"timeout_sec": 1,
+		"poll_interval_sec": 1,
+		"max_wait_sec": 5
+	}
+	var result: Dictionary = _tools._tool_generate_3d_asset(params)
+	assert_eq(result.get("status"), "pending", "valid config starts a background job")
+	var job_id: String = str(result.get("job_id", ""))
+	assert_false(job_id.is_empty(), "pending response carries a job_id")
+	assert_true(_tools._gen_job_manager.has_job(job_id), "job registered in the manager")
+	assert_false(_tools._gen_job_manager.is_cancelled(job_id), "job not cancelled yet")
+	_tools._gen_job_manager.cancel_job(job_id)
+	assert_true(_tools._gen_job_manager.is_cancelled(job_id), "cancel flag flips after cancel_job")
+	# Drain the job: the worker aborts at its next cancellation check, then the
+	# registry empties (bounded wait; never asserts the network outcome).
+	var deadline: int = Time.get_ticks_msec() + 10000
+	while _tools._gen_job_manager.has_job(job_id) and Time.get_ticks_msec() < deadline:
+		_tools._gen_job_manager.poll_job(job_id)
+		OS.delay_msec(50)
+	_tools._gen_job_manager.flush()
+	if FileAccess.file_exists("res://.tmp_gen_async_test.glb"):
+		DirAccess.remove_absolute("res://.tmp_gen_async_test.glb")
+	if FileAccess.file_exists("res://.tmp_gen_async_test.glb.gen.json"):
+		DirAccess.remove_absolute("res://.tmp_gen_async_test.glb.gen.json")
+
+func test_generate_3d_asset_forwards_cancelled_worker_result():
+	var params: Dictionary = {"prompt": "a tree", "resource_path": "res://.tmp_gen_cancel.glb", "preset": "meshy_text_to_3d", "api_key_env": ""}
+	var cfg: Dictionary = _tools._resolve_3d_config(params)
+	var key: String = _tools._generate_3d_job_key("a tree", "res://.tmp_gen_cancel.glb", cfg)
+	_tools._gen_job_manager.start_job(key, Callable(self, "_fake_gen_cancelled_worker"))
+	var result: Dictionary = {}
+	var deadline: int = Time.get_ticks_msec() + 5000
+	while Time.get_ticks_msec() < deadline:
+		result = _tools._tool_generate_3d_asset(params)
+		if result.get("status", "") != "pending":
+			break
+		OS.delay_msec(20)
+	assert_eq(result.get("status"), "cancelled", "polling a cancelled generation job returns cancelled")
+	assert_true(bool(result.get("cancelled", false)), "the worker's cancelled marker is forwarded")
+	if FileAccess.file_exists("res://.tmp_gen_cancel.glb"):
+		DirAccess.remove_absolute("res://.tmp_gen_cancel.glb")
+
+func test_generate_3d_job_key_stable_for_same_params():
+	var cfg: Dictionary = _tools._resolve_3d_config({"preset": "meshy_text_to_3d"})
+	var key_a: String = _tools._generate_3d_job_key("a tree", "res://model.glb", cfg)
+	var key_b: String = _tools._generate_3d_job_key("a tree", "res://model.glb", cfg)
+	assert_eq(key_a, key_b, "same prompt/path/preset derive the same job key")
+	var key_c: String = _tools._generate_3d_job_key("a bush", "res://model.glb", cfg)
+	assert_ne(key_a, key_c, "a different prompt derives a different job key")
+	var key_d: String = _tools._generate_3d_job_key("a tree", "res://other.glb", cfg)
+	assert_ne(key_a, key_d, "a different output path derives a different job key")
+
+# --- main-thread finalize (reimport + inspect) ------------------------------
+
+func test_finalize_generate_3d_asset_merges_reimport_and_inspect():
+	# In headless unit runs there is no editor interface: reimport is skipped
+	# with a reason and inspect on a missing file yields inspect_error. The
+	# merge must be deterministic and never resurrect _needs_finalize.
+	var result: Dictionary = _tools._finalize_generate_3d_asset({
+		"_needs_finalize": true,
+		"status": "success",
+		"resource_path": "res://.tmp_missing_model.glb",
+		"size_bytes": 12
+	}, {"reimport": true, "inspect": true})
+	assert_false(result.has("_needs_finalize"), "finalize strips the internal marker")
+	assert_eq(result.get("status"), "success", "success status preserved")
+	assert_false(bool(result.get("reimported", true)), "reimport is skipped without an editor interface")
+	assert_true(result.has("reimport_skipped_reason"), "skip reason recorded")
+	assert_has(result, "inspect_error", "inspect on a missing file yields inspect_error")
+
+func test_finalize_generate_3d_asset_respects_reimport_flag():
+	var result: Dictionary = _tools._finalize_generate_3d_asset({
+		"_needs_finalize": true,
+		"status": "success",
+		"resource_path": "res://.tmp_missing_model.glb"
+	}, {"reimport": false, "inspect": false})
+	assert_false(bool(result.get("reimported", true)), "reimport disabled by caller")
+	assert_eq(str(result.get("reimport_skipped_reason", "")), "reimport disabled by caller", "explicit skip reason")
+	assert_false(result.has("inspect_error") or result.has("inspection"), "inspect disabled by caller")
+
+func test_finalize_passthrough_without_marker():
+	var result: Dictionary = _tools._finalize_generate_3d_asset({"status": "failed"}, {"reimport": true, "inspect": true})
+	assert_eq(result, {"status": "failed"}, "results without the finalize marker pass through unchanged")

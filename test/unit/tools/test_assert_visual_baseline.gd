@@ -1,14 +1,14 @@
 extends "res://addons/gut/test.gd"
 
 # Unit tests for the assert_visual_baseline regression gate and the shared
-# _diff_images helper in project_tools_native.gd. Uses real in-memory images
+# _diff_images helper in project_verification_tools.gd. Uses real in-memory images
 # written to a temp dir under user:// so it runs headless (no game required).
 
 var _tools: RefCounted = null
 var _tmp_dir: String = "user://.tmp_visual_baseline_test"
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_verification_tools.gd").new()
 	var dir: DirAccess = DirAccess.open("user://")
 	if dir and not dir.dir_exists(_tmp_dir):
 		dir.make_dir_recursive(_tmp_dir)

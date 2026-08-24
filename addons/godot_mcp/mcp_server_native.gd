@@ -83,7 +83,7 @@ extends EditorPlugin
 		allow_remote = value
 		notify_property_list_changed()
 
-@export var cors_origin: String = "*":
+@export var cors_origin: String = "":
 	set(value):
 		cors_origin = value
 		notify_property_list_changed()
@@ -98,6 +98,10 @@ var _editor_interface: EditorInterface = null
 var _mcp_server_mode: bool = false
 var _tool_instances: Dictionary = {}
 var _debugger_bridge: MCPDebuggerBridge = null
+var _prompt_workflows: RefCounted = null  # prompt_workflows.gd 实例（MCP prompts 工作流模板）
+# 本次插件会话是否由 _ensure_runtime_probe_autoload() 新增了 runtime probe autoload。
+# 若 project.godot 本来就声明了该 autoload（当前仓库正是如此），退出时不得删除它。
+var _probe_autoload_added_this_session: bool = false
 
 const TOOL_SCRIPT_PATHS: Dictionary = {
 	"NodeToolsNative": "res://addons/godot_mcp/tools/node_tools_native.gd",
@@ -105,7 +109,17 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"SceneToolsNative": "res://addons/godot_mcp/tools/scene_tools_native.gd",
 	"EditorToolsNative": "res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"DebugToolsNative": "res://addons/godot_mcp/tools/debug_tools_native.gd",
+	# debug_tools_native.gd 按域拆分出的子模块（注册顺序与原文件分区顺序一致）
+	"DebugBridgeTools": "res://addons/godot_mcp/tools/debug_bridge_tools.gd",
+	"DebugRuntimeTools": "res://addons/godot_mcp/tools/debug_runtime_tools.gd",
+	"DebugVerifyTools": "res://addons/godot_mcp/tools/debug_verify_tools.gd",
 	"ProjectToolsNative": "res://addons/godot_mcp/tools/project_tools_native.gd",
+	# project_tools_native.gd 按域拆分出的子模块（注册顺序与原文件分区顺序一致）
+	"ProjectResourcesTools": "res://addons/godot_mcp/tools/project_resources_tools.gd",
+	"ProjectAssetsTools": "res://addons/godot_mcp/tools/project_assets_tools.gd",
+	"ProjectTilesetTools": "res://addons/godot_mcp/tools/project_tileset_tools.gd",
+	"ProjectVerificationTools": "res://addons/godot_mcp/tools/project_verification_tools.gd",
+	"ProjectWorkflowTools": "res://addons/godot_mcp/tools/project_workflow_tools.gd",
 	"MetaToolsNative": "res://addons/godot_mcp/tools/meta_tools_native.gd"
 }
 
@@ -159,13 +173,9 @@ func _enter_tree() -> void:
 	_native_server.set_http_port(http_port)
 	_log_info("HTTP port set to: " + str(http_port))
 	
-	# 如果启用了认证，创建认证管理器
-	if auth_enabled and transport_mode == "http":
-		var auth_manager: McpAuthManager = McpAuthManager.new()
-		auth_manager.set_token(auth_token)
-		auth_manager.set_enabled(true)
-		_native_server.set_auth_manager(auth_manager)
-		_log_info("Auth manager created and enabled")
+	# 按当前配置应用认证（创建或移除认证管理器）。
+	# S2 修复：认证配置在服务器启动时重新评估，启动前在面板中开启认证也能生效。
+	_apply_auth_config()
 	
 	# 配置 SSE 和远程访问（仅 HTTP 模式）
 	if transport_mode == "http":
@@ -195,11 +205,17 @@ func _enter_tree() -> void:
 	# 注册所有工具
 	_register_all_tools()
 	
-	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication
+	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
+	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot
+	# 静态声明的 autoload 必须保留，避免无头导入/编辑器退出时破坏项目配置。
+	_probe_autoload_added_this_session = not ProjectSettings.has_setting("autoload/MCPRuntimeProbe")
 	_ensure_runtime_probe_autoload()
 	
 	# 注册所有资源
 	_register_all_resources()
+	
+	# 注册所有 prompts（真实工作流模板）
+	_register_all_prompts()
 	
 	# 在UI创建前加载已保存的工具状态（确保UI显示正确的启用状态）
 	if _native_server.has_method("load_tool_states"):
@@ -234,8 +250,10 @@ func _exit_tree() -> void:
 		_main_panel.queue_free()
 		_main_panel = null
 
-	# Remove MCPRuntimeProbe autoload on plugin exit
-	_remove_runtime_probe_autoload()
+	# 仅在本次插件会话真正新增了 autoload 时才移除；项目静态声明的
+	# MCPRuntimeProbe autoload 属于 project.godot，退出时不得删除。
+	if _probe_autoload_added_this_session:
+		_remove_runtime_probe_autoload()
 
 	if _debugger_bridge:
 		remove_debugger_plugin(_debugger_bridge)
@@ -315,6 +333,34 @@ func _apply_cmdline_overrides() -> void:
 	if transport_override != "":
 		transport_mode = transport_override
 		_log_info("MCP transport overridden via command line: " + transport_mode)
+
+
+## 判定认证配置是否应生效（纯逻辑，便于单元测试）。
+## @param enabled: bool - 面板/配置中的认证开关
+## @param transport: String - 当前传输模式（"http" / "stdio"）
+## @returns: bool - 需要创建并挂载认证管理器
+static func should_enable_auth(enabled: bool, transport: String) -> bool:
+	return enabled and transport == "http"
+
+
+## 按当前配置重建认证管理器（S2 修复）。
+## 在服务器真正 start() 之前调用：若启用认证且为 HTTP 传输，则创建新的
+## McpAuthManager（带上当前 token）并挂到服务器 core；否则置空，确保关闭认证
+## 或切换传输后移除旧的认证管理器。必须在 _apply_cmdline_overrides() 之后调用，
+## 以保证 transport_mode 已包含命令行覆盖（--mcp-transport）。
+func _apply_auth_config() -> void:
+	if not _native_server:
+		return
+	
+	if should_enable_auth(auth_enabled, transport_mode):
+		var auth_manager: McpAuthManager = McpAuthManager.new()
+		auth_manager.set_token(auth_token)
+		auth_manager.set_enabled(true)
+		_native_server.set_auth_manager(auth_manager)
+		_log_info("Auth manager created and enabled")
+	else:
+		_native_server.set_auth_manager(null)
+		_log_info("Auth manager disabled or not applicable (transport=" + transport_mode + ")")
 
 # ============================================================================
 # 插件配置（根据godot-dev-guide优化）
@@ -494,6 +540,11 @@ func _start_native_server() -> bool:
 	# overrides (parse_mcp_overrides returns -1 / "").
 	_apply_cmdline_overrides()
 
+	# 在真正 start() 前按当前配置重建认证管理器（S2 修复）。
+	# 必须在 _apply_cmdline_overrides() 之后执行，确保 transport_mode 已包含
+	# 命令行覆盖。覆盖面板 Start 按钮与 --mcp-server / auto_start 两条启动路径。
+	_apply_auth_config()
+
 	_log_info("Starting native MCP server...")
 	var success: bool = _native_server.start()
 	
@@ -613,6 +664,27 @@ func _register_all_resources() -> void:
 	_register_editor_resources()
 	
 	_log_info("All MCP resources registered successfully")
+
+# ============================================================================
+# 私有方法 - Prompt 注册（真实工作流模板）
+# ============================================================================
+
+func _register_all_prompts() -> void:
+	_log_info("Registering all MCP prompts...")
+	
+	if not _native_server:
+		_log_error("MCP Server instance not available")
+		return
+	
+	_prompt_workflows = _instantiate_script("res://addons/godot_mcp/native_mcp/prompt_workflows.gd")
+	if not _prompt_workflows:
+		_log_error("Failed to instantiate prompt workflows module")
+		return
+	
+	var count: int = 0
+	if _prompt_workflows.has_method("register_to_server"):
+		count = int(_prompt_workflows.register_to_server(_native_server))
+	_log_info("All MCP prompts registered successfully. Total: " + str(count))
 
 func _register_scene_resources() -> void:
 	# godot://scene/list

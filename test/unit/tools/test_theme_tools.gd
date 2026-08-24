@@ -1,9 +1,9 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for the Batch 3 UI theme tools in project_tools_native.gd:
+# Unit tests for the Batch 3 UI theme tools in project_workflow_tools.gd:
 # create_theme, set_theme_item, set_default_theme.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_workflow_tools.gd"
 const TMP_DIR: String = "res://.test_tmp_theme"
 
 var _tools: RefCounted = null

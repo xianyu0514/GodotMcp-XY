@@ -40,7 +40,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a preset (minimal_core, level_design, debugging, automation_qa, art_resources, all). After enabling, the new tools appear in tools/list and you can call them directly. This keeps context small and saves compute."
+const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a focused preset (game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core, all). Prefer the narrowest matching preset; 'all' has the highest context cost. After enabling, the new tools appear in tools/list and you can call them directly."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -62,20 +62,69 @@ const MAX_QUEUE_WAIT_SECONDS: float = 30.0
 const MAX_WAITING_REQUESTS: int = 256
 
 ## Read-only tools whose (potentially expensive) results are cached and served
-## directly on a repeat call until a mutating tool invalidates the cache. The
-## cache is keyed by tool name plus its arguments, so different args cache apart.
-## Limited to structural reads (scene-tree walks, filesystem scans) whose result
-## changes only via MCP mutations, which clear the cache; a 5-minute TTL bounds
-## staleness from any out-of-band edit made outside the MCP server.
-const CACHEABLE_READ_TOOLS: Array[String] = ["get_scene_structure", "list_nodes", "list_project_scenes"]
+## directly on a repeat call until a mutating tool invalidates the cache. Keys
+## are deterministic: tool name + canonical (key-sorted) JSON of the arguments,
+## so identical calls share one cache entry regardless of argument insertion
+## order. Limited to structural reads (scene-tree walks, filesystem scans,
+## project metadata) whose result changes only via MCP mutations, which clear
+## the cache; the RESULT_CACHE_TTL_MS TTL bounds staleness from any out-of-band
+## edit made outside the MCP server.
+const CACHEABLE_READ_TOOLS: Array[String] = [
+	"get_scene_structure", "list_nodes", "list_project_scenes",
+	"list_project_scripts", "get_project_structure", "list_open_scenes",
+	"get_scene_tree", "get_node_properties", "batch_get_node_properties",
+	"list_project_resources", "list_project_input_actions",
+	"list_project_autoloads", "list_project_global_classes", "get_import_status",
+	"list_tool_catalog", "search_tools", "get_tool_details"
+]
+
+## Maximum number of tool results kept in the in-memory LRU result cache. When
+## the cache would exceed this many entries, the least recently used entry is
+## evicted.
+const RESULT_CACHE_MAX: int = 64
+
+## TTL (ms) for cached tool results. Invalidation is primarily event-driven (any
+## mutating tool clears the whole cache); this TTL is only a bounded-staleness
+## backstop for out-of-band edits made outside the MCP server — deliberately
+## much shorter than the old 5-minute scene-structure TTL.
+const RESULT_CACHE_TTL_MS: int = 60000
+
+## Results whose JSON serialization exceeds this many UTF-8 bytes are spilled to
+## disk (res://.mcp/out/) and returned to the client as a truncated head/tail
+## preview plus a resume hint, instead of being inlined into the response.
+const MAX_INLINE_RESULT_BYTES: int = 50000
+
+## Preview sizes (characters) returned inline for spilled results: the head and
+## tail of the payload so the model can judge the content before reading the
+## spill file for the full result.
+const SPILL_PREVIEW_HEAD_CHARS: int = 4096
+const SPILL_PREVIEW_TAIL_CHARS: int = 1024
+
+## Directory (res:// path) where spilled large results are written.
+const SPILL_OUTPUT_DIR: String = "res://.mcp/out"
+
+## Tools whose results are never spilled: file-content/log readers where the
+## spill file would merely duplicate the same text and re-reading it through the
+## tool could ping-pong. These keep returning their content inline.
+const SPILL_EXEMPT_TOOLS: Array[String] = ["read_script", "batch_read_scripts", "get_editor_logs"]
+
+## TTL (ms) advertised in the `_meta` of list responses. The 2026-07-28 MCP spec
+## adds `_meta.ttlMs`/`cacheScope` for list caching; Claude Code validates these
+## fields and rejects list results that omit them.
+const LIST_CACHE_TTL_MS: int = 30000
+const TOOLS_LIST_CACHE_SCOPE: String = "toolSet"
+const RESOURCES_LIST_CACHE_SCOPE: String = "resourceList"
+const PROMPTS_LIST_CACHE_SCOPE: String = "promptList"
+
+## Path to the plugin manifest whose `plugin/version` key is the single source
+## of truth for the version reported in the `initialize` handshake.
+const PLUGIN_CONFIG_PATH: String = "res://addons/godot_mcp/plugin.cfg"
 
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
 
 var _active: bool = false
-var _thread: Thread = null
-var _mutex: Mutex = Mutex.new()
 
 # 传输方式相关变量（新增 - 支持多种传输方式）
 var _transport_type: TransportType = TransportType.TRANSPORT_STDIO
@@ -103,6 +152,11 @@ var _resources: Dictionary = {}  # String -> MCPResource
 var _prompts: Dictionary = {}  # String -> MCPPrompt
 var _resource_subscriptions: Dictionary = {}  # String (uri) -> true; active resource subscriptions
 var _tool_list_dirty: bool = false  # 工具列表变更标记
+# tools/list 服务端缓存：启用工具按名字排序后的 MCPTool.to_dict() 数组。
+# 列表只在注册/注销/启用状态变化时重建；重复请求直接复用，避免每轮重建
+# 30+ 个 schema Dictionary 并保证确定性排序（利于客户端 prompt cache）。
+var _tool_list_cache: Array[Dictionary] = []
+var _tool_list_cache_valid: bool = false
 
 var _classifier = null  # MCPToolClassifier (lazy-loaded for GUT CLI compat)
 var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat)
@@ -112,13 +166,36 @@ var _log_level: int = MCPTypes.LogLevel.INFO
 var _security_level: int = MCPTypes.SecurityLevel.STRICT
 var _rate_limit: int = 1000  # Max requests per 60s window before throttling
 
+## Version reported in the `initialize` handshake (`serverInfo.version`). The
+## single source of truth is `plugin.cfg` (`plugin/version`), loaded by
+## `_load_plugin_version()` in `start()`; defaults to "0.0.0" before that.
+var _server_version: String = "0.0.0"
+
 # 速率限制跟踪
 var _request_count: Dictionary = {}  # String (client_id) -> int
 var _request_timestamps: Dictionary = {}  # String (client_id) -> Array[int]
 
-# 缓存
-var _scene_structure_cache: Dictionary = {}  # String -> Dictionary
-var _cache_timestamp: Dictionary = {}  # String -> int
+# 结果缓存（LRU + 事件失效）
+# _result_cache: key -> {"value": Variant, "last_access": int (ms)}
+var _result_cache: Dictionary = {}
+# LRU 最近使用列表：下标 0 = 最常使用，与 _result_cache 的 key 一一对应
+var _result_cache_order: Array[String] = []
+# 单飞标记：正在执行的 key -> true（同一 key 并发时合并执行）
+var _cache_inflight: Dictionary = {}
+# 缓存失效代数：每次失效 +1；失效前已启动的读工具完成后不得写入（结果已过期）
+var _cache_generation: int = 0
+
+## Requests the client asked to cancel via `notifications/cancelled`
+## (request id -> true). Long-running tools poll `is_request_cancelled()` /
+## `is_current_tool_cancelled()` while they run and abort early when set.
+var _cancelled_requests: Dictionary = {}
+
+## Execution context of the currently running tool call (main thread only, the
+## serial queue guarantees a single in-flight call): {"tool_name", "request_id",
+## "progress_token"}. Set right before a tool callable runs and cleared after,
+## so tools can correlate progress notifications and cancellation with the
+## request that started them without the request id in their signature.
+var _execution_context: Dictionary = {}
 
 # JSONRPC实例（如需使用Godot内置JSONRPC处理，可取消注释）
 # var _jsonrpc: JSONRPC = JSONRPC.new()
@@ -217,6 +294,14 @@ func _on_transport_message_received(message: Dictionary, context: Variant) -> vo
 	# Only requests/notifications (carrying "method") are processed; ignore responses.
 	if not message.has("method"):
 		_log_warn("Received unexpected response message: " + JSON.stringify(message))
+		return
+	
+	# Cancellation must be observed by an in-flight tool call, so it bypasses the
+	# serial queue and marks the request immediately instead of waiting behind the
+	# long-running call it cancels. All state touched here lives on the main
+	# thread (transport marshals via call_deferred), so this is safe.
+	if String(message.get("method", "")) == MCPTypes.METHOD_NOTIFICATIONS_CANCELLED:
+		_handle_cancelled_notification(message)
 		return
 	
 	# Backpressure: when the queue is full (or other requests are already waiting),
@@ -319,6 +404,27 @@ func _on_transport_stopped() -> void:
 # 生命周期方法
 # ============================================================================
 
+## 覆盖服务器版本（优先于 plugin.cfg 自动读取的值）。
+## @param version: String - 版本号
+func set_server_version(version: String) -> void:
+	_server_version = version
+	_log_info("Server version set to: " + version)
+
+## 从 plugin.cfg 的 `plugin/version` 键读取插件版本，作为 serverInfo.version
+## 的唯一来源。读取失败或键缺失时保持当前 _server_version（默认 "0.0.0"）。
+func _load_plugin_version() -> void:
+	var config: ConfigFile = ConfigFile.new()
+	var err: Error = config.load(PLUGIN_CONFIG_PATH)
+	if err != OK:
+		_log_warn("Failed to load plugin config for server version: " + str(err))
+		return
+	var version: String = config.get_value("plugin", "version", "")
+	if version.is_empty():
+		_log_warn("plugin.cfg has no plugin/version key; keeping server version: " + _server_version)
+		return
+	_server_version = version
+	_log_info("Server version loaded from plugin.cfg: " + version)
+
 func start() -> bool:
 	if _active:
 		_log_warn("Server already running")
@@ -349,7 +455,10 @@ func start() -> bool:
 		if not saved_states.is_empty():
 			_state_manager.apply_states_to_server(self, saved_states)
 			_log_info("Applied saved tool states: " + str(saved_states.size()) + " tools")
-	
+
+	# 读取插件版本（plugin.cfg），使 initialize 握手报告与编辑器插件一致的版本。
+	_load_plugin_version()
+
 	_active = true
 	_log_info("MCP Server started successfully (transport: " + str(_transport_type) + ")")
 	
@@ -380,6 +489,10 @@ func stop() -> void:
 	# Resource subscriptions are per-session; drop them so a restarted server does
 	# not emit resources/updated for resources the new client never subscribed to.
 	_resource_subscriptions.clear()
+	# Drop cancellation markers and the execution context so a restarted server
+	# never carries stale cancellation state from the previous session.
+	_cancelled_requests.clear()
+	_execution_context = {}
 
 	_log_info("MCP Server stopped")
 
@@ -397,7 +510,21 @@ func _handle_request(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id", null)
 	var params: Dictionary = message.get("params", {})
 	
-	# 速率限制检查
+	# JSON-RPC 2.0: 通知（无 "id" 的消息）绝不产生响应。匹配已知通知方法处理
+	# （如 notifications/initialized），未知通知也静默返回空字典 —— 空字典为假值，
+	# _drain_request_queue 中的 `if response:` 判定为 false，因此永远不会发送响应。
+	var is_notification: bool = not message.has("id")
+	if is_notification:
+		match method:
+			MCPTypes.METHOD_NOTIFICATIONS_INITIALIZED:
+				return _handle_initialized_notification(message)
+			MCPTypes.METHOD_NOTIFICATIONS_CANCELLED:
+				return _handle_cancelled_notification(message)
+		# 未知通知：忽略，不发送任何响应
+		_log_warn("Unknown notification ignored: " + method)
+		return {}
+	
+	# 速率限制仅对请求（带 id）生效：通知不计数，也不因限流返回错误响应。
 	if not _check_rate_limit("default"):
 		return MCPTypes.create_error_response(id, MCPTypes.ERROR_INTERNAL_ERROR, "Rate limit exceeded")
 	
@@ -405,8 +532,9 @@ func _handle_request(message: Dictionary) -> Dictionary:
 		MCPTypes.METHOD_INITIALIZE:
 			return _handle_initialize(message)
 		
-		MCPTypes.METHOD_NOTIFICATIONS_INITIALIZED:
-			return _handle_initialized_notification(message)
+		MCPTypes.METHOD_PING:
+			# MCP 规范：ping 请求返回空 result
+			return MCPTypes.create_response(id, {})
 		
 		MCPTypes.METHOD_TOOLS_LIST:
 			return _handle_tools_list(message)
@@ -452,12 +580,15 @@ func _handle_initialize(message: Dictionary) -> Dictionary:
 	
 	var negotiated_version: String = _negotiate_protocol_version(client_protocol_version)
 	
+	# serverInfo.version 单一来源：start() 已从 plugin.cfg 读取；为空时回退 "0.0.0"。
+	var server_version: String = "0.0.0" if _server_version.is_empty() else _server_version
+	
 	var result: Dictionary = {
 		"protocolVersion": negotiated_version,
 		"capabilities": MCPTypes.create_capabilities(true, true, true, true),
 		"serverInfo": {
 			"name": "godot-native-mcp",
-			"version": "2.0.0"
+			"version": server_version
 		},
 		"instructions": SERVER_INSTRUCTIONS
 	}
@@ -490,26 +621,63 @@ func _handle_initialized_notification(message: Dictionary) -> Dictionary:
 	# 这是一个通知，不需要返回响应
 	return {}
 
+## Handle a `notifications/cancelled` notification: mark the referenced request
+## id so the running tool call can observe it via `is_request_cancelled()` /
+## `is_current_tool_cancelled()` and abort early. Notifications never produce a
+## response, so an empty dict is returned (falsy -> nothing is sent).
+func _handle_cancelled_notification(message: Dictionary) -> Dictionary:
+	var params: Dictionary = message.get("params", {})
+	var request_id: Variant = params.get("requestId", null)
+	if request_id != null:
+		_cancelled_requests[request_id] = true
+		_log_info("Cancellation requested for request: " + str(request_id))
+	else:
+		_log_warn("Cancellation notification without a requestId; ignored")
+	return {}
+
 func _handle_tools_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	
-	# 构建工具列表（根据mcp-builder，包含annotations和outputSchema）
-	var tools_list: Array[Dictionary] = []
+	if not _tool_list_cache_valid:
+		_rebuild_tool_list_cache()
 	
-	for tool_name in _tools:
-		var tool: MCPTypes.MCPTool = _tools[tool_name]
-		if tool and tool.is_valid() and tool.enabled:
-			tools_list.append(tool.to_dict())
-	
-	var result: Dictionary = {"tools": tools_list}
+	var result: Dictionary = {"tools": _tool_list_cache}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope），Claude Code 缺失会拒绝。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": TOOLS_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 
-	_log_info("Tools list requested. Available tools: " + str(tools_list.size()) + " (registered: " + str(_tools.size()) + ")")
+	_log_info("Tools list requested. Available tools: " + str(_tool_list_cache.size()) + " (registered: " + str(_tools.size()) + ")")
 
 	if _debug_enabled():
 		_log_debug("Tools list response: " + JSON.stringify(response))
 
 	return response
+
+## Rebuild the cached tools/list payload: deterministic alphabetical order and
+## reuse of MCPTool.to_dict() output for subsequent requests until invalidated.
+func _rebuild_tool_list_cache() -> void:
+	var names: Array[String] = []
+	for tool_name in _tools:
+		names.append(str(tool_name))
+	names.sort()
+	
+	var tools_list: Array[Dictionary] = []
+	for tool_name in names:
+		var tool: MCPTypes.MCPTool = _tools[tool_name]
+		if tool and tool.is_valid() and tool.enabled:
+			tools_list.append(tool.to_dict())
+	
+	_tool_list_cache = tools_list
+	_tool_list_cache_valid = true
+
+## Drop the cached tools/list payload. Called whenever a registration,
+## unregistration or enable/disable change makes the previous payload stale.
+func _invalidate_tool_list_cache() -> void:
+	if _tool_list_cache_valid or not _tool_list_cache.is_empty():
+		_tool_list_cache_valid = false
 
 func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
@@ -546,20 +714,60 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		}
 		return MCPTypes.create_response(id, error_result)
 	
-	# Read-through cache: serve a cached result for expensive read-only scene
-	# queries instead of re-walking the scene tree. The cache is invalidated below
-	# whenever a mutating tool runs, so a cache hit always reflects the live tree.
+	# Read-through cache: serve a cached result for expensive read-only queries
+	# instead of re-walking the scene tree / rescanning the project. Keys are
+	# deterministic (canonical JSON of the arguments) and the whole cache is
+	# dropped whenever a mutating tool runs below, so a hit always reflects the
+	# live tree. Single-flight dedupe: if the same key is already executing, wait
+	# a frame and reuse its result instead of running a duplicate (the serial
+	# request queue already prevents most overlap; this covers direct concurrent
+	# invocations).
 	var is_cacheable_read: bool = tool_name in CACHEABLE_READ_TOOLS
 	var cache_key: String = ""
+	var cache_generation_at_start: int = _cache_generation
 	if is_cacheable_read:
-		cache_key = tool_name + ":" + JSON.stringify(arguments)
-		var cached: Dictionary = get_cached_scene_structure(cache_key)
-		if not cached.is_empty():
+		cache_key = tool_name + ":" + _canonical_json(arguments)
+		var cached_formatted: Variant = _result_cache_get_formatted(cache_key)
+		if cached_formatted is Dictionary:
 			_log_info("Serving cached result for: " + tool_name)
+			return MCPTypes.create_response(id, cached_formatted)
+		var cached: Variant = _result_cache_get(cache_key)
+		if cached != null:
+			_log_info("Serving cached result (legacy entry) for: " + tool_name)
 			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
+		if _cache_inflight.has(cache_key):
+			var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
+			if main_loop:
+				await main_loop.process_frame
+			var retried_formatted: Variant = _result_cache_get_formatted(cache_key)
+			if retried_formatted is Dictionary:
+				_log_info("Serving result from in-flight twin for: " + tool_name)
+				return MCPTypes.create_response(id, retried_formatted)
+			var retried: Variant = _result_cache_get(cache_key)
+			if retried != null:
+				_log_info("Serving result from in-flight twin for: " + tool_name)
+				return MCPTypes.create_response(id, _format_tool_result(retried, tool))
+		_cache_inflight[cache_key] = true
 	
 	# 发送开始信号
 	tool_execution_started.emit(tool_name, arguments)
+	
+	# Capture the execution context (request id + optional progress token) so a
+	# long-running tool can emit notifications/progress and observe
+	# notifications/cancelled while it runs. The token is read from the
+	# spec-compliant params._meta location first, then from arguments._meta for
+	# clients that nest it inside the tool arguments.
+	var progress_token: Variant = null
+	var meta: Variant = params.get("_meta", null)
+	if meta is Dictionary:
+		progress_token = (meta as Dictionary).get("progressToken", null)
+	if progress_token == null and arguments.has("_meta") and arguments["_meta"] is Dictionary:
+		progress_token = (arguments["_meta"] as Dictionary).get("progressToken", null)
+	_execution_context = {
+		"tool_name": tool_name,
+		"request_id": id,
+		"progress_token": progress_token
+	}
 	
 	# 执行工具
 	var result: Variant = null
@@ -567,13 +775,14 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
-		var status: Error = OK
-		
-		# 捕获执行错误
-		if status == OK:
-			result = await tool.callable.call(arguments)
-		else:
-			error = "Tool execution failed with error: " + str(status)
+		result = await tool.callable.call(arguments)
+	
+	# Tool execution finished: drop this request's cancellation marker (if the
+	# client cancelled mid-run) and the execution context so the next request
+	# starts clean.
+	if _cancelled_requests.has(id):
+		_cancelled_requests.erase(id)
+	_execution_context = {}
 	
 	# 处理执行结果
 	if not error.is_empty():
@@ -589,17 +798,21 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		return MCPTypes.create_response(id, error_result)
 	
 	var has_error: bool = result is Dictionary and result.has("error")
-
-	# Keep the read cache coherent: store successful cacheable reads, and drop the
-	# whole scene-structure cache when a mutating tool runs (readOnlyHint == false)
-	# so subsequent reads never serve a stale tree.
-	if is_cacheable_read:
-		if not has_error and result is Dictionary:
-			set_cached_scene_structure(cache_key, result)
-	elif not bool(tool.annotations.get("readOnlyHint", false)):
-		_invalidate_scene_structure_cache()
-
 	var response_result: Dictionary = _format_tool_result(result, tool)
+
+	# Keep the result cache coherent: store successful cacheable reads together
+	# with their already-formatted payload (so repeat calls skip JSON.stringify +
+	# spill checks), and drop the whole cache when a mutating tool runs
+	# (readOnlyHint == false) so subsequent reads never serve a stale tree. A read
+	# that started before a mutation invalidated the cache (cache_generation
+	# bumped) must not cache its now-stale result.
+	if is_cacheable_read:
+		if not has_error and result is Dictionary and cache_generation_at_start == _cache_generation:
+			_result_cache_put(cache_key, result, response_result)
+		else:
+			_cache_inflight.erase(cache_key)
+	elif not bool(tool.annotations.get("readOnlyHint", false)):
+		_invalidate_result_cache()
 
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
 	
@@ -611,18 +824,30 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	return response
 
-## Wrap a tool's raw result Dictionary into an MCP tool-call result payload.
-## Shared by live execution and cache hits so both produce identical responses.
+## Wrap a tool's raw result into an MCP tool-call result payload. Shared by live
+## execution and cache hits so both produce identical responses. Results whose
+## JSON serialization exceeds MAX_INLINE_RESULT_BYTES are spilled to disk and
+## returned as a truncated head/tail preview (never an error, per the DSH
+## "spill, don't fail" principle); file-content tools in SPILL_EXEMPT_TOOLS keep
+## returning inline content.
 func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 	var has_error: bool = result is Dictionary and result.has("error")
+	var json_text: String = JSON.stringify(result)
+	var spilled: Dictionary = {}
+	if not has_error:
+		spilled = _maybe_spill_result(json_text, tool)
+		if not spilled.is_empty():
+			json_text = JSON.stringify(spilled)
 	var response_result: Dictionary = {
 		"content": [{
 			"type": "text",
-			"text": JSON.stringify(result)
+			"text": json_text
 		}],
 		"isError": has_error
 	}
-	if not has_error and tool.output_schema.size() > 0:
+	# On a spill the full payload lives on disk; echoing it as structuredContent
+	# would defeat the size limit, so it is omitted for spilled results only.
+	if not has_error and tool.output_schema.size() > 0 and spilled.is_empty():
 		response_result["structuredContent"] = result
 	return response_result
 
@@ -640,6 +865,11 @@ func _handle_resources_list(message: Dictionary) -> Dictionary:
 			resources_list.append(resource.to_dict())
 	
 	var result: Dictionary = {"resources": resources_list}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": RESOURCES_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 	
 	if _debug_enabled():
@@ -748,6 +978,61 @@ func notify_resource_updated(uri: String) -> bool:
 		return true
 	return false
 
+# ============================================================================
+# Progress 通知与取消支持（2025-03-26+ MCP 规范）
+# ============================================================================
+
+## Send a `notifications/progress` notification to the client. `progress_token`
+## is the client-supplied `_meta.progressToken` of the tool call being reported
+## on; when it is absent (client did not opt in) or no transport is connected,
+## the notification is silently skipped. `total` and `message` are optional per
+## the spec and omitted from the payload when empty.
+func send_progress_notification(progress_token: Variant, progress: int, total: int = 0, message: String = "") -> void:
+	if progress_token == null:
+		return
+	if not _transport or not _transport.has_method("send_raw_message"):
+		return
+	var params: Dictionary = {
+		"progressToken": progress_token,
+		"progress": progress
+	}
+	if total > 0:
+		params["total"] = total
+	if not message.is_empty():
+		params["message"] = message
+	var notification: Dictionary = {
+		"jsonrpc": "2.0",
+		"method": MCPTypes.NOTIFICATION_PROGRESS,
+		"params": params
+	}
+	_transport.send_raw_message(notification)
+	_log_debug("Sent progress notification (token=%s, progress=%d, total=%d)" % [str(progress_token), progress, total])
+
+## Whether the client sent a `notifications/cancelled` for the given request id.
+func is_request_cancelled(request_id: Variant) -> bool:
+	return _cancelled_requests.has(request_id)
+
+## Drop the cancellation marker for a request id (called after a tool finishes).
+func clear_cancelled(request_id: Variant) -> void:
+	if _cancelled_requests.has(request_id):
+		_cancelled_requests.erase(request_id)
+
+## Whether the currently executing tool call (see `_execution_context`) has been
+## cancelled by the client. Tools cannot see their own request id, so they poll
+## this while running and abort early when it returns true.
+func is_current_tool_cancelled() -> bool:
+	if _execution_context.is_empty():
+		return false
+	return _cancelled_requests.has(_execution_context.get("request_id", null))
+
+## The progress token of the currently executing tool call, or null when the
+## client did not supply one. Lets tools that did not see `_meta` in their
+## arguments still report progress.
+func get_current_progress_token() -> Variant:
+	if _execution_context.is_empty():
+		return null
+	return _execution_context.get("progress_token", null)
+
 func _handle_prompts_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	
@@ -761,6 +1046,11 @@ func _handle_prompts_list(message: Dictionary) -> Dictionary:
 			prompts_list.append(prompt.to_dict())
 	
 	var result: Dictionary = {"prompts": prompts_list}
+	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope）。
+	result["_meta"] = {
+		"ttlMs": LIST_CACHE_TTL_MS,
+		"cacheScope": PROMPTS_LIST_CACHE_SCOPE
+	}
 	var response: Dictionary = MCPTypes.create_response(id, result)
 	
 	return response
@@ -838,11 +1128,15 @@ func register_tool(name: String, description: String,
 		return
 	
 	_tools[name] = tool
+	_invalidate_tool_list_cache()
+	_invalidate_result_cache()
 	_log_info("Tool registered: " + name)
 
 func unregister_tool(name: String) -> void:
 	if _tools.has(name):
 		_tools.erase(name)
+		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		_log_info("Tool unregistered: " + name)
 
 func get_tool(name: String) -> MCPTypes.MCPTool:
@@ -880,10 +1174,14 @@ func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 			if not _tools[tool_name].enabled:
 				_tools[tool_name].enabled = true
 				_tool_list_dirty = true
+				_invalidate_tool_list_cache()
+				_invalidate_result_cache()
 			_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
 			return
 		_tools[tool_name].enabled = enabled
 		_tool_list_dirty = true
+		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		if enabled:
 			_log_info("Tool enabled: " + tool_name)
 		else:
@@ -912,6 +1210,8 @@ func set_group_enabled(group_name: String, enabled: bool) -> int:
 			changed_count += 1
 	if changed_count > 0:
 		_tool_list_dirty = true
+		_invalidate_tool_list_cache()
+		_invalidate_result_cache()
 		_log_info("Group '" + group_name + "' " + ("enabled" if enabled else "disabled") + ": " + str(changed_count) + " tools affected")
 	return changed_count
 
@@ -1061,46 +1361,176 @@ func _check_rate_limit(client_id: String) -> bool:
 	return true
 
 # ============================================================================
-# 缓存机制（根据godot-dev-guide新增）
+# 结果缓存机制（LRU + 确定性 key + 事件失效）
 # ============================================================================
 
+## Deterministic JSON serialization used to build cache keys: dictionary keys are
+## sorted recursively so two argument dicts with identical content but different
+## insertion order produce the same key. Scalars fall back to JSON.stringify.
+static func _canonical_json(data: Variant) -> String:
+	match typeof(data):
+		TYPE_DICTIONARY:
+			var keys: Array = (data as Dictionary).keys()
+			var sorted_keys: Array[String] = []
+			var key_lookup: Dictionary = {}  # stringified key -> original key
+			for key in keys:
+				var skey: String = str(key)
+				sorted_keys.append(skey)
+				key_lookup[skey] = key
+			sorted_keys.sort()
+			var parts: Array[String] = []
+			for skey in sorted_keys:
+				parts.append(JSON.stringify(skey) + ":" + _canonical_json(data[key_lookup[skey]]))
+			return "{" + ",".join(parts) + "}"
+		TYPE_ARRAY:
+			var items: Array[String] = []
+			for item in data:
+				items.append(_canonical_json(item))
+			return "[" + ",".join(items) + "]"
+		_:
+			var encoded: String = JSON.stringify(data)
+			if encoded.is_empty():
+				encoded = JSON.stringify(str(data))
+			return encoded
+
+## Fetch (and LRU-touch) a cache entry. Returns {} on miss or TTL expiry
+## (expired entries are dropped immediately).
+func _result_cache_get_entry(key: String) -> Dictionary:
+	if not _result_cache.has(key):
+		return {}
+	var entry: Dictionary = _result_cache[key]
+	if Time.get_ticks_msec() - int(entry.get("last_access", 0)) > RESULT_CACHE_TTL_MS:
+		_result_cache.erase(key)
+		_result_cache_order.erase(key)
+		return {}
+	entry["last_access"] = Time.get_ticks_msec()
+	_result_cache_touch(key)
+	return entry
+
+## Read the raw cached tool result. Returns null on miss, on TTL expiry (the
+## entry is dropped), or for entries evicted by the LRU policy.
+func _result_cache_get(key: String) -> Variant:
+	var entry: Dictionary = _result_cache_get_entry(key)
+	if entry.is_empty():
+		return null
+	return entry.get("value", null)
+
+## Read the cached, already-formatted MCP tool-call result payload. Returns
+## null when the key is missing/expired or when the entry was stored by a legacy
+## caller without a formatted payload.
+func _result_cache_get_formatted(key: String) -> Variant:
+	var entry: Dictionary = _result_cache_get_entry(key)
+	if entry.is_empty():
+		return null
+	return entry.get("formatted", null)
+
+## Store a result under key, refresh recency, and enforce the LRU capacity:
+## beyond RESULT_CACHE_MAX the least recently used entry is evicted. The optional
+## `formatted` payload is the exact response result produced by
+## `_format_tool_result`; storing it lets cache hits skip JSON.stringify and
+## spill re-checks.
+func _result_cache_put(key: String, value: Variant, formatted: Variant = null) -> void:
+	if _result_cache.has(key):
+		_result_cache.erase(key)
+		_result_cache_order.erase(key)
+	var entry: Dictionary = {"value": value, "last_access": Time.get_ticks_msec()}
+	if formatted != null:
+		entry["formatted"] = formatted
+	_result_cache[key] = entry
+	_cache_inflight.erase(key)
+	_result_cache_order.push_front(key)
+	while _result_cache_order.size() > RESULT_CACHE_MAX:
+		var evicted_key: String = _result_cache_order.pop_back()
+		_result_cache.erase(evicted_key)
+		_cache_inflight.erase(evicted_key)
+
+## Move a key to the most-recently-used position (index 0) of the LRU order.
+func _result_cache_touch(key: String) -> void:
+	var idx: int = _result_cache_order.find(key)
+	if idx > 0:
+		_result_cache_order.remove_at(idx)
+		_result_cache_order.push_front(key)
+
+## Drop the whole result cache. Called after any mutating tool so the next read
+## recomputes from the live tree instead of serving stale data. Also bumps the
+## generation counter so in-flight reads started before the invalidation never
+## cache their (now stale) results.
+func _invalidate_result_cache() -> void:
+	_cache_generation += 1
+	if _result_cache.is_empty() and _cache_inflight.is_empty():
+		return
+	_result_cache.clear()
+	_result_cache_order.clear()
+	_cache_inflight.clear()
+	_log_debug("Result cache invalidated")
+
+## Legacy scene-structure cache API, kept for backward compatibility as thin
+## wrappers over the shared LRU result cache (keys are used as-is, not
+## canonicalized).
 func get_cached_scene_structure(scene_path: String) -> Dictionary:
-	var cache_key: String = scene_path
-	var current_time: int = Time.get_unix_time_from_system()
-	
-	# 检查缓存是否有效（5分钟有效期）
-	if _scene_structure_cache.has(cache_key):
-		var cache_time: int = _cache_timestamp.get(cache_key, 0)
-		if current_time - cache_time < 300:  # 5分钟
-			_log_debug("Cache hit: " + scene_path)
-			return _scene_structure_cache[cache_key]
-	
-	# 缓存未命中或已过期
-	_log_debug("Cache miss: " + scene_path)
+	var value: Variant = _result_cache_get(scene_path)
+	if value is Dictionary:
+		return value
 	return {}
 
 func set_cached_scene_structure(scene_path: String, structure: Dictionary) -> void:
-	var cache_key: String = scene_path
-	var current_time: int = Time.get_unix_time_from_system()
-	
-	_scene_structure_cache[cache_key] = structure
-	_cache_timestamp[cache_key] = current_time
-	
-	_log_debug("Cache set: " + scene_path)
+	_result_cache_put(scene_path, structure)
 
 func clear_cache() -> void:
-	_scene_structure_cache.clear()
-	_cache_timestamp.clear()
+	_invalidate_result_cache()
 	_log_info("Cache cleared")
 
-## Drop all cached scene-structure results. Called after any mutating tool so the
-## next read recomputes from the live scene tree instead of serving stale data.
-func _invalidate_scene_structure_cache() -> void:
-	if _scene_structure_cache.is_empty():
-		return
-	_scene_structure_cache.clear()
-	_cache_timestamp.clear()
-	_log_debug("Scene structure cache invalidated")
+# ============================================================================
+# 结果体积控制（spill 落盘）
+# ============================================================================
+
+## If `json_text` exceeds MAX_INLINE_RESULT_BYTES (and the tool is not spill
+## exempt), write it to res://.mcp/out/ and return the truncated preview payload.
+## Returns {} when the result stays inline (small, exempt, or disk write failed —
+## a failed spill falls back to inline, never to an error).
+func _maybe_spill_result(json_text: String, tool: MCPTypes.MCPTool) -> Dictionary:
+	if json_text.is_empty() or tool.name in SPILL_EXEMPT_TOOLS:
+		return {}
+	var size_bytes: int = json_text.to_utf8_buffer().size()
+	if size_bytes <= MAX_INLINE_RESULT_BYTES:
+		return {}
+	var path: String = _spill_result_to_disk(json_text)
+	if path.is_empty():
+		return {}
+	return {
+		"truncated": true,
+		"total_bytes": size_bytes,
+		"path": path,
+		"head": json_text.substr(0, SPILL_PREVIEW_HEAD_CHARS),
+		"tail": json_text.substr(maxi(0, json_text.length() - SPILL_PREVIEW_TAIL_CHARS)),
+		"content_type": "application/json",
+		"resume_hint": "read the file at " + path + " with a script/resource tool for the full result"
+	}
+
+## Write `json_text` to <SPILL_OUTPUT_DIR>/<content_hash>.json and return the
+## path; returns "" on any failure (the caller then falls back to inline).
+func _spill_result_to_disk(json_text: String) -> String:
+	var err: Error = DirAccess.make_dir_recursive_absolute(SPILL_OUTPUT_DIR)
+	if err != OK:
+		var root: DirAccess = DirAccess.open("res://")
+		if root:
+			err = root.make_dir_recursive(SPILL_OUTPUT_DIR.trim_prefix("res://"))
+	if err != OK:
+		_log_warn("Spill: failed to create output dir " + SPILL_OUTPUT_DIR + " (error " + str(err) + ")")
+		return ""
+	var path: String = SPILL_OUTPUT_DIR + "/" + _hash_string(json_text) + ".json"
+	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if not file:
+		_log_warn("Spill: failed to open " + path + " for writing; falling back to inline")
+		return ""
+	file.store_string(json_text)
+	file.close()
+	_log_info("Spilled large result (%d bytes) to %s" % [json_text.to_utf8_buffer().size(), path])
+	return path
+
+## Deterministic short content hash used for spill filenames.
+static func _hash_string(value: String) -> String:
+	return "%08x" % (value.hash() & 0xFFFFFFFF)
 
 # ============================================================================
 # 配置方法
