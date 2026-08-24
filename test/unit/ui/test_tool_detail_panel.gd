@@ -32,12 +32,25 @@ func test_show_empty_renders_hint():
 	var panel: MCPToolDetailPanel = _make_panel()
 	panel.show_empty()
 	assert_gt(panel._content.get_child_count(), 0, "Empty state still renders a hint")
-	assert_gte(panel._content.get_child(0).get_theme_font_size("font_size"), 14, "Empty-state guidance is readable")
+	assert_gte(panel.custom_minimum_size.x, 380.0, "Detail pane protects a useful reading width")
+	assert_gte(panel._content.get_child(0).get_theme_font_size("font_size"), 15, "Empty-state guidance matches editor text")
 
 func test_show_tool_populates_content():
 	var panel: MCPToolDetailPanel = _make_panel()
 	panel.show_tool(_sample_info())
 	assert_gt(panel._content.get_child_count(), 1, "Tool detail builds multiple sections")
+	assert_gte(_find_label(panel, "Create a node in the scene tree").get_theme_font_size("font_size"), 15, "Detail body copy is readable")
+	assert_gte(_find_label(panel, "parent_path").get_theme_font_size("font_size"), 15, "Parameter names remain prominent")
+	assert_gte(_find_label(panel, "Parent node path").get_theme_font_size("font_size"), 14, "Parameter help is not rendered as tiny metadata")
+
+func _find_label(node: Node, txt: String) -> Label:
+	for child in node.get_children():
+		if child is Label and (child as Label).text == txt:
+			return child
+		var nested: Label = _find_label(child, txt)
+		if nested:
+			return nested
+	return null
 
 func _has_button_with_text(node: Node, txt: String) -> bool:
 	for child in node.get_children():

@@ -14,10 +14,20 @@ var _collapse_button: Button = null
 var _count_label: Label = null
 var _desc_label: Label = null
 var _tool_container: VBoxContainer = null
+var _body_font_size: int = 15
+var _ui_scale: float = 1.0
 
-func setup(group_name: String, items: Array, translation_manager = null) -> void:
+func setup(
+	group_name: String,
+	items: Array,
+	translation_manager = null,
+	body_font_size: int = 15,
+	ui_scale: float = 1.0
+) -> void:
 	_group_name = group_name
 	_translation_manager = translation_manager
+	_body_font_size = maxi(body_font_size, 15)
+	_ui_scale = maxf(ui_scale, 0.75)
 	add_theme_constant_override("separation", 0)
 
 	var card: PanelContainer = PanelContainer.new()
@@ -25,25 +35,27 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 	add_child(card)
 
 	var inner: VBoxContainer = VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 4)
+	inner.add_theme_constant_override("separation", int(_s(6)))
 	card.add_child(inner)
 
 	var header: HBoxContainer = HBoxContainer.new()
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_theme_constant_override("separation", 6)
+	header.add_theme_constant_override("separation", int(_s(8)))
 	inner.add_child(header)
 
 	_collapse_button = Button.new()
 	_collapse_button.text = "▼"
 	_collapse_button.flat = true
 	_collapse_button.focus_mode = Control.FOCUS_NONE
+	_collapse_button.custom_minimum_size = Vector2(_s(30), _s(30))
+	_collapse_button.add_theme_font_size_override("font_size", _body_font_size)
 	_collapse_button.tooltip_text = "Collapse/Expand"
 	_collapse_button.pressed.connect(_toggle_collapse)
 	header.add_child(_collapse_button)
 
 	_group_check = CheckBox.new()
 	_group_check.text = _get_group_display_name()
-	_group_check.add_theme_font_size_override("font_size", 16)
+	_group_check.add_theme_font_size_override("font_size", _body_font_size + 1)
 	_group_check.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95))
 	var group_desc: String = _get_group_description()
 	if not group_desc.is_empty():
@@ -57,21 +69,21 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 
 	_count_label = Label.new()
 	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_count_label.add_theme_font_size_override("font_size", 13)
-	_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
+	_count_label.add_theme_font_size_override("font_size", maxi(_body_font_size - 1, 14))
+	_count_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
 	header.add_child(_count_label)
 
 	if not group_desc.is_empty():
 		_desc_label = Label.new()
 		_desc_label.text = group_desc
 		_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-		_desc_label.add_theme_font_size_override("font_size", 13)
-		_desc_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.71))
+		_desc_label.add_theme_font_size_override("font_size", maxi(_body_font_size - 1, 14))
+		_desc_label.add_theme_color_override("font_color", Color(0.71, 0.71, 0.76))
 		inner.add_child(_desc_label)
 
 	_tool_container = VBoxContainer.new()
 	_tool_container.name = "ToolContainer"
-	_tool_container.add_theme_constant_override("separation", 2)
+	_tool_container.add_theme_constant_override("separation", int(_s(3)))
 	inner.add_child(_tool_container)
 
 	for item in items:
@@ -85,7 +97,9 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 			description = translated_desc
 
 		var tool_item: MCPToolItem = MCPToolItem.new()
-		tool_item.setup(tool_name, description, enabled, category, _group_name)
+		tool_item.setup(
+			tool_name, description, enabled, category, _group_name, _body_font_size, _ui_scale
+		)
 		tool_item.tool_toggled.connect(_on_tool_item_toggled)
 		tool_item.tool_selected.connect(_on_tool_item_selected)
 		_tool_container.add_child(tool_item)
@@ -94,15 +108,18 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 
 func _make_card_style() -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = Color(1, 1, 1, 0.035)
-	style.border_color = Color(1, 1, 1, 0.06)
+	style.bg_color = Color(1, 1, 1, 0.03)
+	style.border_color = Color(1, 1, 1, 0.085)
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(5)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
+	style.set_corner_radius_all(int(_s(6)))
+	style.content_margin_left = _s(11)
+	style.content_margin_right = _s(11)
+	style.content_margin_top = _s(10)
+	style.content_margin_bottom = _s(10)
 	return style
+
+func _s(value: float) -> float:
+	return roundf(value * _ui_scale)
 
 func get_group_name() -> String:
 	return _group_name

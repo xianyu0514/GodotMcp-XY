@@ -42,7 +42,9 @@ func test_profile_controls_live_in_one_compact_toolbar():
 	assert_not_null(panel._preset_count_label, "Selected preset shows its tool count")
 	assert_false(panel._preset_option.get_item_tooltip(1).is_empty(), "Dropdown items explain the preset on hover")
 	assert_false(panel._preset_option.get_item_text(1).contains("\n"), "Profiles use concise single-line labels")
-	assert_lte(panel._preset_option.custom_minimum_size.y, 38.0, "Profile selector stays compact")
+	assert_lte(panel._preset_option.custom_minimum_size.y, 42.0, "Larger profile selector stays compact")
+	assert_gte(panel._preset_option.get_theme_font_size("font_size"), 15, "Profile selection matches editor text scale")
+	assert_gte(panel._preset_description_label.get_theme_font_size("font_size"), 14, "Profile guidance remains legible")
 
 func test_selecting_preset_refreshes_explanation_and_count():
 	var panel: Node = _make_panel()
@@ -67,7 +69,29 @@ func test_profile_dropdown_keeps_common_tasks_immediately_discoverable():
 	assert_string_contains(labels, "2D", "2D work is visible in the selector")
 	assert_string_contains(labels, "3D", "3D work is visible in the selector")
 	assert_string_contains(labels, "UI", "UI work is visible in the selector")
-	assert_gte(panel._preset_label.get_theme_font_size("font_size"), 13, "Compact profile label stays readable")
+	assert_gte(panel._preset_label.get_theme_font_size("font_size"), 15, "Compact profile label matches editor text scale")
+
+func test_tools_workspace_gives_detail_pane_a_real_sidebar_share():
+	var panel: Node = _make_panel()
+	var tools_tab: VBoxContainer = panel._create_tools_tab()
+	add_child_autofree(tools_tab)
+	tools_tab.size = Vector2(1600, 900)
+	await get_tree().process_frame
+	assert_not_null(panel._tools_middle_split, "Tool list and detail use an explicit responsive split")
+	assert_true(
+		panel._tool_list_pane.size_flags_horizontal == Control.SIZE_EXPAND_FILL,
+		"Tool list participates in proportional layout"
+	)
+	assert_true(
+		panel._tool_detail_panel.size_flags_horizontal == Control.SIZE_EXPAND_FILL,
+		"Right sidebar participates in proportional layout"
+	)
+	assert_gte(panel._tool_detail_panel.custom_minimum_size.x, 380.0, "Right sidebar keeps a readable minimum width")
+	assert_gte(panel._tool_list_pane.size_flags_stretch_ratio, 2.0, "Tool list remains the primary workspace")
+	assert_gte(panel._tool_detail_panel.size_flags_stretch_ratio, 1.0, "Right sidebar receives a deliberate share")
+	assert_lte(panel._tool_list_pane.size_flags_stretch_ratio, 3.0, "Right sidebar is not squeezed below roughly one quarter")
+	var sidebar_share: float = panel._tool_detail_panel.size.x / panel._tools_middle_split.size.x
+	assert_between(sidebar_share, 0.24, 0.38, "Desktop layout gives the detail sidebar about one quarter to one third")
 
 func test_profile_toolbar_applies_a_task_without_unrelated_tools():
 	var panel: Node = _make_panel()

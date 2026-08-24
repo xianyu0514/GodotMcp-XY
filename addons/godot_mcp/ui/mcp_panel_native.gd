@@ -95,6 +95,8 @@ var _detail_count: Label = null
 var _enable_all_button: Button = null
 var _disable_all_button: Button = null
 var _tool_detail_panel: MCPToolDetailPanel = null
+var _tools_middle_split: HSplitContainer = null
+var _tool_list_pane: VBoxContainer = null
 var _selected_tool_name: String = ""
 var _language_option: OptionButton = null
 
@@ -117,6 +119,8 @@ var _import_preset_button: Button = null
 var _preset_file_dialog: FileDialog = null
 var _preset_dialog_save: bool = false
 var _preset_bar: HBoxContainer = null
+var _body_font_size: int = 15
+var _ui_scale: float = 1.0
 
 var _log_file_path: String = "user://mcp_server.log"
 var _log_file_flush_count: int = 10
@@ -132,6 +136,7 @@ func _ready() -> void:
 	_translation_manager.load_all()
 	_settings_manager = MCPSettingsManager.new()
 	_preset_manager = MCPToolPresetManager.new()
+	_capture_editor_metrics()
 	_create_ui()
 	_debounce_timer = Timer.new()
 	_debounce_timer.one_shot = true
@@ -146,6 +151,22 @@ func _exit_tree() -> void:
 		_tunnel_poll_timer.stop()
 	if _tunnel_manager and _tunnel_manager.is_running():
 		_tunnel_manager.stop()
+
+func _capture_editor_metrics() -> void:
+	# The editor theme is the visual source of truth. The small floor prevents
+	# plugin-only metadata from dropping below Godot's normal readable scale.
+	var label_size: int = get_theme_font_size("font_size", "Label")
+	var button_size: int = get_theme_font_size("font_size", "Button")
+	_body_font_size = maxi(15, maxi(label_size, button_size))
+	_ui_scale = 1.0
+	if Engine.is_editor_hint():
+		_ui_scale = clampf(EditorInterface.get_editor_scale(), 0.75, 3.0)
+
+func _font(delta: int = 0, minimum: int = 14) -> int:
+	return maxi(_body_font_size + delta, minimum)
+
+func _s(value: float) -> float:
+	return roundf(value * _ui_scale)
 
 func set_plugin(plugin: EditorPlugin) -> void:
 	_plugin = plugin
@@ -194,7 +215,7 @@ func _create_ui() -> void:
 	_tab_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_tab_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_tab_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_tab_container.add_theme_font_size_override("font_size", 14)
+	_tab_container.add_theme_font_size_override("font_size", _font())
 	add_child(_tab_container)
 
 	var settings_tab: VBoxContainer = _create_settings_tab()
@@ -217,18 +238,18 @@ func _create_status_bar() -> Control:
 	frame.add_theme_stylebox_override("panel", _banner_style())
 
 	var bar: HBoxContainer = HBoxContainer.new()
-	bar.add_theme_constant_override("separation", 8)
+	bar.add_theme_constant_override("separation", int(_s(9)))
 	frame.add_child(bar)
 
 	_status_dot = Panel.new()
-	_status_dot.custom_minimum_size = Vector2(10, 10)
+	_status_dot.custom_minimum_size = Vector2(_s(10), _s(10))
 	_status_dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_status_dot.add_theme_stylebox_override("panel", _dot_style(Color(0.55, 0.55, 0.6)))
 	bar.add_child(_status_dot)
 
 	_status_label = Label.new()
 	_status_label.text = _tr("ui.status_unknown")
-	_status_label.add_theme_font_size_override("font_size", 16)
+	_status_label.add_theme_font_size_override("font_size", _font(1, 16))
 	_status_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	bar.add_child(_status_label)
 
@@ -236,30 +257,30 @@ func _create_status_bar() -> Control:
 	_connection_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_connection_info_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_connection_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_connection_info_label.add_theme_font_size_override("font_size", 13)
+	_connection_info_label.add_theme_font_size_override("font_size", _font(-1, 14))
 	_connection_info_label.add_theme_color_override("font_color", Color(0.72, 0.74, 0.80))
 	bar.add_child(_connection_info_label)
 
 	_self_check_button = Button.new()
 	_self_check_button.text = _tr("ui.self_check")
 	_self_check_button.flat = true
-	_self_check_button.custom_minimum_size = Vector2(0, 36)
-	_self_check_button.add_theme_font_size_override("font_size", 13)
+	_self_check_button.custom_minimum_size = Vector2(0, _s(38))
+	_self_check_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_self_check_button.pressed.connect(_on_self_check_pressed)
 	bar.add_child(_self_check_button)
 
 	_start_button = Button.new()
 	_start_button.text = _tr("ui.start_server")
-	_start_button.custom_minimum_size = Vector2(132, 38)
-	_start_button.add_theme_font_size_override("font_size", 15)
+	_start_button.custom_minimum_size = Vector2(_s(136), _s(40))
+	_start_button.add_theme_font_size_override("font_size", _font(1, 16))
 	_make_primary_button(_start_button)
 	_start_button.pressed.connect(_on_start_pressed)
 	bar.add_child(_start_button)
 
 	_stop_button = Button.new()
 	_stop_button.text = _tr("ui.stop_server")
-	_stop_button.custom_minimum_size = Vector2(100, 38)
-	_stop_button.add_theme_font_size_override("font_size", 14)
+	_stop_button.custom_minimum_size = Vector2(_s(104), _s(40))
+	_stop_button.add_theme_font_size_override("font_size", _font())
 	_stop_button.pressed.connect(_on_stop_pressed)
 	bar.add_child(_stop_button)
 
@@ -270,17 +291,17 @@ func _banner_style() -> StyleBoxFlat:
 	style.bg_color = Color(1, 1, 1, 0.03)
 	style.border_color = Color(1, 1, 1, 0.07)
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
+	style.set_corner_radius_all(int(_s(6)))
+	style.content_margin_left = _s(12)
+	style.content_margin_right = _s(12)
+	style.content_margin_top = _s(8)
+	style.content_margin_bottom = _s(8)
 	return style
 
 func _dot_style(color: Color) -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
 	style.bg_color = color
-	style.set_corner_radius_all(5)
+	style.set_corner_radius_all(int(_s(5)))
 	return style
 
 func _on_copy_local_endpoint_pressed() -> void:
@@ -566,7 +587,7 @@ func _build_public_endpoint_card(parent: VBoxContainer) -> void:
 
 	_public_endpoint_title_label = Label.new()
 	_public_endpoint_title_label.text = _tr("ui.public_endpoint")
-	_public_endpoint_title_label.add_theme_font_size_override("font_size", 13)
+	_public_endpoint_title_label.add_theme_font_size_override("font_size", _font())
 	_public_endpoint_title_label.add_theme_color_override("font_color", Color(0.5, 0.86, 0.55))
 	box.add_child(_public_endpoint_title_label)
 
@@ -1059,27 +1080,27 @@ func _settings_card(content: VBoxContainer, title: Label) -> VBoxContainer:
 	content.add_child(card)
 
 	var box: VBoxContainer = VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
+	box.add_theme_constant_override("separation", int(_s(8)))
 	card.add_child(box)
 
-	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_font_size_override("font_size", _font(2, 17))
 	title.add_theme_color_override("font_color", Color(0.62, 0.74, 1.0))
 	box.add_child(title)
 	return box
 
 func _settings_row(parent: VBoxContainer, label: Label, control: Control, expand: bool) -> void:
 	var row: HBoxContainer = HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
+	row.add_theme_constant_override("separation", int(_s(10)))
 	parent.add_child(row)
 
-	label.custom_minimum_size = Vector2(120, 0)
-	label.add_theme_font_size_override("font_size", 14)
+	label.custom_minimum_size = Vector2(_s(128), 0)
+	label.add_theme_font_size_override("font_size", _font())
 	label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
 	row.add_child(label)
 	var control_minimum: Vector2 = control.custom_minimum_size
-	control_minimum.y = maxf(control_minimum.y, 34.0)
+	control_minimum.y = maxf(control_minimum.y, _s(38))
 	control.custom_minimum_size = control_minimum
-	control.add_theme_font_size_override("font_size", 14)
+	control.add_theme_font_size_override("font_size", _font())
 
 	if expand:
 		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1089,26 +1110,26 @@ func _settings_row(parent: VBoxContainer, label: Label, control: Control, expand
 
 func _panel_card_style() -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = Color(1, 1, 1, 0.025)
-	style.border_color = Color(1, 1, 1, 0.06)
+	style.bg_color = Color(1, 1, 1, 0.028)
+	style.border_color = Color(1, 1, 1, 0.08)
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 12
-	style.content_margin_bottom = 12
+	style.set_corner_radius_all(int(_s(6)))
+	style.content_margin_left = _s(14)
+	style.content_margin_right = _s(14)
+	style.content_margin_top = _s(12)
+	style.content_margin_bottom = _s(12)
 	return style
 
 func _profile_bar_style() -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = Color(1, 1, 1, 0.025)
-	style.border_color = Color(1, 1, 1, 0.07)
+	style.bg_color = Color(1, 1, 1, 0.03)
+	style.border_color = Color(1, 1, 1, 0.085)
 	style.set_border_width_all(1)
-	style.set_corner_radius_all(6)
-	style.content_margin_left = 10
-	style.content_margin_right = 10
-	style.content_margin_top = 6
-	style.content_margin_bottom = 6
+	style.set_corner_radius_all(int(_s(6)))
+	style.content_margin_left = _s(11)
+	style.content_margin_right = _s(11)
+	style.content_margin_top = _s(6)
+	style.content_margin_bottom = _s(6)
 	return style
 
 func _apply_preset_id(preset_id: String) -> void:
@@ -1124,13 +1145,13 @@ func _build_preset_row(content: VBoxContainer) -> void:
 	content.add_child(card)
 
 	_preset_bar = HBoxContainer.new()
-	_preset_bar.add_theme_constant_override("separation", 8)
-	_preset_bar.custom_minimum_size.y = 36
+	_preset_bar.add_theme_constant_override("separation", int(_s(9)))
+	_preset_bar.custom_minimum_size.y = _s(40)
 	card.add_child(_preset_bar)
 
 	_preset_label = Label.new()
 	_preset_label.text = _tr("ui.preset_label")
-	_preset_label.add_theme_font_size_override("font_size", 13)
+	_preset_label.add_theme_font_size_override("font_size", _font())
 	_preset_label.add_theme_color_override("font_color", Color(0.62, 0.74, 1.0))
 	_preset_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_preset_bar.add_child(_preset_label)
@@ -1138,8 +1159,8 @@ func _build_preset_row(content: VBoxContainer) -> void:
 	_preset_option = OptionButton.new()
 	_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_preset_option.size_flags_stretch_ratio = 0.55
-	_preset_option.custom_minimum_size = Vector2(220, 34)
-	_preset_option.add_theme_font_size_override("font_size", 13)
+	_preset_option.custom_minimum_size = Vector2(_s(230), _s(38))
+	_preset_option.add_theme_font_size_override("font_size", _font())
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
@@ -1148,17 +1169,17 @@ func _build_preset_row(content: VBoxContainer) -> void:
 	_preset_bar.add_child(_preset_option)
 
 	_preset_count_label = Label.new()
-	_preset_count_label.custom_minimum_size.x = 78
+	_preset_count_label.custom_minimum_size.x = _s(86)
 	_preset_count_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_preset_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_preset_count_label.add_theme_font_size_override("font_size", 12)
+	_preset_count_label.add_theme_font_size_override("font_size", _font(-1, 14))
 	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.66, 0.82))
 	_preset_bar.add_child(_preset_count_label)
 
 	_apply_preset_button = Button.new()
 	_apply_preset_button.text = _tr("ui.preset_apply")
-	_apply_preset_button.custom_minimum_size = Vector2(82, 34)
-	_apply_preset_button.add_theme_font_size_override("font_size", 13)
+	_apply_preset_button.custom_minimum_size = Vector2(_s(86), _s(38))
+	_apply_preset_button.add_theme_font_size_override("font_size", _font())
 	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
 	_preset_bar.add_child(_apply_preset_button)
 
@@ -1171,23 +1192,23 @@ func _build_preset_row(content: VBoxContainer) -> void:
 	_preset_description_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_preset_description_label.clip_text = true
 	_preset_description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_preset_description_label.add_theme_font_size_override("font_size", 12)
-	_preset_description_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
+	_preset_description_label.add_theme_font_size_override("font_size", _font(-1, 14))
+	_preset_description_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
 	_preset_bar.add_child(_preset_description_label)
 
 	_export_preset_button = Button.new()
 	_export_preset_button.text = _tr("ui.preset_export")
 	_export_preset_button.flat = true
-	_export_preset_button.custom_minimum_size.y = 34
-	_export_preset_button.add_theme_font_size_override("font_size", 12)
+	_export_preset_button.custom_minimum_size.y = _s(38)
+	_export_preset_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_export_preset_button.pressed.connect(_on_export_preset_pressed)
 	_preset_bar.add_child(_export_preset_button)
 
 	_import_preset_button = Button.new()
 	_import_preset_button.text = _tr("ui.preset_import")
 	_import_preset_button.flat = true
-	_import_preset_button.custom_minimum_size.y = 34
-	_import_preset_button.add_theme_font_size_override("font_size", 12)
+	_import_preset_button.custom_minimum_size.y = _s(38)
+	_import_preset_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_import_preset_button.pressed.connect(_on_import_preset_pressed)
 	_preset_bar.add_child(_import_preset_button)
 
@@ -1286,10 +1307,10 @@ func _create_tools_tab() -> VBoxContainer:
 	tab.add_theme_constant_override("separation", 4)
 
 	var margin: MarginContainer = MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 12)
-	margin.add_theme_constant_override("margin_right", 12)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_bottom", 8)
+	margin.add_theme_constant_override("margin_left", int(_s(12)))
+	margin.add_theme_constant_override("margin_right", int(_s(12)))
+	margin.add_theme_constant_override("margin_top", int(_s(9)))
+	margin.add_theme_constant_override("margin_bottom", int(_s(9)))
 	margin.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	tab.add_child(margin)
@@ -1304,30 +1325,30 @@ func _create_tools_tab() -> VBoxContainer:
 
 	_refresh_tools_button = Button.new()
 	_refresh_tools_button.text = _tr("ui.refresh_tools")
-	_refresh_tools_button.custom_minimum_size.y = 34
-	_refresh_tools_button.add_theme_font_size_override("font_size", 13)
+	_refresh_tools_button.custom_minimum_size.y = _s(38)
+	_refresh_tools_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_refresh_tools_button.pressed.connect(_refresh_tools_list)
 	toolbar.add_child(_refresh_tools_button)
 
 	_tools_count_label = Label.new()
 	_tools_count_label.text = _tr("ui.tools_init")
 	_tools_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_tools_count_label.add_theme_font_size_override("font_size", 13)
-	_tools_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
+	_tools_count_label.add_theme_font_size_override("font_size", _font(-1, 14))
+	_tools_count_label.add_theme_color_override("font_color", Color(0.68, 0.68, 0.72))
 	toolbar.add_child(_tools_count_label)
 
 	_build_preset_row(content)
 
 	var search_row: HBoxContainer = HBoxContainer.new()
-	search_row.add_theme_constant_override("separation", 8)
+	search_row.add_theme_constant_override("separation", int(_s(8)))
 	content.add_child(search_row)
 
 	_tools_search_edit = LineEdit.new()
 	_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	_tools_search_edit.clear_button_enabled = true
 	_tools_search_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_tools_search_edit.custom_minimum_size.y = 38
-	_tools_search_edit.add_theme_font_size_override("font_size", 14)
+	_tools_search_edit.custom_minimum_size.y = _s(42)
+	_tools_search_edit.add_theme_font_size_override("font_size", _font())
 	_tools_search_edit.text_changed.connect(_on_tools_search_changed)
 	search_row.add_child(_tools_search_edit)
 
@@ -1336,11 +1357,11 @@ func _create_tools_tab() -> VBoxContainer:
 	var split: HSplitContainer = HSplitContainer.new()
 	split.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	split.split_offset = 210
+	split.split_offset = int(_s(210))
 	content.add_child(split)
 
 	var nav_scroll: ScrollContainer = ScrollContainer.new()
-	nav_scroll.custom_minimum_size = Vector2(215, 0)
+	nav_scroll.custom_minimum_size = Vector2(_s(225), 0)
 	nav_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	nav_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	split.add_child(nav_scroll)
@@ -1350,52 +1371,54 @@ func _create_tools_tab() -> VBoxContainer:
 	_category_nav_container.add_theme_constant_override("separation", 2)
 	nav_scroll.add_child(_category_nav_container)
 
-	var middle_split: HSplitContainer = HSplitContainer.new()
-	middle_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	middle_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	middle_split.split_offset = 360
-	split.add_child(middle_split)
+	_tools_middle_split = HSplitContainer.new()
+	_tools_middle_split.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tools_middle_split.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tools_middle_split.split_offset = 0
+	split.add_child(_tools_middle_split)
 
-	var detail: VBoxContainer = VBoxContainer.new()
-	detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	detail.add_theme_constant_override("separation", 4)
-	middle_split.add_child(detail)
+	_tool_list_pane = VBoxContainer.new()
+	_tool_list_pane.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tool_list_pane.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_tool_list_pane.size_flags_stretch_ratio = 2.45
+	_tool_list_pane.add_theme_constant_override("separation", int(_s(5)))
+	_tools_middle_split.add_child(_tool_list_pane)
 
 	var header_margin: MarginContainer = MarginContainer.new()
-	header_margin.add_theme_constant_override("margin_left", 10)
-	detail.add_child(header_margin)
+	header_margin.add_theme_constant_override("margin_left", int(_s(10)))
+	header_margin.add_theme_constant_override("margin_right", int(_s(8)))
+	_tool_list_pane.add_child(header_margin)
 
 	var header_box: VBoxContainer = VBoxContainer.new()
-	header_box.add_theme_constant_override("separation", 2)
+	header_box.add_theme_constant_override("separation", int(_s(3)))
 	header_margin.add_child(header_box)
 
 	_detail_title = Label.new()
-	_detail_title.add_theme_font_size_override("font_size", 18)
+	_detail_title.add_theme_font_size_override("font_size", _font(3, 18))
 	_detail_title.add_theme_color_override("font_color", Color(0.95, 0.95, 0.98))
 	header_box.add_child(_detail_title)
 
 	_detail_desc = Label.new()
 	_detail_desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_detail_desc.add_theme_font_size_override("font_size", 14)
-	_detail_desc.add_theme_color_override("font_color", Color(0.6, 0.6, 0.64))
+	_detail_desc.add_theme_font_size_override("font_size", _font(-1, 14))
+	_detail_desc.add_theme_color_override("font_color", Color(0.69, 0.69, 0.74))
 	header_box.add_child(_detail_desc)
 
 	var action_row: HBoxContainer = HBoxContainer.new()
-	action_row.add_theme_constant_override("separation", 6)
+	action_row.add_theme_constant_override("separation", int(_s(7)))
 	header_box.add_child(action_row)
 
 	_enable_all_button = Button.new()
 	_enable_all_button.text = _tr("ui.enable_current_category")
-	_enable_all_button.custom_minimum_size.y = 34
-	_enable_all_button.add_theme_font_size_override("font_size", 13)
+	_enable_all_button.custom_minimum_size.y = _s(38)
+	_enable_all_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_enable_all_button.pressed.connect(_on_enable_all_pressed)
 	action_row.add_child(_enable_all_button)
 
 	_disable_all_button = Button.new()
 	_disable_all_button.text = _tr("ui.disable_current_category")
-	_disable_all_button.custom_minimum_size.y = 34
-	_disable_all_button.add_theme_font_size_override("font_size", 13)
+	_disable_all_button.custom_minimum_size.y = _s(38)
+	_disable_all_button.add_theme_font_size_override("font_size", _font(-1, 14))
 	_disable_all_button.pressed.connect(_on_disable_all_pressed)
 	action_row.add_child(_disable_all_button)
 
@@ -1404,19 +1427,19 @@ func _create_tools_tab() -> VBoxContainer:
 	action_row.add_child(action_spacer)
 
 	_detail_count = Label.new()
-	_detail_count.add_theme_font_size_override("font_size", 13)
-	_detail_count.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
+	_detail_count.add_theme_font_size_override("font_size", _font(-1, 14))
+	_detail_count.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
 	action_row.add_child(_detail_count)
 
 	var header_sep: HSeparator = HSeparator.new()
-	detail.add_child(header_sep)
+	_tool_list_pane.add_child(header_sep)
 
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	detail.add_child(scroll)
+	_tool_list_pane.add_child(scroll)
 
 	_tools_list_container = VBoxContainer.new()
 	_tools_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1424,9 +1447,11 @@ func _create_tools_tab() -> VBoxContainer:
 	scroll.add_child(_tools_list_container)
 
 	_tool_detail_panel = MCPToolDetailPanel.new()
+	_tool_detail_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tool_detail_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_tool_detail_panel.setup(_translation_manager)
-	middle_split.add_child(_tool_detail_panel)
+	_tool_detail_panel.size_flags_stretch_ratio = 1.0
+	_tool_detail_panel.setup(_translation_manager, _body_font_size, _ui_scale)
+	_tools_middle_split.add_child(_tool_detail_panel)
 
 	return tab
 
@@ -1683,7 +1708,7 @@ func _refresh_tools_list() -> void:
 
 func _create_group_widget(group_name: String, group_tools: Array) -> void:
 	var widget: MCPToolGroupItem = MCPToolGroupItem.new()
-	widget.setup(group_name, group_tools, _translation_manager)
+	widget.setup(group_name, group_tools, _translation_manager, _body_font_size, _ui_scale)
 	widget.group_toggled.connect(_on_group_toggled)
 	widget.item_toggled.connect(_on_tool_toggled)
 	widget.tool_selected.connect(_on_tool_selected)
@@ -1723,9 +1748,9 @@ func _build_category_nav() -> void:
 func _add_nav_section(title: String) -> void:
 	var label: Label = Label.new()
 	label.text = title
-	label.add_theme_font_size_override("font_size", 12)
-	label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.54))
-	label.add_theme_constant_override("margin_top", 8)
+	label.add_theme_font_size_override("font_size", _font(-1, 14))
+	label.add_theme_color_override("font_color", Color(0.58, 0.58, 0.63))
+	label.add_theme_constant_override("margin_top", int(_s(9)))
 	_category_nav_container.add_child(label)
 
 func _add_nav_item(key: String, label: String, icon_name: String) -> void:
@@ -1733,7 +1758,7 @@ func _add_nav_item(key: String, label: String, icon_name: String) -> void:
 	if icon_name != "" and has_theme_icon(icon_name, "EditorIcons"):
 		icon_tex = get_theme_icon(icon_name, "EditorIcons")
 	var item: MCPCategoryNavItem = MCPCategoryNavItem.new()
-	item.setup(key, label, icon_tex, _nav_group)
+	item.setup(key, label, icon_tex, _nav_group, _body_font_size, _ui_scale)
 	item.category_selected.connect(_select_category)
 	_category_nav_container.add_child(item)
 	_nav_items[key] = item
@@ -1825,7 +1850,7 @@ func _build_scope_chips(parent: HBoxContainer) -> void:
 	for entry in defs:
 		var chip: MCPCategoryNavItem = MCPCategoryNavItem.new()
 		parent.add_child(chip)
-		chip.setup(entry[0], entry[1], null, _scope_chip_group)
+		chip.setup(entry[0], entry[1], null, _scope_chip_group, _body_font_size, _ui_scale)
 		chip.category_selected.connect(_select_category)
 		_scope_chips[entry[0]] = chip
 

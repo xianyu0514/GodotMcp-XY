@@ -8,18 +8,30 @@ var category_key: String = ""
 var _base_label: String = ""
 var _enabled: int = 0
 var _total: int = 0
+var _body_font_size: int = 15
+var _ui_scale: float = 1.0
 
-func setup(key: String, label: String, icon_tex: Texture2D, group: ButtonGroup) -> void:
+func setup(
+	key: String,
+	label: String,
+	icon_tex: Texture2D,
+	group: ButtonGroup,
+	body_font_size: int = 15,
+	ui_scale: float = 1.0
+) -> void:
 	category_key = key
 	_base_label = label
+	_body_font_size = maxi(body_font_size, 15)
+	_ui_scale = maxf(ui_scale, 0.75)
 	toggle_mode = true
 	flat = true
 	focus_mode = Control.FOCUS_NONE
 	alignment = HORIZONTAL_ALIGNMENT_LEFT
 	clip_text = true
 	button_group = group
-	custom_minimum_size = Vector2(0, 38)
-	add_theme_font_size_override("font_size", 13)
+	custom_minimum_size = Vector2(0, _s(44))
+	add_theme_font_size_override("font_size", _body_font_size)
+	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if icon_tex:
 		icon = icon_tex
 	add_theme_stylebox_override("normal", _style(Color(1, 1, 1, 0.0), false))
@@ -53,16 +65,19 @@ func _render() -> void:
 func _style(bg: Color, accent: bool) -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
 	style.bg_color = bg
-	style.set_corner_radius_all(4)
-	style.content_margin_left = 8
-	style.content_margin_right = 8
-	style.content_margin_top = 7
-	style.content_margin_bottom = 7
+	style.set_corner_radius_all(int(_s(5)))
+	style.content_margin_left = _s(10)
+	style.content_margin_right = _s(10)
+	style.content_margin_top = _s(8)
+	style.content_margin_bottom = _s(8)
 	if accent:
-		style.border_width_left = 2
+		style.border_width_left = int(_s(3))
 		style.border_color = Color(0.40, 0.62, 1.0, 0.95)
 	return style
 
 func _on_toggled(pressed: bool) -> void:
 	if pressed:
 		category_selected.emit(category_key)
+
+func _s(value: float) -> float:
+	return roundf(value * _ui_scale)
