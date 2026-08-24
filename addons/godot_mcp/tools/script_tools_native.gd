@@ -9,6 +9,12 @@ const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_pol
 
 var _editor_interface: EditorInterface = null
 
+# Autoload/全局类声明缓存：批量校验（verify_scripts）时避免对每个失败脚本重复
+# 遍历 ProjectSettings.get_property_list() / get_global_class_list()（TTL 到期自动重建）。
+var _autoload_decls_cache: String = ""
+var _autoload_decls_cache_ts: int = 0
+const AUTOLOAD_DECLS_CACHE_TTL_MS: int = 5000
+
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
 
@@ -47,6 +53,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_open_script_at_line(server_core)
 	_register_attach_script(server_core)
 	_register_validate_script(server_core)
+	_register_verify_scripts(server_core)
 	_register_validate_shader(server_core)
 	_register_search_in_files(server_core)
 
@@ -56,7 +63,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_list_project_scripts(server_core: RefCounted) -> void:
 	var tool_name: String = "list_project_scripts"
-	var description: String = "List all GDScript (.gd) and C# (.cs) script files in the project. Returns paths relative to res://."
+	var description: String = "List GDScript (.gd) and C# (.cs) script files in the project. Supports limit/offset pagination; count is the page size and total_count is the full total. Returns paths relative to res://."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -66,6 +73,14 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "string",
 				"description": "Optional subpath to search (e.g. 'res://scripts/'). Default is 'res://'.",
 				"default": "res://"
+			},
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of script paths to return. Default is 1000. Extra paths are omitted and 'truncated' is set true."
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Number of script paths to skip before applying limit. Default 0."
 			}
 		}
 	}
@@ -78,7 +93,9 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"}
 			},
-			"count": {"type": "integer"}
+			"count": {"type": "integer", "description": "Number of script paths in this page."},
+			"total_count": {"type": "integer", "description": "Total number of script paths before limit/offset pagination."},
+			"truncated": {"type": "boolean", "description": "True when more script paths remain after this page."}
 		}
 	}
 	
@@ -115,9 +132,18 @@ func _tool_list_project_scripts(params: Dictionary) -> Dictionary:
 	# 排序
 	scripts.sort()
 	
+	var limit: int = int(params.get("limit", 1000))
+	if limit <= 0:
+		limit = 1000
+	var offset: int = int(params.get("offset", 0))
+	var page: Dictionary = PayloadUtils.paginate_list(scripts, limit, offset)
+	var scripts_page: Array = page["items"]
+	
 	return {
-		"scripts": scripts,
-		"count": scripts.size()
+		"scripts": scripts_page,
+		"count": scripts_page.size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"]
 	}
 
 # ============================================================================
@@ -2080,7 +2106,7 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 
 func _register_validate_script(server_core: RefCounted) -> void:
 	var tool_name: String = "validate_script"
-	var description: String = "Validate GDScript syntax without executing it. Checks for errors and warnings."
+	var description: String = "Validate GDScript syntax without executing it. Checks for errors and warnings; returns structured compile errors with line numbers."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -2160,7 +2186,7 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 	var autoload_aware: bool = false
 
 	if reload_err != OK:
-		var autoload_decls: String = _build_autoload_declarations()
+		var autoload_decls: String = _get_autoload_declarations_cached()
 		if not autoload_decls.is_empty():
 			var retry_content: String = _insert_autoload_decls_after_extends(validation_content, autoload_decls)
 			var retry_script: GDScript = GDScript.new()
@@ -2174,26 +2200,7 @@ func _tool_validate_script(params: Dictionary) -> Dictionary:
 					"message": "Script validates successfully with Autoload/global class awareness. Original validation failed due to unresolved Autoload or global class names."
 				})
 		if not autoload_aware:
-			var error_msg: String = test_script.get_meta("_error_text", "") if test_script.has_meta("_error_text") else ""
-			if error_msg.is_empty():
-				var err_lines: PackedStringArray = content.split("\n")
-				for i in range(err_lines.size()):
-					var line: String = err_lines[i].strip_edges()
-					if line.is_empty():
-						continue
-					if _is_syntax_error_line(line):
-						errors.append({
-							"line": i + 1,
-							"column": 0,
-							"message": "Syntax error near: " + line
-						})
-						break
-				if errors.is_empty():
-					errors.append({
-						"line": 0,
-						"column": 0,
-						"message": "Script has syntax errors"
-					})
+			errors.append(_collect_validation_error(test_script, content))
 
 	if check_warnings and reload_err == OK:
 		var source_lines: PackedStringArray = content.split("\n")
@@ -2223,6 +2230,75 @@ func _is_syntax_error_line(line: String) -> bool:
 			return true
 	return false
 
+# 从 Godot 编译错误文本中提取行号。
+# 支持 "Parse Error: Expected ')' at line 12 (script.gd)" / "Line 12: ..." 等格式；
+# 提取不到返回 0（中文或其他语言格式不匹配时也不会崩溃）。
+static func _extract_error_line(error_text: String) -> int:
+	if error_text.is_empty():
+		return 0
+	var line_regex := RegEx.new()
+	if line_regex.compile("(?:line|Line)\\s*(\\d+)") != OK:
+		return 0
+	var match: RegExMatch = line_regex.search(error_text)
+	if match:
+		return int(match.get_string(1))
+	return 0
+
+# 提取错误类型前缀（Parse Error / Compile Error / ERROR 等），未识别返回空字符串。
+static func _extract_error_type_prefix(error_text: String) -> String:
+	var lower: String = error_text.to_lower()
+	var prefixes: Array[String] = ["parse error", "compile error", "parser error", "error"]
+	for prefix in prefixes:
+		if lower.begins_with(prefix):
+			return error_text.substr(0, prefix.length()).capitalize()
+	return ""
+
+# 收集 validate_script 的单个编译错误（带行号的结构化错误）：
+# 1. 优先读取 _error_text meta（现有行为）；
+# 2. 为空则探测 _error_script / _error_line 等其他 meta（Godot 4.x reload 失败时部分版本会写入）；
+# 3. 仍为空则回退到 _is_syntax_error_line 逐行启发式（保留）。
+func _collect_validation_error(test_script: GDScript, content: String) -> Dictionary:
+	var error_msg: String = ""
+	if test_script.has_meta("_error_text"):
+		error_msg = str(test_script.get_meta("_error_text", ""))
+	if error_msg.is_empty():
+		for meta_key in test_script.get_meta_list():
+			if meta_key == "_error_text":
+				continue
+			var meta_val: Variant = test_script.get_meta(meta_key)
+			if meta_val is String and not str(meta_val).is_empty():
+				error_msg = str(meta_val)
+				break
+	if not error_msg.is_empty():
+		var error_line: int = _extract_error_line(error_msg)
+		if error_line == 0 and test_script.has_meta("_error_line"):
+			error_line = int(test_script.get_meta("_error_line", 0))
+		var error_prefix: String = _extract_error_type_prefix(error_msg)
+		var display_msg: String = error_msg
+		if not error_prefix.is_empty() and not error_msg.to_lower().begins_with(error_prefix.to_lower()):
+			display_msg = "%s: %s" % [error_prefix, error_msg]
+		return {
+			"line": error_line,
+			"column": 0,
+			"message": display_msg
+		}
+	var err_lines: PackedStringArray = content.split("\n")
+	for i in range(err_lines.size()):
+		var line: String = err_lines[i].strip_edges()
+		if line.is_empty():
+			continue
+		if _is_syntax_error_line(line):
+			return {
+				"line": i + 1,
+				"column": 0,
+				"message": "Syntax error near: " + line
+			}
+	return {
+		"line": 0,
+		"column": 0,
+		"message": "Script has syntax errors"
+	}
+
 func _strip_class_names(source: String) -> String:
 	var lines: PackedStringArray = source.split("\n")
 	var result: PackedStringArray = []
@@ -2233,6 +2309,16 @@ func _strip_class_names(source: String) -> String:
 		else:
 			result.append(line)
 	return "\n".join(result)
+
+# 带 TTL 的 Autoload/全局类声明缓存：批量校验场景（verify_scripts）下，多个失败脚本
+# 共享同一份声明，避免每个脚本都重新遍历 ProjectSettings（TTL 内 ProjectSettings 变更
+# 会在到期后自动感知；`_build_autoload_declarations` 本身保持不变，供直接调用）。
+func _get_autoload_declarations_cached() -> String:
+	var now: int = Time.get_ticks_msec()
+	if _autoload_decls_cache.is_empty() or now - _autoload_decls_cache_ts > AUTOLOAD_DECLS_CACHE_TTL_MS:
+		_autoload_decls_cache = _build_autoload_declarations()
+		_autoload_decls_cache_ts = now
+	return _autoload_decls_cache
 
 func _build_autoload_declarations() -> String:
 	var decls: PackedStringArray = []
@@ -2300,6 +2386,207 @@ func _spaces_to_tabs(code: String) -> String:
 		var new_line: String = "\t".repeat(tab_count) + " ".repeat(remaining_spaces) + line.substr(leading_spaces)
 		result_lines.append(new_line)
 	return "\n".join(result_lines)
+
+# ============================================================================
+# verify_scripts - 批量校验项目脚本编译状态
+# ============================================================================
+
+func _register_verify_scripts(server_core: RefCounted) -> void:
+	var tool_name: String = "verify_scripts"
+	var description: String = "Batch-verify the compilation status of project scripts, returning per-script structured errors and warnings with line numbers. With no script_paths it scans the whole project for .gd scripts (skipping res://addons/ and res://test/ by default to avoid false positives from the plugin itself and the test suite), capped by max_scripts. Use after editing code as a verification step, complementing validate_script (single script) and execute_editor_script (full reload)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"script_paths": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Optional explicit script paths (.gd/.cs) to verify. When omitted, the project is scanned for .gd scripts under res:// (excluding res://addons/ and res://test/)."
+			},
+			"check_warnings": {
+				"type": "boolean",
+				"description": "Whether to check for warnings. Default is true."
+			},
+			"max_scripts": {
+				"type": "integer",
+				"description": "Maximum number of scripts to verify in one call (each GDScript.reload has cost). Default is 100."
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"verified": {"type": "integer"},
+			"failed": {"type": "integer"},
+			"results": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"path": {"type": "string"},
+						"valid": {"type": "boolean"},
+						"errors": {"type": "array"},
+						"warnings": {"type": "array"},
+						"error_count": {"type": "integer"},
+						"warning_count": {"type": "integer"}
+					}
+				}
+			},
+			"total_checked": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_verify_scripts"),
+		output_schema, annotations,
+		"supplementary", "Script-Advanced")
+
+func _tool_verify_scripts(params: Dictionary) -> Dictionary:
+	var check_warnings: bool = bool(params.get("check_warnings", true))
+	var max_scripts: int = max(1, int(params.get("max_scripts", 100)))
+
+	# 去重：同一路径只校验一次（显式路径可能重复，扫描结果天然无重复）。
+	var seen: Dictionary = {}
+	var requested: Array = []
+	var raw_paths: Variant = params.get("script_paths", [])
+	if raw_paths is Array:
+		for p in raw_paths:
+			var s: String = String(p).strip_edges()
+			if not s.is_empty() and not seen.has(s):
+				seen[s] = true
+				requested.append(s)
+
+	var paths: Array = []
+	if requested.is_empty():
+		# Default: scan the project, skipping the plugin's own addons/, the test
+		# suite and the engine cache to avoid false positives.
+		_collect_verify_script_paths(paths)
+	else:
+		paths = requested
+	paths.sort()
+
+	var results: Array = []
+	var verified: int = 0
+	var failed: int = 0
+	var checked: int = 0
+	for script_path in paths:
+		if checked >= max_scripts:
+			break
+		checked += 1
+		var result: Dictionary = _verify_single_script(String(script_path), check_warnings)
+		results.append(result)
+		if bool(result.get("valid", false)):
+			verified += 1
+		else:
+			failed += 1
+
+	return {
+		"verified": verified,
+		"failed": failed,
+		"results": results,
+		"total_checked": checked
+	}
+
+# 校验单个脚本文件，返回与 validate_script 一致的结构化错误/警告。
+# 复用 _tool_validate_script 的同一套编译逻辑（class_name 剥离、Autoload/全局类
+# 感知重试、_collect_validation_error 错误提取），保证单脚本与批量结果一致。
+func _verify_single_script(script_path: String, check_warnings: bool) -> Dictionary:
+	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
+	if not validation["valid"]:
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Invalid script path: " + validation["error"]}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	if not FileAccess.file_exists(script_path):
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Script file not found: " + script_path}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+	if not file:
+		return {
+			"path": script_path,
+			"valid": false,
+			"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
+			"warnings": [],
+			"error_count": 1,
+			"warning_count": 0
+		}
+	var content: String = file.get_as_text()
+	file.close()
+
+	var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
+	return {
+		"path": script_path,
+		"valid": bool(vr.get("valid", false)),
+		"errors": vr.get("errors", []),
+		"warnings": vr.get("warnings", []),
+		"error_count": int(vr.get("error_count", 0)),
+		"warning_count": int(vr.get("warning_count", 0))
+	}
+
+# 递归收集 .gd 脚本，跳过指定名称的子目录（如 addons/test/.godot）。
+func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_dir_names: Array) -> void:
+	var dir: DirAccess = DirAccess.open(directory_path)
+	if not dir:
+		return
+
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while not file_name.is_empty():
+		if file_name != "." and file_name != "..":
+			var full_path: String = directory_path
+			if not full_path.ends_with("/"):
+				full_path += "/"
+			full_path += file_name
+
+			if dir.current_is_dir():
+				if not (file_name in skip_dir_names):
+					_collect_gd_scripts_excluding(full_path, result, skip_dir_names)
+			elif file_name.ends_with(".gd"):
+				result.append(full_path)
+		file_name = dir.get_next()
+	dir.list_dir_end()
+
+# 收集待校验脚本路径：编辑器模式优先用 EditorFileSystem 缓存索引（比 DirAccess
+# 递归扫描快一个量级，大项目尤其明显）；无编辑器接口（headless/CI）时回退 DirAccess。
+func _collect_verify_script_paths(result: Array) -> void:
+	var ei: EditorInterface = _get_editor_interface()
+	var efs: EditorFileSystem = ei.get_resource_filesystem() if ei else null
+	if efs and efs.get_filesystem() != null:
+		_walk_editor_filesystem(efs.get_filesystem(), result, ["addons", "test", ".godot"])
+		return
+	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot"])
+
+func _walk_editor_filesystem(dir: EditorFileSystemDirectory, result: Array, skip_dir_names: Array) -> void:
+	for i in range(dir.get_subdir_count()):
+		var sub: EditorFileSystemDirectory = dir.get_subdir(i)
+		if sub.get_name() in skip_dir_names:
+			continue
+		_walk_editor_filesystem(sub, result, skip_dir_names)
+	var dir_path: String = dir.get_path()
+	if dir_path.ends_with("/"):
+		dir_path = dir_path.trim_suffix("/")
+	for i in range(dir.get_file_count()):
+		var fname: String = dir.get_file(i)
+		if fname.ends_with(".gd"):
+			result.append(dir_path + "/" + fname)
 
 # ============================================================================
 # search_in_files - 在项目文件中搜索内容

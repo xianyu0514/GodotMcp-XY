@@ -125,6 +125,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_reload_open_scripts(server_core)
 	_register_close_script_tab(server_core)
 	_register_get_import_status(server_core)
+	_register_undo(server_core)
+	_register_redo(server_core)
+	_register_get_undo_history(server_core)
 
 # ============================================================================
 # get_editor_state - 获取编辑器状态
@@ -2253,24 +2256,24 @@ func _remove_dir_recursive(path: String) -> int:
 
 func _register_configure_android_export(server_core: RefCounted) -> void:
 	var tool_name: String = "configure_android_export"
-	var description: String = "Configure Android-specific options on an existing Android export preset in export_presets.cfg (e.g. package name, app name, version code/name, Gradle build, APK/AAB format, min/target SDK, target architectures, keystore file paths). Only sets the fields you provide; the preset's platform must be 'Android'. Keystore passwords are intentionally NOT written here — set them via the GODOT_ANDROID_KEYSTORE_* environment variables. Works on Godot 4.6+."
+	var description: String = "Configure Android options on an existing Android export preset in export_presets.cfg (package name, app name, version code/name, Gradle build, APK/AAB format, SDK levels, architectures, keystore paths). Only sets provided fields; preset platform must be Android. Keystore passwords are NOT written here (set via GODOT_ANDROID_KEYSTORE_* env vars). Godot 4.6+."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"preset": {"type": "string", "description": "Preset name or section (e.g. 'Android' or 'preset.0')."},
-			"config_path": {"type": "string", "description": "Path to export_presets.cfg. Default 'res://export_presets.cfg'.", "default": "res://export_presets.cfg"},
-			"package_name": {"type": "string", "description": "Reverse-DNS application id -> package/unique_name (e.g. 'com.example.game')."},
+			"preset": {"type": "string", "description": "Preset name or section."},
+			"config_path": {"type": "string", "description": "Path to export_presets.cfg.", "default": "res://export_presets.cfg"},
+			"package_name": {"type": "string", "description": "App id -> package/unique_name."},
 			"app_name": {"type": "string", "description": "Display name -> package/name."},
-			"version_code": {"type": "integer", "description": "Integer version code -> version/code."},
-			"version_name": {"type": "string", "description": "Human version string -> version/name."},
-			"use_gradle_build": {"type": "boolean", "description": "Toggle gradle_build/use_gradle_build."},
-			"export_format": {"type": "string", "enum": ["apk", "aab"], "description": "gradle_build/export_format (apk=0, aab=1)."},
-			"min_sdk": {"type": "string", "description": "gradle_build/min_sdk."},
-			"target_sdk": {"type": "string", "description": "gradle_build/target_sdk."},
-			"architectures": {"type": "array", "description": "Subset of ['arm64-v8a','armeabi-v7a','x86','x86_64']; listed archs are enabled, the rest disabled."},
-			"keystore_release": {"type": "string", "description": "Path to release keystore -> keystore/release (path only, no password)."},
-			"keystore_debug": {"type": "string", "description": "Path to debug keystore -> keystore/debug (path only, no password)."}
+			"version_code": {"type": "integer", "description": "Int version -> version/code."},
+			"version_name": {"type": "string", "description": "String version -> version/name."},
+			"use_gradle_build": {"type": "boolean", "description": "-> gradle_build/use_gradle_build."},
+			"export_format": {"type": "string", "enum": ["apk", "aab"], "description": "-> gradle_build/export_format."},
+			"min_sdk": {"type": "string", "description": "-> gradle_build/min_sdk."},
+			"target_sdk": {"type": "string", "description": "-> gradle_build/target_sdk."},
+			"architectures": {"type": "array", "description": "Enabled archs; rest disabled."},
+			"keystore_release": {"type": "string", "description": "-> keystore/release (path only)."},
+			"keystore_debug": {"type": "string", "description": "-> keystore/debug (path only)."}
 		},
 		"required": ["preset"]
 	}
@@ -2413,3 +2416,232 @@ func _tool_configure_android_export(params: Dictionary) -> Dictionary:
 		"change_count": changes.size(),
 		"godot_version": str(Engine.get_version_info().get("string", ""))
 	}
+
+# ============================================================================
+# undo / redo / get_undo_history - 编辑器 UndoRedo 栈操作
+# ============================================================================
+# Godot 4.x 的 EditorUndoRedoManager（editor_interface.get_undo_redo()）管理
+# 编辑器撤销/重做栈。AI 用 MCP 改场景后，agent 可通过这些工具一键撤销/重做，
+# 或查询撤销栈内容决定下一步。
+
+func _get_undo_redo_manager() -> UndoRedo:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return null
+	var method_name: String = _first_supported_method(editor_interface, ["get_undo_redo"])
+	if method_name == "":
+		return null
+	return editor_interface.call(method_name) as UndoRedo
+
+# 纯函数：在给定 UndoRedo 上执行撤销，便于单测覆盖（Godot 的 undo() 返回 void，
+# 空栈调用无副作用 —— 用 has_undo() 判断何时停止）。
+static func _apply_undo_actions(undo_redo: UndoRedo, count: int) -> Dictionary:
+	if undo_redo == null:
+		return {"error": "UndoRedo not available"}
+	if not undo_redo.has_undo():
+		return {"status": "noop", "message": "Nothing to undo"}
+	var undone_count: int = 0
+	var limit: int = maxi(count, 1)
+	while undone_count < limit and undo_redo.has_undo():
+		undo_redo.undo()
+		undone_count += 1
+	return {
+		"status": "success",
+		"undone_count": undone_count,
+		"has_undo": undo_redo.has_undo()
+	}
+
+static func _apply_redo_actions(undo_redo: UndoRedo, count: int) -> Dictionary:
+	if undo_redo == null:
+		return {"error": "UndoRedo not available"}
+	if not undo_redo.has_redo():
+		return {"status": "noop", "message": "Nothing to redo"}
+	var redone_count: int = 0
+	var limit: int = maxi(count, 1)
+	while redone_count < limit and undo_redo.has_redo():
+		undo_redo.redo()
+		redone_count += 1
+	return {
+		"status": "success",
+		"redone_count": redone_count,
+		"has_redo": undo_redo.has_redo()
+	}
+
+# 纯函数：生成撤销栈摘要。UndoRedo 语义：get_current_action() 指向下一个可撤销
+# 的动作（无动作时为 -1），get_history_count() 为栈内总动作数。可撤销数 = current+1，
+# 可重做数 = total-(current+1)。动作名列表按“最近优先”排列，受 limit 截断。
+static func _describe_undo_history(undo_redo: UndoRedo, limit: int) -> Dictionary:
+	if undo_redo == null:
+		return {"error": "UndoRedo not available"}
+	var total_actions: int = undo_redo.get_history_count()
+	var current_action: int = undo_redo.get_current_action()
+	var undo_count: int = current_action + 1
+	var redo_count: int = maxi(total_actions - (current_action + 1), 0)
+	var max_items: int = maxi(limit, 1)
+	var undo_actions: Array = []
+	var redo_actions: Array = []
+	for i in range(current_action, -1, -1):
+		if undo_actions.size() >= max_items:
+			break
+		undo_actions.append({"name": str(undo_redo.get_action_name(i))})
+	for i in range(current_action + 1, total_actions):
+		if redo_actions.size() >= max_items:
+			break
+		redo_actions.append({"name": str(undo_redo.get_action_name(i))})
+	return {
+		"undo_count": undo_count,
+		"redo_count": redo_count,
+		"can_undo": undo_redo.has_undo(),
+		"can_redo": undo_redo.has_redo(),
+		"undo_actions": undo_actions,
+		"redo_actions": redo_actions
+	}
+
+func _register_undo(server_core: RefCounted) -> void:
+	var tool_name: String = "undo"
+	var description: String = "Undo the most recent editor action(s). Each editor UndoRedo action typically bundles one scene edit (node create/delete, property change, tile paint) — undo() pops the latest undoable action and restores the previous state. Pass count to undo several actions at once; the loop stops when the undo stack is empty. Returns status 'noop' with message 'Nothing to undo' when the stack is empty."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"count": {
+				"type": "integer",
+				"description": "Number of actions to undo. Default 1.",
+				"default": 1
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"undone_count": {"type": "integer"},
+			"has_undo": {"type": "boolean"},
+			"message": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_undo"),
+		output_schema, annotations,
+		"supplementary", "Editor-Advanced")
+
+func _tool_undo(params: Dictionary) -> Dictionary:
+	var count: int = int(params.get("count", 1))
+	if count < 1:
+		return {"error": "count must be a positive integer"}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	var undo_redo: UndoRedo = _get_undo_redo_manager()
+	if undo_redo == null:
+		return {"error": "Editor UndoRedo not available"}
+	return _apply_undo_actions(undo_redo, count)
+
+func _register_redo(server_core: RefCounted) -> void:
+	var tool_name: String = "redo"
+	var description: String = "Redo the most recently undone editor action(s). Each redo re-applies the next action from the editor's redo stack. Pass count to redo several actions at once; the loop stops when the redo stack is empty. Returns status 'noop' with message 'Nothing to redo' when the stack is empty."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"count": {
+				"type": "integer",
+				"description": "Number of actions to redo. Default 1.",
+				"default": 1
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"redone_count": {"type": "integer"},
+			"has_redo": {"type": "boolean"},
+			"message": {"type": "string"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_redo"),
+		output_schema, annotations,
+		"supplementary", "Editor-Advanced")
+
+func _tool_redo(params: Dictionary) -> Dictionary:
+	var count: int = int(params.get("count", 1))
+	if count < 1:
+		return {"error": "count must be a positive integer"}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	var undo_redo: UndoRedo = _get_undo_redo_manager()
+	if undo_redo == null:
+		return {"error": "Editor UndoRedo not available"}
+	return _apply_redo_actions(undo_redo, count)
+
+func _register_get_undo_history(server_core: RefCounted) -> void:
+	var tool_name: String = "get_undo_history"
+	var description: String = "Read-only summary of the editor's UndoRedo stack: how many actions can be undone and redone, plus the names of the most recent undoable and redoable actions (most recent first, capped by 'limit' which defaults to 20)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"limit": {
+				"type": "integer",
+				"description": "Maximum number of action names to list per direction. Default 20.",
+				"default": 20
+			}
+		}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"undo_count": {"type": "integer"},
+			"redo_count": {"type": "integer"},
+			"can_undo": {"type": "boolean"},
+			"can_redo": {"type": "boolean"},
+			"undo_actions": {"type": "array", "items": {"type": "object"}},
+			"redo_actions": {"type": "array", "items": {"type": "object"}}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+		Callable(self, "_tool_get_undo_history"),
+		output_schema, annotations,
+		"supplementary", "Editor-Advanced")
+
+func _tool_get_undo_history(params: Dictionary) -> Dictionary:
+	var limit: int = int(params.get("limit", 20))
+	if limit < 1:
+		return {"error": "limit must be a positive integer"}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	var undo_redo: UndoRedo = _get_undo_redo_manager()
+	if undo_redo == null:
+		return {"error": "Editor UndoRedo not available"}
+	return _describe_undo_history(undo_redo, limit)

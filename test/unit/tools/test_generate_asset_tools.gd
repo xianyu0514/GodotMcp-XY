@@ -1,14 +1,14 @@
 extends "res://addons/gut/test.gd"
 
 # Unit tests for the generate_asset asset-generation adapter tool in
-# project_tools_native.gd. Covers parameter validation, offline procedural
+# project_assets_tools.gd. Covers parameter validation, offline procedural
 # image/audio generation, deterministic seeding, the external-provider
 # unconfigured fall-back, byte validation, and the prompt manifest.
 #
 # Tests run headlessly (no editor), so reimport is always skipped with a
 # reason; success-path tests only assert the file lands on disk.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_assets_tools.gd"
 const TMP_DIR: String = "res://.test_tmp_generate_asset"
 
 var _tools: RefCounted = null
@@ -165,12 +165,70 @@ func test_external_unconfigured_without_endpoint():
 	assert_false(FileAccess.file_exists(_tmp_path("ext.png")), "No file should be written when unconfigured")
 
 func test_external_missing_api_key_env():
+	# 使用白名单内的 endpoint 与密钥变量名，确保走到"环境变量未设置"分支；
+	# 白名单之外的变量名会在到达这里之前被拦截（见 test_api_key_env_not_in_allowlist_rejected）。
+	var env_name: String = "OPENAI_API_KEY"
+	var original_value: String = OS.get_environment(env_name)
+	OS.set_environment(env_name, "")
 	var result: Dictionary = _tools._tool_generate_asset({
 		"type": "texture", "prompt": "x", "resource_path": _tmp_path("ext.png"),
-		"provider": "external", "endpoint": "https://example.com/gen",
-		"api_key_env": "DEFINITELY_UNSET_ENV_VAR_FOR_TEST"
+		"provider": "external", "endpoint": "https://api.openai.com/v1/images/generations",
+		"api_key_env": env_name
 	})
+	if original_value.is_empty():
+		OS.unset_environment(env_name)
+	else:
+		OS.set_environment(env_name, original_value)
 	assert_has(result, "error", "Missing api key env var should error")
+
+# --- S6 资产生成安全加固（endpoint 白名单 / api_key_env 白名单 / https-only） --
+
+func test_endpoint_not_in_allowlist_rejected():
+	var result: Dictionary = _tools._tool_generate_asset({
+		"type": "texture", "prompt": "x", "resource_path": _tmp_path("ext.png"),
+		"provider": "external", "endpoint": "https://internal.example.com/gen",
+		"api_key_env": "OPENAI_API_KEY"
+	})
+	assert_has(result, "error", "Non-allowlisted endpoint should error")
+	assert_true(str(result.get("error", "")).contains("allowlist"), "Error should mention the allowlist")
+	assert_eq(result.get("status"), "endpoint_blocked", "Status should mark the endpoint as blocked")
+	assert_false(FileAccess.file_exists(_tmp_path("ext.png")), "No file should be written")
+
+func test_api_key_env_not_in_allowlist_rejected():
+	var result: Dictionary = _tools._tool_generate_asset({
+		"type": "texture", "prompt": "x", "resource_path": _tmp_path("ext.png"),
+		"provider": "external", "endpoint": "https://api.openai.com/v1/images/generations",
+		"api_key_env": "AWS_SECRET_ACCESS_KEY"
+	})
+	assert_has(result, "error", "Non-allowlisted env var name should error")
+	assert_true(str(result.get("error", "")).contains("allowlist"), "Error should mention the allowlist")
+	assert_false(FileAccess.file_exists(_tmp_path("ext.png")), "No file should be written")
+
+func test_is_allowed_gen_endpoint():
+	var tool_script: GDScript = load(TOOL_SCRIPT)
+	assert_true(tool_script._is_allowed_gen_endpoint("https://api.openai.com/v1/images/generations"), "OpenAI preset endpoint should be allowed")
+	assert_true(tool_script._is_allowed_gen_endpoint("https://api.meshy.ai/openapi/v2/text-to-3d"), "Meshy preset endpoint should be allowed")
+	assert_true(tool_script._is_allowed_gen_endpoint("http://127.0.0.1:7860/sdapi/v1/txt2img"), "Local SD preset endpoint should be allowed")
+	assert_false(tool_script._is_allowed_gen_endpoint("https://evil.example.com/x"), "Unknown host should be rejected")
+	assert_false(tool_script._is_allowed_gen_endpoint("http://internal.example.com/x"), "http to unknown host should be rejected")
+	assert_false(tool_script._is_allowed_gen_endpoint("ftp://api.openai.com/x"), "Non-http(s) scheme should be rejected")
+	assert_false(tool_script._is_allowed_gen_endpoint("nope"), "URL without scheme should be rejected")
+
+func test_is_allowed_api_key_env():
+	var tool_script: GDScript = load(TOOL_SCRIPT)
+	assert_true(tool_script._is_allowed_api_key_env(""), "Empty name (no auth) should be allowed")
+	assert_true(tool_script._is_allowed_api_key_env("GODOT_MCP_API_KEY"), "GODOT_MCP_API_KEY should be allowed")
+	assert_true(tool_script._is_allowed_api_key_env("OPENAI_API_KEY"), "Preset key env should be allowed")
+	assert_false(tool_script._is_allowed_api_key_env("AWS_SECRET_ACCESS_KEY"), "Arbitrary env var should be rejected")
+
+func test_https_only_for_blocking_request():
+	var result: Dictionary = _tools._http_blocking_request("http://127.0.0.1:8080/x", HTTPClient.METHOD_GET, PackedStringArray(), "", 1.0)
+	assert_has(result, "error", "http:// URL should be rejected before any connection")
+	assert_true(str(result.get("error", "")).contains("https"), "Error should mention https")
+	# allow_http=true 放行 scheme 门禁：连接本机未监听端口会快速失败，而非 https 拒绝。
+	var allowed: Dictionary = _tools._http_blocking_request("http://127.0.0.1:1/x", HTTPClient.METHOD_GET, PackedStringArray(), "", 1.0, true)
+	assert_has(allowed, "error", "With allow_http the request proceeds and fails at connect time")
+	assert_false(str(allowed.get("error", "")).contains("https"), "Error should not be the https-only refusal")
 
 # --- byte validation helper -------------------------------------------------
 

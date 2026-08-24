@@ -15,6 +15,10 @@ func test_validate_valid_script():
 func test_validate_syntax_error():
 	var result = _script_tools._tool_validate_script({"content": "extends Node\n\nfunc _ready()\n\tpass"})
 	assert_false(result.get("valid", true), "Should be invalid")
+	# The engine surfaces the parse error; mark it handled so GUT does not
+	# count it as an unexpected error.
+	for e in get_errors():
+		e.handled = true
 
 func test_validate_autoload_aware_field_present():
 	var result = _script_tools._tool_validate_script({"content": "extends Node\n\nfunc _ready():\n\tpass"})
@@ -24,6 +28,9 @@ func test_validate_real_syntax_error_not_rescued():
 	var result = _script_tools._tool_validate_script({"content": "func _ready(\n\tpass"})
 	assert_false(result.get("valid", true), "Real syntax error should not be rescued")
 	assert_false(result.get("autoload_aware", true), "Real syntax error should not set autoload_aware")
+	# Mark the expected engine parse error as handled (see above).
+	for e in get_errors():
+		e.handled = true
 
 func test_build_autoload_declarations_returns_string():
 	var decls = _script_tools._build_autoload_declarations()

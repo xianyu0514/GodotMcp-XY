@@ -61,6 +61,13 @@ jobs:
             echo "::error::Project failed to import cleanly (script parse/load errors above)."
             exit 1
           fi
+          # The plugin lifecycle must not rewrite the versioned project file
+          # (for example, removing the MCPRuntimeProbe autoload on exit).
+          if ! git diff --exit-code -- project.godot; then
+            echo "::error::godot --import modified project.godot. The plugin must preserve project configuration on shutdown."
+            git diff -- project.godot
+            exit 1
+          fi
 
       - name: Run GUT unit tests (full suite)
         run: |

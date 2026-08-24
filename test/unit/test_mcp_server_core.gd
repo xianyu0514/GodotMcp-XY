@@ -169,6 +169,18 @@ func test_disabled_tool_not_in_tools_list():
 	if tools_list.size() > 0:
 		assert_eq(tools_list[0].get("name", ""), "other_tool", "Only other_tool should appear")
 
+func test_tools_list_omits_output_schema():
+	# tools/list 精简下发：outputSchema 不得随列表下发（完整 schema 由
+	# get_tool_details 按需提供），inputSchema/annotations 等其余字段保留。
+	_core.register_tool("schema_tool", "A tool with output schema", {"type": "object"}, func(args): return {"status": "ok"}, {"type": "object", "properties": {"result": {"type": "string"}}})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+	var response: Dictionary = _core._handle_tools_list(msg)
+	var tools_list: Array = response.get("result", {}).get("tools", [])
+	assert_true(tools_list.size() >= 1, "Registered tool should appear in tools/list")
+	for tool_entry in tools_list:
+		assert_false(tool_entry.has("outputSchema"), "tools/list must not carry outputSchema: %s" % tool_entry.get("name", "?"))
+		assert_true(tool_entry.has("inputSchema"), "tools/list should keep inputSchema: %s" % tool_entry.get("name", "?"))
+
 func test_disabled_tool_call_returns_error():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.set_tool_enabled("test_tool", false)
@@ -250,6 +262,99 @@ func test_handle_request_awaits_tool_call():
 	var msg: Dictionary = {"id": 12, "method": "tools/call", "params": {"name": "test_req_tool", "arguments": {}}}
 	var response: Dictionary = await _core._handle_request(msg)
 	assert_false(response.get("result", {}).get("isError", true), "handle_request should await tool_call successfully")
+
+# ============================================================================
+# Protocol compliance: ping / notifications / list _meta / server version
+# ============================================================================
+
+func test_ping_returns_empty_result():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response.get("jsonrpc", ""), "2.0", "Ping response should be JSON-RPC 2.0")
+	assert_eq(response.get("id"), 1, "Ping response should echo the request id")
+	assert_has(response, "result", "Ping response should carry a result")
+	assert_eq(response.get("result", {}).size(), 0, "Ping result should be an empty dict")
+
+func test_initialized_notification_no_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Known notification must be handled without producing a response")
+
+func test_notification_gets_no_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Notification must never produce a response")
+
+func test_unknown_notification_no_error_response():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/unknown_method", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "Unknown notification must not produce an error response")
+
+func test_rate_limit_skips_notifications():
+	_core.set_rate_limit(1)
+	# 消耗唯一的速率配额：一次带 id 的请求应通过。
+	var req: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+	var req_response: Dictionary = _core._handle_request(req)
+	assert_has(req_response, "result", "First request should pass the rate limit")
+	# 第二个带 id 的请求应被限流拒绝。
+	var second: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}}
+	var limited: Dictionary = _core._handle_request(second)
+	assert_true(limited.has("error"), "Second request should be rate limited")
+	# 通知不受限流影响：仍返回空字典，且不计入配额（不再触发限流错误响应）。
+	var notification: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var notif_response: Dictionary = _core._handle_request(notification)
+	assert_eq(notif_response, {}, "Notification must skip rate limiting and never produce a response")
+
+func test_tools_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+	var response: Dictionary = _core._handle_tools_list(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_has(result, "_meta", "tools/list result should include _meta")
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "toolSet", "_meta.cacheScope should be 'toolSet'")
+
+func test_resources_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "resources/list"}
+	var response: Dictionary = _core._handle_resources_list(msg)
+	var result: Dictionary = response.get("result", {})
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "resourceList", "_meta.cacheScope should be 'resourceList'")
+
+func test_prompts_list_has_meta_ttl():
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "prompts/list"}
+	var response: Dictionary = _core._handle_prompts_list(msg)
+	var result: Dictionary = response.get("result", {})
+	var meta: Dictionary = result.get("_meta", {})
+	assert_eq(meta.get("ttlMs", 0), _core.LIST_CACHE_TTL_MS, "_meta.ttlMs should equal LIST_CACHE_TTL_MS")
+	assert_eq(meta.get("cacheScope", ""), "promptList", "_meta.cacheScope should be 'promptList'")
+
+func test_initialize_default_server_version_fallback():
+	# start() 尚未调用时，_server_version 保持默认 "0.0.0"，且不再硬编码 "2.0.0"。
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	assert_eq(server_info.get("name", ""), "godot-native-mcp", "serverInfo.name should stay godot-native-mcp")
+	assert_eq(server_info.get("version", ""), "0.0.0", "Before start(), serverInfo.version should fall back to 0.0.0")
+
+func test_initialize_server_version_from_plugin_cfg():
+	# start() 会在 _active = true 之前调用 _load_plugin_version()；测试直接调用它，
+	# 避免启动 stdio 传输线程（headless 下会阻塞等待 stdin）。
+	_core._load_plugin_version()
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	var version: String = server_info.get("version", "")
+	assert_false(version.is_empty(), "serverInfo.version should be non-empty")
+	assert_ne(version, "2.0.0", "serverInfo.version should not be the old hardcoded 2.0.0")
+	var config: ConfigFile = ConfigFile.new()
+	assert_eq(config.load(_core.PLUGIN_CONFIG_PATH), OK, "plugin.cfg should load")
+	assert_eq(version, config.get_value("plugin", "version", ""), "serverInfo.version should equal plugin.cfg plugin/version")
+
+func test_set_server_version_override():
+	_core.set_server_version("9.9.9")
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var server_info: Dictionary = response.get("result", {}).get("serverInfo", {})
+	assert_eq(server_info.get("version", ""), "9.9.9", "set_server_version should override the reported version")
 
 # ============================================================================
 # Serial request queue
@@ -495,3 +600,327 @@ func test_all_cacheable_read_tools_invalidated_by_mutation():
 		await _core._handle_request(mutate_msg)
 		await _core._handle_request(read_msg)
 		assert_eq(calls[0], 2, "%s must recompute after a mutating tool" % tool_name)
+
+# ============================================================================
+# 通用结果缓存（LRU + 确定性 key + 事件失效）
+# ============================================================================
+
+func test_result_cache_hit_serves_cached():
+	# A cacheable read tool's repeat call (same tool + same args) must be served
+	# straight from the result cache without re-executing the handler.
+	var calls: Array = [0]
+	_core.register_tool("get_project_structure", "Read structure", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"total_files": 42, "calls": calls[0]},
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_project_structure", "arguments": {}}}
+	var r1: Dictionary = await _core._handle_request(msg)
+	var r2: Dictionary = await _core._handle_request(msg)
+	assert_eq(calls[0], 1, "Repeat call must be served from the result cache")
+	assert_eq(JSON.stringify(r1), JSON.stringify(r2), "Cached response must match the first response")
+
+func test_result_cache_key_canonical():
+	# The cache key is built from canonical (key-sorted) JSON: two argument
+	# dicts with identical content but different insertion order must hit the
+	# same cache entry.
+	var args_a: Dictionary = {"filter": "a", "opts": {"z": 1, "y": 2, "x": 3}, "list": [1, {"k": "v"}]}
+	var args_b: Dictionary = {"list": [1, {"k": "v"}], "opts": {"x": 3, "y": 2, "z": 1}, "filter": "a"}
+	assert_eq(_core._canonical_json(args_a), _core._canonical_json(args_b),
+		"Canonical JSON must ignore dictionary insertion order")
+	var calls: Array = [0]
+	_core.register_tool("list_project_autoloads", "Read autoloads", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"count": calls[0]},
+		{}, {"readOnlyHint": true})
+	var msg_a: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_project_autoloads", "arguments": args_a}}
+	var msg_b: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "list_project_autoloads", "arguments": args_b}}
+	await _core._handle_request(msg_a)
+	await _core._handle_request(msg_b)
+	assert_eq(calls[0], 1, "Reordered arguments must share one cache entry")
+
+func test_mutating_tool_invalidates_cache():
+	# A mutating tool (readOnlyHint == false) clears the whole result cache, so
+	# the next read recomputes instead of serving the stale entry.
+	var calls: Array = [0]
+	_core.register_tool("get_scene_tree", "Read tree", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"nodes": ["A"], "calls": calls[0]},
+		{}, {"readOnlyHint": true})
+	_core.register_tool("rename_node", "Mutate", {"type": "object"},
+		func(args): return {"status": "ok"},
+		{}, {"readOnlyHint": false})
+	var read_msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_scene_tree", "arguments": {}}}
+	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "rename_node", "arguments": {}}}
+	await _core._handle_request(read_msg)
+	await _core._handle_request(read_msg)
+	assert_eq(calls[0], 1, "Second read before mutation should be a cache hit")
+	await _core._handle_request(mutate_msg)
+	await _core._handle_request(read_msg)
+	assert_eq(calls[0], 2, "Read after a mutating tool must recompute, not serve stale cache")
+
+func test_cache_lru_eviction():
+	# Beyond RESULT_CACHE_MAX distinct keys, the least recently used entry must
+	# be evicted: re-calling the earliest key re-executes the handler.
+	var calls: Dictionary = {}
+	_core.register_tool("get_scene_structure", "Read scene", {"type": "object"},
+		func(args):
+			var n: int = args.get("n", 0)
+			calls[n] = calls.get(n, 0) + 1
+			return {"n": n},
+		{}, {"readOnlyHint": true})
+	var max: int = _core.RESULT_CACHE_MAX
+	for n in range(max + 5):
+		var msg: Dictionary = {"jsonrpc": "2.0", "id": n, "method": "tools/call",
+			"params": {"name": "get_scene_structure", "arguments": {"n": n}}}
+		await _core._handle_request(msg)
+	assert_true(_core._result_cache.size() <= max,
+		"Cache must not exceed RESULT_CACHE_MAX entries (has %d)" % _core._result_cache.size())
+	assert_true(_core._result_cache_order.size() <= max,
+		"LRU order must not exceed RESULT_CACHE_MAX entries (has %d)" % _core._result_cache_order.size())
+	# The earliest key (n=0) fell off the LRU: re-calling it must recompute.
+	var before: int = calls.get(0, 0)
+	var msg0: Dictionary = {"jsonrpc": "2.0", "id": 900, "method": "tools/call",
+		"params": {"name": "get_scene_structure", "arguments": {"n": 0}}}
+	await _core._handle_request(msg0)
+	assert_eq(calls.get(0, 0), before + 1, "LRU-evicted entry must recompute on next access")
+
+func test_spill_large_result():
+	# A result whose JSON exceeds MAX_INLINE_RESULT_BYTES is spilled to disk and
+	# returned as a truncated head/tail preview — isError stays false and the
+	# spill file contains the full JSON.
+	var big_value: Dictionary = {"items": []}
+	for i in range(3000):
+		big_value["items"].append({"index": i, "payload": "x".repeat(40)})
+	_core.register_tool("big_result_tool", "Big result", {"type": "object"},
+		func(args): return big_value,
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "big_result_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_request(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_false(result.get("isError", false), "Spilled result must not be an error")
+	assert_false(result.has("structuredContent"), "Spilled result must not echo the full payload as structuredContent")
+	var text: String = result.get("content", [{}])[0].get("text", "")
+	var payload: Dictionary = JSON.parse_string(text)
+	assert_true(payload.has("truncated"), "Large result should carry the truncated flag")
+	assert_true(payload.get("truncated", false), "truncated must be true")
+	assert_true(payload.get("total_bytes", 0) > _core.MAX_INLINE_RESULT_BYTES,
+		"total_bytes must exceed the inline limit")
+	var path: String = payload.get("path", "")
+	assert_false(path.is_empty(), "Spill path must be non-empty")
+	assert_true(FileAccess.file_exists(path), "Spill file must exist on disk: " + path)
+	assert_true(FileAccess.get_file_as_string(path).length() > 0, "Spill file must contain the full JSON")
+	assert_false(str(payload.get("head", "")).is_empty(), "head preview must be non-empty")
+	assert_false(str(payload.get("tail", "")).is_empty(), "tail preview must be non-empty")
+	# Clean up the test artifact so the repo stays clean.
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+
+func test_spill_exempt_tools_not_spilled():
+	# File-content tools in SPILL_EXEMPT_TOOLS keep returning their content
+	# inline even when it exceeds the size limit (no spill ping-pong).
+	var big_content: String = "y".repeat(60000)
+	_core.register_tool("read_script", "Read script", {"type": "object"},
+		func(args): return {"script_path": "res://x.gd", "content": big_content, "line_count": 1},
+		{}, {"readOnlyHint": true})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "read_script", "arguments": {"script_path": "res://x.gd"}}}
+	var response: Dictionary = await _core._handle_request(msg)
+	var result: Dictionary = response.get("result", {})
+	assert_false(result.get("isError", false), "Exempt tool result must not be an error")
+	var text: String = result.get("content", [{}])[0].get("text", "")
+	var payload: Variant = JSON.parse_string(text)
+	assert_false(payload is Dictionary and payload.has("truncated"),
+		"Exempt tools must never spill: %s" % text.substr(0, 120))
+
+# ============================================================================
+# Progress 通知与取消支持（notifications/progress + notifications/cancelled）
+# ============================================================================
+
+## Minimal transport double that records every raw message sent. Extends the
+## transport base so it can be assigned to the core's typed _transport member.
+class MockTransport:
+	extends McpTransportBase
+	var sent: Array = []
+	func send_raw_message(message: Dictionary) -> void:
+		sent.append(message)
+	func is_running() -> bool:
+		return false
+
+# --- notifications/cancelled handling ---------------------------------------
+
+func test_cancelled_notification_marks_request():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 42}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "cancelled notification must never produce a response")
+	assert_true(_core.is_request_cancelled(42), "request id should be marked cancelled")
+
+func test_cancelled_unknown_request_noop():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 999}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "unknown cancelled notification produces no response")
+	assert_false(_core.is_request_cancelled(1), "unrelated ids must not be marked")
+	# clear_cancelled on a known id removes it; on an unknown id it is a no-op.
+	_core.clear_cancelled(999)
+	assert_false(_core.is_request_cancelled(999), "clear_cancelled removes the marker")
+	_core.clear_cancelled(12345)
+	assert_true(true, "clear_cancelled on an unknown id must not crash")
+
+func test_cancelled_notification_without_request_id_ignored():
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {}}
+	var response: Dictionary = _core._handle_request(msg)
+	assert_eq(response, {}, "missing requestId still yields no response")
+	assert_eq(_core._cancelled_requests.size(), 0, "no marker added without requestId")
+
+func test_cancelled_notification_fast_path_bypasses_queue():
+	# Cancellation must not wait behind the serial queue (it is meant to cancel
+	# the in-flight request, which is exactly the one occupying the queue), so it
+	# is processed immediately when received through the transport.
+	var msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": "req-1"}}
+	_core._on_transport_message_received(msg, null)
+	assert_true(_core.is_request_cancelled("req-1"), "fast path marks the request immediately")
+	assert_eq(_core.get_request_queue_depth(), 0, "cancelled notification must not enter the serial queue")
+
+# --- send_progress_notification --------------------------------------------
+
+func test_send_progress_without_transport_silent():
+	# No transport connected: sending must not crash and must silently no-op.
+	_core.send_progress_notification("tok-1", 1, 0, "hi")
+	assert_true(true, "send_progress with no transport should not crash")
+
+func test_send_progress_without_token_silent():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification(null, 1)
+	assert_eq(mock.sent.size(), 0, "no notification sent without a progress token")
+	_core._transport = null
+
+func test_send_progress_with_token_sends_notification():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification("tok-1", 5, 10, "working")
+	assert_eq(mock.sent.size(), 1, "one progress notification sent")
+	var msg: Dictionary = mock.sent[0]
+	assert_eq(msg.get("jsonrpc", ""), "2.0", "payload should be JSON-RPC 2.0")
+	assert_eq(msg.get("method", ""), "notifications/progress", "method should be notifications/progress")
+	var params: Dictionary = msg.get("params", {})
+	assert_eq(params.get("progressToken"), "tok-1", "progressToken echoed")
+	assert_eq(params.get("progress"), 5, "progress value")
+	assert_eq(params.get("total"), 10, "total value")
+	assert_eq(params.get("message"), "working", "message value")
+	_core._transport = null
+
+func test_send_progress_omits_optional_fields_when_empty():
+	var mock: MockTransport = MockTransport.new()
+	_core._transport = mock
+	_core.send_progress_notification("tok-2", 3)
+	var params: Dictionary = mock.sent[0].get("params", {})
+	assert_false(params.has("total"), "total omitted when 0")
+	assert_false(params.has("message"), "message omitted when empty")
+	_core._transport = null
+
+# --- tool-call execution context + cancellation cleanup ---------------------
+
+func test_tool_call_clears_cancelled_marker():
+	var observed: Array = []
+	_core.register_tool("cancel_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core.is_request_cancelled(77))
+		return {})
+	_core._cancelled_requests[77] = true
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 77, "method": "tools/call", "params": {"name": "cancel_probe", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_eq(observed.size(), 1, "tool executed once")
+	assert_true(observed[0], "marker visible to the tool during execution")
+	assert_false(_core.is_request_cancelled(77), "marker cleared after tool execution")
+	assert_false(response.get("result", {}).get("isError", false), "call should succeed")
+
+func test_execution_context_set_during_call_and_cleared_after():
+	var observed: Array = []
+	_core.register_tool("ctx_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core._execution_context.duplicate())
+		return {})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 55, "method": "tools/call", "params": {"name": "ctx_probe", "arguments": {"_meta": {"progressToken": "pt-55"}}}}
+	await _core._handle_tool_call(msg)
+	assert_eq(observed.size(), 1, "tool executed once")
+	assert_eq(observed[0].get("tool_name"), "ctx_probe", "context records the tool name")
+	assert_eq(observed[0].get("request_id"), 55, "context records the request id")
+	assert_eq(observed[0].get("progress_token"), "pt-55", "context records arguments._meta.progressToken")
+	assert_true(_core._execution_context.is_empty(), "execution context cleared after the tool call")
+
+func test_execution_context_token_from_params_meta():
+	# Spec-compliant clients put _meta.progressToken next to arguments, not inside
+	# them; the core must capture it from there as well.
+	var observed: Array = []
+	_core.register_tool("meta_probe", "Probe", {"type": "object"}, func(args):
+		observed.append(_core._execution_context.duplicate())
+		return {})
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "meta_probe", "arguments": {}, "_meta": {"progressToken": "pt-params"}}}
+	await _core._handle_tool_call(msg)
+	assert_eq(observed[0].get("progress_token"), "pt-params", "params._meta.progressToken captured")
+
+func test_is_current_tool_cancelled_outside_execution():
+	assert_false(_core.is_current_tool_cancelled(), "no execution context -> not cancelled")
+	assert_eq(_core.get_current_progress_token(), null, "no execution context -> no progress token")
+
+func test_fast_path_cancel_flips_inflight_flag():
+	# A cancel notification delivered before a queued tool call runs must be
+	# observed by that call (fast path), and the marker must be cleared once the
+	# call finishes.
+	var saw: Array = []
+	_core.register_tool("inflight_probe", "Probe", {"type": "object"}, func(args):
+		await get_tree().process_frame
+		saw.append(_core.is_current_tool_cancelled())
+		return {"done": true})
+	_core._active = true
+	var msg: Dictionary = {"jsonrpc": "2.0", "id": 321, "method": "tools/call", "params": {"name": "inflight_probe", "arguments": {}}}
+	_core._request_queue.append({"message": msg, "context": null})
+	var cancel_msg: Dictionary = {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 321}}
+	_core._on_transport_message_received(cancel_msg, null)
+	assert_true(_core.is_request_cancelled(321), "fast path marks before the queued call runs")
+	_core._drain_request_queue()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(saw.size(), 1, "tool ran once")
+	assert_true(saw[0], "tool observed the cancellation mid-run")
+	assert_false(_core.is_request_cancelled(321), "marker cleared after the call finished")
+	assert_eq(_core.get_request_queue_depth(), 0, "queue fully drained")
+	_core._active = false
+
+# --- tool integration: run_project_test through the real core ----------------
+
+func test_run_project_test_progress_and_cancel_via_core():
+	# End-to-end: the real project tool wired to the real core. The cancelled
+	# path returns a cancelled status; the pending-poll path emits a progress
+	# notification through the (mock) transport.
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	tools._server_core = core
+	core.register_tool("run_project_test", "Run a single test", {"type": "object"},
+		Callable(tools, "_tool_run_project_test"), {}, {}, "supplementary", "Project-Advanced")
+	core.set_tool_enabled("run_project_test", true)
+	var mock: MockTransport = MockTransport.new()
+	core._transport = mock
+	var test_path: String = "res://test/unit/test_async_job_runner.gd"
+	# Seed a running job so the tool takes the pending/poll path.
+	tools._test_runner.start(test_path, func() -> Dictionary:
+		OS.delay_msec(800)
+		return {"status": "passed", "framework": "fake"})
+	# 1) Cancelled request -> tool aborts with a cancelled status.
+	core._cancelled_requests[1001] = true
+	var cancel_msg: Dictionary = {"jsonrpc": "2.0", "id": 1001, "method": "tools/call", "params": {"name": "run_project_test", "arguments": {"test_path": test_path, "_meta": {"progressToken": "tok-x"}}}}
+	var cancel_resp: Dictionary = await core._handle_tool_call(cancel_msg)
+	var cancel_payload: Dictionary = JSON.parse_string(cancel_resp.get("result", {}).get("content", [{}])[0].get("text", "{}"))
+	assert_eq(cancel_payload.get("status"), "cancelled", "run_project_test aborts when the request is cancelled")
+	assert_false(core.is_request_cancelled(1001), "marker cleared after the cancelled call finished")
+	# 2) Normal pending poll -> a progress notification is emitted.
+	var poll_msg: Dictionary = {"jsonrpc": "2.0", "id": 1002, "method": "tools/call", "params": {"name": "run_project_test", "arguments": {"test_path": test_path, "_meta": {"progressToken": "tok-y"}}}}
+	var poll_resp: Dictionary = await core._handle_tool_call(poll_msg)
+	var poll_payload: Dictionary = JSON.parse_string(poll_resp.get("result", {}).get("content", [{}])[0].get("text", "{}"))
+	assert_eq(poll_payload.get("status"), "pending", "running job still reports pending")
+	assert_true(mock.sent.size() >= 1, "at least one progress notification was sent")
+	var sent_methods: Array = []
+	for m in mock.sent:
+		sent_methods.append(m.get("method", ""))
+	assert_true("notifications/progress" in sent_methods, "a notifications/progress message was sent during polling")
+	tools._test_runner.flush()

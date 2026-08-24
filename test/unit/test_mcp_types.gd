@@ -80,13 +80,21 @@ func test_mcp_tool_to_dict():
 	assert_eq(d["description"], "A test tool", "Dict should have correct description")
 	assert_has(d, "inputSchema", "Dict should have inputSchema")
 
-func test_mcp_tool_to_dict_with_output_schema():
+func test_mcp_tool_to_dict_omits_output_schema():
+	# tools/list 精简下发：即使 output_schema 非空，to_dict() 也不得包含 outputSchema
+	# （完整 schema 由 get_tool_details 按需提供）。
 	var tool: MCPTypes.MCPTool = MCPTypes.MCPTool.new()
 	tool.name = "test_tool"
 	tool.description = "A test tool"
-	tool.output_schema = {"type": "object"}
+	tool.input_schema = {"type": "object"}
+	tool.output_schema = {"type": "object", "properties": {"result": {"type": "string"}}}
+	tool.annotations = MCPTypes.MCPTool.create_annotations(true, false, true, false)
 	var d: Dictionary = tool.to_dict()
-	assert_has(d, "outputSchema", "Dict should have outputSchema when set")
+	assert_false(d.has("outputSchema"), "Dict must NOT include outputSchema (lazy via get_tool_details)")
+	assert_has(d, "inputSchema", "Dict should still have inputSchema")
+	assert_has(d, "annotations", "Dict should still have annotations")
+	# MCPTool.output_schema 字段本身保留，供 get_tool_details 直接读取。
+	assert_eq(tool.output_schema.get("type", ""), "object", "MCPTool.output_schema field itself must be preserved")
 
 func test_mcp_tool_to_dict_without_output_schema():
 	var tool: MCPTypes.MCPTool = MCPTypes.MCPTool.new()
@@ -185,3 +193,12 @@ func test_create_capabilities():
 
 func test_protocol_version():
 	assert_eq(MCPTypes.PROTOCOL_VERSION, "2025-11-25", "Protocol version should be 2025-11-25")
+
+func test_method_ping_constant():
+	assert_eq(MCPTypes.METHOD_PING, "ping", "METHOD_PING should be 'ping'")
+
+func test_method_notifications_cancelled_constant():
+	assert_eq(MCPTypes.METHOD_NOTIFICATIONS_CANCELLED, "notifications/cancelled", "METHOD_NOTIFICATIONS_CANCELLED should be 'notifications/cancelled'")
+
+func test_notification_progress_constant():
+	assert_eq(MCPTypes.NOTIFICATION_PROGRESS, "notifications/progress", "NOTIFICATION_PROGRESS should be 'notifications/progress'")

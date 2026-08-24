@@ -81,6 +81,8 @@ var _group_widgets: Dictionary = {}
 var _tools_search_edit: LineEdit = null
 var _core_group_names: Array = []
 var _supp_group_names: Array = []
+var _tool_classifier = null
+var _domain_names: Array[String] = []
 var _category_nav_container: VBoxContainer = null
 var _nav_group: ButtonGroup = null
 var _nav_items: Dictionary = {}
@@ -107,6 +109,8 @@ var _asset_endpoint_edit: LineEdit = null
 var _preset_manager = null
 var _preset_label: Label = null
 var _preset_option: OptionButton = null
+var _preset_description_label: Label = null
+var _preset_count_label: Label = null
 var _apply_preset_button: Button = null
 var _export_preset_button: Button = null
 var _import_preset_button: Button = null
@@ -887,7 +891,8 @@ func _build_transport_card(content: VBoxContainer) -> void:
 	_cors_origin_label = Label.new()
 	_cors_origin_label.text = _tr("ui.cors_origin")
 	_cors_origin_edit = LineEdit.new()
-	_cors_origin_edit.text = "*"
+	_cors_origin_edit.text = ""
+	_cors_origin_edit.placeholder_text = _tr("ui.cors_origin_placeholder")
 	_cors_origin_edit.text_changed.connect(_on_cors_origin_changed)
 	_settings_row(_http_config_container, _cors_origin_label, _cors_origin_edit, true)
 
@@ -1076,41 +1081,80 @@ func _panel_card_style() -> StyleBoxFlat:
 	return style
 
 func _build_preset_row(content: VBoxContainer) -> void:
-	var row: HBoxContainer = HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	content.add_child(row)
+	var card: PanelContainer = PanelContainer.new()
+	card.add_theme_stylebox_override("panel", _panel_card_style())
+	content.add_child(card)
+
+	var body: VBoxContainer = VBoxContainer.new()
+	body.add_theme_constant_override("separation", 7)
+	card.add_child(body)
 
 	_preset_label = Label.new()
 	_preset_label.text = _tr("ui.preset_label")
+	_preset_label.add_theme_font_size_override("font_size", 14)
 	_preset_label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
-	row.add_child(_preset_label)
+	body.add_child(_preset_label)
+
+	var selection_row: HBoxContainer = HBoxContainer.new()
+	selection_row.add_theme_constant_override("separation", 8)
+	body.add_child(selection_row)
 
 	_preset_option = OptionButton.new()
+	_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
-	row.add_child(_preset_option)
+			_preset_option.set_item_tooltip(_preset_option.item_count - 1, _tr("ui.preset_desc_" + preset_id))
+	_preset_option.item_selected.connect(_on_preset_selected)
+	selection_row.add_child(_preset_option)
 
 	_apply_preset_button = Button.new()
 	_apply_preset_button.text = _tr("ui.preset_apply")
 	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
-	row.add_child(_apply_preset_button)
+	selection_row.add_child(_apply_preset_button)
 
-	var spacer: Control = Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
+	_preset_description_label = Label.new()
+	_preset_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	_preset_description_label.add_theme_font_size_override("font_size", 11)
+	_preset_description_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
+	body.add_child(_preset_description_label)
+
+	var manage_row: HBoxContainer = HBoxContainer.new()
+	manage_row.add_theme_constant_override("separation", 4)
+	body.add_child(manage_row)
+
+	_preset_count_label = Label.new()
+	_preset_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_count_label.add_theme_font_size_override("font_size", 10)
+	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.62, 0.72))
+	manage_row.add_child(_preset_count_label)
 
 	_export_preset_button = Button.new()
 	_export_preset_button.text = _tr("ui.preset_export")
 	_export_preset_button.flat = true
 	_export_preset_button.pressed.connect(_on_export_preset_pressed)
-	row.add_child(_export_preset_button)
+	manage_row.add_child(_export_preset_button)
 
 	_import_preset_button = Button.new()
 	_import_preset_button.text = _tr("ui.preset_import")
 	_import_preset_button.flat = true
 	_import_preset_button.pressed.connect(_on_import_preset_pressed)
-	row.add_child(_import_preset_button)
+	manage_row.add_child(_import_preset_button)
+
+	_on_preset_selected(_preset_option.selected)
+
+func _on_preset_selected(index: int) -> void:
+	if _preset_manager == null or _preset_option == null:
+		return
+	var ids: Array = _preset_manager.get_preset_ids()
+	if index < 0 or index >= ids.size():
+		return
+	var preset_id: String = ids[index]
+	if _preset_description_label:
+		_preset_description_label.text = _tr("ui.preset_desc_" + preset_id)
+	if _preset_count_label:
+		var count: int = _preset_manager.get_preset_enabled_count(preset_id)
+		_preset_count_label.text = _trf("ui.preset_tool_count", [count])
 
 func _registered_tool_names() -> Array:
 	var names: Array = []
@@ -1279,12 +1323,12 @@ func _create_tools_tab() -> VBoxContainer:
 	header_box.add_child(action_row)
 
 	_enable_all_button = Button.new()
-	_enable_all_button.text = _tr("ui.enable_all")
+	_enable_all_button.text = _tr("ui.enable_current_category")
 	_enable_all_button.pressed.connect(_on_enable_all_pressed)
 	action_row.add_child(_enable_all_button)
 
 	_disable_all_button = Button.new()
-	_disable_all_button.text = _tr("ui.disable_all")
+	_disable_all_button.text = _tr("ui.disable_current_category")
 	_disable_all_button.pressed.connect(_on_disable_all_pressed)
 	action_row.add_child(_disable_all_button)
 
@@ -1378,7 +1422,7 @@ func _update_ui_state() -> void:
 			_allow_remote_check.button_pressed = _plugin.allow_remote if _plugin.get("allow_remote") != null else false
 
 		if _cors_origin_edit:
-			_cors_origin_edit.text = _plugin.cors_origin if _plugin.get("cors_origin") != null else "*"
+			_cors_origin_edit.text = _plugin.cors_origin if _plugin.get("cors_origin") != null else ""
 
 		if _rate_limit_spin:
 			_rate_limit_spin.value = _plugin.rate_limit if _plugin.get("rate_limit") != null else 1000
@@ -1531,6 +1575,8 @@ func _refresh_tools_list() -> void:
 	var classifier = null
 	if _server_core and _server_core.has_method("get_classifier"):
 		classifier = _server_core.get_classifier()
+	_tool_classifier = classifier
+	_domain_names = classifier.get_all_domains() if classifier and classifier.has_method("get_all_domains") else []
 
 	var tools_by_group: Dictionary = {}
 	for tool_info in tools:
@@ -1587,6 +1633,11 @@ func _build_category_nav() -> void:
 	_add_nav_item("__supplementary__", _tr("ui.extended_tools"), "Tools")
 	_add_nav_item("__all__", _tr("ui.all_tools"), "GuiTreeArrowDown")
 
+	if not _domain_names.is_empty():
+		_add_nav_section(_tr("ui.workflow_categories"))
+		for domain_name in _domain_names:
+			_add_nav_item("__domain__" + domain_name, _tr("domain." + domain_name), _domain_icon_name(domain_name))
+
 	if _core_group_names.size() > 0:
 		_add_nav_section(_tr("ui.core_tools"))
 		for group_name in _core_group_names:
@@ -1630,6 +1681,17 @@ func _group_icon_name(group_name: String) -> String:
 			return by_prefix[prefix]
 	return ""
 
+func _domain_icon_name(domain_name: String) -> String:
+	var icons: Dictionary = {
+		"2d": "Node2D",
+		"3d": "Node3D",
+		"ui": "Control",
+		"assets_animation": "Animation",
+		"debug_test": "Debug",
+		"shipping": "Export"
+	}
+	return icons.get(domain_name, "")
+
 func _group_icon_texture(group_name: String) -> Texture2D:
 	var icon_name: String = _group_icon_name(group_name)
 	if icon_name != "" and has_theme_icon(icon_name, "EditorIcons"):
@@ -1655,7 +1717,20 @@ func _groups_for_selection() -> Array:
 		"__all__":
 			return _core_group_names + _supp_group_names
 		_:
+			if _selected_category.begins_with("__domain__"):
+				return []
 			return [_selected_category]
+
+func _tools_for_selection() -> Array[String]:
+	if _selected_category.begins_with("__domain__") and _tool_classifier:
+		return _tool_classifier.get_domain_tools(_selected_category.trim_prefix("__domain__"))
+	var result: Array[String] = []
+	for group_name in _groups_for_selection():
+		var widget: MCPToolGroupItem = _group_widgets.get(group_name)
+		if widget:
+			for item in widget.get_tool_items():
+				result.append(item.get_tool_name())
+	return result
 
 func _select_category(key: String) -> void:
 	_selected_category = key
@@ -1702,6 +1777,9 @@ func _apply_view() -> void:
 	_ensure_tool_selection()
 
 func _apply_category_view() -> void:
+	if _selected_category.begins_with("__domain__"):
+		_apply_domain_view(_selected_category.trim_prefix("__domain__"))
+		return
 	var scope: Array = _groups_for_selection()
 	for group_name in _group_widgets:
 		var widget: MCPToolGroupItem = _group_widgets[group_name]
@@ -1723,6 +1801,15 @@ func _apply_category_view() -> void:
 		_:
 			_detail_title.text = _group_display_name(_selected_category)
 			_detail_desc.text = _group_description(_selected_category)
+
+func _apply_domain_view(domain_name: String) -> void:
+	var allowed: Array[String] = _tools_for_selection()
+	for group_name in _group_widgets:
+		var widget: MCPToolGroupItem = _group_widgets[group_name]
+		widget.visible = widget.apply_tool_names(allowed) > 0
+	_set_bulk_buttons_enabled(true)
+	_detail_title.text = _tr("domain." + domain_name)
+	_detail_desc.text = _tr("domaindesc." + domain_name)
 
 func _apply_search_view(query: String) -> void:
 	var total_matches: int = 0
@@ -1750,10 +1837,11 @@ func _on_disable_all_pressed() -> void:
 	_set_scope_enabled(false)
 
 func _set_scope_enabled(value: bool) -> void:
-	for group_name in _groups_for_selection():
-		var widget: MCPToolGroupItem = _group_widgets.get(group_name)
-		if widget:
-			widget.set_group_enabled(value)
+	var selected_tools: Array[String] = _tools_for_selection()
+	for widget in _group_widgets.values():
+		for item in widget.get_tool_items():
+			if item.get_tool_name() in selected_tools:
+				item.set_enabled(value)
 	_update_nav_counts()
 	_update_tools_count()
 	_update_detail_count()
@@ -1797,6 +1885,19 @@ func _update_nav_counts() -> void:
 		_nav_items["__supplementary__"].set_count(supp_enabled, supp_total)
 	if _nav_items.has("__all__"):
 		_nav_items["__all__"].set_count(core_enabled + supp_enabled, core_total + supp_total)
+	var enabled_by_name: Dictionary = {}
+	if _server_core and _server_core.has_method("get_registered_tools"):
+		for tool_info in _server_core.get_registered_tools():
+			enabled_by_name[tool_info.get("name", "")] = tool_info.get("enabled", true)
+	for domain_name in _domain_names:
+		var domain_tools: Array[String] = _tool_classifier.get_domain_tools(domain_name) if _tool_classifier else []
+		var domain_enabled: int = 0
+		for tool_name in domain_tools:
+			if enabled_by_name.get(tool_name, false):
+				domain_enabled += 1
+		var key: String = "__domain__" + domain_name
+		if _nav_items.has(key):
+			_nav_items[key].set_count(domain_enabled, domain_tools.size())
 	if _scope_chips.has("__recommended__"):
 		_scope_chips["__recommended__"].set_count(core_enabled, core_total)
 	if _scope_chips.has("__supplementary__"):
@@ -1810,13 +1911,15 @@ func _update_detail_count() -> void:
 	if _tools_search_edit and not _tools_search_edit.text.strip_edges().is_empty():
 		_detail_count.text = ""
 		return
-	var counts: Dictionary = _compute_group_counts()
 	var enabled: int = 0
 	var total: int = 0
-	for group_name in _groups_for_selection():
-		var c: Dictionary = counts.get(group_name, {"enabled": 0, "total": 0})
-		enabled += c["enabled"]
-		total += c["total"]
+	var selected_tools: Array[String] = _tools_for_selection()
+	for widget in _group_widgets.values():
+		for item in widget.get_tool_items():
+			if item.get_tool_name() in selected_tools:
+				total += 1
+				if item.is_enabled():
+					enabled += 1
 	_detail_count.text = _trf("ui.enabled_format", [enabled, total])
 
 func _on_tool_toggled(tool_name: String, enabled: bool) -> void:
@@ -1991,9 +2094,9 @@ func _refresh_translations() -> void:
 	if _tools_search_edit:
 		_tools_search_edit.placeholder_text = _tr("ui.search_placeholder")
 	if _enable_all_button:
-		_enable_all_button.text = _tr("ui.enable_all")
+		_enable_all_button.text = _tr("ui.enable_current_category")
 	if _disable_all_button:
-		_disable_all_button.text = _tr("ui.disable_all")
+		_disable_all_button.text = _tr("ui.disable_current_category")
 	if _open_log_button:
 		_open_log_button.text = _tr("ui.open_log")
 	if _clear_log_button:
@@ -2069,6 +2172,8 @@ func _refresh_translations() -> void:
 		for i in range(preset_ids.size()):
 			if i < _preset_option.item_count:
 				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
+				_preset_option.set_item_tooltip(i, _tr("ui.preset_desc_" + preset_ids[i]))
+		_on_preset_selected(_preset_option.selected)
 	for entry in _section_titles:
 		var label: Label = entry["label"]
 		if is_instance_valid(label):

@@ -18,3 +18,18 @@ static func truncate_list(items: Array, limit: int, default_limit: int = 1000) -
 		"total_count": total_count,
 		"truncated": truncated
 	}
+
+# Paginate a list with unified limit/offset semantics for high-volume read
+# tools. `offset` is applied before `limit`; `truncated` means entries remain
+# after the returned page. A non-positive limit falls back to the default.
+static func paginate_list(items: Array, limit: int, offset: int = 0, default_limit: int = 1000) -> Dictionary:
+	var effective_limit: int = limit if limit > 0 else default_limit
+	var total_count: int = items.size()
+	var start: int = clampi(offset, 0, total_count)
+	var end: int = mini(total_count, start + effective_limit)
+	var page: Array = items.slice(start, end)
+	return {
+		"items": page,
+		"total_count": total_count,
+		"truncated": end < total_count
+	}

@@ -6,10 +6,12 @@
 
 - `plugin.cfg` 与 `mcp_server_native.gd` — 编辑器插件入口。
 - `native_mcp/` — JSON-RPC/MCP 核心、HTTP/SSE 与 stdio 传输、鉴权、设置、隧道和工具状态管理。
-- `tools/` — 215 个 MCP 工具的实现。
+- `tools/` — 221 个 MCP 工具的实现。
 - `runtime/mcp_runtime_probe.gd` — 可选 Autoload，用于检查和驱动运行中的游戏。
 - `ui/` — MCP 停靠面板、工具管理器和详情视图。
 - `translations/` — 面板文本和工具描述。
+
+工具管理器提供 2D、3D、界面、资源与动画、调试与测试、发布与维护等任务视图，以及 12 个带用途和工具数量预览的实用预设。每个视图只筛选和切换其精选工具，同时保留现有核心/扩展层级与分组兼容性。
 
 ## 快速开始
 
@@ -30,11 +32,11 @@
 
 ## 工具模型
 
-插件注册 215 个工具：
+插件注册 221 个工具：
 
-- 30 个核心工具默认启用。
-- 183 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
-- 2 个常驻元工具：`list_tool_catalog` 与 `enable_tools`。
+- 28 个核心工具默认启用。
+- 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
+- 4 个常驻元工具：`list_tool_catalog`、`search_tools`、`get_tool_details` 与 `enable_tools`。
 
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。
 

@@ -493,11 +493,15 @@ func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 	if not scene_root:
 		return {"error": "No scene is currently open"}
 	
-	# 构建场景结构
+	# 构建场景结构（一次遍历同时得到树与可见节点数，避免默认情况下二次 _count_nodes 遍历）
+	var built: Dictionary = _build_node_tree_with_count(scene_root, 0, max_depth, scene_root)
+	# max_depth 截断时 built["count"] 只统计可见部分的节点，而 total_nodes
+	# 的语义是完整场景节点总数，此时回退到全量统计。
+	var total_nodes: int = built["count"] if max_depth < 0 else _count_nodes(scene_root)
 	var scene_structure: Dictionary = {
 		"scene_name": scene_root.name,
-		"root_node": _build_node_tree(scene_root, 0, max_depth, scene_root),
-		"total_nodes": _count_nodes(scene_root)
+		"root_node": built["tree"],
+		"total_nodes": total_nodes
 	}
 	
 	return scene_structure
@@ -515,25 +519,32 @@ static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 	return node_path
 
 static func _build_node_tree(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
+	return _build_node_tree_with_count(node, current_depth, max_depth, scene_root)["tree"]
+
+## 单次遍历构建节点树并统计已展开部分的节点数；max_depth 截断时 count
+## 只包含可见节点，不包含被 children_truncated 隐藏的子树。返回 {"tree": Dictionary, "count": int}。
+static func _build_node_tree_with_count(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
 	var node_info: Dictionary = {
 		"name": node.name,
 		"type": node.get_class(),
 		"path": _make_friendly_path(node, scene_root),
 		"children": []
 	}
+	var count: int = 1  # 当前节点
 	
 	# 检查是否达到最大深�?
 	if max_depth >= 0 and current_depth >= max_depth:
 		node_info["children_truncated"] = true
-		return node_info
+		return {"tree": node_info, "count": count}
 	
 	# 递归处理子节�?
 	for child_index in range(node.get_child_count()):
 		var child: Node = node.get_child(child_index)
-		var child_tree: Dictionary = _build_node_tree(child, current_depth + 1, max_depth, scene_root)
-		node_info["children"].append(child_tree)
+		var child_result: Dictionary = _build_node_tree_with_count(child, current_depth + 1, max_depth, scene_root)
+		node_info["children"].append(child_result["tree"])
+		count += int(child_result["count"])
 	
-	return node_info
+	return {"tree": node_info, "count": count}
 
 # 辅助函数：计算节点总数
 static func _count_nodes(node: Node) -> int:
@@ -565,6 +576,10 @@ func _register_list_project_scenes(server_core: RefCounted) -> void:
 			"limit": {
 				"type": "integer",
 				"description": "Maximum number of scene paths to return. Default is 1000. Extra paths are omitted and 'truncated' is set true."
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Number of scene paths to skip before applying limit. Default 0."
 			}
 		}
 	}
@@ -615,6 +630,7 @@ func _tool_list_project_scenes(params: Dictionary) -> Dictionary:
 	var limit: int = int(params.get("limit", 1000))
 	if limit <= 0:
 		limit = 1000
+	var offset: int = int(params.get("offset", 0))
 	
 	# 使用DirAccess递归查找所�?tscn文件
 	var collected: Array[String] = []
@@ -623,7 +639,7 @@ func _tool_list_project_scenes(params: Dictionary) -> Dictionary:
 	# 排序
 	collected.sort()
 	
-	var page: Dictionary = PayloadUtils.truncate_list(collected, limit)
+	var page: Dictionary = PayloadUtils.paginate_list(collected, limit, offset)
 	var scenes: Array = page["items"]
 	
 	return {

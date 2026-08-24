@@ -6,6 +6,15 @@ extends McpTransportBase
 # 继承自 McpTransportBase，实现传输层统一接口
 
 # ==============================================================================
+# 常量
+# ==============================================================================
+
+## 停止时等待 stdin 读线程退出的最大毫秒数。
+## 读线程可能阻塞在 OS.read_string_from_stdin() 上（无输入时永不返回），
+## 超过该时限后放弃等待，避免 stop()/退出死锁（P9 修复）。
+const STDIO_STOP_TIMEOUT_MS: int = 2000
+
+# ==============================================================================
 # 状态变量（带类型提示 - 根据 godot-dev-guide）
 # ==============================================================================
 
@@ -20,9 +29,6 @@ var _mutex: Mutex = Mutex.new()
 
 ## 消息队列（存储待处理的消息）
 var _message_queue: Array[Dictionary] = []
-
-## 响应队列（存储待发送的响应）
-var _response_queue: Array[Dictionary] = []
 
 ## 日志回调
 var _log_callback: Callable = Callable()
@@ -60,20 +66,34 @@ func stop() -> void:
 	
 	_active = false
 	
-	# 等待线程结束
+	# 有界等待线程结束（P9 修复）：stdin 读线程可能阻塞在
+	# OS.read_string_from_stdin() 上，无输入时永不返回；无限期 wait_to_finish()
+	# 会导致编辑器停服/退出卡死。超时后放弃线程引用，交由进程退出时自然清理。
 	if _thread and _thread.is_alive():
-		_thread.wait_to_finish()
-		_thread = null
+		if _wait_for_thread_exit(_thread, STDIO_STOP_TIMEOUT_MS):
+			_thread.wait_to_finish()
+		elif _log_callback.is_valid():
+			_log_callback.call("WARN", "stdio reader thread did not exit; abandoning wait to avoid deadlock")
+	_thread = null
 	
 	# 清空队列
 	_mutex.lock()
 	_message_queue.clear()
-	_response_queue.clear()
 	_mutex.unlock()
 	
 	server_stopped.emit()
 	if _log_callback.is_valid():
 		_log_callback.call("INFO", "Server stopped")
+
+## 有界等待线程退出：在 timeout_ms 毫秒内轮询线程状态。
+## @param thread: Thread - 要等待的线程
+## @param timeout_ms: int - 最大等待毫秒数
+## @returns: bool - 线程已退出返回 true；超时仍未退出返回 false
+func _wait_for_thread_exit(thread: Thread, timeout_ms: int) -> bool:
+	var deadline: int = Time.get_ticks_msec() + timeout_ms
+	while thread.is_alive() and Time.get_ticks_msec() < deadline:
+		OS.delay_msec(10)
+	return not thread.is_alive()
 
 ## 检查传输层是否正在运行
 ## @returns: bool - 运行中返回 true，否则返回 false
@@ -131,9 +151,6 @@ func _parse_and_queue_message(raw_input: String) -> void:
 		
 		# 在主线程中处理消息（确保线程安全）
 		call_deferred("_process_next_message")
-	
-	# 处理响应队列
-	call_deferred("_process_response_queue")
 
 ## 处理下一个消息
 func _process_next_message() -> void:
@@ -149,21 +166,6 @@ func _process_next_message() -> void:
 	
 	# 发送信号到核心层处理
 	message_received.emit(message, null)  # context 为 null（stdio 不需要）
-
-## 处理响应队列（stdio 模式：直接输出到 stdout）
-func _process_response_queue() -> void:
-	_mutex.lock()
-	
-	if _response_queue.is_empty():
-		_mutex.unlock()
-		return
-	
-	var response: Dictionary = _response_queue.pop_front()
-	
-	_mutex.unlock()
-	
-	# 发送到 stdout
-	_send_response(response)
 
 ## 发送响应（stdio 模式：输出到 stdout）
 ## @param response: Dictionary - JSON-RPC 响应
@@ -192,15 +194,6 @@ func send_raw_message(message: Dictionary) -> void:
 	if _log_callback.is_valid():
 		_log_callback.call("DEBUG", "Sending raw message: " + json_string)
 	print(json_string)
-
-## 队列响应（供外部调用）
-## @param response: Dictionary - JSON-RPC 响应
-func queue_response(response: Dictionary) -> void:
-	_mutex.lock()
-	_response_queue.append(response)
-	_mutex.unlock()
-	
-	call_deferred("_process_response_queue")
 
 ## 在主线程中发送错误信号（线程安全）
 func _emit_error(id: Variant, code: int, message: String, data: Variant = null) -> void:

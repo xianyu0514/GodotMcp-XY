@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**24 tools** — 4 core, 20 advanced.
+**27 tools** — 3 core, 24 advanced.
 
 Drive the Godot editor itself: run/stop the project, inspect editor state, select files/nodes, manage open scripts, export builds and capture screenshots.
 
@@ -15,18 +15,18 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 
 ## Tool list
 
-### Editor (4 core)
+### Editor (3 core)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_editor_state` | core | Get the current state of the Godot editor, including active scene and selection info. |
 | `run_project` | core | Run the current project or a specific scene. Launches the game in play mode. |
 | `stop_project` | core | Stop the currently running project and return to editor mode. |
-| `execute_editor_script` | core | Execute a script in the editor with access to editor APIs. Guarded by the script sandbox (see note below). |
+| `execute_editor_script` | advanced | Execute a script in the editor with access to editor APIs. Guarded by the script sandbox (see note below). |
 
 > **Script sandbox guard:** when `security_level` is `1` (STRICT, the default), `execute_editor_script` is scanned by a capability denylist before it runs. Scripts that reference OS process execution (`OS.execute`, `OS.create_process`, …), out-of-project filesystem paths, networking (`HTTPRequest`, `TCPServer`, …) or other dangerous APIs are rejected with `{"blocked": true, "reason": "script_sandbox", "category": …}` instead of being executed. Set `security_level = 0` (PERMISSIVE) to disable the guard. This is an anti-footgun guard, not an adversarial sandbox. The same guard applies to `execute_script` (including its single-line expression path), `evaluate_debug_expression` and `evaluate_runtime_expression`.
 
-### Editor-Advanced (20 advanced)
+### Editor-Advanced (24 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -44,9 +44,12 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `run_export` | advanced | Run a Godot CLI export for a configured preset. |
 | `smoke_test_export` | advanced | Post-export smoke test: confirm an exported product exists and (optionally) launches cleanly. Resolves the artifact from `artifact_path` or the preset export_path, optionally exports first (`run_export`), asserts the file exists, and when `launch=true` runs it with `launch_args` (default `--quit-after 120`) to capture and check the exit code against `expected_exit_code`. Returns an objective pass/fail with reasons. |
 | `manage_export_templates` | advanced | Manage locally installed Godot export templates: report status (templates dir installed versions and the official download URL/.tpz filename) install a .tpz/.zip archive or remove an installed version directory. Works on Godot 4.6+. |
-| `configure_android_export` | advanced | Configure Android-specific options on an existing Android export preset in export_presets.cfg such as package name version code/name Gradle build APK/AAB format SDK levels target architectures and keystore file paths. Keystore passwords are not written here. Works on Godot 4.6+. |
+| `configure_android_export` | advanced | Configure Android options on an existing Android export preset in export_presets.cfg (package name, app name, version code/name, Gradle build, APK/AAB format, SDK levels, architectures, keystore paths). Only sets provided fields; preset platform must be Android. Keystore passwords are NOT written here (set via GODOT_ANDROID_KEYSTORE_* env vars). Godot 4.6+. |
 | `get_unsaved_changes` | advanced | List scenes and scripts with unsaved edits in the editor buffers (Godot 4.7 APIs; *_supported flags report availability). |
 | `save_all_scripts` | advanced | Save every script currently open in the script editor (Godot 4.7 ScriptEditor.save_all_scripts). |
 | `reload_open_scripts` | advanced | Reload the editor's open script buffers from disk so the editor does not overwrite externally rewritten files (Godot 4.7). |
 | `close_script_tab` | advanced | Close a script tab in the editor's script editor, optionally targeting a specific script path (Godot 4.7). |
 | `get_import_status` | advanced | Report whether the EditorFileSystem is currently scanning or importing assets (importing field requires Godot 4.7). |
+| `undo` | advanced | Undo the most recent editor action(s) via the editor's UndoRedo stack (node create/delete, property change, tile paint, …). Pass `count` to undo several actions at once; the loop stops when the undo stack is empty. Returns status `noop` with message `Nothing to undo` when the stack is empty. |
+| `redo` | advanced | Redo the most recently undone editor action(s). Pass `count` to redo several actions at once; the loop stops when the redo stack is empty. Returns status `noop` with message `Nothing to redo` when the stack is empty. |
+| `get_undo_history` | advanced | Read-only summary of the editor's UndoRedo stack: how many actions can be undone/redone and the names of the most recent undoable and redoable actions (most recent first, capped by `limit`, default 20). |

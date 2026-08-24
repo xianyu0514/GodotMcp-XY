@@ -1,12 +1,12 @@
 extends "res://addons/gut/test.gd"
 
-# Unit tests for the Batch 8 TileSet layer tools (project_tools_native.gd):
+# Unit tests for the Batch 8 TileSet layer tools (project_tileset_tools.gd):
 # configure_tileset_layers, set_tile_collision_polygon, set_tile_terrain.
 # These tools operate on saved TileSet (.tres) files, so the success path is
 # fully exercised headless: build a TileSet with an atlas tile, save it, run
 # the tool, reload from disk and assert the layers / tile data round-trip.
 
-const PROJECT_TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const PROJECT_TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tileset_tools.gd"
 const TMP_DIR: String = "res://.test_tmp_tileset_layers"
 
 var _project_tools: RefCounted = null

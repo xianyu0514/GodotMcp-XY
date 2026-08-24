@@ -17,6 +17,7 @@ ui.token_placeholder,Enter auth token,Enter auth token,输入认证令牌
 ui.enable_sse,Enable SSE,Enable SSE,启用 SSE
 ui.allow_remote,Allow Remote Access,Allow Remote Access,允许远程访问
 ui.cors_origin,CORS Origin:,CORS Origin:,CORS 源：
+ui.cors_origin_placeholder,Empty = no CORS header (browser cross-origin blocked),Empty = no CORS header (browser cross-origin blocked),留空 = 不发送 CORS 头（浏览器跨域被阻止）
 ui.auto_start,Auto Start,Auto Start,自动启动
 ui.vibe_coding_mode,Vibe Coding / Do Not Disturb,Vibe Coding / Do Not Disturb,Vibe Coding / 免打扰模式
 ui.log_level,Log Level:,Log Level:,日志级别：
@@ -65,12 +66,27 @@ groupdesc.Project,Project info settings and resource listing,Project info settin
 groupdesc.Project-Advanced,Resource creation input map themes and TileSet,Resource creation input map themes and TileSet,资源创建、输入映射、主题与 TileSet
 groupdesc.Meta,Always-on meta tools tool catalog and on-demand enablement,Always-on meta tools tool catalog and on-demand enablement,始终在线的元工具：工具目录查询与按需启用
 ui.categories,Categories,Categories,分类
+ui.workflow_categories,Choose by task,Choose by task,按开发任务选择
+domain.2d,2D games,2D games,2D 游戏
+domaindesc.2d,"Shared creation tools plus sprites, TileSet, TileMap and 2D collision; 3D-only tools stay hidden.","Shared creation tools plus sprites, TileSet, TileMap and 2D collision; 3D-only tools stay hidden.",通用创作工具，以及精灵、TileSet、TileMap 和 2D 碰撞；不显示 3D 专属工具。
+domain.3d,3D games,3D games,3D 游戏
+domaindesc.3d,"Shared creation tools plus glTF, 3D generation, materials, shaders and render verification; 2D-only tools stay hidden.","Shared creation tools plus glTF, 3D generation, materials, shaders and render verification; 2D-only tools stay hidden.",通用创作工具，以及 glTF、3D 生成、材质、着色器和渲染验证；不显示 2D 专属工具。
+domain.ui,UI & menus,UI & menus,界面与菜单
+domaindesc.ui,"Controls, anchors, themes, localization and visual checks for interface work.","Controls, anchors, themes, localization and visual checks for interface work.",用于界面开发的 Control、锚点、主题、本地化和视觉检查工具。
+domain.assets_animation,Assets & animation,Assets & animation,资源与动画
+domaindesc.assets_animation,"Generate and import assets, edit textures, and inspect animation and audio at runtime.","Generate and import assets, edit textures, and inspect animation and audio at runtime.",生成与导入资源、编辑纹理，并在运行时检查动画和音频。
+domain.debug_test,Debug & test,Debug & test,调试与测试
+domaindesc.debug_test,"Breakpoints, runtime inspection, assertions, performance budgets and automated tests.","Breakpoints, runtime inspection, assertions, performance budgets and automated tests.",断点、运行时检查、断言、性能预算和自动化测试。
+domain.shipping,Release & maintenance,Release & maintenance,发布与维护
+domaindesc.shipping,"Export, packaging, smoke tests, versioning, migration and project health checks.","Export, packaging, smoke tests, versioning, migration and project health checks.",导出、打包、冒烟测试、版本管理、迁移和项目健康检查。
 ui.recommended,Recommended,Recommended,常用推荐
 ui.recommended_desc,"Essential tools, enabled by default","Essential tools, enabled by default",核心常用工具，开箱即用
 ui.all_tools,All tools,All tools,全部工具
 ui.all_tools_desc,"Browse every tool, grouped by category","Browse every tool, grouped by category",按分类浏览全部工具
 ui.enable_all,Enable all,Enable all,全选
 ui.disable_all,Disable all,Disable all,全不选
+ui.enable_current_category,Enable this category,Enable this category,启用当前分类
+ui.disable_current_category,Disable this category,Disable this category,停用当前分类
 ui.no_results,No tools match your search,No tools match your search,没有匹配的工具
 ui.search_results,Search results,Search results,搜索结果
 ui.detail_select_hint,Select a tool to view its details,Select a tool to view its details,选择左侧工具查看详情
@@ -126,11 +142,30 @@ ui.preset_import,Import,Import,导入
 ui.preset_export_title,Export tool preset,Export tool preset,导出工具预设
 ui.preset_import_title,Import tool preset,Import tool preset,导入工具预设
 ui.preset_minimal_core,Minimal (core only),Minimal (core only),最小核心
+ui.preset_game_2d,Build a 2D game,Build a 2D game,开发 2D 游戏
+ui.preset_game_3d,Build a 3D game,Build a 3D game,开发 3D 游戏
+ui.preset_ui_localization,UI & localization,UI & localization,界面与本地化
+ui.preset_gameplay_scripting,Gameplay & scripting,Gameplay & scripting,玩法与脚本
+ui.preset_animation_audio,Animation & audio,Animation & audio,动画与音频
+ui.preset_release_export,Release & export,Release & export,发布与导出
 ui.preset_level_design,Level Design,Level Design,关卡设计
 ui.preset_debugging,Debugging,Debugging,调试诊断
 ui.preset_automation_qa,QA Automation,QA Automation,自动化测试
 ui.preset_art_resources,Art & Resources,Art & Resources,资源美术
 ui.preset_all,All tools,All tools,全部工具
+ui.preset_desc_minimal_core,"Everyday scene, node and script editing with the smallest context footprint.","Everyday scene, node and script editing with the smallest context footprint.",日常场景、节点与脚本编辑，保持最小上下文占用。
+ui.preset_desc_game_2d,"Core creation plus sprites, TileSet, TileMap and 2D collision; excludes 3D-only tools.","Core creation plus sprites, TileSet, TileMap and 2D collision; excludes 3D-only tools.",核心创作能力，加上精灵、TileSet、TileMap 与 2D 碰撞；不启用 3D 专属工具。
+ui.preset_desc_game_3d,"Core creation plus glTF, 3D assets, materials, shaders and render verification.","Core creation plus glTF, 3D assets, materials, shaders and render verification.",核心创作能力，加上 glTF、3D 资源、材质、着色器与渲染验证。
+ui.preset_desc_ui_localization,"Controls, anchors, themes, localization and visual UI verification.","Controls, anchors, themes, localization and visual UI verification.",Control、锚点、主题、本地化与界面视觉验证。
+ui.preset_desc_gameplay_scripting,"Script analysis, symbol navigation and input workflows for gameplay programming.","Script analysis, symbol navigation and input workflows for gameplay programming.",用于玩法编程的脚本分析、符号导航与输入系统工作流。
+ui.preset_desc_animation_audio,"Asset generation and import plus runtime animation and audio inspection.","Asset generation and import plus runtime animation and audio inspection.",资源生成与导入，以及运行时动画和音频检查。
+ui.preset_desc_release_export,"Export, packaging, smoke tests, versioning, migration and project health checks.","Export, packaging, smoke tests, versioning, migration and project health checks.",导出、打包、冒烟测试、版本管理、迁移与项目健康检查。
+ui.preset_desc_level_design,"Advanced node editing, scene structure, instancing and editor authoring tools.","Advanced node editing, scene structure, instancing and editor authoring tools.",高级节点编辑、场景结构、实例化与编辑器创作工具。
+ui.preset_desc_debugging,"Breakpoints, call stacks, runtime inspection and performance diagnostics.","Breakpoints, call stacks, runtime inspection and performance diagnostics.",断点、调用栈、运行时检查与性能诊断。
+ui.preset_desc_automation_qa,"Runtime assertions, visual checks, project audits and automated test workflows.","Runtime assertions, visual checks, project audits and automated test workflows.",运行时断言、视觉检查、项目审计与自动化测试工作流。
+ui.preset_desc_art_resources,"Broad resource, scene and node tooling for asset-heavy authoring workflows.","Broad resource, scene and node tooling for asset-heavy authoring workflows.",面向资源密集型创作的完整资源、场景与节点工具。
+ui.preset_desc_all,"Enables all tools. Highest context cost; use only when a focused preset is insufficient.","Enables all tools. Highest context cost; use only when a focused preset is insufficient.",启用全部工具，上下文开销最高；仅在专用预设不足时使用。
+ui.preset_tool_count,%d tools will be enabled,%d tools will be enabled,将启用 %d 个工具
 ui.section_connection,Connection,Connection,连接
 ui.connection_hint,"Copy a ready-to-use endpoint or client config for your local MCP server.","Copy a ready-to-use endpoint or client config for your local MCP server.",复制可直接使用的本地 MCP 服务器端点或客户端配置。
 ui.local_endpoint,Local endpoint,Local endpoint,本地地址

@@ -14,7 +14,19 @@ class FakeServerCore:
 		classifier = ClassifierScript.new()
 
 	func seed(name: String, enabled: bool, category: String, group: String, description: String) -> void:
-		tools[name] = {"enabled": enabled, "category": category, "group": group, "description": description}
+		tools[name] = {
+			"name": name,
+			"enabled": enabled,
+			"category": category,
+			"group": group,
+			"description": description,
+			"input_schema": {"type": "object", "properties": {"demo": {"type": "string"}}},
+			"output_schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+			"annotations": {"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
+		}
+
+	func get_tool(name: String):
+		return tools.get(name, null)
 
 	func get_registered_tools() -> Array:
 		var out: Array = []
@@ -59,6 +71,8 @@ func before_each():
 	_core.seed("create_node", true, "core", "Node-Write", "Create a node.")
 	_core.seed("list_tool_catalog", true, "meta", "Meta", "List the registered tools.")
 	_core.seed("enable_tools", true, "meta", "Meta", "Enable or disable tools.")
+	_core.seed("search_tools", true, "meta", "Meta", "Search the registered tools by keywords. Returns matching tool names.")
+	_core.seed("get_tool_details", true, "meta", "Meta", "Get the full schema details of a single tool.")
 	_core.seed("get_runtime_info", false, "supplementary", "Debug-Advanced", "Get runtime info from the running game. Returns fps and node count.")
 	_core.seed("run_export", false, "supplementary", "Project-Advanced", "Run an export preset.")
 	_tool._server_core = _core
@@ -72,8 +86,8 @@ func after_each():
 func test_catalog_lists_groups_and_counts():
 	var result: Dictionary = _tool._tool_list_tool_catalog({})
 	assert_has(result, "groups", "Catalog should return a groups map")
-	assert_eq(result.get("total_registered", 0), 5, "Should report 5 registered tools")
-	assert_eq(result.get("enabled_count", 0), 3, "create_node + 2 meta tools are enabled")
+	assert_eq(result.get("total_registered", 0), 7, "Should report 7 registered tools")
+	assert_eq(result.get("enabled_count", 0), 5, "create_node + 4 meta tools are enabled")
 	assert_true(result["groups"].has("Debug-Advanced"), "Groups should include Debug-Advanced")
 
 func test_catalog_group_filter():
@@ -139,3 +153,74 @@ func test_enable_tools_applies_preset():
 func test_enable_tools_rejects_unknown_preset():
 	var result: Dictionary = _tool._tool_enable_tools({"preset": "does_not_exist"})
 	assert_has(result, "error", "Unknown preset should return an error")
+
+# --- search_tools ---
+
+func test_search_tools_requires_query():
+	var result: Dictionary = _tool._tool_search_tools({})
+	assert_has(result, "error", "Missing query is rejected")
+	var result_blank: Dictionary = _tool._tool_search_tools({"query": "   "})
+	assert_has(result_blank, "error", "Blank query is rejected")
+
+func test_search_tools_multi_keyword_and():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime info"})
+	assert_eq(result.get("total_matched", -1), 1, "Both keywords must match the same tool (AND)")
+	var tools: Array = result.get("tools", [])
+	assert_eq(tools.size(), 1, "One tool matches 'runtime info'")
+	assert_eq(tools[0].get("name"), "get_runtime_info", "get_runtime_info matches both keywords")
+	assert_eq(tools[0].get("group"), "Debug-Advanced", "Match carries its group")
+	assert_eq(tools[0].get("category"), "supplementary", "Match carries its category")
+	assert_eq(tools[0].get("enabled"), false, "Match carries its enabled state")
+	assert_true(tools[0].has("description"), "Description included by default")
+
+func test_search_tools_and_requires_all_keywords():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime export"})
+	assert_eq(result.get("total_matched", -1), 0, "No single tool contains both keywords")
+
+func test_search_tools_group_filter():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime", "group": "Debug-Advanced"})
+	assert_eq(result.get("total_matched", -1), 1, "Group filter narrows to Debug-Advanced")
+	var filtered: Dictionary = _tool._tool_search_tools({"query": "runtime", "group": "Project-Advanced"})
+	assert_eq(filtered.get("total_matched", -1), 0, "No runtime match in Project-Advanced")
+
+func test_search_tools_limit_truncates():
+	var result: Dictionary = _tool._tool_search_tools({"query": "the", "limit": 2})
+	assert_eq(result.get("total_matched", -1), 4, "total_matched reports all matches before truncation")
+	assert_eq(result.get("tools", []).size(), 2, "limit caps the returned list")
+
+func test_search_tools_enabled_only():
+	var result: Dictionary = _tool._tool_search_tools({"query": "export"})
+	assert_eq(result.get("total_matched", -1), 1, "run_export matches 'export'")
+	var enabled_only: Dictionary = _tool._tool_search_tools({"query": "export", "enabled_only": true})
+	assert_eq(enabled_only.get("total_matched", -1), 0, "Disabled run_export is excluded by enabled_only")
+
+func test_search_tools_omit_descriptions():
+	var result: Dictionary = _tool._tool_search_tools({"query": "runtime", "include_descriptions": false})
+	var tools: Array = result.get("tools", [])
+	assert_eq(tools.size(), 1, "Match still found")
+	assert_false(tools[0].has("description"), "Description omitted when include_descriptions=false")
+
+# --- get_tool_details ---
+
+func test_get_tool_details_requires_name():
+	var result: Dictionary = _tool._tool_get_tool_details({})
+	assert_has(result, "error", "Missing name is rejected")
+
+func test_get_tool_details_returns_full_schema():
+	var result: Dictionary = _tool._tool_get_tool_details({"name": "get_runtime_info"})
+	assert_eq(result.get("found"), true, "Registered tool is found")
+	assert_eq(result.get("name"), "get_runtime_info", "Name echoed back")
+	assert_eq(result.get("category"), "supplementary", "Category reported")
+	assert_eq(result.get("group"), "Debug-Advanced", "Group reported")
+	assert_eq(result.get("enabled"), false, "Enabled state reported")
+	assert_true(result.has("description"), "Full description returned")
+	assert_true(result.has("inputSchema"), "inputSchema returned")
+	assert_true(result["inputSchema"].has("properties"), "inputSchema carries properties")
+	assert_true(result.has("outputSchema"), "outputSchema returned")
+	assert_true(result.has("annotations"), "annotations returned")
+
+func test_get_tool_details_missing_returns_not_found():
+	var result: Dictionary = _tool._tool_get_tool_details({"name": "ghost_tool"})
+	assert_eq(result.get("found"), false, "Unknown tool reports found=false")
+	assert_has(result, "hint", "Not-found response suggests how to search")
+	assert_true(str(result.get("hint", "")).contains("list_tool_catalog"), "Hint points to the catalog")

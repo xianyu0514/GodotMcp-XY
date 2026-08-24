@@ -161,55 +161,55 @@ func test_mutex_thread_safety():
 	assert_true(true, "Mutex lock/unlock should not crash")
 
 func test_set_debugger_breakpoint_missing_path():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_set_debugger_breakpoint({"line": 1, "enabled": true})
 	assert_has(result, "error", "Should return error for missing path")
 	assert_true(str(result.error).contains("path"), "Error should mention path")
 
 func test_set_debugger_breakpoint_invalid_line():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_set_debugger_breakpoint({"path": "res://player.gd", "line": 0, "enabled": true})
 	assert_has(result, "error", "Should return error for invalid line")
 	assert_true(str(result.error).contains("line"), "Error should mention line")
 
 func test_send_debugger_message_missing_message():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_send_debugger_message({})
 	assert_has(result, "error", "Should return error for missing message")
 	assert_true(str(result.error).contains("message"), "Error should mention message")
 
 func test_toggle_debugger_profiler_missing_profiler():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_toggle_debugger_profiler({"enabled": true})
 	assert_has(result, "error", "Should return error for missing profiler")
 	assert_true(str(result.error).contains("profiler"), "Error should mention profiler")
 
 func test_add_debugger_capture_prefix_missing_prefix():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_add_debugger_capture_prefix({})
 	assert_has(result, "error", "Should return error for missing prefix")
 	assert_true(str(result.error).contains("prefix"), "Error should mention prefix")
 
 func test_install_runtime_probe_empty_node_name():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_install_runtime_probe({"node_name": ""})
 	assert_has(result, "error", "Should return error for empty node_name before editing scene")
 	assert_true(str(result.error).contains("Editor interface") or str(result.error).contains("node_name"), "Error should be explicit")
 
 func test_send_debug_command_rejects_unknown_command():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_send_debug_command({"command": "unsupported"})
 	assert_has(result, "error", "Should return error for unsupported command")
 	assert_true(str(result.error).contains("Unsupported"), "Error should mention unsupported command")
 
 func test_get_debug_stack_variables_rejects_negative_frame():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	var result: Dictionary = debug_tools._tool_get_debug_stack_variables({"frame": -1})
 	assert_has(result, "error", "Should return error for invalid frame")
 	assert_true(str(result.error).contains("bridge") or str(result.error).contains("available"), "Error should mention debugger state")
 
 func test_get_debug_stack_frames_truncates_to_limit():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	_runtime_bridge = FakeStackBridge.new(10, 0)
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 	var result: Dictionary = debug_tools._tool_get_debug_stack_frames({"limit": 3})
@@ -218,7 +218,7 @@ func test_get_debug_stack_frames_truncates_to_limit():
 	assert_true(result.get("truncated"), "truncated flag is set when frames exceed the limit")
 
 func test_get_debug_stack_frames_not_truncated_under_limit():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	_runtime_bridge = FakeStackBridge.new(2, 0)
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 	var result: Dictionary = debug_tools._tool_get_debug_stack_frames({"limit": 1000})
@@ -227,7 +227,7 @@ func test_get_debug_stack_frames_not_truncated_under_limit():
 	assert_false(result.get("truncated"), "truncated flag is false when no frames are dropped")
 
 func test_get_debug_stack_variables_truncates_to_limit():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	_runtime_bridge = FakeStackBridge.new(0, 25)
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 	var result: Dictionary = debug_tools._tool_get_debug_stack_variables({"frame": 0, "limit": 10})
@@ -236,7 +236,7 @@ func test_get_debug_stack_variables_truncates_to_limit():
 	assert_true(result.get("truncated"), "truncated flag is set when variables exceed the limit")
 
 func test_get_debug_scopes_not_truncated_by_variable_limit():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
 	_runtime_bridge = FakeStackBridge.new(0, 1500)
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 	# Scopes summarize all variables; the default variable limit must not silently
@@ -247,7 +247,7 @@ func test_get_debug_scopes_not_truncated_by_variable_limit():
 	assert_eq(scopes[0].get("named_variables"), 1500, "Scope count reflects the full variable set, not the truncated subset")
 
 func test_runtime_probe_polling_reuses_pending_request():
-	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	_runtime_bridge = FakeRuntimeBridge.new()
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 
@@ -309,19 +309,19 @@ func test_poll_loop_enters_on_initial_stale():
 
 func test_compare_values_eq():
 	"""_compare_values with operator='eq' should match identical strings"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("hello", "hello", "eq")
 	assert_true(result, "'hello' == 'hello' should be true")
 
 func test_compare_values_ne():
 	"""_compare_values with operator='ne' should match different strings"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("hello", "world", "ne")
 	assert_true(result, "'hello' != 'world' should be true")
 
 func test_compare_values_gt():
 	"""_compare_values with operator='gt' should compare numerically"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("5", "3", "gt")
 	assert_true(result, "5 > 3 should be true")
 	result = tool._compare_values("3", "5", "gt")
@@ -329,13 +329,13 @@ func test_compare_values_gt():
 
 func test_compare_values_lt():
 	"""_compare_values with operator='lt' should compare numerically"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("3", "5", "lt")
 	assert_true(result, "3 < 5 should be true")
 
 func test_compare_values_gte():
 	"""_compare_values with operator='gte' should include equality"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("5", "5", "gte")
 	assert_true(result, "5 >= 5 should be true")
 	result = tool._compare_values("6", "5", "gte")
@@ -343,7 +343,7 @@ func test_compare_values_gte():
 
 func test_compare_values_lte():
 	"""_compare_values with operator='lte' should include equality"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("5", "5", "lte")
 	assert_true(result, "5 <= 5 should be true")
 	result = tool._compare_values("4", "5", "lte")
@@ -351,7 +351,7 @@ func test_compare_values_lte():
 
 func test_compare_values_default_operator():
 	"""_compare_values with unknown operator should return false"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: bool = tool._compare_values("hello", "world", "invalid_op")
 	assert_false(result, "Unknown operator should return false")
 
@@ -359,13 +359,13 @@ func test_compare_values_default_operator():
 
 func test_await_scene_ready_missing_scene_name():
 	"""await_scene_ready should error when scene_name is missing"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	var result: Dictionary = tool._tool_await_scene_ready({})
 	assert_has(result, "error", "Missing scene_name should return error")
 
 func test_await_scene_ready_validates_scene_name():
 	"""await_scene_ready should accept valid scene_name parameter"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	# Can't fully test the wait loop in unit tests (no game running).
 	# But we can verify the function is callable and returns properly structured results.
 	var result: Dictionary = tool._tool_await_scene_ready({"scene_name": "Main", "timeout_sec": 0.1})
@@ -452,14 +452,14 @@ func test_request_key_omits_empty_match_fields():
 
 func test_merge_runtime_params_carries_session_and_timeout():
 	"""_merge_runtime_params should propagate session_id/timeout_ms to sub-tool params"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var merged: Dictionary = tool._merge_runtime_params({"session_id": 7, "timeout_ms": 1234}, {})
 	assert_eq(merged.get("session_id", -1), 7, "session_id should be carried over")
 	assert_eq(merged.get("timeout_ms", -1), 1234, "timeout_ms should be carried over")
 
 func test_merge_runtime_params_applies_overrides():
 	"""_merge_runtime_params should apply per-call overrides on top of shared fields"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var merged: Dictionary = tool._merge_runtime_params({"session_id": 3}, {"action_name": "jump", "pressed": true})
 	assert_eq(merged.get("action_name", ""), "jump", "override action_name should be present")
 	assert_eq(merged.get("pressed", false), true, "override pressed should be present")
@@ -467,13 +467,13 @@ func test_merge_runtime_params_applies_overrides():
 
 func test_await_real_ms_zero_returns_immediately():
 	"""_await_real_ms(0) should complete without blocking"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	await tool._await_real_ms(0)
 	assert_true(true, "Awaiting 0ms should return immediately")
 
 func test_play_and_verify_requires_running_session():
 	"""play_and_verify should error cleanly when no runtime probe session is reachable"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var result: Dictionary = await tool._tool_play_and_verify({"steps": [], "assertions": []})
 	assert_has(result, "error", "Should return an error without a running session")
 	assert_true(str(result.get("error", "")).contains("runtime probe"), "Error should guide user to install the runtime probe")
@@ -482,7 +482,7 @@ func test_play_and_verify_requires_running_session():
 
 func test_filter_runtime_error_events_filters_by_sequence():
 	"""Only output events newer than the baseline sequence should be returned"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var events: Array = [
 		{"sequence": 5, "category": "stderr", "message": "old error"},
 		{"sequence": 11, "category": "stderr", "message": "new error"}
@@ -493,7 +493,7 @@ func test_filter_runtime_error_events_filters_by_sequence():
 
 func test_filter_runtime_error_events_filters_by_category():
 	"""Events whose category is not in the requested set should be ignored"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var events: Array = [
 		{"sequence": 20, "category": "stdout", "message": "just a print"},
 		{"sequence": 21, "category": "stderr", "message": "a real error"}
@@ -504,7 +504,7 @@ func test_filter_runtime_error_events_filters_by_category():
 
 func test_filter_runtime_error_events_normalizes_fields():
 	"""Collected errors should expose stable normalized fields"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var events: Array = [
 		{"sequence": 3, "category": "stderr", "message": "boom", "file": "res://p.gd", "line": 42, "function": "_ready"}
 	]
@@ -517,17 +517,18 @@ func test_filter_runtime_error_events_normalizes_fields():
 
 func test_filter_runtime_error_events_empty_when_none_match():
 	"""No matching events should yield an empty array"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	var collected: Array = tool._filter_runtime_error_events([], 0, ["stderr"])
 	assert_eq(collected.size(), 0, "Empty input should produce no collected errors")
 
 func test_play_and_verify_fails_on_runtime_error_by_default():
 	"""A runtime error captured during the run should fail the report by default"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
 	_runtime_bridge = FakeRuntimeBridge.new()
 	_runtime_bridge.output_events = [
 		{"sequence": 9999, "category": "stderr", "message": "Invalid call. Nonexistent function 'foo'", "file": "res://x.gd", "line": 7, "function": "_process"}
 	]
+	tool._runtime_tools = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
 	var result: Dictionary = await tool._tool_play_and_verify({"steps": [], "assertions": []})
 	assert_false(bool(result.get("passed", true)), "Run should fail when a runtime error is captured")
@@ -537,7 +538,8 @@ func test_play_and_verify_fails_on_runtime_error_by_default():
 
 func test_play_and_verify_can_ignore_runtime_errors():
 	"""fail_on_runtime_error=false should still report errors but not fail the run"""
-	var tool = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/debug_verify_tools.gd").new()
+	tool._runtime_tools = load("res://addons/godot_mcp/tools/debug_runtime_tools.gd").new()
 	_runtime_bridge = FakeRuntimeBridge.new()
 	_runtime_bridge.output_events = [
 		{"sequence": 9999, "category": "stderr", "message": "some warning", "file": "res://y.gd", "line": 1, "function": "_ready"}
@@ -546,3 +548,67 @@ func test_play_and_verify_can_ignore_runtime_errors():
 	var result: Dictionary = await tool._tool_play_and_verify({"steps": [], "assertions": [], "fail_on_runtime_error": false})
 	assert_true(bool(result.get("passed", false)), "Run should pass when fail_on_runtime_error is false")
 	assert_eq((result.get("runtime_errors", []) as Array).size(), 1, "Captured errors should still be reported")
+
+# --- get_editor_logs 修复（issue #9/#12/#32） ---
+
+func test_editor_log_filename_candidates_versioned():
+	"""Versioned editor_log filename candidates should track the running engine version"""
+	var debug_tools_script: GDScript = load("res://addons/godot_mcp/tools/debug_tools_native.gd")
+	var vi: Dictionary = Engine.get_version_info()
+	var major: int = int(vi.get("major", 4))
+	var minor: int = int(vi.get("minor", 0))
+	var patch: int = int(vi.get("patch", 0))
+	var status: String = str(vi.get("status", "stable"))
+	var candidates: Array = debug_tools_script._editor_log_filename_candidates()
+	assert_eq(candidates.size(), 2, "Should produce a full and a short candidate filename")
+	assert_eq(candidates[0], "editor_log-%d.%d.%d.%s.txt" % [major, minor, patch, status], "First candidate should be the full versioned filename")
+	assert_eq(candidates[1], "editor_log-%d.%d.%s.txt" % [major, minor, status], "Second candidate should be the short versioned filename")
+	assert_gt(major, 3, "Engine major version should be >= 4")
+	assert_gte(minor, 0, "Engine minor version should be a valid number")
+	assert_true(candidates[0].ends_with(".txt"), "Candidate should end with .txt")
+
+func test_find_output_panel_fallback():
+	"""Class-name lookup first, legacy name-pattern fallback second, no crash on miss"""
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var root: Control = Control.new()
+	root.name = "RootPanel"
+	# 模拟非英语界面的翻译节点名：名字不含 Output，也不是 OutputPanel 类。
+	var translated: Label = Label.new()
+	translated.name = "PanelDeSalida"
+	root.add_child(translated)
+	add_child_autofree(root)
+	# 无 OutputPanel 类节点、名字也不含 Output → 回退返回 null 且不崩溃。
+	var found: Node = debug_tools._find_output_panel(root)
+	assert_eq(found, null, "Fallback should return null when no panel matches")
+	# find_children 按类名找不到时不应抛错。
+	var by_class: Array = root.find_children("*", "OutputPanel", true, false)
+	assert_eq(by_class.size(), 0, "No OutputPanel-class nodes should be found")
+	# 名字含 Output 的普通节点仍能被旧名字通配回退找到。
+	var legacy: Label = Label.new()
+	legacy.name = "LegacyOutputPanel"
+	root.add_child(legacy)
+	var found2: Node = debug_tools._find_output_panel(root)
+	assert_eq(found2, legacy, "Legacy name-pattern fallback should find the node")
+
+func test_scan_godot_log_error_lines_finds_script_errors():
+	"""user://logs/godot.log fallback should surface SCRIPT/PARSE ERROR lines"""
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_tools_native.gd").new()
+	var tmp_dir: String = "res://.test_tmp_debug_logs"
+	if not DirAccess.dir_exists_absolute(tmp_dir):
+		DirAccess.make_dir_recursive_absolute(tmp_dir)
+	var log_path: String = tmp_dir.path_join("godot.log")
+	var f: FileAccess = FileAccess.open(log_path, FileAccess.WRITE)
+	f.store_string("Godot Engine v4.7.2.stable\n")
+	f.store_string("INFO: editor started\n")
+	f.store_string("SCRIPT ERROR: Parse Error: unexpected token\n")
+	f.store_string("   at: res://player.gd:3\n")
+	f.store_string("PARSE ERROR: expected identifier\n")
+	f.store_string("normal log line\n")
+	f.close()
+	var lines: Array = debug_tools._scan_godot_log_error_lines(log_path)
+	assert_eq(lines.size(), 2, "Only SCRIPT ERROR / PARSE ERROR lines should be collected")
+	assert_eq(lines[0].get("type"), "Error", "Collected lines should be typed Error")
+	assert_true(str(lines[0].get("message", "")).contains("SCRIPT ERROR"), "First entry should be the script error")
+	assert_true(str(lines[1].get("message", "")).contains("PARSE ERROR"), "Second entry should be the parse error")
+	DirAccess.remove_absolute(log_path)
+	DirAccess.remove_absolute(tmp_dir)

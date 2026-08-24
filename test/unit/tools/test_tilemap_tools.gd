@@ -1,13 +1,13 @@
 extends "res://addons/gut/test.gd"
 
 # Unit tests for the Batch 6 TileMapLayer tools:
-# create_tileset (project_tools_native.gd),
+# create_tileset (project_tileset_tools.gd),
 # set_tilemap_layer_cells / get_tilemap_layer_cells (scene_tools_native.gd).
 # Editor-dependent paths (resolving a TileMapLayer in the edited scene) are
 # exercised live over HTTP; here we cover validation, parsing and the
 # headless-safe create_tileset resource path.
 
-const PROJECT_TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const PROJECT_TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tileset_tools.gd"
 const SCENE_TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/scene_tools_native.gd"
 const TMP_DIR: String = "res://.test_tmp_tilemap"
 

@@ -1,10 +1,10 @@
 extends "res://addons/gut/test.gd"
 
 # Unit tests for the Batch 1 data-driven resource tools in
-# project_tools_native.gd: create_custom_resource, batch_create_resources,
+# project_resources_tools.gd: create_custom_resource, batch_create_resources,
 # update_resource_properties, read_resource_properties.
 
-const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_tools_native.gd"
+const TOOL_SCRIPT: String = "res://addons/godot_mcp/tools/project_resources_tools.gd"
 const FIXTURE_SCRIPT: String = "res://test/unit/tools/fixtures/sample_card_data.gd"
 const TMP_DIR: String = "res://.test_tmp_resource_data"
 

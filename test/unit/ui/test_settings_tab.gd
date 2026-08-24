@@ -50,6 +50,9 @@ func test_settings_exposes_asset_provider_card() -> void:
 func test_asset_provider_card_relabels_on_locale_switch() -> void:
 	var panel: Node = _make_panel()
 	autofree(panel._create_settings_tab())
+	# Inject a real translation manager (the bare panel stub has none) so the
+	# locale switch path is exercised instead of crashing on a null manager.
+	panel._translation_manager = load("res://addons/godot_mcp/native_mcp/translation_manager.gd").new()
 	panel._translation_manager.set_locale("zh")
 	panel._refresh_translations()
 	assert_eq(panel._asset_provider_label.text, panel._tr("ui.asset_provider"), "provider label refreshed to active locale")

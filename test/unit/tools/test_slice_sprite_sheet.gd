@@ -2,14 +2,14 @@ extends "res://addons/gut/test.gd"
 
 # Unit tests for slice_sprite_sheet plus its pure helpers
 # (_compute_sprite_frame_layout / _resolve_sprite_animations) in
-# project_tools_native.gd. Uses real images written to a temp dir under user://
+# project_assets_tools.gd. Uses real images written to a temp dir under user://
 # so the whole tool runs headless (no game / editor import required).
 
 var _tools: RefCounted = null
 var _tmp_dir: String = "user://.tmp_slice_sprite_test"
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_assets_tools.gd").new()
 	var dir: DirAccess = DirAccess.open("user://")
 	if dir and not dir.dir_exists(_tmp_dir):
 		dir.make_dir_recursive(_tmp_dir)

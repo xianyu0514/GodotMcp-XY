@@ -73,6 +73,16 @@ def main() -> int:
     try:
         wait_for_server()
 
+        # execute_editor_script is supplementary (disabled by default) after the
+        # security downgrade; enable it explicitly for this flow.
+        enable_result = tool_call(
+            "enable_tools",
+            {"tools": ["execute_editor_script"], "enabled": True},
+            request_id=1,
+        )
+        if enable_result.get("status") != "success":
+            raise AssertionError(f"enable_tools failed: {enable_result}")
+
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
         expected_tools = {
@@ -393,7 +403,7 @@ def main() -> int:
             "execute_editor_script",
             {
                 "code": (
-                    'var tools := DebugToolsNative.new()\n'
+                    'var tools := DebugBridgeTools.new()\n'
                     'var bridge := MCPDebuggerBridge.new()\n'
                     'var helper_node := Node.new()\n'
                     'var helper_callable := Callable(helper_node, "queue_free")\n'
@@ -490,7 +500,7 @@ def main() -> int:
             "execute_editor_script",
             {
                 "code": (
-                    'var tools := DebugToolsNative.new()\n'
+                    'var tools := DebugBridgeTools.new()\n'
                     'var bridge := MCPDebuggerBridge.new()\n'
                     'var inspect_node := Node.new()\n'
                     'inspect_node.name = "InspectableNode"\n'

@@ -10,7 +10,7 @@ var _tools: RefCounted = null
 var _base: String = "user://i18n_test_%d" % (Time.get_ticks_usec())
 
 func before_each() -> void:
-	_tools = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	_tools = load("res://addons/godot_mcp/tools/project_workflow_tools.gd").new()
 	_base = "user://i18n_test_%d" % (Time.get_ticks_usec())
 	DirAccess.make_dir_recursive_absolute(_base)
 
