@@ -9,6 +9,8 @@ class FakeServerCore:
 	var tools: Dictionary = {}
 	var classifier = null
 	var notified: int = 0
+	var bulk_apply_calls: int = 0
+	var catalog_revision: int = 7
 
 	func _init() -> void:
 		classifier = ClassifierScript.new()
@@ -51,6 +53,36 @@ class FakeServerCore:
 				tools[n]["enabled"] = enabled
 				changed += 1
 		return changed
+
+	func apply_tool_states(states: Dictionary) -> Dictionary:
+		bulk_apply_calls += 1
+		var changed_tools: Array[String] = []
+		var unknown_tools: Array[String] = []
+		var names: Array = states.keys()
+		names.sort()
+		for name_value in names:
+			var name: String = String(name_value)
+			if not tools.has(name):
+				unknown_tools.append(name)
+				continue
+			var target: bool = bool(states[name])
+			if classifier.is_meta_tool(name):
+				target = true
+			if tools[name]["enabled"] == target:
+				continue
+			tools[name]["enabled"] = target
+			changed_tools.append(name)
+		if not changed_tools.is_empty():
+			catalog_revision += 1
+		return {
+			"changed_count": changed_tools.size(),
+			"changed_tools": changed_tools,
+			"unknown_tools": unknown_tools,
+			"catalog_revision": catalog_revision
+		}
+
+	func get_tool_catalog_revision() -> int:
+		return catalog_revision
 
 	func notify_tool_list_changed() -> void:
 		notified += 1
@@ -106,6 +138,32 @@ func test_catalog_truncates_long_description():
 	var entry: Dictionary = result["groups"]["Debug-Advanced"]["tools"][0]
 	assert_true(entry["description"].length() <= 141, "Description should be trimmed to a short summary")
 
+func test_catalog_summary_only_omits_per_tool_payloads():
+	var result: Dictionary = _tool._tool_list_tool_catalog({"summary_only": true})
+	assert_eq(result.get("total_matched", -1), 7, "Summary still counts every matching tool")
+	assert_eq(result.get("groups", {}).get("Debug-Advanced", {}).get("total", -1), 1,
+		"Summary retains group counts")
+	assert_false(result.get("groups", {}).get("Debug-Advanced", {}).has("tools"),
+		"Summary mode must omit per-tool arrays to minimize tokens")
+
+func test_catalog_output_is_deterministic():
+	var first: Dictionary = _tool._tool_list_tool_catalog({})
+	var second: Dictionary = _tool._tool_list_tool_catalog({})
+	assert_eq(first.get("groups", {}).keys(), second.get("groups", {}).keys(),
+		"Repeated catalog calls must preserve group order for prompt caching")
+	for group_name in first.get("groups", {}):
+		var first_names: Array = []
+		for entry in first["groups"][group_name].get("tools", []):
+			first_names.append(entry.get("name", ""))
+		var sorted_names: Array = first_names.duplicate()
+		sorted_names.sort()
+		assert_eq(first_names, sorted_names, "Tools inside each group must be sorted by name")
+
+func test_catalog_known_revision_returns_minimal_not_modified_response():
+	var result: Dictionary = _tool._tool_list_tool_catalog({"known_revision": 7})
+	assert_eq(result, {"not_modified": true, "catalog_revision": 7},
+		"A matching revision should avoid retransmitting the unchanged catalog")
+
 # --- enable_tools ---
 
 func test_enable_tools_by_name():
@@ -113,6 +171,22 @@ func test_enable_tools_by_name():
 	assert_eq(result.get("status", ""), "success", "Should succeed")
 	assert_true(_core.is_enabled("get_runtime_info"), "Requested tool should be enabled")
 	assert_eq(_core.notified, 1, "Should emit a tools/list_changed notification")
+	assert_eq(_core.bulk_apply_calls, 1, "One request should use one bulk state transition")
+	assert_eq(result.get("changed_tools", []), ["get_runtime_info"], "Response reports only changed tools")
+	assert_false(result.has("enabled_tools"), "Compact response omits the full enabled list by default")
+
+func test_enable_tools_can_include_full_enabled_list_on_request():
+	var result: Dictionary = _tool._tool_enable_tools({
+		"tools": ["get_runtime_info"],
+		"include_enabled_tools": true
+	})
+	assert_true(result.has("enabled_tools"), "Full enabled list remains available for compatibility")
+	assert_true("get_runtime_info" in result.get("enabled_tools", []), "Requested tool appears in full list")
+
+func test_enable_tools_noop_does_not_notify():
+	var result: Dictionary = _tool._tool_enable_tools({"tools": ["create_node"]})
+	assert_eq(result.get("changed_count", -1), 0, "Already-enabled tools produce a no-op")
+	assert_eq(_core.notified, 0, "No-op requests should not make clients reload tools/list")
 
 func test_enable_tools_by_group():
 	_tool._tool_enable_tools({"groups": ["Debug-Advanced"]})
@@ -149,6 +223,7 @@ func test_enable_tools_applies_preset():
 	assert_true(_core.is_enabled("enable_tools"), "Meta tool stays enabled under minimal_core")
 	assert_false(_core.is_enabled("get_runtime_info"), "Supplementary tool disabled by minimal_core")
 	assert_false(_core.is_enabled("run_export"), "Supplementary tool disabled by minimal_core")
+	assert_eq(_core.bulk_apply_calls, 1, "A preset should apply all states in one batch")
 
 func test_enable_tools_rejects_unknown_preset():
 	var result: Dictionary = _tool._tool_enable_tools({"preset": "does_not_exist"})
@@ -199,6 +274,31 @@ func test_search_tools_omit_descriptions():
 	var tools: Array = result.get("tools", [])
 	assert_eq(tools.size(), 1, "Match still found")
 	assert_false(tools[0].has("description"), "Description omitted when include_descriptions=false")
+
+func test_search_tools_supports_chinese_intent_aliases():
+	var result: Dictionary = _tool._tool_search_tools({"query": "运行时 信息"})
+	assert_eq(result.get("total_matched", -1), 1, "Chinese intent terms should match English tool metadata")
+	assert_eq(result.get("tools", [])[0].get("name", ""), "get_runtime_info",
+		"Chinese runtime/info query should find get_runtime_info")
+	assert_true(result.get("tools", [])[0].get("score", 0) > 0, "Ranked results expose a relevance score")
+	var natural_result: Dictionary = _tool._tool_search_tools({"query": "查询运行时信息"})
+	assert_eq(natural_result.get("tools", [])[0].get("name", ""), "get_runtime_info",
+		"Chinese aliases should also be extracted from an unspaced natural phrase")
+
+func test_search_tools_ranks_exact_normalized_name_first():
+	_core.seed("inspect_runtime_info", false, "supplementary", "Debug-Advanced",
+		"Inspect runtime info and diagnostics.")
+	var result: Dictionary = _tool._tool_search_tools({"query": "get runtime info"})
+	assert_eq(result.get("tools", [])[0].get("name", ""), "get_runtime_info",
+		"An exact normalized tool name should outrank a description-only match")
+
+func test_search_tools_clamps_large_limit():
+	for index in range(60):
+		_core.seed("demo_tool_%02d" % index, false, "supplementary", "Project-Advanced",
+			"Demo utility for catalog limit testing.")
+	var result: Dictionary = _tool._tool_search_tools({"query": "demo", "limit": 999})
+	assert_eq(result.get("total_matched", -1), 60, "Full match count remains visible")
+	assert_eq(result.get("tools", []).size(), 50, "Returned results are hard-capped to protect context")
 
 # --- get_tool_details ---
 
