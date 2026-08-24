@@ -89,5 +89,6 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已完成 | M6（巨型文件拆分 / 死代码 / 单一数据表 tools_manifest） | ✅ 导入门禁 + 计数一致（381e472 / dd0ecd5 / f26fdde） |
 | 已追加 | tools/list 服务端缓存 + 确定性排序；结果缓存同时保存 formatted payload（命中跳过 JSON.stringify/spill 检查）；meta 发现工具（list_tool_catalog/search_tools/get_tool_details）纳入只读结果缓存；HTTP 轮询去除每轮 `_connections.duplicate()` | ✅ 全量 GUT 0 失败（678006f / f630cc9 / 3530489 / 7c67f8e） |
 | 已完成 | M5（无损 list 分页 + revision 安全扫描快照） | ✅ 7 条稳定读路径补齐；跨页单扫描；8 项 / 4 MiB 门禁；写工具不以重执行换分页 |
-| 下轮 | P3.3 工作流路由质量门禁 | 用真实游戏制作任务语料验证原子工具覆盖率、Top-k 成功率与增量 Schema token，不靠扩大默认工具集换命中 |
+| 已完成 | P3.3 工作流路由质量门禁 | ✅ 48 个中英真实制作任务 / 12 领域 / 174 个原子期望；Recall@8 与完整任务成功率 100%，验证阶段召回 97.30%，已知跨域误选 0，平均 Schema 节省 97.34%；默认预算仍为 8，未新增工具/Schema/模型调用 |
+| 下轮 | P3.4 缓存可观测性与真实命中基线 | 给 tools/list、结果缓存和工作流 LRU 增加无 Schema 成本的诊断/测试基线，量化冷启动、任务切换与重复目标命中，不为追求命中率放宽失效正确性 |
 | 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |
