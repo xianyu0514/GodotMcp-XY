@@ -44,6 +44,7 @@ addons/godot_mcp/
 ├── mcp_server_native.gd       # EditorPlugin 入口 — 注册插件、管理生命周期
 ├── native_mcp/                 # 核心服务器引擎
 │   ├── mcp_server_core.gd      # 中枢：工具注册、JSON-RPC 分发、信号总线
+│   ├── cache_revision_index.gd # 结果缓存依赖标签、路径级 revision 与 O(1) 懒失效
 │   ├── mcp_transport_base.gd   # 传输层抽象基类
 │   ├── mcp_http_server.gd      # HTTP/SSE 传输（默认端口 9080）
 │   ├── mcp_stdio_server.gd     # stdio 传输（供 Claude Desktop 等使用）
