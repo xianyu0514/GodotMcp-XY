@@ -28,6 +28,8 @@ func _left_click() -> InputEventMouseButton:
 func test_set_selected_tracks_state():
 	var item: MCPToolItem = _make_item("create_node")
 	assert_false(item.is_selected(), "Rows start unselected")
+	assert_gte(item.custom_minimum_size.y, 42.0, "Tool rows provide a readable click target")
+	assert_gte(item.get_child(1).get_theme_font_size("font_size"), 13, "Tool names use a readable font size")
 	item.set_selected(true)
 	assert_true(item.is_selected(), "set_selected(true) marks the row selected")
 	item.set_selected(false)

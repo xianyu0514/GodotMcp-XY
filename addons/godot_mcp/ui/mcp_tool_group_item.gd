@@ -43,7 +43,7 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 
 	_group_check = CheckBox.new()
 	_group_check.text = _get_group_display_name()
-	_group_check.add_theme_font_size_override("font_size", 14)
+	_group_check.add_theme_font_size_override("font_size", 16)
 	_group_check.add_theme_color_override("font_color", Color(0.92, 0.92, 0.95))
 	var group_desc: String = _get_group_description()
 	if not group_desc.is_empty():
@@ -57,7 +57,7 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 
 	_count_label = Label.new()
 	_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_count_label.add_theme_font_size_override("font_size", 11)
+	_count_label.add_theme_font_size_override("font_size", 13)
 	_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	header.add_child(_count_label)
 
@@ -65,8 +65,8 @@ func setup(group_name: String, items: Array, translation_manager = null) -> void
 		_desc_label = Label.new()
 		_desc_label.text = group_desc
 		_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-		_desc_label.add_theme_font_size_override("font_size", 11)
-		_desc_label.add_theme_color_override("font_color", Color(0.58, 0.58, 0.62))
+		_desc_label.add_theme_font_size_override("font_size", 13)
+		_desc_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.71))
 		inner.add_child(_desc_label)
 
 	_tool_container = VBoxContainer.new()
@@ -100,8 +100,8 @@ func _make_card_style() -> StyleBoxFlat:
 	style.set_corner_radius_all(5)
 	style.content_margin_left = 10
 	style.content_margin_right = 10
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
 	return style
 
 func get_group_name() -> String:

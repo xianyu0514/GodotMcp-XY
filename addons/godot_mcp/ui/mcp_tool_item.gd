@@ -19,6 +19,7 @@ func setup(name: String, description: String, enabled: bool, category: String, g
 	_tool_group = group
 	_description = description
 
+	custom_minimum_size = Vector2(0, 46)
 	add_theme_constant_override("separation", 8)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	mouse_entered.connect(_on_mouse_entered)
@@ -34,6 +35,7 @@ func setup(name: String, description: String, enabled: bool, category: String, g
 	name_label.custom_minimum_size = Vector2(186, 0)
 	name_label.clip_text = true
 	name_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	name_label.add_theme_font_size_override("font_size", 14)
 	name_label.add_theme_color_override("font_color", Color(0.86, 0.86, 0.9))
 	add_child(name_label)
 
@@ -43,7 +45,7 @@ func setup(name: String, description: String, enabled: bool, category: String, g
 	badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	badge.custom_minimum_size = Vector2(46, 0)
 	badge.mouse_filter = Control.MOUSE_FILTER_PASS
-	badge.add_theme_font_size_override("font_size", 9)
+	badge.add_theme_font_size_override("font_size", 11)
 	if category == "supplementary":
 		badge.add_theme_color_override("font_color", Color(0.78, 0.66, 0.32))
 	else:
@@ -56,8 +58,8 @@ func setup(name: String, description: String, enabled: bool, category: String, g
 	desc_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	desc_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	desc_label.mouse_filter = Control.MOUSE_FILTER_PASS
-	desc_label.add_theme_font_size_override("font_size", 11)
-	desc_label.add_theme_color_override("font_color", Color(0.62, 0.62, 0.66))
+	desc_label.add_theme_font_size_override("font_size", 13)
+	desc_label.add_theme_color_override("font_color", Color(0.70, 0.70, 0.75))
 	add_child(desc_label)
 
 func get_tool_name() -> String:
