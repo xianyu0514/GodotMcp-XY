@@ -9,7 +9,7 @@
 
 1. **缓存失效由修订驱动，不是 TTL**：DSH 几乎不用 TTL，全部用 seq 水位 / `replace_generation` / epoch / ver 版本号失效——内容变了才作废，缓存命中率最大化。
 2. **模型只见最小 schema**：`schemaOf` 白名单只下发 `name/description/parameters`（工具定义层）；output schema、超时、并发标记一律不进上下文。
-3. **结果体积三层控制**：工具内建 cap（read 2000 行/glob 100/grep 250）→ 50KB spill 落盘（模型见 head/tail 预览 + 定位符 + 恢复指引，落盘失败不转 error）→ 8KB pruner（确定性裁剪可重放）。
+3. **结果体积三层控制**：工具内建 cap（read 2000 行/glob 100/grep 250）→ 50KB spill 落盘（模型首包见 head/tail 预览 + 标准 `resource_link`，按需通过 `resources/read` 无损取回；落盘失败不转 error）→ 8KB pruner（确定性裁剪可重放）。
 4. **token 计费口径**：`JSON.stringify(tools).length / 4` 字符/token 启发式，provider usage 锚定校正。
 5. **上下文压缩（compaction）**：contextWindow×0.8 触发、16% 尾部保留、8K 摘要、摘要复用会话前缀保 KV cache。
 6. **agent 目标驱动**：goal 持久快照 + CAS revision + 回合驱动器（agent 空闲自动续作下一轮）+ 人类武装授权（armed/disarmed 分离）。
@@ -39,8 +39,9 @@
 
 ### M4. 结果体积控制（spill 落盘）
 - core 层新增结果上限：`MAX_INLINE_RESULT_BYTES = 50000`（DSH 默认）。
-- 超限结果：写盘到 `res://.mcp/out/<hash>.json`，返回 `{truncated: true, total_bytes, path, head: <前 4096 字符>, tail: <后 1024 字符>, resume_hint}`——模型可按需读回全文。
-- **不转 error**（best-effort，DSH 原则）；读文件类工具豁免（防死循环）。
+- 超限结果：写盘到 `res://.mcp/out/<sha256>.json`，返回兼容的 `{truncated, total_bytes, path, head, tail, resume_hint}` 预览，同时追加标准 MCP `resource_link`。相同内容验证 SHA-256 后直接复用，不重复写盘。
+- `resources/read` 通过 `godot-mcp://result/<sha256>` 返回 UTF-8 安全的 16 KiB 固定页；跟随 `_meta.nextUri` 并顺序拼接可逐字节还原原 JSON。动态结果不加入 `resources/list`，也不新增工具/Schema。
+- **功能收益优先**：错误结果与源码/日志读取完整内联；hash/写盘失败时回退完整内联，不转 error、不丢字段。204,211-byte Unicode 门禁首包节省 95.62%，13 页 SHA-256 完整重建。
 
 ### M5. 读工具 limit/offset/summary 规范（文档+抽查）
 - 高返回工具（list_nodes/get_scene_structure/list_project_resources 等）统一 `limit`/`offset`/`summary` 参数语义并写入 docs；抽查补缺。
@@ -80,7 +81,7 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 
 | 阶段 | 内容 | 状态 / 验证 |
 | --- | --- | --- |
-| 已完成 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（LRU 结果缓存）+ M4（spill） | ✅ 全量 GUT 0 失败 + token 预算断言（4be1fd3 / cec0714） |
+| 已完成 | M1（tools/list 去 outputSchema）+ M2（token 预算）+ M3（LRU 结果缓存）+ M4（无损、可寻址 spill） | ✅ 全量 GUT 0 失败 + token 预算断言；204,211-byte 结果首包减少 95.62%，逐页 SHA-256 精确重建 |
 | 已完成 | M6（巨型文件拆分 / 死代码 / 单一数据表 tools_manifest） | ✅ 导入门禁 + 计数一致（381e472 / dd0ecd5 / f26fdde） |
 | 已追加 | tools/list 服务端缓存 + 确定性排序；结果缓存同时保存 formatted payload（命中跳过 JSON.stringify/spill 检查）；meta 发现工具（list_tool_catalog/search_tools/get_tool_details）纳入只读结果缓存；HTTP 轮询去除每轮 `_connections.duplicate()` | ✅ 全量 GUT 0 失败（678006f / f630cc9 / 3530489 / 7c67f8e） |
 | 下轮 | M5（读工具 limit/offset/summary 规范补缺） | 按高返回工具逐个审计 |

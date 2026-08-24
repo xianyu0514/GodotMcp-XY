@@ -40,6 +40,8 @@ The addon registers 221 tools:
 
 Discovery is progressive and cache-friendly: one `enable_tools` call with `workflow_query` locally routes an English/Chinese goal and atomically activates a bounded inspect/execute/verify set. An immutable normalized index covers all 217 non-meta atomic tools by exact name and official English/Chinese description, returns names without schemas and defaults to an 8-tool budget. Schema-token costs are estimated once per definition; equal-coverage candidates are chosen by semantic value per incremental token, while exact atomic requests retain strict priority. A 64-entry LRU reuses normalized goals; visibility changes preserve its definition revision, index and routes. The activation path preserves core/meta and replaces old supplementary task tools by default, while `replace_supplementary=false` adds tools incrementally. Catalog revisions and dependency-tagged result revisions avoid flushing unrelated scene/script/resource reads; exact script and resource paths expire lazily.
 
+Large successful results keep a compatible preview and expose their exact JSON through a standard content-addressed `resource_link`. `resources/read` returns UTF-8-safe 16 KiB pages with `_meta.nextUri`; errors and source/log readers remain complete inline, and spill failure never replaces a complete result.
+
 See the project-level [Tools Reference](../../docs/tools/README.md).
 
 ## Configuration
