@@ -1576,7 +1576,11 @@ func _refresh_tools_list() -> void:
 	if _server_core and _server_core.has_method("get_classifier"):
 		classifier = _server_core.get_classifier()
 	_tool_classifier = classifier
-	_domain_names = classifier.get_all_domains() if classifier and classifier.has_method("get_all_domains") else []
+	_domain_names.clear()
+	if classifier and classifier.has_method("get_all_domains"):
+		# Dynamic method dispatch is typed as Variant/Array at this call site.
+		# Array.assign() performs the checked copy required by Array[String].
+		_domain_names.assign(classifier.get_all_domains())
 
 	var tools_by_group: Dictionary = {}
 	for tool_info in tools:
@@ -1890,7 +1894,9 @@ func _update_nav_counts() -> void:
 		for tool_info in _server_core.get_registered_tools():
 			enabled_by_name[tool_info.get("name", "")] = tool_info.get("enabled", true)
 	for domain_name in _domain_names:
-		var domain_tools: Array[String] = _tool_classifier.get_domain_tools(domain_name) if _tool_classifier else []
+		var domain_tools: Array[String] = []
+		if _tool_classifier:
+			domain_tools.assign(_tool_classifier.get_domain_tools(domain_name))
 		var domain_enabled: int = 0
 		for tool_name in domain_tools:
 			if enabled_by_name.get(tool_name, false):
