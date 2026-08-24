@@ -6,6 +6,7 @@ const ClassifierScript = preload("res://addons/godot_mcp/native_mcp/mcp_tool_cla
 # Minimal stand-in for MCPServerCore exposing only what the meta tools touch.
 class FakeServerCore:
 	extends RefCounted
+	const TOKEN_ESTIMATOR = preload("res://addons/godot_mcp/utils/token_estimator.gd")
 	var tools: Dictionary = {}
 	var classifier = null
 	var notified: int = 0
@@ -40,7 +41,9 @@ class FakeServerCore:
 				"enabled": tools[n]["enabled"],
 				"category": tools[n]["category"],
 				"group": tools[n]["group"],
-				"description": tools[n]["description"]
+				"description": tools[n]["description"],
+				"schema_tokens": TOKEN_ESTIMATOR.estimate_tool_definition(
+					String(n), String(tools[n]["description"]), tools[n]["input_schema"])
 			})
 		return out
 
@@ -252,6 +255,8 @@ func test_enable_tools_activates_exact_workflow_and_replaces_old_task_tools():
 	assert_true(_core.is_enabled("create_node"), "Core tools remain visible")
 	assert_eq(result.get("workflow", {}).get("tool_count", 0), 1,
 		"Exact atomic intent keeps the activated surface minimal")
+	assert_gt(result.get("workflow", {}).get("estimated_full_load_schema_tokens", 0), 0,
+		"One-call activation exposes measurable schema cost savings")
 	assert_eq(result.get("workflow_query", ""), "get_runtime_info", "The normalized task intent is echoed")
 	assert_true(result.get("replaced_supplementary", false), "Response makes replacement semantics explicit")
 	assert_eq(_core.bulk_apply_calls, 1, "Activation and stale-tool cleanup share one atomic transition")
