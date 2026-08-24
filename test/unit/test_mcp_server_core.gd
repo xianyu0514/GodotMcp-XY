@@ -605,6 +605,73 @@ func test_cacheable_read_keys_by_arguments():
 	await _core._handle_request(shallow)
 	assert_eq(calls[0], 2, "Different arguments cache separately; each variant computed once")
 
+func test_read_snapshot_cache_reuses_scan_across_page_views() -> void:
+	var scans: Array[int] = [0]
+	var producer: Callable = func() -> Dictionary:
+		scans[0] += 1
+		return {"items": [1, 2, 3], "scan": scans[0]}
+	var query: Dictionary = {"search_path": "res://", "resource_types": [".png"]}
+	var first: Dictionary = _core.get_or_compute_read_snapshot(
+		"list_project_resources", query, producer)
+	var second: Dictionary = _core.get_or_compute_read_snapshot(
+		"list_project_resources", query, producer)
+	assert_eq(scans[0], 1, "Different page views should reuse one expensive project scan")
+	assert_same(first, second, "Snapshot hits should avoid deep-copying a potentially large result")
+
+func test_read_snapshot_cache_uses_dependency_revision_invalidation() -> void:
+	var scans: Array[int] = [0]
+	var producer: Callable = func() -> Dictionary:
+		scans[0] += 1
+		return {"resources": ["res://asset-%d.png" % scans[0]]}
+	var query: Dictionary = {"search_path": "res://"}
+	_core.get_or_compute_read_snapshot("list_project_resources", query, producer)
+	var unrelated_tags: Array[String] = [_core.CACHE_REVISION_INDEX_SCRIPT.TAG_SCENE_CONTENT]
+	_core._advance_result_cache_revisions(unrelated_tags, "test scene mutation")
+	_core.get_or_compute_read_snapshot("list_project_resources", query, producer)
+	assert_eq(scans[0], 1, "Unrelated scene edits keep resource scan snapshots hot")
+	var resource_tags: Array[String] = [_core.CACHE_REVISION_INDEX_SCRIPT.TAG_RESOURCE_CATALOG]
+	_core._advance_result_cache_revisions(resource_tags, "test resource mutation")
+	_core.get_or_compute_read_snapshot("list_project_resources", query, producer)
+	assert_eq(scans[0], 2, "Relevant resource changes lazily invalidate the scan snapshot")
+
+func test_read_snapshot_cache_has_a_separate_small_lru_budget() -> void:
+	var ordinary_key: String = "read_script:{\"script_path\":\"res://:@snapshot:.gd\"}"
+	_core._result_cache_put(ordinary_key, {"content": "ordinary"})
+	for index in range(_core.READ_SNAPSHOT_CACHE_MAX + 2):
+		_core.get_or_compute_read_snapshot(
+			"list_project_resources",
+			{"search_path": "res://snapshot-%d" % index},
+			func() -> Dictionary: return {"resources": []})
+	var snapshot_keys: Array[String] = []
+	for key_value in _core._result_cache.keys():
+		var key: String = str(key_value)
+		if _core._is_read_snapshot_cache_key(key):
+			snapshot_keys.append(key)
+	assert_eq(snapshot_keys.size(), _core.READ_SNAPSHOT_CACHE_MAX,
+		"Scan snapshots cannot consume the general result cache without bound")
+	assert_true(_core._result_cache.has(ordinary_key),
+		"A marker inside ordinary arguments must not be mistaken for a snapshot key")
+
+func test_read_snapshot_cache_returns_but_does_not_retain_oversized_results() -> void:
+	var scans: Array[int] = [0]
+	var oversized_payload: String = "x".repeat(_core.READ_SNAPSHOT_MAX_BYTES)
+	var producer: Callable = func() -> Dictionary:
+		scans[0] += 1
+		return {"payload": oversized_payload, "scan": scans[0]}
+	var query: Dictionary = {"search_path": "res://oversized-snapshot"}
+	var first: Dictionary = _core.get_or_compute_read_snapshot(
+		"list_project_resources", query, producer)
+	var second: Dictionary = _core.get_or_compute_read_snapshot(
+		"list_project_resources", query, producer)
+	assert_eq(first.get("payload", "").length(), _core.READ_SNAPSHOT_MAX_BYTES,
+		"The memory gate must never truncate or replace the caller's result")
+	assert_eq(second.get("payload", "").length(), _core.READ_SNAPSHOT_MAX_BYTES,
+		"Oversized follow-up results remain fully usable")
+	assert_eq(scans[0], 2, "Oversized snapshots are recomputed instead of retained")
+	for key_value in _core._result_cache.keys():
+		assert_false(str(key_value).contains(":@snapshot:"),
+			"No oversized scan snapshot should occupy the in-memory LRU")
+
 func test_all_cacheable_read_tools_are_served_from_cache():
 	# Guard the whole CACHEABLE_READ_TOOLS list (not just get_scene_structure):
 	# every listed read-only tool must be served from cache on a repeat call.

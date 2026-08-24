@@ -65,3 +65,21 @@ func test_resource_creation_uses_exact_output_path_when_available() -> void:
 		"create_animation", "Project-Advanced", {"animation_path": "res://anim/walk.tres"})
 	assert_has(tags, "resource:res://anim/walk.tres")
 	assert_does_not_have(tags, INDEX_SCRIPT.TAG_RESOURCE_ALL)
+
+
+func test_cross_file_scans_watch_single_file_aggregate_revisions() -> void:
+	var expectations: Array = [
+		["find_resource_usages", INDEX_SCRIPT.TAG_RESOURCE_AGGREGATE],
+		["find_resource_usages", INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE],
+		["list_unused_resources", INDEX_SCRIPT.TAG_RESOURCE_AGGREGATE],
+		["scan_migration_compatibility", INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE],
+		["find_deprecated_api_usage", INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE],
+	]
+	for expectation in expectations:
+		var tool_name: String = expectation[0]
+		var changed_tag: String = expectation[1]
+		var index = INDEX_SCRIPT.new()
+		var snapshot: Dictionary = index.snapshot(INDEX_SCRIPT.read_tags(tool_name, {}))
+		index.advance([changed_tag])
+		assert_false(index.is_current(snapshot),
+			"%s must expire after %s changes" % [tool_name, changed_tag])

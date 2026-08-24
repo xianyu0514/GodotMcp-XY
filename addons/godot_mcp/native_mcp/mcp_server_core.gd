@@ -89,6 +89,12 @@ const CACHE_PRESERVING_MUTATION_TOOLS: Array[String] = ["enable_tools"]
 ## evicted.
 const RESULT_CACHE_MAX: int = 64
 
+## Full scan snapshots are shared by every limit/offset view of the same query.
+## They live in the existing revision-aware LRU but have tighter count/size
+## gates so improved cross-page hit rate cannot create unbounded memory use.
+const READ_SNAPSHOT_CACHE_MAX: int = 8
+const READ_SNAPSHOT_MAX_BYTES: int = 4 * 1024 * 1024
+
 ## TTL (ms) for cached tool results. Invalidation is primarily revision-driven
 ## (project mutations advance dependency tags; catalog mutations are targeted);
 ## this TTL is only a bounded-staleness
@@ -1549,6 +1555,49 @@ func _result_cache_touch(key: String) -> void:
 	if idx > 0:
 		_result_cache_order.remove_at(idx)
 		_result_cache_order.push_front(key)
+
+## Return one immutable, dependency-versioned scan snapshot for all pages of a
+## read query. `arguments` must exclude presentation-only limit/offset fields.
+## On a miss the producer runs once; oversized snapshots remain fully usable
+## for this call but are not retained in memory.
+func get_or_compute_read_snapshot(tool_name: String, arguments: Dictionary,
+		producer: Callable) -> Dictionary:
+	if not producer.is_valid():
+		return {"error": "Invalid read snapshot producer"}
+	if tool_name not in CACHEABLE_READ_TOOLS:
+		var uncached: Variant = producer.call()
+		return uncached if uncached is Dictionary else {}
+	var key: String = tool_name + ":@snapshot:" + _canonical_json(arguments)
+	var cached: Variant = _result_cache_get(key)
+	if cached is Dictionary:
+		return cached
+	var dependency_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.read_tags(
+		tool_name, arguments)
+	var revision_snapshot: Dictionary = _cache_revision_index.snapshot(dependency_tags)
+	var produced: Variant = producer.call()
+	if not (produced is Dictionary):
+		return {}
+	var result: Dictionary = produced
+	if result.has("error") or not _cache_revision_index.is_current(revision_snapshot):
+		return result
+	var encoded: String = JSON.stringify(result)
+	if encoded.to_utf8_buffer().size() > READ_SNAPSHOT_MAX_BYTES:
+		return result
+	_result_cache_put(key, result, null, revision_snapshot)
+	_enforce_read_snapshot_cache_limit()
+	return result
+
+func _enforce_read_snapshot_cache_limit() -> void:
+	var snapshot_keys: Array[String] = []
+	for key in _result_cache_order:
+		if _is_read_snapshot_cache_key(key):
+			snapshot_keys.append(key)
+	for index in range(READ_SNAPSHOT_CACHE_MAX, snapshot_keys.size()):
+		_erase_result_cache_key(snapshot_keys[index])
+
+static func _is_read_snapshot_cache_key(key: String) -> bool:
+	var separator: int = key.find(":")
+	return separator >= 0 and key.substr(separator).begins_with(":@snapshot:")
 
 ## Explicitly drop the whole result cache (public clear_cache compatibility).
 ## Normal tool mutations use dependency revisions instead.

@@ -64,12 +64,15 @@ class FakeStackBridge:
 
 	var frame_count: int = 0
 	var variable_count: int = 0
+	var stack_dump_requests: int = 0
+	var stack_variable_requests: int = 0
 
 	func _init(frames: int, variables: int) -> void:
 		frame_count = frames
 		variable_count = variables
 
 	func request_stack_dump(_session_id: int = -1) -> Dictionary:
+		stack_dump_requests += 1
 		return {"status": "requested"}
 
 	func get_latest_stack_dump() -> Array:
@@ -79,6 +82,7 @@ class FakeStackBridge:
 		return frames
 
 	func request_stack_frame_vars(_frame: int, _session_id: int = -1) -> Dictionary:
+		stack_variable_requests += 1
 		return {"status": "requested"}
 
 	func get_latest_stack_variables(_frame: int) -> Array:
@@ -234,6 +238,30 @@ func test_get_debug_stack_variables_truncates_to_limit():
 	assert_eq(result.get("count"), 10, "Returned variable count is capped at the limit")
 	assert_eq(result.get("total_count"), 25, "total_count reports the full number of variables")
 	assert_true(result.get("truncated"), "truncated flag is set when variables exceed the limit")
+
+func test_debug_stack_pages_reconstruct_without_refreshing_snapshot():
+	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()
+	_runtime_bridge = FakeStackBridge.new(7, 7)
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(_runtime_bridge))
+	var first_frames: Dictionary = debug_tools._tool_get_debug_stack_frames({"limit": 3})
+	var second_frames: Dictionary = debug_tools._tool_get_debug_stack_frames({
+		"limit": 3, "offset": first_frames.get("next_offset", -1), "refresh": false
+	})
+	assert_eq(second_frames.get("frames", [])[0].get("index"), 3,
+		"Frame continuation starts at the advertised offset")
+	assert_eq(_runtime_bridge.stack_dump_requests, 1,
+		"Following a page with refresh=false reuses the captured debugger snapshot")
+	assert_true(second_frames.get("has_more"), "A third frame page remains available")
+
+	var first_variables: Dictionary = debug_tools._tool_get_debug_stack_variables({"frame": 0, "limit": 4})
+	var second_variables: Dictionary = debug_tools._tool_get_debug_stack_variables({
+		"frame": 0, "limit": 4, "offset": first_variables.get("next_offset", -1), "refresh": false
+	})
+	assert_eq(second_variables.get("variables", [])[0].get("name"), "v4",
+		"Variable continuation starts at the advertised offset")
+	assert_eq(_runtime_bridge.stack_variable_requests, 1,
+		"Variable follow-up does not request a different debugger snapshot")
+	assert_false(second_variables.get("has_more", true), "The second variable page is final")
 
 func test_get_debug_scopes_not_truncated_by_variable_limit():
 	var debug_tools: RefCounted = load("res://addons/godot_mcp/tools/debug_bridge_tools.gd").new()

@@ -30,7 +30,9 @@ const CACHEABLE_READ_TOOLS: Array[String] = [
 	"list_project_autoloads", "list_project_global_classes", "get_import_status",
 	"list_tool_catalog", "search_tools", "get_tool_details",
 	"read_script", "batch_read_scripts", "get_project_info",
-	"get_project_settings", "read_resource_properties", "get_resource_dependencies"
+	"get_project_settings", "read_resource_properties", "get_resource_dependencies",
+	"find_resource_usages", "list_unused_resources",
+	"scan_migration_compatibility", "find_deprecated_api_usage"
 ]
 
 const STATIC_READ_TAGS: Dictionary = {
@@ -52,7 +54,15 @@ const STATIC_READ_TAGS: Dictionary = {
 	"search_tools": [TAG_TOOL_CATALOG],
 	"get_tool_details": [TAG_TOOL_CATALOG],
 	"get_project_info": [TAG_PROJECT_SETTINGS],
-	"get_project_settings": [TAG_PROJECT_SETTINGS]
+	"get_project_settings": [TAG_PROJECT_SETTINGS],
+	"find_resource_usages": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
+		TAG_RESOURCE_CATALOG, TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE],
+	"list_unused_resources": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
+		TAG_RESOURCE_CATALOG, TAG_PROJECT_SETTINGS],
+	"scan_migration_compatibility": [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE,
+		TAG_SCRIPT_CATALOG],
+	"find_deprecated_api_usage": [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE,
+		TAG_SCRIPT_CATALOG]
 }
 
 const GLOBAL_MUTATION_TOOLS: Array[String] = [
