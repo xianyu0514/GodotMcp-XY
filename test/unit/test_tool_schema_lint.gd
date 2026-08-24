@@ -40,6 +40,9 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/project_workflow_tools.gd",
 	"res://addons/godot_mcp/tools/meta_tools_native.gd",
 ]
+const WORKFLOW_ROUTER = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
+const TRANSLATION_MANAGER = preload("res://addons/godot_mcp/native_mcp/translation_manager.gd")
+const TOKEN_ESTIMATOR = preload("res://addons/godot_mcp/utils/token_estimator.gd")
 
 ## 允许关键字白名单 —— MCP/JSON Schema 常见安全子集。
 ## 覆盖当前 schema 实际用到的全部 7 个关键字（type/properties/required/items/
@@ -172,6 +175,7 @@ var _malformed_subschemas: Array[String] = []
 var _input_oneof: Array[String] = []
 var _output_oneof: Array[String] = []
 var _module_load_failures: Array[String] = []
+var _module_instances: Array[RefCounted] = []
 var _props_no_desc: Array[String] = []      # "tool -> prop"（无 description 且无 enum/const/items）
 var _top_props_total: int = 0
 
@@ -185,6 +189,9 @@ func before_all() -> void:
 			continue
 		var instance: RefCounted = script.new()
 		instance.register_tools(_core)
+		# Registered callables are bound to their module instances. Keep those
+		# instances alive so registry-level tests exercise the complete catalog.
+		_module_instances.append(instance)
 	_tools = _core.get_all_tools()
 	_scan_all_schemas()
 
@@ -197,6 +204,7 @@ func after_all() -> void:
 		for name in names:
 			_core.unregister_tool(name)
 	_tools = {}
+	_module_instances.clear()
 	_core = null
 
 
@@ -436,6 +444,39 @@ func test_tool_definitions_within_token_budget() -> void:
 	assert_eq(over_budget.size(), 0, "超单工具预算（%d token）的工具 %d 个（登记 KNOWN_OVER_BUDGET_TOOLS 或精简描述）：%s" % [TOOL_TOKEN_BUDGET, over_budget.size(), str(over_budget)])
 	assert_true(default_total <= DEFAULT_SET_TOKEN_BUDGET, "默认启用集总估算 %d 超预算 %d" % [default_total, DEFAULT_SET_TOKEN_BUDGET])
 	assert_true(full_total <= FULL_SET_TOKEN_BUDGET, "全量总估算 %d 超预算 %d" % [full_total, FULL_SET_TOKEN_BUDGET])
+
+
+func test_registered_schema_costs_match_budget_estimator() -> void:
+	var registered_costs: Dictionary = {}
+	for info_value in _core.get_registered_tools():
+		var info: Dictionary = info_value
+		registered_costs[String(info.get("name", ""))] = int(info.get("schema_tokens", 0))
+	assert_eq(registered_costs.size(), _tools.size(), "每个注册工具都应有不可变 schema 成本")
+	for tool_name in _tools:
+		var tool = _tools[tool_name]
+		var expected: int = TOKEN_ESTIMATOR.estimate_tool_definition(
+			tool.name, tool.description, tool.input_schema)
+		assert_eq(int(registered_costs.get(tool_name, 0)), expected,
+			"路由和预算门禁必须共享同一 token 口径: " + String(tool_name))
+
+
+func test_cost_aware_workflow_avoids_most_full_load_schema_tokens() -> void:
+	var router: RefCounted = WORKFLOW_ROUTER.new()
+	var routing_hints: Dictionary = TRANSLATION_MANAGER.new().load_locale("zh")
+	var route: Dictionary = router.route(
+		"debug runtime errors and verify performance",
+		_core.get_registered_tools(), 8, _core.get_tool_registry_revision(), routing_hints)
+	assert_lte(int(route.get("tool_count", 999)), 8, "真实目录路线仍受工具预算约束")
+	assert_gte(float(route.get("estimated_token_savings_ratio", 0.0)), 0.90,
+		"真实 221 工具目录的典型路线应避免至少 90% 的补充 schema token")
+	assert_gt(int(route.get("estimated_full_load_schema_tokens", 0)),
+		int(route.get("estimated_added_schema_tokens", 0)), "成本指标必须反映真实目录节省")
+	print("[CostAwareRoute] added=%d full=%d savings=%.2f%% tools=%d" % [
+		int(route.get("estimated_added_schema_tokens", 0)),
+		int(route.get("estimated_full_load_schema_tokens", 0)),
+		float(route.get("estimated_token_savings_ratio", 0.0)) * 100.0,
+		int(route.get("tool_count", 0)),
+	])
 
 
 # ----------------------------------------------------------------------------

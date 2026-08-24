@@ -24,6 +24,7 @@ func before_each() -> void:
 		_registered.append({
 			"name": name,
 			"description": String(descriptions.get(name, name.replace("_", " "))),
+			"schema_tokens": 96 + name.length() * 2,
 			"enabled": String(manifest.get("category", "")) in ["core", "meta"],
 			"category": String(manifest.get("category", "")),
 			"group": String(manifest.get("group", ""))
@@ -107,6 +108,51 @@ func test_routing_is_deterministic_and_output_bounded() -> void:
 	assert_eq(first, second, "Stable routing preserves result and prompt-cache reuse")
 	assert_lte(_flatten_tools(first).size(), 10,
 		"Even an excessive request is hard-capped to protect model context")
+
+func test_cost_aware_selection_prefers_cheaper_equal_coverage() -> void:
+	var catalog: Array = [
+		{
+			"name": "a_expensive_demo",
+			"description": "Handle a demo capability.",
+			"schema_tokens": 1200,
+			"enabled": false,
+			"category": "supplementary",
+			"group": "Project-Advanced"
+		},
+		{
+			"name": "z_cheap_demo",
+			"description": "Handle a demo capability.",
+			"schema_tokens": 40,
+			"enabled": false,
+			"category": "supplementary",
+			"group": "Project-Advanced"
+		}
+	]
+	var route: Dictionary = _router.route("demo", catalog, 1, 12)
+	assert_eq(_flatten_tools(route), ["z_cheap_demo"],
+		"Equal semantic coverage must choose the lower tools/list token cost")
+
+func test_exact_atomic_intent_overrides_schema_cost() -> void:
+	var catalog: Array = [
+		{"name": "expensive_exact", "description": "Expensive exact.", "schema_tokens": 2000,
+			"enabled": false, "category": "supplementary", "group": "Project-Advanced"},
+		{"name": "cheap_exact_helper", "description": "Cheap exact helper.", "schema_tokens": 20,
+			"enabled": false, "category": "supplementary", "group": "Project-Advanced"}
+	]
+	var route: Dictionary = _router.route("expensive_exact", catalog, 1, 13)
+	assert_eq(_flatten_tools(route), ["expensive_exact"],
+		"Cost optimization must never make an exact atomic capability unreachable")
+
+func test_route_reports_compact_schema_token_savings() -> void:
+	var route: Dictionary = _router.route(
+		"debug runtime errors and verify performance", _registered, 8, 14, _routing_hints)
+	var added_tokens: int = int(route.get("estimated_added_schema_tokens", -1))
+	var full_tokens: int = int(route.get("estimated_full_load_schema_tokens", -1))
+	var savings_ratio: float = float(route.get("estimated_token_savings_ratio", -1.0))
+	assert_gte(added_tokens, 0, "Route reports supplementary schema tokens added to the baseline")
+	assert_gt(full_tokens, added_tokens, "Bounded route must cost less than loading all supplementary schemas")
+	assert_gte(savings_ratio, 0.90, "Typical route should avoid at least 90% of full-load schema tokens")
+	assert_lte(savings_ratio, 1.0, "Savings ratio remains normalized")
 
 func test_immutable_index_builds_once_per_registry_revision() -> void:
 	_router.route("debug runtime errors", _registered, 8, 7, _routing_hints)

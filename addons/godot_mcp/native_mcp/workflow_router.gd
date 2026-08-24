@@ -6,15 +6,22 @@ extends RefCounted
 ## the intent terms with the fewest useful tools, then groups the selected names
 ## into inspect / execute / verify stages. Every non-meta tool participates in the
 ## adaptive index, while a small curated seed table improves common game workflows.
+## Equal-coverage candidates are ranked by semantic value per estimated schema
+## token so the enabled tool surface stays useful and small.
 
 const DEFAULT_TOOL_BUDGET: int = 8
 const MAX_TOOL_BUDGET: int = 10
 const ROUTE_CACHE_MAX: int = 64
+const DEFAULT_TOOL_SCHEMA_TOKENS: int = 128
+const TOOL_COUNT_TOKEN_PENALTY: int = 32
 const MIN_CURATED_SCORE: int = 40
 const CURATED_MIN_TOOLS: int = 4
 
 var _indexed_revision: int = -1
 var _indexed_tools: Array = []
+var _indexed_by_name: Dictionary = {}
+var _indexed_exact_by_intent: Dictionary = {}
+var _indexed_full_load_schema_tokens: int = 0
 var _route_cache: Dictionary = {}
 var _route_lru: Array[String] = []
 var _sorted_alias_keys: Array = []
@@ -162,8 +169,15 @@ func _get_sorted_alias_keys() -> Array:
 		)
 	return _sorted_alias_keys
 
-func _contains_search_token(haystack: String, needle: String) -> bool:
-	return (" " + haystack + " ").contains(" " + needle + " ")
+func _has_token_match(haystack: String, needle: String, first_match: int) -> bool:
+	var start: int = first_match
+	while start >= 0:
+		var end: int = start + needle.length()
+		if (start == 0 or haystack.unicode_at(start - 1) == 32) and (
+				end == haystack.length() or haystack.unicode_at(end) == 32):
+			return true
+		start = haystack.find(needle, start + 1)
+	return false
 
 func _score_term(info: Dictionary, variants: Array) -> int:
 	var name: String = String(info.get("_name_text", ""))
@@ -181,19 +195,19 @@ func _score_term(info: Dictionary, variants: Array) -> int:
 		var variant: String = String(variant_value)
 		if name == variant:
 			best = max(best, 300)
-		elif _contains_search_token(name, variant):
-			best = max(best, 160)
-		elif name.contains(variant):
-			best = max(best, 120)
-		elif _contains_search_token(group, variant) or group.contains(variant):
-			best = max(best, 50)
-		elif description.contains(variant):
-			best = max(best, 20)
 		else:
-			for routing_text_value in routing_texts:
-				if String(routing_text_value).contains(variant):
-					best = max(best, 20)
-					break
+			var name_match: int = name.find(variant)
+			if name_match >= 0:
+				best = max(best, 160 if _has_token_match(name, variant, name_match) else 120)
+			elif group.find(variant) >= 0:
+				best = max(best, 50)
+			elif description.find(variant) >= 0:
+				best = max(best, 20)
+			else:
+				for routing_text_value in routing_texts:
+					if String(routing_text_value).find(variant) >= 0:
+						best = max(best, 20)
+						break
 	return best
 
 func score_tool_match(info: Dictionary, query_raw: String, terms: Array) -> int:
@@ -232,6 +246,8 @@ func _build_capability_index(registered: Array, routing_hints: Dictionary) -> Ar
 		if String(info.get("category", "")) == "meta":
 			continue
 		var name: String = String(info.get("name", ""))
+		var category: String = String(info.get("category", ""))
+		var schema_tokens: int = max(1, int(info.get("schema_tokens", DEFAULT_TOOL_SCHEMA_TOKENS)))
 		var routing_texts: Array[String] = []
 		var hint_value: Variant = routing_hints.get(name, "")
 		if hint_value is Array:
@@ -245,9 +261,12 @@ func _build_capability_index(registered: Array, routing_hints: Dictionary) -> Ar
 				routing_texts.append(normalized_hint)
 		tools.append({
 			"name": name,
-			"category": String(info.get("category", "")),
+			"category": category,
 			"group": String(info.get("group", "")),
 			"description": String(info.get("description", "")),
+			"schema_tokens": schema_tokens,
+			"_incremental_schema_tokens": 0 if category == "core" else schema_tokens,
+			"_selection_cost": TOOL_COUNT_TOKEN_PENALTY if category == "core" else schema_tokens + TOOL_COUNT_TOKEN_PENALTY,
 			"_name_text": normalize_search_text(name),
 			"_group_text": normalize_search_text(String(info.get("group", ""))),
 			"_description_text": normalize_search_text(String(info.get("description", ""))),
@@ -263,21 +282,39 @@ func _ensure_capability_index(registered: Array, registry_revision: int, routing
 		return _build_capability_index(registered, routing_hints)
 	if _indexed_revision != registry_revision:
 		_indexed_tools = _build_capability_index(registered, routing_hints)
+		var cost_index: Dictionary = _build_cost_index(_indexed_tools)
+		_indexed_by_name = cost_index.get("by_name", {})
+		_indexed_exact_by_intent = cost_index.get("exact_by_intent", {})
+		_indexed_full_load_schema_tokens = int(cost_index.get("full_load_schema_tokens", 0))
 		_indexed_revision = registry_revision
 		_index_builds += 1
 		_route_cache.clear()
 		_route_lru.clear()
 	return _indexed_tools
 
-func _matches_canonical_intent(info: Dictionary, normalized_query: String) -> bool:
-	if String(info.get("_name_text", "")) == normalized_query:
-		return true
-	if String(info.get("_description_text", "")) == normalized_query:
-		return true
-	for routing_text_value in info.get("_routing_texts", []):
-		if String(routing_text_value) == normalized_query:
-			return true
-	return false
+func _build_cost_index(atomic_tools: Array) -> Dictionary:
+	var by_name: Dictionary = {}
+	var exact_by_intent: Dictionary = {}
+	var full_load_schema_tokens: int = 0
+	for info_value in atomic_tools:
+		var info: Dictionary = info_value
+		var name: String = String(info.get("name", ""))
+		by_name[name] = info
+		var exact_intents: Array = [
+			String(info.get("_name_text", "")),
+			String(info.get("_description_text", "")),
+		]
+		exact_intents.append_array(info.get("_routing_texts", []))
+		for intent_value in exact_intents:
+			var intent: String = String(intent_value)
+			if not intent.is_empty() and not exact_by_intent.has(intent):
+				exact_by_intent[intent] = name
+		full_load_schema_tokens += int(info.get("_incremental_schema_tokens", 0))
+	return {
+		"by_name": by_name,
+		"exact_by_intent": exact_by_intent,
+		"full_load_schema_tokens": full_load_schema_tokens
+	}
 
 func _route_cache_key(query: String, budget: int) -> String:
 	return normalize_search_text(query) + "|" + str(budget)
@@ -317,7 +354,7 @@ func _score_curated_workflow(workflow: Dictionary, terms: Array, normalized_quer
 		var variants: Array = variants_value
 		for variant_value in variants:
 			var variant: String = String(variant_value)
-			if _contains_search_token(haystack, variant) or haystack.contains(variant):
+			if haystack.contains(variant):
 				score += 25
 				break
 	for keyword_value in workflow.get("_normalized_keywords", []):
@@ -385,6 +422,26 @@ func _build_stages(selected: Array[String]) -> Array[Dictionary]:
 			stages.append({"phase": phase, "tools": buckets[phase]})
 	return stages
 
+func _build_cost_metrics(
+	selected: Array[String],
+	atomic_by_name: Dictionary,
+	full_load_schema_tokens: int
+) -> Dictionary:
+	var added_schema_tokens: int = 0
+	for tool_name in selected:
+		var info: Dictionary = atomic_by_name.get(tool_name, {})
+		added_schema_tokens += int(info.get("_incremental_schema_tokens", 0))
+	var savings_ratio: float = 1.0
+	if full_load_schema_tokens > 0:
+		savings_ratio = clamp(
+			1.0 - float(added_schema_tokens) / float(full_load_schema_tokens), 0.0, 1.0)
+		savings_ratio = round(savings_ratio * 10000.0) / 10000.0
+	return {
+		"estimated_added_schema_tokens": added_schema_tokens,
+		"estimated_full_load_schema_tokens": full_load_schema_tokens,
+		"estimated_token_savings_ratio": savings_ratio
+	}
+
 func route(
 	query_raw: String,
 	registered: Array,
@@ -401,38 +458,53 @@ func route(
 	if registry_revision >= 0 and _route_cache.has(cache_key):
 		return _get_cached_route(cache_key)
 	_route_computations += 1
-	var result: Dictionary = _compute_route(query, atomic_tools, budget)
+	var atomic_by_name: Dictionary = _indexed_by_name
+	var exact_by_intent: Dictionary = _indexed_exact_by_intent
+	var full_load_schema_tokens: int = _indexed_full_load_schema_tokens
+	if registry_revision < 0:
+		var local_cost_index: Dictionary = _build_cost_index(atomic_tools)
+		atomic_by_name = local_cost_index.get("by_name", {})
+		exact_by_intent = local_cost_index.get("exact_by_intent", {})
+		full_load_schema_tokens = int(local_cost_index.get("full_load_schema_tokens", 0))
+	var result: Dictionary = _compute_route(
+		query, atomic_tools, budget, atomic_by_name, exact_by_intent,
+		full_load_schema_tokens)
 	if registry_revision >= 0:
 		_store_cached_route(cache_key, result)
 	return result
 
-func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictionary:
+func _compute_route(
+	query: String,
+	atomic_tools: Array,
+	budget: int,
+	atomic_by_name: Dictionary,
+	exact_by_intent: Dictionary,
+	full_load_schema_tokens: int
+) -> Dictionary:
 	var terms: Array = build_query_terms(query, true)
 	if terms.is_empty():
 		terms = [[normalize_search_text(query)]]
 	var normalized_query: String = normalize_search_text(query)
-	var atomic_names: Dictionary = {}
-	for info_value in atomic_tools:
-		atomic_names[String((info_value as Dictionary).get("name", ""))] = true
 	# Exact atomic names are an escape hatch with strict priority. This guarantees
 	# complete bilingual coverage and avoids adding workflow companions to a
 	# one-tool intent when an official capability description is supplied.
-	for info_value in atomic_tools:
-		var exact_info: Dictionary = info_value
-		var exact_name: String = String(exact_info.get("name", ""))
-		if _matches_canonical_intent(exact_info, normalized_query):
-			var exact_labels: Array[String] = []
-			for variants_value in terms:
-				exact_labels.append(_term_label(variants_value))
-			return {
-				"matched_workflow": "adaptive",
-				"stages": _build_stages([exact_name]),
-				"tool_count": 1,
-				"covered_terms": exact_labels,
-				"uncovered_terms": [],
-				"coverage_ratio": 1.0,
-				"tool_budget": budget
-			}
+	var exact_name: String = String(exact_by_intent.get(normalized_query, ""))
+	if not exact_name.is_empty():
+		var exact_labels: Array[String] = []
+		for variants_value in terms:
+			exact_labels.append(_term_label(variants_value))
+		var exact_result: Dictionary = {
+			"matched_workflow": "adaptive",
+			"stages": _build_stages([exact_name]),
+			"tool_count": 1,
+			"covered_terms": exact_labels,
+			"uncovered_terms": [],
+			"coverage_ratio": 1.0,
+			"tool_budget": budget
+		}
+		exact_result.merge(_build_cost_metrics(
+			[exact_name], atomic_by_name, full_load_schema_tokens))
+		return exact_result
 	var curated: Dictionary = _best_curated_workflow(terms, normalized_query)
 	var curated_names: Array = curated.get("tools", [])
 
@@ -447,15 +519,15 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 			if term_score > 0:
 				matches.append(term_index)
 				score += term_score
-		if normalize_search_text(name) == normalized_query:
-			score += 5000
-			matches.clear()
-			for term_index in range(terms.size()):
-				matches.append(term_index)
 		if name in curated_names:
 			score += 80
 		if score > 0:
-			candidates.append({"name": name, "matches": matches, "score": score})
+			candidates.append({
+				"name": name,
+				"matches": matches,
+				"score": score,
+				"selection_cost": int(info.get("_selection_cost", DEFAULT_TOOL_SCHEMA_TOKENS + TOOL_COUNT_TOKEN_PENALTY))
+			})
 
 	var uncovered: Dictionary = {}
 	for term_index in range(terms.size()):
@@ -464,14 +536,14 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 	var forced_tools: Array[String] = []
 	if not curated.is_empty() and _has_term_label(terms, ["运行", "run", "launch", "execute"]):
 		for preferred_name in ["run_project", "play_and_verify", "run_export", "run_project_tests"]:
-			if preferred_name in curated_names and atomic_names.has(preferred_name):
+			if preferred_name in curated_names and atomic_by_name.has(preferred_name):
 				forced_tools.append(preferred_name)
 				break
 	if not curated.is_empty() and _has_term_label(terms, ["验证", "测试", "verify", "validate", "assert", "test"]):
 		for tool_value in curated_names:
 			var verifier_name: String = String(tool_value)
 			if (_stage_for_tool(verifier_name) == "verify" and verifier_name not in forced_tools
-					and atomic_names.has(verifier_name)):
+					and atomic_by_name.has(verifier_name)):
 				forced_tools.append(verifier_name)
 				break
 	for forced_name in forced_tools:
@@ -487,8 +559,9 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 			break
 	while selected.size() < budget:
 		var best: Dictionary = {}
-		var best_value: int = -1
 		var best_new_coverage: int = 0
+		var best_cost: int = 1
+		var best_score: int = 0
 		for candidate_value in candidates:
 			var candidate: Dictionary = candidate_value
 			var candidate_name: String = String(candidate.get("name", ""))
@@ -498,11 +571,24 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 			for term_index in candidate.get("matches", []):
 				if uncovered.has(term_index):
 					new_coverage += 1
-			var value: int = new_coverage * 1000 + int(candidate.get("score", 0))
-			if value > best_value or (value == best_value and candidate_name < String(best.get("name", ""))):
+			var candidate_cost: int = int(candidate.get("selection_cost", DEFAULT_TOOL_SCHEMA_TOKENS + TOOL_COUNT_TOKEN_PENALTY))
+			var candidate_score: int = int(candidate.get("score", 0))
+			var better: bool = best.is_empty() or new_coverage > best_new_coverage
+			if not better and new_coverage == best_new_coverage:
+				# Compare score/cost ratios with integer cross multiplication to keep
+				# ranking byte-stable across platforms and avoid float noise.
+				var candidate_value_ratio: int = candidate_score * best_cost
+				var best_value_ratio: int = best_score * candidate_cost
+				better = candidate_value_ratio > best_value_ratio
+				if candidate_value_ratio == best_value_ratio:
+					better = candidate_cost < best_cost
+					if candidate_cost == best_cost:
+						better = candidate_name < String(best.get("name", ""))
+			if better:
 				best = candidate
-				best_value = value
 				best_new_coverage = new_coverage
+				best_cost = candidate_cost
+				best_score = candidate_score
 		if best.is_empty() or best_new_coverage == 0 or (uncovered.is_empty() and selected.size() >= 1):
 			break
 		var best_name: String = String(best.get("name", ""))
@@ -517,7 +603,7 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 			if selected.size() >= min(budget, CURATED_MIN_TOOLS):
 				break
 			var tool_name: String = String(tool_value)
-			if tool_name not in selected and atomic_names.has(tool_name):
+			if tool_name not in selected and atomic_by_name.has(tool_name):
 				selected.append(tool_name)
 
 	var covered_terms: Array[String] = []
@@ -532,7 +618,7 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 	if not terms.is_empty():
 		ratio = float(covered_terms.size()) / float(terms.size())
 
-	return {
+	var result: Dictionary = {
 		"matched_workflow": String(curated.get("id", "adaptive")),
 		"stages": _build_stages(selected),
 		"tool_count": selected.size(),
@@ -541,6 +627,8 @@ func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictiona
 		"coverage_ratio": ratio,
 		"tool_budget": budget
 	}
+	result.merge(_build_cost_metrics(selected, atomic_by_name, full_load_schema_tokens))
+	return result
 
 func validate_curated_tool_references(registered: Array) -> Array[String]:
 	var registered_names: Dictionary = {}

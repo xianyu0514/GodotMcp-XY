@@ -86,6 +86,31 @@ func test_registry_revision_ignores_visibility_changes() -> void:
 	assert_eq(_core.get_tool_registry_revision(), registered_revision + 1,
 		"Unregistration advances immutable registry revision")
 
+func test_registered_tools_expose_stable_schema_token_estimates() -> void:
+	_core.register_tool("small_schema", "Small schema.", {
+		"type": "object", "properties": {}
+	}, func(args): return {}, {}, {}, "supplementary", "Debug-Advanced")
+	_core.register_tool("large_schema", "Large schema.", {
+		"type": "object",
+		"properties": {
+			"payload": {"type": "string", "description": "x".repeat(512)}
+		}
+	}, func(args): return {}, {}, {}, "supplementary", "Debug-Advanced")
+	var costs: Dictionary = {}
+	for info_value in _core.get_registered_tools():
+		var info: Dictionary = info_value
+		costs[String(info.get("name", ""))] = int(info.get("schema_tokens", 0))
+	assert_gt(int(costs.get("small_schema", 0)), 0, "Every valid tool gets a positive schema cost")
+	assert_gt(int(costs.get("large_schema", 0)), int(costs.get("small_schema", 0)),
+		"Larger tools/list definitions must cost more")
+	var stable_cost: int = int(costs.get("large_schema", 0))
+	_core.set_tool_enabled("large_schema", true)
+	for info_value in _core.get_registered_tools():
+		var info: Dictionary = info_value
+		if String(info.get("name", "")) == "large_schema":
+			assert_eq(int(info.get("schema_tokens", 0)), stable_cost,
+				"Visibility changes must not recompute or alter immutable schema cost")
+
 func test_set_tool_enabled():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.set_tool_enabled("test_tool", false)
