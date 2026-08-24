@@ -264,6 +264,15 @@ func test_enable_tools_workflow_can_preserve_enabled_supplementary_tools():
 	assert_false(result.get("replaced_supplementary", true), "Response reports incremental activation")
 	assert_eq(_core.bulk_apply_calls, 1, "Incremental activation remains one bulk transition")
 
+func test_enable_tools_repeated_workflow_keeps_catalog_revision_stable():
+	_tool._tool_enable_tools({"workflow_query": "get_runtime_info"})
+	var first_revision: int = _core.catalog_revision
+	var repeated: Dictionary = _tool._tool_enable_tools({"workflow_query": "get_runtime_info"})
+	assert_eq(repeated.get("changed_count", -1), 0, "The same task profile becomes a no-op")
+	assert_eq(repeated.get("catalog_revision", 0), first_revision,
+		"A repeated task must preserve the tools/list cache key")
+	assert_eq(_core.notified, 1, "Only the first activation should refresh client schemas")
+
 func test_enable_tools_workflow_rejects_blank_intent():
 	var result: Dictionary = _tool._tool_enable_tools({"workflow_query": "   "})
 	assert_has(result, "error", "An explicitly blank workflow intent must fail closed")
