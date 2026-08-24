@@ -37,6 +37,7 @@ signal log_message(level: String, message: String)
 const JSONRPC_VERSION: String = "2.0"
 const PROTOCOL_VERSION: String = "2025-11-25"
 const CACHE_REVISION_INDEX_SCRIPT = preload("res://addons/godot_mcp/native_mcp/cache_revision_index.gd")
+const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estimator.gd")
 
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
@@ -167,6 +168,10 @@ var _tool_catalog_revision: int = 0
 # Definition-only revision for immutable routing/search indices. Unlike the
 # catalog revision, visibility changes do not advance this value.
 var _tool_registry_revision: int = 0
+# Approximate tools/list token costs are computed once with the same canonical
+# DSH-inspired estimator used by the schema budget gate. They guide relative
+# route optimization only; they are never billing or protocol behavior.
+var _tool_schema_token_costs: Dictionary = {}
 
 var _classifier = null  # MCPToolClassifier (lazy-loaded for GUT CLI compat)
 var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat)
@@ -1149,6 +1154,7 @@ func register_tool(name: String, description: String,
 		return
 	
 	_tools[name] = tool
+	_tool_schema_token_costs[name] = _estimate_tool_schema_tokens(tool)
 	_invalidate_tool_list_cache()
 	_tool_catalog_revision += 1
 	_tool_registry_revision += 1
@@ -1158,6 +1164,7 @@ func register_tool(name: String, description: String,
 func unregister_tool(name: String) -> void:
 	if _tools.has(name):
 		_tools.erase(name)
+		_tool_schema_token_costs.erase(name)
 		_invalidate_tool_list_cache()
 		_tool_catalog_revision += 1
 		_tool_registry_revision += 1
@@ -1186,9 +1193,14 @@ func get_registered_tools() -> Array:
 				"description": tool.description,
 				"enabled": tool.enabled,
 				"category": tool.category,
-				"group": tool.group
+				"group": tool.group,
+				"schema_tokens": int(_tool_schema_token_costs.get(tool_name, 1))
 			})
 	return tools_info
+
+func _estimate_tool_schema_tokens(tool: MCPTypes.MCPTool) -> int:
+	return TOKEN_ESTIMATOR_SCRIPT.estimate_tool_definition(
+		tool.name, tool.description, tool.input_schema)
 
 func set_tool_enabled(tool_name: String, enabled: bool) -> void:
 	if not _tools.has(tool_name):
