@@ -30,7 +30,7 @@ This keeps the initial tool list small enough for AI clients while preserving ac
 Progressive discovery mirrors the official MCP pattern: catalog → search → details → enable.
 
 1. Start with core tools and meta tools.
-2. Call `list_tool_catalog` with a `group` or `query` filter to inspect available tools, or `search_tools` with multiple keywords (AND) to pinpoint tools for a task.
+2. Prefer `search_tools` with a short English or Chinese task intent; it returns a small relevance-ranked candidate list. Use `list_tool_catalog` with `summary_only=true` only to browse groups.
 3. Call `get_tool_details` for the exact schema of a specific tool before invoking it.
 4. Call `enable_tools` with explicit `tools`, `groups` or a preset.
 5. Wait for `notifications/tools/list_changed` and let the client refresh.

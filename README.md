@@ -68,7 +68,7 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | Always-on tool discovery and on-demand enablement |
 | **Total** | **221** | **28** | **189** | |
 
-Only core and meta tools are visible to `tools/list` at startup. Use the MCP panel or the `enable_tools` meta tool to enable advanced tools by name, group or one of 12 practical presets. The panel previews each preset's purpose and tool count, and offers task-focused 2D, 3D, UI, asset/animation, debug/test and release views so unrelated tool families can stay disabled. See the [Tools Reference](docs/tools/README.md).
+Only core and meta tools are visible to `tools/list` at startup. `search_tools` ranks a small English/Chinese task-intent result set locally, then `enable_tools` applies names, groups or one of 12 practical presets in one atomic update. Group summaries, catalog revisions and targeted cache invalidation keep discovery responses small without evicting unrelated project reads. See the [Tools Reference](docs/tools/README.md).
 
 ## Example prompts
 
