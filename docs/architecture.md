@@ -38,6 +38,7 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 | --- | --- |
 | `mcp_server_native.gd` | EditorPlugin entry point, settings wiring, panel registration and server lifecycle. |
 | `native_mcp/mcp_server_core.gd` | JSON-RPC/MCP method handling, tool registry, notifications and server-wide options. |
+| `native_mcp/cache_revision_index.gd` | Dependency-tagged result-cache revisions and mutation impact routing; enables O(1) lazy invalidation instead of whole-cache flushes. |
 | `native_mcp/mcp_http_server.gd` | HTTP endpoint and SSE transport. |
 | `native_mcp/mcp_stdio_server.gd` | stdio transport for clients that spawn the server process. |
 | `native_mcp/mcp_types.gd` | Protocol constants and shared data structures. |
@@ -88,6 +89,12 @@ Tool registration uses `server_core.register_tool(...)` with name, description, 
 This design keeps the default client context small without making specialized capabilities unavailable.
 
 `native_mcp/workflow_router.gd` is a pure-logic discovery layer used by `search_tools(mode="workflow")`. It does not register another MCP tool or duplicate schemas. A deterministic single catalog scan combines 11 small curated game-development seeds with an adaptive fallback over every non-meta tool, greedily covers intent terms, and emits only a bounded list of names grouped into inspect/execute/verify stages. Exact tool-name queries have strict priority, which makes all 217 atomic capabilities routable while the default workflow payload remains capped at 8 names (hard maximum 10).
+
+## Result cache and revisions
+
+Expensive deterministic reads use a 64-entry in-memory LRU with canonical argument keys, preformatted MCP payloads, single-flight deduplication and a 60-second out-of-band edit backstop. `cache_revision_index.gd` assigns each cached read a compact dependency snapshot (scene content, file catalogs, project settings, import state, tool catalog, or exact script/resource paths).
+
+Mutating tools advance only the revisions they can affect. The write path therefore touches a bounded number of integers and never scans or clears the LRU. Stale entries are removed lazily when their key is requested, while unrelated entries stay hot. Script and resource reads are path-scoped; runtime-only debugger writes preserve all editor/project entries. Unknown or plugin-defined writers fail safe by advancing the global revision. This increases hit rate without weakening correctness, and the existing TTL still bounds changes made outside MCP.
 
 ## Runtime probe
 

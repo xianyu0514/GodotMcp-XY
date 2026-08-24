@@ -36,6 +36,7 @@ signal log_message(level: String, message: String)
 
 const JSONRPC_VERSION: String = "2.0"
 const PROTOCOL_VERSION: String = "2025-11-25"
+const CACHE_REVISION_INDEX_SCRIPT = preload("res://addons/godot_mcp/native_mcp/cache_revision_index.gd")
 
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
@@ -62,21 +63,13 @@ const MAX_QUEUE_WAIT_SECONDS: float = 30.0
 const MAX_WAITING_REQUESTS: int = 256
 
 ## Read-only tools whose (potentially expensive) results are cached and served
-## directly on a repeat call until a mutating tool invalidates the cache. Keys
+## directly on a repeat call while their dependency revisions remain current. Keys
 ## are deterministic: tool name + canonical (key-sorted) JSON of the arguments,
 ## so identical calls share one cache entry regardless of argument insertion
-## order. Limited to structural reads (scene-tree walks, filesystem scans,
-## project metadata) whose result changes only via MCP mutations, which clear
-## the cache; the RESULT_CACHE_TTL_MS TTL bounds staleness from any out-of-band
-## edit made outside the MCP server.
-const CACHEABLE_READ_TOOLS: Array[String] = [
-	"get_scene_structure", "list_nodes", "list_project_scenes",
-	"list_project_scripts", "get_project_structure", "list_open_scenes",
-	"get_scene_tree", "get_node_properties", "batch_get_node_properties",
-	"list_project_resources", "list_project_input_actions",
-	"list_project_autoloads", "list_project_global_classes", "get_import_status",
-	"list_tool_catalog", "search_tools", "get_tool_details"
-]
+## order. Limited to deterministic scene/project scans and path-scoped script or
+## resource reads. MCP mutations advance only related revisions; the TTL bounds
+## staleness from any out-of-band edit made outside the MCP server.
+const CACHEABLE_READ_TOOLS: Array[String] = CACHE_REVISION_INDEX_SCRIPT.CACHEABLE_READ_TOOLS
 
 ## Discovery results depend on the registered tool catalog and enabled states,
 ## but project/scene reads do not. Catalog-only changes evict just these entries
@@ -95,8 +88,8 @@ const CACHE_PRESERVING_MUTATION_TOOLS: Array[String] = ["enable_tools"]
 ## evicted.
 const RESULT_CACHE_MAX: int = 64
 
-## TTL (ms) for cached tool results. Invalidation is primarily event-driven
-## (project mutations clear the whole cache; catalog mutations are targeted);
+## TTL (ms) for cached tool results. Invalidation is primarily revision-driven
+## (project mutations advance dependency tags; catalog mutations are targeted);
 ## this TTL is only a bounded-staleness
 ## backstop for out-of-band edits made outside the MCP server — deliberately
 ## much shorter than the old 5-minute scene-structure TTL.
@@ -189,15 +182,18 @@ var _server_version: String = "0.0.0"
 var _request_count: Dictionary = {}  # String (client_id) -> int
 var _request_timestamps: Dictionary = {}  # String (client_id) -> Array[int]
 
-# 结果缓存（LRU + 事件失效）
-# _result_cache: key -> {"value": Variant, "last_access": int (ms)}
+# 结果缓存（LRU + 依赖域 revision 懒失效）
+# _result_cache: key -> {"value", "last_access", "revision_snapshot"}
 var _result_cache: Dictionary = {}
 # LRU 最近使用列表：下标 0 = 最常使用，与 _result_cache 的 key 一一对应
 var _result_cache_order: Array[String] = []
-# 单飞标记：正在执行的 key -> true（同一 key 并发时合并执行）
+# 单飞标记：正在执行的 key -> revision snapshot（同一 key 并发时合并执行）
 var _cache_inflight: Dictionary = {}
-# 缓存失效代数：每次失效 +1；失效前已启动的读工具完成后不得写入（结果已过期）
+# 缓存状态变更计数（兼容诊断/测试）；正确性由依赖 revision snapshot 保证。
 var _cache_generation: int = 0
+# Project/editor dependency revision index. Mutations advance a few tags in O(1)
+# instead of scanning and clearing the full result cache.
+var _cache_revision_index = CACHE_REVISION_INDEX_SCRIPT.new()
 
 ## Requests the client asked to cancel via `notifications/cancelled`
 ## (request id -> true). Long-running tools poll `is_request_cancelled()` /
@@ -730,17 +726,20 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	# Read-through cache: serve a cached result for expensive read-only queries
 	# instead of re-walking the scene tree / rescanning the project. Keys are
-	# deterministic (canonical JSON of the arguments) and the whole cache is
-	# dropped whenever a mutating tool runs below, so a hit always reflects the
-	# live tree. Single-flight dedupe: if the same key is already executing, wait
+	# deterministic (canonical JSON of the arguments). Each entry captures only
+	# the project revision tags it depends on; a hit validates those integers in
+	# O(tags) without rescanning the cache. Single-flight dedupe: if the same key
+	# is already executing, wait
 	# a frame and reuse its result instead of running a duplicate (the serial
 	# request queue already prevents most overlap; this covers direct concurrent
 	# invocations).
 	var is_cacheable_read: bool = tool_name in CACHEABLE_READ_TOOLS
 	var cache_key: String = ""
-	var cache_generation_at_start: int = _cache_generation
+	var cache_revision_snapshot_at_start: Dictionary = {}
 	if is_cacheable_read:
 		cache_key = tool_name + ":" + _canonical_json(arguments)
+		var dependency_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.read_tags(tool_name, arguments)
+		cache_revision_snapshot_at_start = _cache_revision_index.snapshot(dependency_tags)
 		var cached_formatted: Variant = _result_cache_get_formatted(cache_key)
 		if cached_formatted is Dictionary:
 			_log_info("Serving cached result for: " + tool_name)
@@ -749,6 +748,10 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		if cached != null:
 			_log_info("Serving cached result (legacy entry) for: " + tool_name)
 			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
+		if _cache_inflight.has(cache_key):
+			var inflight_snapshot: Variant = _cache_inflight[cache_key]
+			if inflight_snapshot is Dictionary and not _cache_revision_index.is_current(inflight_snapshot):
+				_cache_inflight.erase(cache_key)
 		if _cache_inflight.has(cache_key):
 			var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
 			if main_loop:
@@ -761,7 +764,7 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 			if retried != null:
 				_log_info("Serving result from in-flight twin for: " + tool_name)
 				return MCPTypes.create_response(id, _format_tool_result(retried, tool))
-		_cache_inflight[cache_key] = true
+		_cache_inflight[cache_key] = cache_revision_snapshot_at_start
 	
 	# 发送开始信号
 	tool_execution_started.emit(tool_name, arguments)
@@ -815,18 +818,19 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	var response_result: Dictionary = _format_tool_result(result, tool)
 
 	# Keep the result cache coherent: store successful cacheable reads together
-	# with their already-formatted payload (so repeat calls skip JSON.stringify +
-	# spill checks), and drop the whole cache when a mutating tool runs
-	# (readOnlyHint == false) so subsequent reads never serve a stale tree. A read
-	# that started before a mutation invalidated the cache (cache_generation
-	# bumped) must not cache its now-stale result.
+	# with their formatted payload and dependency-revision snapshot. Mutations
+	# advance only affected revisions; stale entries are discarded on access.
+	# A read that overlapped a relevant mutation cannot repopulate the cache
+	# because its captured snapshot no longer matches.
 	if is_cacheable_read:
-		if not has_error and result is Dictionary and cache_generation_at_start == _cache_generation:
-			_result_cache_put(cache_key, result, response_result)
+		if not has_error and result is Dictionary and _cache_revision_index.is_current(cache_revision_snapshot_at_start):
+			_result_cache_put(cache_key, result, response_result, cache_revision_snapshot_at_start)
 		else:
 			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)) and tool_name not in CACHE_PRESERVING_MUTATION_TOOLS:
-		_invalidate_result_cache()
+		var mutation_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.mutation_tags(
+			tool_name, tool.group, arguments)
+		_advance_result_cache_revisions(mutation_tags, tool_name)
 
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
 	
@@ -1406,7 +1410,7 @@ func _check_rate_limit(client_id: String) -> bool:
 	return true
 
 # ============================================================================
-# 结果缓存机制（LRU + 确定性 key + 事件失效）
+# 结果缓存机制（LRU + 确定性 key + 依赖 revision 懒失效）
 # ============================================================================
 
 ## Deterministic JSON serialization used to build cache keys: dictionary keys are
@@ -1438,15 +1442,18 @@ static func _canonical_json(data: Variant) -> String:
 				encoded = JSON.stringify(str(data))
 			return encoded
 
-## Fetch (and LRU-touch) a cache entry. Returns {} on miss or TTL expiry
-## (expired entries are dropped immediately).
+## Fetch (and LRU-touch) a cache entry. Returns {} on miss, TTL expiry, or a
+## dependency revision mismatch (stale entries are dropped immediately).
 func _result_cache_get_entry(key: String) -> Dictionary:
 	if not _result_cache.has(key):
 		return {}
 	var entry: Dictionary = _result_cache[key]
 	if Time.get_ticks_msec() - int(entry.get("last_access", 0)) > RESULT_CACHE_TTL_MS:
-		_result_cache.erase(key)
-		_result_cache_order.erase(key)
+		_erase_result_cache_key(key)
+		return {}
+	var revision_snapshot: Variant = entry.get("revision_snapshot", null)
+	if revision_snapshot is Dictionary and not _cache_revision_index.is_current(revision_snapshot):
+		_erase_result_cache_key(key)
 		return {}
 	entry["last_access"] = Time.get_ticks_msec()
 	_result_cache_touch(key)
@@ -1474,13 +1481,15 @@ func _result_cache_get_formatted(key: String) -> Variant:
 ## `formatted` payload is the exact response result produced by
 ## `_format_tool_result`; storing it lets cache hits skip JSON.stringify and
 ## spill re-checks.
-func _result_cache_put(key: String, value: Variant, formatted: Variant = null) -> void:
+func _result_cache_put(key: String, value: Variant, formatted: Variant = null,
+		revision_snapshot: Dictionary = {}) -> void:
 	if _result_cache.has(key):
-		_result_cache.erase(key)
-		_result_cache_order.erase(key)
+		_erase_result_cache_key(key)
 	var entry: Dictionary = {"value": value, "last_access": Time.get_ticks_msec()}
 	if formatted != null:
 		entry["formatted"] = formatted
+	if not revision_snapshot.is_empty():
+		entry["revision_snapshot"] = revision_snapshot.duplicate()
 	_result_cache[key] = entry
 	_cache_inflight.erase(key)
 	_result_cache_order.push_front(key)
@@ -1489,6 +1498,12 @@ func _result_cache_put(key: String, value: Variant, formatted: Variant = null) -
 		_result_cache.erase(evicted_key)
 		_cache_inflight.erase(evicted_key)
 
+## Remove one entry from both the value map and the recency index.
+func _erase_result_cache_key(key: String) -> void:
+	_result_cache.erase(key)
+	_result_cache_order.erase(key)
+	_cache_inflight.erase(key)
+
 ## Move a key to the most-recently-used position (index 0) of the LRU order.
 func _result_cache_touch(key: String) -> void:
 	var idx: int = _result_cache_order.find(key)
@@ -1496,12 +1511,11 @@ func _result_cache_touch(key: String) -> void:
 		_result_cache_order.remove_at(idx)
 		_result_cache_order.push_front(key)
 
-## Drop the whole result cache. Called after any mutating tool so the next read
-## recomputes from the live tree instead of serving stale data. Also bumps the
-## generation counter so in-flight reads started before the invalidation never
-## cache their (now stale) results.
+## Explicitly drop the whole result cache (public clear_cache compatibility).
+## Normal tool mutations use dependency revisions instead.
 func _invalidate_result_cache() -> void:
 	_cache_generation += 1
+	_cache_revision_index.advance([CACHE_REVISION_INDEX_SCRIPT.TAG_GLOBAL])
 	if _result_cache.is_empty() and _cache_inflight.is_empty():
 		return
 	_result_cache.clear()
@@ -1509,11 +1523,27 @@ func _invalidate_result_cache() -> void:
 	_cache_inflight.clear()
 	_log_debug("Result cache invalidated")
 
+## O(affected tags) mutation path. Cached values are not scanned: their snapshots
+## are checked only if that key is requested again. At most the tiny in-flight
+## set is pruned so a relevant concurrent read cannot be mistaken for reusable.
+func _advance_result_cache_revisions(tags: Array[String], tool_name: String = "") -> void:
+	if tags.is_empty():
+		return
+	_cache_generation += 1
+	_cache_revision_index.advance(tags)
+	for key_value in _cache_inflight.keys():
+		var key: String = String(key_value)
+		var inflight_snapshot: Variant = _cache_inflight[key_value]
+		if inflight_snapshot is Dictionary and not _cache_revision_index.is_current(inflight_snapshot):
+			_cache_inflight.erase(key)
+	_log_debug("Advanced result-cache revisions for %s: %s" % [tool_name, ",".join(tags)])
+
 ## Evict cache entries produced by specific tools while retaining unrelated
-## scene/project reads. The generation still advances so an in-flight result
-## started against the old catalog cannot repopulate a stale entry afterward.
+## scene/project reads. The tool-catalog revision also advances so an in-flight
+## discovery result cannot repopulate a stale entry afterward.
 func _invalidate_result_cache_for_tools(tool_names: Array[String]) -> void:
 	_cache_generation += 1
+	_cache_revision_index.advance([CACHE_REVISION_INDEX_SCRIPT.TAG_TOOL_CATALOG])
 	var targets: Dictionary = {}
 	for tool_name in tool_names:
 		targets[tool_name] = true
