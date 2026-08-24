@@ -21,7 +21,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | --- | --- | --- |
 | `get_project_info` | core | Get general information about the Godot project, including name, version, and description. |
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
-| `list_project_resources` | core | List all resource files in the project (.tres, .res, .png, .ogg, etc.). |
+| `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
 ### Project-Advanced (58 advanced)
 
@@ -55,11 +55,11 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `scan_cyclic_resource_dependencies` | advanced | Scan for cyclic resource dependencies. |
 | `detect_broken_scripts` | advanced | Detect broken scripts in the project. |
 | `audit_project_health` | advanced | Audit project health and integrity. |
-| `find_resource_usages` | advanced | Find which resources reference a target resource (reverse dependency lookup). |
-| `list_unused_resources` | advanced | List resource files that no other resource references. |
-| `scan_migration_compatibility` | advanced | Scan project source for usages of APIs changed by a target Godot release (default 4.7) and report migration issues with file/line and severity. |
+| `find_resource_usages` | advanced | Find resources that reference a target, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
+| `list_unused_resources` | advanced | List unreferenced resources with lossless `limit`/`offset` pages backed by one revision-safe scan. |
+| `scan_migration_compatibility` | advanced | Scan `.gd`/`.cs` for target-version migration issues, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
 | `apply_migration_fixes` | advanced | Apply the safe mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry-run preview. |
-| `find_deprecated_api_usage` | advanced | Scan scripts for removed/deprecated Godot 4.x APIs and report file:line with the modern replacement; class/property rules are cross-checked against ClassDB. |
+| `find_deprecated_api_usage` | advanced | Scan scripts for removed/deprecated Godot 4.x APIs and replacements, with lossless pages backed by one revision-safe scan. |
 | `detect_gdextension_addons` | advanced | Detect native GDExtension addons by scanning .gdextension files and report entry symbol, compatibility_minimum, per-platform library availability and any SConstruct build hints. Detection only. |
 | `create_gradient_texture` | advanced | Create and save a GradientTexture2D (.tres) with a configurable color gradient and fill mode (linear radial square or conic). Conic fill requires Godot 4.7. |
 | `pack_pck` | advanced | Bundle a set of files into a Godot .pck archive using PCKPacker mapping virtual target paths to existing source files. Useful for building DLC or mod packs. |

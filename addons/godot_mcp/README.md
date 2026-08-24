@@ -42,6 +42,8 @@ Discovery is progressive and cache-friendly: one `enable_tools` call with `workf
 
 Large successful results keep a compatible preview and expose their exact JSON through a standard content-addressed `resource_link`. `resources/read` returns UTF-8-safe 16 KiB pages with `_meta.nextUri`; errors and source/log readers remain complete inline, and spill failure never replaces a complete result.
 
+Stable high-volume list and scan tools use one lossless `limit`/`offset` contract and reuse a revision-safe full-scan snapshot across pages. Snapshots have independent 8-entry and 4 MiB-per-entry gates; stateful mutations are never re-executed merely to fetch another page.
+
 See the project-level [Tools Reference](../../docs/tools/README.md).
 
 ## Configuration

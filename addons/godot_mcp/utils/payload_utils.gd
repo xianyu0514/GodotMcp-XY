@@ -28,8 +28,15 @@ static func paginate_list(items: Array, limit: int, offset: int = 0, default_lim
 	var start: int = clampi(offset, 0, total_count)
 	var end: int = mini(total_count, start + effective_limit)
 	var page: Array = items.slice(start, end)
-	return {
+	var result: Dictionary = {
 		"items": page,
 		"total_count": total_count,
-		"truncated": end < total_count
+		"truncated": end < total_count,
+		"offset": start,
+		"limit": effective_limit,
+		"returned_count": page.size(),
+		"has_more": end < total_count
 	}
+	if end < total_count:
+		result["next_offset"] = end
+	return result

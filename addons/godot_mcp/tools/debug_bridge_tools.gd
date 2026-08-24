@@ -303,17 +303,18 @@ func _tool_add_debugger_capture_prefix(params: Dictionary) -> Dictionary:
 func _register_get_debug_stack_frames(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"get_debug_stack_frames",
-		"Return the latest captured script stack frames and request a fresh stack dump from breaked sessions.",
+		"Get captured script stack frames with lossless limit/offset pages. Refresh once, then follow next_offset with refresh=false.",
 		{
 			"type": "object",
 			"properties": {
 				"refresh": {"type": "boolean", "default": true},
 				"session_id": {"type": "integer", "description": "Optional debugger session id. Omit or use -1 for all active sessions."},
-				"limit": {"type": "integer", "description": "Maximum number of stack frames to return. Default is 1000.", "default": 1000}
+				"limit": {"type": "integer", "description": "Maximum number of stack frames to return. Default is 1000.", "default": 1000},
+				"offset": {"type": "integer", "description": "Zero-based frame offset. For follow-up pages, use next_offset with refresh=false to keep the same captured stack.", "default": 0}
 			}
 		},
 		Callable(self, "_tool_get_debug_stack_frames"),
-		{"type": "object", "properties": {"frames": {"type": "array"}, "count": {"type": "integer"}, "total_count": {"type": "integer"}, "truncated": {"type": "boolean"}, "refresh_result": {"type": "object"}}},
+		{"type": "object", "properties": {"frames": {"type": "array"}, "count": {"type": "integer"}, "total_count": {"type": "integer"}, "truncated": {"type": "boolean"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}, "returned_count": {"type": "integer"}, "has_more": {"type": "boolean"}, "next_offset": {"type": "integer"}, "refresh_result": {"type": "object"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
 		"supplementary", "Debug-Advanced"
 	)
@@ -326,30 +327,39 @@ func _tool_get_debug_stack_frames(params: Dictionary) -> Dictionary:
 	if params.get("refresh", true):
 		refresh_result = bridge.request_stack_dump(params.get("session_id", -1))
 	var frames: Array = bridge.get_latest_stack_dump()
-	var bounded: Dictionary = PayloadUtils.truncate_list(frames, int(params.get("limit", 0)))
-	return {
-		"frames": bounded["items"],
-		"count": bounded["items"].size(),
-		"total_count": bounded["total_count"],
-		"truncated": bounded["truncated"],
+	var page: Dictionary = PayloadUtils.paginate_list(
+		frames, int(params.get("limit", 0)), int(params.get("offset", 0)))
+	var result: Dictionary = {
+		"frames": page["items"],
+		"count": page["items"].size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"],
+		"offset": page["offset"],
+		"limit": page["limit"],
+		"returned_count": page["returned_count"],
+		"has_more": page["has_more"],
 		"refresh_result": refresh_result
 	}
+	if page.has("next_offset"):
+		result["next_offset"] = page["next_offset"]
+	return result
 
 func _register_get_debug_stack_variables(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"get_debug_stack_variables",
-		"Return latest captured local/member/global variables for a stack frame and request a fresh variable dump.",
+		"Get captured stack-frame variables with lossless limit/offset pages. Refresh once, then follow next_offset with refresh=false.",
 		{
 			"type": "object",
 			"properties": {
 				"frame": {"type": "integer", "default": 0},
 				"refresh": {"type": "boolean", "default": true},
 				"session_id": {"type": "integer", "description": "Optional debugger session id. Omit or use -1 for all active sessions."},
-				"limit": {"type": "integer", "description": "Maximum number of variables to return. Default is 1000.", "default": 1000}
+				"limit": {"type": "integer", "description": "Maximum number of variables to return. Default is 1000.", "default": 1000},
+				"offset": {"type": "integer", "description": "Zero-based variable offset. For follow-up pages, use next_offset with refresh=false to keep the same captured frame.", "default": 0}
 			}
 		},
 		Callable(self, "_tool_get_debug_stack_variables"),
-		{"type": "object", "properties": {"frame": {"type": "integer"}, "variables": {"type": "array"}, "count": {"type": "integer"}, "total_count": {"type": "integer"}, "truncated": {"type": "boolean"}, "refresh_result": {"type": "object"}}},
+		{"type": "object", "properties": {"frame": {"type": "integer"}, "variables": {"type": "array"}, "count": {"type": "integer"}, "total_count": {"type": "integer"}, "truncated": {"type": "boolean"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}, "returned_count": {"type": "integer"}, "has_more": {"type": "boolean"}, "next_offset": {"type": "integer"}, "refresh_result": {"type": "object"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
 		"supplementary", "Debug-Advanced"
 	)
@@ -365,15 +375,23 @@ func _tool_get_debug_stack_variables(params: Dictionary) -> Dictionary:
 	if params.get("refresh", true):
 		refresh_result = bridge.request_stack_frame_vars(frame, params.get("session_id", -1))
 	var variables: Array = bridge.get_latest_stack_variables(frame)
-	var bounded: Dictionary = PayloadUtils.truncate_list(variables, int(params.get("limit", 0)))
-	return {
+	var page: Dictionary = PayloadUtils.paginate_list(
+		variables, int(params.get("limit", 0)), int(params.get("offset", 0)))
+	var result: Dictionary = {
 		"frame": frame,
-		"variables": bounded["items"],
-		"count": bounded["items"].size(),
-		"total_count": bounded["total_count"],
-		"truncated": bounded["truncated"],
+		"variables": page["items"],
+		"count": page["items"].size(),
+		"total_count": page["total_count"],
+		"truncated": page["truncated"],
+		"offset": page["offset"],
+		"limit": page["limit"],
+		"returned_count": page["returned_count"],
+		"has_more": page["has_more"],
 		"refresh_result": refresh_result
 	}
+	if page.has("next_offset"):
+		result["next_offset"] = page["next_offset"]
+	return result
 
 func _register_get_debug_scopes(server_core: RefCounted) -> void:
 	server_core.register_tool(

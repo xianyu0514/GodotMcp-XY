@@ -34,8 +34,8 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `toggle_debugger_profiler` | advanced | Toggle an EngineProfiler in active Godot debugger sessions. |
 | `get_debugger_messages` | advanced | Read custom messages captured by the Godot debugger bridge. |
 | `add_debugger_capture_prefix` | advanced | Allow the debugger bridge to capture custom EngineDebugger messages with the given prefix. |
-| `get_debug_stack_frames` | advanced | Return the latest captured script stack frames and request a fresh stack dump from breaked sessions. |
-| `get_debug_stack_variables` | advanced | Return latest captured local/member/global variables for a stack frame and request a fresh variable dump. |
+| `get_debug_stack_frames` | advanced | Get captured stack frames with lossless `limit`/`offset` pages. Refresh once, then follow `next_offset` with `refresh=false`. |
+| `get_debug_stack_variables` | advanced | Get captured frame variables with lossless `limit`/`offset` pages. Refresh once, then follow `next_offset` with `refresh=false`. |
 | `install_runtime_probe` | advanced | Install a runtime probe for debugging. |
 | `remove_runtime_probe` | advanced | Remove a runtime probe. |
 | `request_debug_break` | advanced | Request the debugger to break at the current execution point. |

@@ -383,6 +383,38 @@ func _teardown_reverse_resource_fixture() -> void:
 		dir.list_dir_end()
 	DirAccess.remove_absolute(_REVERSE_RES_DIR)
 
+func test_list_project_resources_pages_reconstruct_one_cached_scan():
+	_setup_reverse_resource_fixture()
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
+	project_tools.register_tools(core)
+	var query: Dictionary = {
+		"search_path": _REVERSE_RES_DIR,
+		"resource_types": [".TRES", "tscn", ".tres"],
+		"limit": 2,
+		"offset": 0
+	}
+	var first: Dictionary = project_tools._tool_list_project_resources(query)
+	query["resource_types"] = [".tscn", ".tres"]
+	query["offset"] = first.get("next_offset", -1)
+	var second: Dictionary = project_tools._tool_list_project_resources(query)
+	var reconstructed: Array = first.get("resources", []) + second.get("resources", [])
+	assert_eq(first.get("count"), 3, "Legacy count remains the full resource count")
+	assert_eq(first.get("returned_count"), 2, "The first page obeys the requested bound")
+	assert_eq(reconstructed, [
+		_REVERSE_RES_DIR + "/holder.tscn",
+		_REVERSE_RES_DIR + "/orphan.tres",
+		_REVERSE_RES_DIR + "/used.tres"
+	], "Following next_offset reconstructs the complete sorted resource list")
+	assert_false(second.get("has_more", true), "The final page is explicit")
+	var snapshot_keys: Array[String] = []
+	for key_value in core._result_cache.keys():
+		var key: String = str(key_value)
+		if key.contains(":@snapshot:"):
+			snapshot_keys.append(key)
+	assert_eq(snapshot_keys.size(), 1, "Both pages reuse exactly one cached directory scan")
+	_teardown_reverse_resource_fixture()
+
 func test_find_resource_usages_rejects_missing_param():
 	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
 	var result: Dictionary = project_tools._tool_find_resource_usages({})
@@ -500,6 +532,32 @@ func test_scan_migration_excludes_behavior_when_disabled():
 	assert_false(result.has("error"), "A valid scan should not error")
 	assert_eq(int(result.get("review_count", 0)), 0, "Behavior issues should be excluded when include_behavior is false")
 	assert_eq(int(result.get("must_fix_count", 0)), 2, "Must-fix issues should still be reported")
+	_teardown_migration_fixture()
+
+func test_scan_migration_pages_reconstruct_all_issues_from_one_snapshot():
+	_setup_migration_fixture()
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	var project_tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
+	project_tools.register_tools(core)
+	var first: Dictionary = project_tools._tool_scan_migration_compatibility({
+		"search_path": _MIGRATION_DIR, "include_behavior": true, "limit": 2, "offset": 0
+	})
+	var second: Dictionary = project_tools._tool_scan_migration_compatibility({
+		"search_path": _MIGRATION_DIR, "include_behavior": true,
+		"limit": 2, "offset": first.get("next_offset", -1)
+	})
+	assert_eq(first.get("total_count"), second.get("total_count"),
+		"Every page reports the complete stable issue count")
+	var reconstructed: Array = first.get("issues", []) + second.get("issues", [])
+	assert_eq(reconstructed.size(), int(first.get("total_count", -1)),
+		"Following next_offset reconstructs every migration issue without loss")
+	assert_false(second.get("has_more", true), "The final page is explicit")
+	var snapshot_keys: Array[String] = []
+	for key_value in core._result_cache.keys():
+		var key: String = str(key_value)
+		if key.contains(":@snapshot:"):
+			snapshot_keys.append(key)
+	assert_eq(snapshot_keys.size(), 1, "Both pages reuse exactly one cached scan snapshot")
 	_teardown_migration_fixture()
 
 func test_apply_migration_fixes_dry_run_does_not_write():

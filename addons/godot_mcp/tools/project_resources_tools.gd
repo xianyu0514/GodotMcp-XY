@@ -48,13 +48,52 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_find_deprecated_api_usage(server_core)
 	_register_detect_gdextension_addons(server_core)
 
+static func _add_pagination_output_schema(output_schema: Dictionary) -> void:
+	var properties: Dictionary = output_schema.get("properties", {})
+	properties["offset"] = {"type": "integer"}
+	properties["limit"] = {"type": "integer"}
+	properties["returned_count"] = {"type": "integer"}
+	properties["has_more"] = {"type": "boolean"}
+	properties["next_offset"] = {"type": "integer"}
+
+static func _sorted_unique_strings(values: Array[String]) -> Array[String]:
+	var seen: Dictionary = {}
+	for value in values:
+		seen[value] = true
+	var result: Array[String] = []
+	for value in seen:
+		result.append(String(value))
+	result.sort()
+	return result
+
+func _paginate_snapshot(snapshot: Dictionary, items_key: String, limit: int,
+		offset: int) -> Dictionary:
+	var result: Dictionary = snapshot.duplicate()
+	var page: Dictionary = PayloadUtils.paginate_list(
+		snapshot.get(items_key, []), limit, offset)
+	result[items_key] = page["items"]
+	for field in ["total_count", "truncated", "offset", "limit", "returned_count", "has_more"]:
+		result[field] = page[field]
+	if page.has("next_offset"):
+		result["next_offset"] = page["next_offset"]
+	else:
+		result.erase("next_offset")
+	return result
+
+func _get_or_compute_read_snapshot(tool_name: String, arguments: Dictionary,
+		producer: Callable) -> Dictionary:
+	if _server_core and _server_core.has_method("get_or_compute_read_snapshot"):
+		return _server_core.get_or_compute_read_snapshot(tool_name, arguments, producer)
+	var produced: Variant = producer.call()
+	return produced if produced is Dictionary else {}
+
 # ============================================================================
 # list_project_resources - 列出项目资源
 # ============================================================================
 
 func _register_list_project_resources(server_core: RefCounted) -> void:
 	var tool_name: String = "list_project_resources"
-	var description: String = "List all resource files in the project (.tres, .res, .png, .ogg, etc.)."
+	var description: String = "List project resource files with lossless limit/offset pagination. Follow next_offset while has_more is true; every page reuses one revision-safe scan snapshot."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -69,7 +108,9 @@ func _register_list_project_resources(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"},
 				"description": "Optional list of file extensions to filter (e.g. ['.tres', '.png']). Returns all if not provided."
-			}
+			},
+			"limit": {"type": "integer", "description": "Maximum resources per page. Default is 1000.", "default": 1000},
+			"offset": {"type": "integer", "description": "Zero-based offset. Continue with next_offset while has_more is true.", "default": 0}
 		}
 	}
 	
@@ -81,9 +122,12 @@ func _register_list_project_resources(server_core: RefCounted) -> void:
 				"type": "array",
 				"items": {"type": "string"}
 			},
-			"count": {"type": "integer"}
+			"count": {"type": "integer"},
+			"total_count": {"type": "integer"},
+			"truncated": {"type": "boolean"}
 		}
 	}
+	_add_pagination_output_schema(output_schema)
 	
 	# annotations - readOnlyHint = true
 	var annotations: Dictionary = {
@@ -103,6 +147,8 @@ func _tool_list_project_resources(params: Dictionary) -> Dictionary:
 	# 参数提取
 	var search_path: String = params.get("search_path", "res://")
 	var resource_types: Array = params.get("resource_types", [])
+	var limit: int = int(params.get("limit", 1000))
+	var offset: int = int(params.get("offset", 0))
 	
 	# 使用PathValidator验证路径安全性
 	var validation: Dictionary = PathValidator.validate_directory_path(search_path)
@@ -127,23 +173,28 @@ func _tool_list_project_resources(params: Dictionary) -> Dictionary:
 	var extensions: Array[String] = []
 	if resource_types.size() > 0:
 		for ext in resource_types:
-			var ext_str: String = str(ext)
+			var ext_str: String = str(ext).strip_edges().to_lower()
+			if ext_str.is_empty():
+				continue
 			if not ext_str.begins_with("."):
 				ext_str = "." + ext_str
 			extensions.append(ext_str)
 	else:
 		extensions = default_extensions
-	
-	# 使用DirAccess递归查找资源文件
+	extensions = _sorted_unique_strings(extensions)
+	var snapshot: Dictionary = _get_or_compute_read_snapshot(
+		"list_project_resources", {"search_path": search_path, "resource_types": extensions},
+		func() -> Dictionary: return _scan_project_resources(search_path, extensions))
+	return _paginate_snapshot(snapshot, "resources", limit, offset)
+
+func _scan_project_resources(search_path: String, extensions: Array[String]) -> Dictionary:
 	var resources: Array[String] = []
 	ProjectToolsNative._collect_resources(search_path, extensions, resources)
-	
-	# 排序
 	resources.sort()
-	
 	return {
 		"resources": resources,
-		"count": resources.size()
+		"count": resources.size(),
+		"total_count": resources.size()
 	}
 
 
@@ -1726,7 +1777,7 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 
 func _register_find_resource_usages(server_core: RefCounted) -> void:
 	var tool_name: String = "find_resource_usages"
-	var description: String = "Find which project resources reference a target resource (reverse dependency lookup)."
+	var description: String = "Find resources that reference a target. Supports lossless limit/offset pages backed by one revision-safe scan."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1744,6 +1795,11 @@ func _register_find_resource_usages(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum number of referencing resources to return. Default is 1000.",
 				"default": 1000
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Zero-based usage offset. Continue with next_offset while has_more is true.",
+				"default": 0
 			}
 		},
 		"required": ["resource_path"]
@@ -1762,6 +1818,7 @@ func _register_find_resource_usages(server_core: RefCounted) -> void:
 			"usages": {"type": "array"}
 		}
 	}
+	_add_pagination_output_schema(output_schema)
 
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -1795,11 +1852,18 @@ func _tool_find_resource_usages(params: Dictionary) -> Dictionary:
 	search_path = search_validation["sanitized"]
 
 	var limit: int = int(params.get("limit", 1000))
-
+	var offset: int = int(params.get("offset", 0))
 	var target_uid: String = ResourceUID.path_to_uid(resource_path)
 	if not target_uid.begins_with("uid://"):
 		target_uid = ""
+	var snapshot: Dictionary = _get_or_compute_read_snapshot(
+		"find_resource_usages",
+		{"resource_path": resource_path, "search_path": search_path},
+		func() -> Dictionary: return _scan_resource_usages(resource_path, search_path, target_uid))
+	return _paginate_snapshot(snapshot, "usages", limit, offset)
 
+func _scan_resource_usages(resource_path: String, search_path: String,
+		target_uid: String) -> Dictionary:
 	var owner_extensions: Array[String] = [
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
@@ -1832,16 +1896,14 @@ func _tool_find_resource_usages(params: Dictionary) -> Dictionary:
 				"references": references
 			})
 
-	var bounded: Dictionary = PayloadUtils.truncate_list(usages, limit)
 	return {
 		"resource_path": resource_path,
 		"search_path": search_path,
 		"target_uid": target_uid,
 		"scanned_resources": owners.size(),
-		"usage_count": int(bounded["total_count"]),
-		"total_count": int(bounded["total_count"]),
-		"truncated": bool(bounded["truncated"]),
-		"usages": bounded["items"]
+		"usage_count": usages.size(),
+		"total_count": usages.size(),
+		"usages": usages
 	}
 
 
@@ -1851,7 +1913,7 @@ func _tool_find_resource_usages(params: Dictionary) -> Dictionary:
 
 func _register_list_unused_resources(server_core: RefCounted) -> void:
 	var tool_name: String = "list_unused_resources"
-	var description: String = "List resource files that no other resource references. Scripts referenced only via class_name are not tracked; entry points (main scene, autoloads) are always treated as used."
+	var description: String = "List unreferenced resources in lossless limit/offset pages backed by one revision-safe scan. Entry points count as used; class_name-only script references are not tracked."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1869,10 +1931,14 @@ func _register_list_unused_resources(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum number of unused resources to return. Default is 1000.",
 				"default": 1000
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Zero-based unused-resource offset. Continue with next_offset while has_more is true.",
+				"default": 0
 			}
 		}
 	}
-
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
@@ -1884,6 +1950,7 @@ func _register_list_unused_resources(server_core: RefCounted) -> void:
 			"unused_resources": {"type": "array"}
 		}
 	}
+	_add_pagination_output_schema(output_schema)
 
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -1905,12 +1972,13 @@ func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
 	search_path = validation["sanitized"]
 
 	var limit: int = int(params.get("limit", 1000))
+	var offset: int = int(params.get("offset", 0))
 
 	var candidate_extensions: Array[String] = []
 	var override_extensions = params.get("extensions", null)
 	if override_extensions is Array and not (override_extensions as Array).is_empty():
 		for ext in override_extensions:
-			var ext_text: String = str(ext).strip_edges()
+			var ext_text: String = str(ext).strip_edges().to_lower()
 			if not ext_text.is_empty():
 				if not ext_text.begins_with("."):
 					ext_text = "." + ext_text
@@ -1923,7 +1991,15 @@ func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
 			".ttf", ".otf",
 			".glb", ".gltf", ".obj", ".fbx"
 		]
+	candidate_extensions = _sorted_unique_strings(candidate_extensions)
+	var snapshot: Dictionary = _get_or_compute_read_snapshot(
+		"list_unused_resources",
+		{"search_path": search_path, "extensions": candidate_extensions},
+		func() -> Dictionary: return _scan_unused_resources(search_path, candidate_extensions))
+	return _paginate_snapshot(snapshot, "unused_resources", limit, offset)
 
+func _scan_unused_resources(search_path: String,
+		candidate_extensions: Array[String]) -> Dictionary:
 	var candidates: Array[String] = []
 	ProjectToolsNative._collect_resources(search_path, candidate_extensions, candidates)
 	candidates.sort()
@@ -1961,14 +2037,12 @@ func _tool_list_unused_resources(params: Dictionary) -> Dictionary:
 		if not referenced.has(candidate_path):
 			unused.append(candidate_path)
 
-	var bounded: Dictionary = PayloadUtils.truncate_list(unused, limit)
 	return {
 		"search_path": search_path,
 		"scanned_resources": candidates.size(),
-		"unused_count": int(bounded["total_count"]),
-		"total_count": int(bounded["total_count"]),
-		"truncated": bool(bounded["truncated"]),
-		"unused_resources": bounded["items"]
+		"unused_count": unused.size(),
+		"total_count": unused.size(),
+		"unused_resources": unused
 	}
 
 func _collect_project_resource_roots() -> Array:
@@ -2223,7 +2297,7 @@ func _compile_migration_rules(rules: Array) -> Array:
 
 func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
 	var tool_name: String = "scan_migration_compatibility"
-	var description: String = "Scan project source (.gd/.cs) for usages of APIs changed by a target Godot release and report migration issues with file/line, severity, and fix guidance. The plugin's own source under res://addons/godot_mcp/ is excluded so its rule-definition strings are not self-reported."
+	var description: String = "Scan project .gd/.cs for Godot-version migration issues. Results use lossless limit/offset pages backed by one revision-safe scan; plugin sources are excluded."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -2247,10 +2321,14 @@ func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum number of issues to return. Default is 1000.",
 				"default": 1000
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Zero-based issue offset. Continue with next_offset while has_more is true.",
+				"default": 0
 			}
 		}
 	}
-
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
@@ -2264,6 +2342,7 @@ func _register_scan_migration_compatibility(server_core: RefCounted) -> void:
 			"issues": {"type": "array"}
 		}
 	}
+	_add_pagination_output_schema(output_schema)
 
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -2307,7 +2386,18 @@ func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
 
 	var include_behavior: bool = bool(params.get("include_behavior", true))
 	var limit: int = int(params.get("limit", 1000))
+	var offset: int = int(params.get("offset", 0))
+	var snapshot: Dictionary = _get_or_compute_read_snapshot(
+		"scan_migration_compatibility",
+		{"target_version": target_version, "search_path": search_path,
+			"include_behavior": include_behavior},
+		func() -> Dictionary:
+			return _scan_migration_compatibility(
+				target_version, search_path, include_behavior, rules))
+	return _paginate_snapshot(snapshot, "issues", limit, offset)
 
+func _scan_migration_compatibility(target_version: String, search_path: String,
+		include_behavior: bool, rules: Array) -> Dictionary:
 	var files: Array[String] = []
 	ProjectToolsNative._collect_resources(search_path, [".gd", ".cs"], files)
 	files = _migration_exclude_plugin_sources(files)
@@ -2362,16 +2452,14 @@ func _tool_scan_migration_compatibility(params: Dictionary) -> Dictionary:
 					issues.append(issue)
 		file.close()
 
-	var bounded: Dictionary = PayloadUtils.truncate_list(issues, limit)
 	return {
 		"target_version": target_version,
 		"search_path": search_path,
 		"scanned_files": files.size(),
 		"must_fix_count": must_fix_count,
 		"review_count": review_count,
-		"total_count": int(bounded["total_count"]),
-		"truncated": bool(bounded["truncated"]),
-		"issues": bounded["items"]
+		"total_count": issues.size(),
+		"issues": issues
 	}
 
 func _register_apply_migration_fixes(server_core: RefCounted) -> void:
@@ -2562,7 +2650,7 @@ func _deprecated_api_rules() -> Array:
 
 func _register_find_deprecated_api_usage(server_core: RefCounted) -> void:
 	var tool_name: String = "find_deprecated_api_usage"
-	var description: String = "Scan project scripts for usage of removed/deprecated Godot 4.x APIs (e.g. Pool*Array, yield, setget, .empty(), .instance(), VisualServer) and report file:line with the modern replacement. Class/property rules are cross-checked against the running engine's ClassDB."
+	var description: String = "Scan scripts for removed/deprecated Godot 4.x APIs and replacements. Results use lossless limit/offset pages backed by one revision-safe scan; class/property rules are checked against ClassDB."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -2582,10 +2670,14 @@ func _register_find_deprecated_api_usage(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum number of findings to return. Default is 1000.",
 				"default": 1000
+			},
+			"offset": {
+				"type": "integer",
+				"description": "Zero-based finding offset. Continue with next_offset while has_more is true.",
+				"default": 0
 			}
 		}
 	}
-
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
@@ -2598,6 +2690,7 @@ func _register_find_deprecated_api_usage(server_core: RefCounted) -> void:
 			"findings": {"type": "array"}
 		}
 	}
+	_add_pagination_output_schema(output_schema)
 
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -2631,7 +2724,16 @@ func _tool_find_deprecated_api_usage(params: Dictionary) -> Dictionary:
 		extensions = [".gd", ".cs"]
 
 	var limit: int = int(params.get("limit", 1000))
+	var offset: int = int(params.get("offset", 0))
+	extensions = _sorted_unique_strings(extensions)
+	var snapshot: Dictionary = _get_or_compute_read_snapshot(
+		"find_deprecated_api_usage",
+		{"search_path": search_path, "languages": extensions},
+		func() -> Dictionary: return _scan_deprecated_api_usage(search_path, extensions))
+	return _paginate_snapshot(snapshot, "findings", limit, offset)
 
+func _scan_deprecated_api_usage(search_path: String,
+		extensions: Array[String]) -> Dictionary:
 	var rules: Array = _deprecated_api_rules()
 	var compiled: Array = []
 	for rule in rules:
@@ -2686,15 +2788,13 @@ func _tool_find_deprecated_api_usage(params: Dictionary) -> Dictionary:
 					findings.append(finding)
 		file.close()
 
-	var bounded: Dictionary = PayloadUtils.truncate_list(findings, limit)
 	return {
 		"search_path": search_path,
 		"scanned_files": files.size(),
 		"rules_evaluated": compiled.size(),
-		"finding_count": int(bounded["total_count"]),
-		"total_count": int(bounded["total_count"]),
-		"truncated": bool(bounded["truncated"]),
-		"findings": bounded["items"]
+		"finding_count": findings.size(),
+		"total_count": findings.size(),
+		"findings": findings
 	}
 
 
@@ -2815,4 +2915,3 @@ func _describe_gdextension(extension_path: String) -> Dictionary:
 		"all_libraries_present": libraries.size() > 0 and missing == 0,
 		"dependencies": dependencies
 	}
-
