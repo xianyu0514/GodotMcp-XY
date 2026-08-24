@@ -38,6 +38,8 @@
 - 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 4 个常驻元工具：`list_tool_catalog`、`search_tools`、`get_tool_details` 与 `enable_tools`。
 
+工具发现采用渐进且缓存友好的流程：`search_tools` 在本地按中英文任务意图排序，目录摘要支持版本复用，批量启用只失效一次发现数据，不会清空无关的项目读取缓存。
+
 完整列表见项目级 [Tools Reference](../../docs/tools/README.md)。
 
 ## 配置

@@ -40,7 +40,7 @@ const PROTOCOL_VERSION: String = "2025-11-25"
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP exposes only a small default tool set (~30 core tools plus the always-on meta tools 'list_tool_catalog' and 'enable_tools') to keep tools/list small. Most editing tasks work with the default set. When you need a capability that is not listed, do NOT give up: first call 'list_tool_catalog' (optionally with a group or query) to discover the relevant tools without loading their full schemas, then call 'enable_tools' to switch them on — either by tool names, by group (e.g. 'Debug-Advanced'), or by applying a focused preset (game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core, all). Prefer the narrowest matching preset; 'all' has the highest context cost. After enabling, the new tools appear in tools/list and you can call them directly."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with ~30 core tools plus four always-on meta tools so tools/list stays small. Most editing tasks work with the default set. When a capability is missing, do not give up and do not load the full 221-tool catalog: call search_tools with a short task intent (English or Chinese), then enable_tools for the exact best-matching names or narrowest group/preset. After a real state change, tools/list_changed asks the client to refresh and supplies the enabled schemas; call get_tool_details only when comparing candidates or when a client cannot refresh. Use list_tool_catalog with summary_only=true only when you need to browse groups. Prefer focused presets (game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core); 'all' has the highest context cost. Reuse catalog_revision with known_revision to avoid downloading an unchanged catalog."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -78,13 +78,26 @@ const CACHEABLE_READ_TOOLS: Array[String] = [
 	"list_tool_catalog", "search_tools", "get_tool_details"
 ]
 
+## Discovery results depend on the registered tool catalog and enabled states,
+## but project/scene reads do not. Catalog-only changes evict just these entries
+## so toggling tools keeps expensive project read results hot.
+const TOOL_DISCOVERY_CACHE_TOOLS: Array[String] = [
+	"list_tool_catalog", "search_tools", "get_tool_details"
+]
+
+## Control-plane mutations change which tool schemas are visible, not project
+## data. Their handlers perform targeted discovery-cache invalidation, so the
+## generic post-call mutation path must preserve unrelated read entries.
+const CACHE_PRESERVING_MUTATION_TOOLS: Array[String] = ["enable_tools"]
+
 ## Maximum number of tool results kept in the in-memory LRU result cache. When
 ## the cache would exceed this many entries, the least recently used entry is
 ## evicted.
 const RESULT_CACHE_MAX: int = 64
 
-## TTL (ms) for cached tool results. Invalidation is primarily event-driven (any
-## mutating tool clears the whole cache); this TTL is only a bounded-staleness
+## TTL (ms) for cached tool results. Invalidation is primarily event-driven
+## (project mutations clear the whole cache; catalog mutations are targeted);
+## this TTL is only a bounded-staleness
 ## backstop for out-of-band edits made outside the MCP server — deliberately
 ## much shorter than the old 5-minute scene-structure TTL.
 const RESULT_CACHE_TTL_MS: int = 60000
@@ -157,6 +170,7 @@ var _tool_list_dirty: bool = false  # 工具列表变更标记
 # 30+ 个 schema Dictionary 并保证确定性排序（利于客户端 prompt cache）。
 var _tool_list_cache: Array[Dictionary] = []
 var _tool_list_cache_valid: bool = false
+var _tool_catalog_revision: int = 0
 
 var _classifier = null  # MCPToolClassifier (lazy-loaded for GUT CLI compat)
 var _state_manager = null  # MCPToolStateManager (lazy-loaded for GUT CLI compat)
@@ -811,7 +825,7 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 			_result_cache_put(cache_key, result, response_result)
 		else:
 			_cache_inflight.erase(cache_key)
-	elif not bool(tool.annotations.get("readOnlyHint", false)):
+	elif not bool(tool.annotations.get("readOnlyHint", false)) and tool_name not in CACHE_PRESERVING_MUTATION_TOOLS:
 		_invalidate_result_cache()
 
 	var response: Dictionary = MCPTypes.create_response(id, response_result)
@@ -1129,14 +1143,16 @@ func register_tool(name: String, description: String,
 	
 	_tools[name] = tool
 	_invalidate_tool_list_cache()
-	_invalidate_result_cache()
+	_tool_catalog_revision += 1
+	_invalidate_tool_discovery_cache(name)
 	_log_info("Tool registered: " + name)
 
 func unregister_tool(name: String) -> void:
 	if _tools.has(name):
 		_tools.erase(name)
 		_invalidate_tool_list_cache()
-		_invalidate_result_cache()
+		_tool_catalog_revision += 1
+		_invalidate_tool_discovery_cache(name)
 		_log_info("Tool unregistered: " + name)
 
 func get_tool(name: String) -> MCPTypes.MCPTool:
@@ -1166,29 +1182,24 @@ func get_registered_tools() -> Array:
 	return tools_info
 
 func set_tool_enabled(tool_name: String, enabled: bool) -> void:
-	if _tools.has(tool_name):
-		# Always-on meta tools (discovery/activation) can never be disabled, regardless of
-		# the caller (UI toggle, preset apply, or restored persisted state). This enforces
-		# the "always enabled" invariant at the system level, not just in the meta-tool path.
-		if not enabled and _is_always_on_tool(tool_name):
-			if not _tools[tool_name].enabled:
-				_tools[tool_name].enabled = true
-				_tool_list_dirty = true
-				_invalidate_tool_list_cache()
-				_invalidate_result_cache()
-			_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
-			return
-		_tools[tool_name].enabled = enabled
-		_tool_list_dirty = true
-		_invalidate_tool_list_cache()
-		_invalidate_result_cache()
-		if enabled:
-			_log_info("Tool enabled: " + tool_name)
-		else:
-			_log_info("Tool disabled: " + tool_name)
-	else:
+	if not _tools.has(tool_name):
 		if enabled:
 			_log_warn("Cannot enable unregistered tool: " + tool_name)
+		return
+
+	var target_enabled: bool = enabled
+	if not target_enabled and _is_always_on_tool(tool_name):
+		target_enabled = true
+		_log_debug("Ignoring request to disable always-on meta tool: " + tool_name)
+	if _tools[tool_name].enabled == target_enabled:
+		return
+
+	_tools[tool_name].enabled = target_enabled
+	_commit_tool_state_changes([tool_name])
+	if target_enabled:
+		_log_info("Tool enabled: " + tool_name)
+	else:
+		_log_info("Tool disabled: " + tool_name)
 
 func _is_always_on_tool(tool_name: String) -> bool:
 	var classifier = get_classifier()
@@ -1200,20 +1211,54 @@ func set_group_enabled(group_name: String, enabled: bool) -> int:
 	if _classifier == null:
 		_classifier = load("res://addons/godot_mcp/native_mcp/mcp_tool_classifier.gd").new()
 	var group_tools: Array[String] = _classifier.get_group_tools(group_name)
-	var changed_count: int = 0
+	var states: Dictionary = {}
 	for tool_name in group_tools:
-		# Never disable always-on meta tools, even if the 'Meta' group is toggled off.
-		if not enabled and _is_always_on_tool(tool_name):
-			continue
-		if _tools.has(tool_name) and _tools[tool_name].enabled != enabled:
-			_tools[tool_name].enabled = enabled
-			changed_count += 1
+		states[tool_name] = enabled
+	var result: Dictionary = apply_tool_states(states)
+	var changed_count: int = int(result.get("changed_count", 0))
 	if changed_count > 0:
-		_tool_list_dirty = true
-		_invalidate_tool_list_cache()
-		_invalidate_result_cache()
 		_log_info("Group '" + group_name + "' " + ("enabled" if enabled else "disabled") + ": " + str(changed_count) + " tools affected")
 	return changed_count
+
+## Apply many visibility changes as one atomic catalog transition. This avoids
+## rebuilding tools/list and invalidating discovery results once per tool when a
+## preset changes dozens or hundreds of entries.
+func apply_tool_states(states: Dictionary) -> Dictionary:
+	var changed_tools: Array[String] = []
+	var unknown_tools: Array[String] = []
+	var state_names: Array = states.keys()
+	state_names.sort()
+	for name_value in state_names:
+		var tool_name: String = String(name_value)
+		if not _tools.has(tool_name):
+			unknown_tools.append(tool_name)
+			continue
+		var target_enabled: bool = bool(states[name_value])
+		if not target_enabled and _is_always_on_tool(tool_name):
+			target_enabled = true
+		if _tools[tool_name].enabled == target_enabled:
+			continue
+		_tools[tool_name].enabled = target_enabled
+		changed_tools.append(tool_name)
+
+	_commit_tool_state_changes(changed_tools)
+	return {
+		"changed_count": changed_tools.size(),
+		"changed_tools": changed_tools,
+		"unknown_tools": unknown_tools,
+		"catalog_revision": _tool_catalog_revision
+	}
+
+func get_tool_catalog_revision() -> int:
+	return _tool_catalog_revision
+
+func _commit_tool_state_changes(changed_tools: Array) -> void:
+	if changed_tools.is_empty():
+		return
+	_tool_list_dirty = true
+	_invalidate_tool_list_cache()
+	_tool_catalog_revision += 1
+	_invalidate_tool_discovery_cache()
 
 func get_tool_list_dirty() -> bool:
 	return _tool_list_dirty
@@ -1463,6 +1508,38 @@ func _invalidate_result_cache() -> void:
 	_result_cache_order.clear()
 	_cache_inflight.clear()
 	_log_debug("Result cache invalidated")
+
+## Evict cache entries produced by specific tools while retaining unrelated
+## scene/project reads. The generation still advances so an in-flight result
+## started against the old catalog cannot repopulate a stale entry afterward.
+func _invalidate_result_cache_for_tools(tool_names: Array[String]) -> void:
+	_cache_generation += 1
+	var targets: Dictionary = {}
+	for tool_name in tool_names:
+		targets[tool_name] = true
+	var removed_count: int = 0
+	for key_value in _result_cache.keys():
+		var key: String = String(key_value)
+		var separator: int = key.find(":")
+		var cached_tool: String = key.substr(0, separator) if separator >= 0 else key
+		if targets.has(cached_tool):
+			_result_cache.erase(key)
+			_result_cache_order.erase(key)
+			removed_count += 1
+	for inflight_key_value in _cache_inflight.keys():
+		var inflight_key: String = String(inflight_key_value)
+		var inflight_separator: int = inflight_key.find(":")
+		var inflight_tool: String = inflight_key.substr(0, inflight_separator) if inflight_separator >= 0 else inflight_key
+		if targets.has(inflight_tool):
+			_cache_inflight.erase(inflight_key)
+	if removed_count > 0:
+		_log_debug("Selectively invalidated %d result cache entries" % removed_count)
+
+func _invalidate_tool_discovery_cache(extra_tool_name: String = "") -> void:
+	var targets: Array[String] = TOOL_DISCOVERY_CACHE_TOOLS.duplicate()
+	if not extra_tool_name.is_empty() and extra_tool_name not in targets:
+		targets.append(extra_tool_name)
+	_invalidate_result_cache_for_tools(targets)
 
 ## Legacy scene-structure cache API, kept for backward compatibility as thin
 ## wrappers over the shared LRU result cache (keys are used as-is, not
