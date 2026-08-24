@@ -1,15 +1,6 @@
 @tool
 extends VBoxContainer
 
-const QUICK_START_PRESETS: Array[String] = [
-	"game_2d",
-	"game_3d",
-	"ui_localization",
-	"gameplay_scripting",
-	"debugging",
-	"release_export",
-]
-
 var _plugin: EditorPlugin = null
 var _server_core: RefCounted = null
 
@@ -125,10 +116,7 @@ var _export_preset_button: Button = null
 var _import_preset_button: Button = null
 var _preset_file_dialog: FileDialog = null
 var _preset_dialog_save: bool = false
-var _quick_start_title_label: Label = null
-var _quick_start_hint_label: Label = null
-var _quick_start_status_label: Label = null
-var _quick_start_buttons: Dictionary = {}
+var _preset_bar: HBoxContainer = null
 
 var _log_file_path: String = "user://mcp_server.log"
 var _log_file_flush_count: int = 10
@@ -1111,104 +1099,17 @@ func _panel_card_style() -> StyleBoxFlat:
 	style.content_margin_bottom = 12
 	return style
 
-func _quick_start_card_style() -> StyleBoxFlat:
+func _profile_bar_style() -> StyleBoxFlat:
 	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = Color(0.30, 0.50, 0.95, 0.10)
-	style.border_color = Color(0.40, 0.62, 1.0, 0.52)
-	style.set_border_width_all(1)
-	style.border_width_left = 4
-	style.set_corner_radius_all(8)
-	style.content_margin_left = 16
-	style.content_margin_right = 16
-	style.content_margin_top = 14
-	style.content_margin_bottom = 14
-	return style
-
-func _quick_task_button_style(bg: Color, border: Color) -> StyleBoxFlat:
-	var style: StyleBoxFlat = StyleBoxFlat.new()
-	style.bg_color = bg
-	style.border_color = border
+	style.bg_color = Color(1, 1, 1, 0.025)
+	style.border_color = Color(1, 1, 1, 0.07)
 	style.set_border_width_all(1)
 	style.set_corner_radius_all(6)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 9
-	style.content_margin_bottom = 9
+	style.content_margin_left = 10
+	style.content_margin_right = 10
+	style.content_margin_top = 6
+	style.content_margin_bottom = 6
 	return style
-
-func _build_quick_start(content: VBoxContainer) -> void:
-	var card: PanelContainer = PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _quick_start_card_style())
-	content.add_child(card)
-
-	var body: VBoxContainer = VBoxContainer.new()
-	body.add_theme_constant_override("separation", 9)
-	card.add_child(body)
-
-	_quick_start_title_label = Label.new()
-	_quick_start_title_label.text = _tr("ui.quick_start_title")
-	_quick_start_title_label.add_theme_font_size_override("font_size", 20)
-	_quick_start_title_label.add_theme_color_override("font_color", Color(0.95, 0.97, 1.0))
-	body.add_child(_quick_start_title_label)
-
-	_quick_start_hint_label = Label.new()
-	_quick_start_hint_label.text = _tr("ui.quick_start_hint")
-	_quick_start_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_quick_start_hint_label.add_theme_font_size_override("font_size", 14)
-	_quick_start_hint_label.add_theme_color_override("font_color", Color(0.76, 0.80, 0.88))
-	body.add_child(_quick_start_hint_label)
-
-	var grid: GridContainer = GridContainer.new()
-	grid.columns = 3
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
-	body.add_child(grid)
-
-	_quick_start_buttons.clear()
-	for preset_id in QUICK_START_PRESETS:
-		var button: Button = Button.new()
-		var count: int = _preset_manager.get_preset_enabled_count(preset_id) if _preset_manager else 0
-		button.text = "%s\n%s" % [
-			_tr("ui.preset_" + preset_id),
-			_trf("ui.quick_start_tool_count", [count]),
-		]
-		button.tooltip_text = _tr("ui.preset_desc_" + preset_id)
-		button.custom_minimum_size = Vector2(0, 58)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override("font_size", 14)
-		button.add_theme_stylebox_override("normal", _quick_task_button_style(Color(1, 1, 1, 0.035), Color(1, 1, 1, 0.10)))
-		button.add_theme_stylebox_override("hover", _quick_task_button_style(Color(0.40, 0.62, 1.0, 0.18), Color(0.46, 0.68, 1.0, 0.70)))
-		button.add_theme_stylebox_override("pressed", _quick_task_button_style(Color(0.30, 0.50, 0.95, 0.25), Color(0.46, 0.68, 1.0, 0.90)))
-		button.pressed.connect(_on_quick_start_pressed.bind(preset_id))
-		grid.add_child(button)
-		_quick_start_buttons[preset_id] = button
-
-	_quick_start_status_label = Label.new()
-	_quick_start_status_label.text = _tr("ui.quick_start_status")
-	_quick_start_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_quick_start_status_label.add_theme_font_size_override("font_size", 13)
-	_quick_start_status_label.add_theme_color_override("font_color", Color(0.58, 0.76, 1.0))
-	body.add_child(_quick_start_status_label)
-
-func _on_quick_start_pressed(preset_id: String) -> void:
-	if _preset_manager == null or not _preset_manager.has_preset(preset_id):
-		return
-	_select_preset_option(preset_id)
-	_apply_preset_id(preset_id)
-	var count: int = _preset_manager.get_preset_enabled_count(preset_id)
-	if _quick_start_status_label:
-		_quick_start_status_label.text = _trf("ui.quick_start_applied", [
-			_tr("ui.preset_" + preset_id), count,
-		])
-		_quick_start_status_label.add_theme_color_override("font_color", Color(0.42, 0.86, 0.54))
-
-func _select_preset_option(preset_id: String) -> void:
-	if _preset_manager == null or _preset_option == null:
-		return
-	var index: int = _preset_manager.get_preset_ids().find(preset_id)
-	if index >= 0:
-		_preset_option.select(index)
-		_on_preset_selected(index)
 
 func _apply_preset_id(preset_id: String) -> void:
 	if _preset_manager == null:
@@ -1218,69 +1119,77 @@ func _apply_preset_id(preset_id: String) -> void:
 
 func _build_preset_row(content: VBoxContainer) -> void:
 	var card: PanelContainer = PanelContainer.new()
-	card.add_theme_stylebox_override("panel", _panel_card_style())
+	card.add_theme_stylebox_override("panel", _profile_bar_style())
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.add_child(card)
 
-	var body: VBoxContainer = VBoxContainer.new()
-	body.add_theme_constant_override("separation", 7)
-	card.add_child(body)
+	_preset_bar = HBoxContainer.new()
+	_preset_bar.add_theme_constant_override("separation", 8)
+	_preset_bar.custom_minimum_size.y = 36
+	card.add_child(_preset_bar)
 
 	_preset_label = Label.new()
 	_preset_label.text = _tr("ui.preset_label")
-	_preset_label.add_theme_font_size_override("font_size", 16)
-	_preset_label.add_theme_color_override("font_color", Color(0.78, 0.78, 0.82))
-	body.add_child(_preset_label)
-
-	var selection_row: HBoxContainer = HBoxContainer.new()
-	selection_row.add_theme_constant_override("separation", 8)
-	body.add_child(selection_row)
+	_preset_label.add_theme_font_size_override("font_size", 13)
+	_preset_label.add_theme_color_override("font_color", Color(0.62, 0.74, 1.0))
+	_preset_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_preset_bar.add_child(_preset_label)
 
 	_preset_option = OptionButton.new()
 	_preset_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_preset_option.custom_minimum_size.y = 38
-	_preset_option.add_theme_font_size_override("font_size", 14)
+	_preset_option.size_flags_stretch_ratio = 0.55
+	_preset_option.custom_minimum_size = Vector2(220, 34)
+	_preset_option.add_theme_font_size_override("font_size", 13)
 	if _preset_manager:
 		for preset_id in _preset_manager.get_preset_ids():
 			_preset_option.add_item(_tr("ui.preset_" + preset_id))
 			_preset_option.set_item_tooltip(_preset_option.item_count - 1, _tr("ui.preset_desc_" + preset_id))
 	_preset_option.item_selected.connect(_on_preset_selected)
-	selection_row.add_child(_preset_option)
+	_preset_bar.add_child(_preset_option)
+
+	_preset_count_label = Label.new()
+	_preset_count_label.custom_minimum_size.x = 78
+	_preset_count_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_preset_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_preset_count_label.add_theme_font_size_override("font_size", 12)
+	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.66, 0.82))
+	_preset_bar.add_child(_preset_count_label)
 
 	_apply_preset_button = Button.new()
 	_apply_preset_button.text = _tr("ui.preset_apply")
-	_apply_preset_button.custom_minimum_size.y = 38
-	_apply_preset_button.add_theme_font_size_override("font_size", 14)
-	_make_primary_button(_apply_preset_button)
+	_apply_preset_button.custom_minimum_size = Vector2(82, 34)
+	_apply_preset_button.add_theme_font_size_override("font_size", 13)
 	_apply_preset_button.pressed.connect(_on_apply_preset_pressed)
-	selection_row.add_child(_apply_preset_button)
+	_preset_bar.add_child(_apply_preset_button)
+
+	var separator: VSeparator = VSeparator.new()
+	_preset_bar.add_child(separator)
 
 	_preset_description_label = Label.new()
-	_preset_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	_preset_description_label.add_theme_font_size_override("font_size", 13)
+	_preset_description_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preset_description_label.size_flags_stretch_ratio = 1.0
+	_preset_description_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_preset_description_label.clip_text = true
+	_preset_description_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_preset_description_label.add_theme_font_size_override("font_size", 12)
 	_preset_description_label.add_theme_color_override("font_color", Color(0.66, 0.66, 0.70))
-	body.add_child(_preset_description_label)
-
-	var manage_row: HBoxContainer = HBoxContainer.new()
-	manage_row.add_theme_constant_override("separation", 4)
-	body.add_child(manage_row)
-
-	_preset_count_label = Label.new()
-	_preset_count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_preset_count_label.add_theme_font_size_override("font_size", 12)
-	_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.62, 0.72))
-	manage_row.add_child(_preset_count_label)
+	_preset_bar.add_child(_preset_description_label)
 
 	_export_preset_button = Button.new()
 	_export_preset_button.text = _tr("ui.preset_export")
 	_export_preset_button.flat = true
+	_export_preset_button.custom_minimum_size.y = 34
+	_export_preset_button.add_theme_font_size_override("font_size", 12)
 	_export_preset_button.pressed.connect(_on_export_preset_pressed)
-	manage_row.add_child(_export_preset_button)
+	_preset_bar.add_child(_export_preset_button)
 
 	_import_preset_button = Button.new()
 	_import_preset_button.text = _tr("ui.preset_import")
 	_import_preset_button.flat = true
+	_import_preset_button.custom_minimum_size.y = 34
+	_import_preset_button.add_theme_font_size_override("font_size", 12)
 	_import_preset_button.pressed.connect(_on_import_preset_pressed)
-	manage_row.add_child(_import_preset_button)
+	_preset_bar.add_child(_import_preset_button)
 
 	_on_preset_selected(_preset_option.selected)
 
@@ -1292,10 +1201,13 @@ func _on_preset_selected(index: int) -> void:
 		return
 	var preset_id: String = ids[index]
 	if _preset_description_label:
-		_preset_description_label.text = _tr("ui.preset_desc_" + preset_id)
+		var description: String = _tr("ui.preset_desc_" + preset_id)
+		_preset_description_label.text = description
+		_preset_description_label.tooltip_text = description
 	if _preset_count_label:
 		var count: int = _preset_manager.get_preset_enabled_count(preset_id)
 		_preset_count_label.text = _trf("ui.preset_tool_count", [count])
+		_preset_count_label.add_theme_color_override("font_color", Color(0.52, 0.66, 0.82))
 
 func _registered_tool_names() -> Array:
 	var names: Array = []
@@ -1324,12 +1236,11 @@ func _on_apply_preset_pressed() -> void:
 		return
 	var preset_id: String = ids[idx]
 	_apply_preset_id(preset_id)
-	if _quick_start_status_label:
-		_quick_start_status_label.text = _trf("ui.quick_start_applied", [
-			_tr("ui.preset_" + preset_id),
+	if _preset_count_label:
+		_preset_count_label.text = _trf("ui.preset_applied_count", [
 			_preset_manager.get_preset_enabled_count(preset_id),
 		])
-		_quick_start_status_label.add_theme_color_override("font_color", Color(0.42, 0.86, 0.54))
+		_preset_count_label.add_theme_color_override("font_color", Color(0.42, 0.82, 0.52))
 
 func _ensure_preset_file_dialog() -> void:
 	if _preset_file_dialog and is_instance_valid(_preset_file_dialog):
@@ -1405,7 +1316,6 @@ func _create_tools_tab() -> VBoxContainer:
 	_tools_count_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.62))
 	toolbar.add_child(_tools_count_label)
 
-	_build_quick_start(content)
 	_build_preset_row(content)
 
 	var search_row: HBoxContainer = HBoxContainer.new()
@@ -2337,22 +2247,6 @@ func _refresh_translations() -> void:
 				_preset_option.set_item_text(i, _tr("ui.preset_" + preset_ids[i]))
 				_preset_option.set_item_tooltip(i, _tr("ui.preset_desc_" + preset_ids[i]))
 		_on_preset_selected(_preset_option.selected)
-	if _quick_start_title_label:
-		_quick_start_title_label.text = _tr("ui.quick_start_title")
-	if _quick_start_hint_label:
-		_quick_start_hint_label.text = _tr("ui.quick_start_hint")
-	if _quick_start_status_label:
-		_quick_start_status_label.text = _tr("ui.quick_start_status")
-		_quick_start_status_label.add_theme_color_override("font_color", Color(0.58, 0.76, 1.0))
-	if _preset_manager:
-		for preset_id in _quick_start_buttons:
-			var button: Button = _quick_start_buttons[preset_id]
-			if is_instance_valid(button):
-				button.text = "%s\n%s" % [
-					_tr("ui.preset_" + preset_id),
-					_trf("ui.quick_start_tool_count", [_preset_manager.get_preset_enabled_count(preset_id)]),
-				]
-				button.tooltip_text = _tr("ui.preset_desc_" + preset_id)
 	for entry in _section_titles:
 		var label: Label = entry["label"]
 		if is_instance_valid(label):

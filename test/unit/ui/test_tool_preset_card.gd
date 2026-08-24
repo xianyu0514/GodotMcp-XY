@@ -28,17 +28,21 @@ func _make_panel() -> Node:
 	autofree(panel)
 	return panel
 
-func test_preset_controls_live_in_a_responsive_card():
+func test_profile_controls_live_in_one_compact_toolbar():
 	var panel: Node = _make_panel()
 	var content: VBoxContainer = VBoxContainer.new()
 	autofree(content)
 	panel._build_preset_row(content)
-	assert_eq(content.get_child_count(), 1, "Preset area is one cohesive block")
-	assert_true(content.get_child(0) is PanelContainer, "Preset controls use a card container")
+	assert_eq(content.get_child_count(), 1, "Profile controls are one cohesive surface")
+	assert_true(content.get_child(0) is PanelContainer, "Profile controls use a subtle panel")
+	assert_true(panel._preset_bar is HBoxContainer, "Every profile control shares one horizontal toolbar")
+	assert_eq(panel._preset_description_label.get_parent(), panel._preset_bar, "Description does not create a second row")
 	assert_true(panel._preset_option.size_flags_horizontal == Control.SIZE_EXPAND_FILL, "Dropdown expands in narrow docks")
 	assert_not_null(panel._preset_description_label, "Selected preset has an explanation")
 	assert_not_null(panel._preset_count_label, "Selected preset shows its tool count")
 	assert_false(panel._preset_option.get_item_tooltip(1).is_empty(), "Dropdown items explain the preset on hover")
+	assert_false(panel._preset_option.get_item_text(1).contains("\n"), "Profiles use concise single-line labels")
+	assert_lte(panel._preset_option.custom_minimum_size.y, 38.0, "Profile selector stays compact")
 
 func test_selecting_preset_refreshes_explanation_and_count():
 	var panel: Node = _make_panel()
@@ -51,29 +55,30 @@ func test_selecting_preset_refreshes_explanation_and_count():
 	assert_false(panel._preset_description_label.text.is_empty(), "Preset explanation is visible before applying")
 	assert_string_contains(panel._preset_count_label.text, "80", "Level design preview reports enabled tool count")
 
-func test_quick_start_explains_the_workflow_and_exposes_task_buttons():
+func test_profile_dropdown_keeps_common_tasks_immediately_discoverable():
 	var panel: Node = _make_panel()
 	var content: VBoxContainer = VBoxContainer.new()
 	autofree(content)
-	panel._build_quick_start(content)
-	assert_eq(content.get_child_count(), 1, "Quick start is a single prominent card")
-	assert_not_null(panel._quick_start_title_label, "Quick start has a visible question")
-	assert_gte(panel._quick_start_title_label.get_theme_font_size("font_size"), 18, "Quick-start title is readable")
-	assert_not_null(panel._quick_start_hint_label, "The three-step workflow is explained")
-	assert_string_contains(panel._quick_start_hint_label.text, "1", "Workflow visibly starts at step 1")
-	assert_eq(panel._quick_start_buttons.size(), 6, "Six common user tasks are available without opening a dropdown")
-	for button in panel._quick_start_buttons.values():
-		assert_gte(button.custom_minimum_size.y, 52.0, "Task buttons are large enough to scan and click")
-		assert_gte(button.get_theme_font_size("font_size"), 14, "Task-button labels are readable")
+	panel._build_preset_row(content)
+	assert_eq(panel._preset_option.item_count, 12, "All built-in task profiles remain available")
+	var labels: String = ""
+	for i in panel._preset_option.item_count:
+		labels += panel._preset_option.get_item_text(i) + " "
+	assert_string_contains(labels, "2D", "2D work is visible in the selector")
+	assert_string_contains(labels, "3D", "3D work is visible in the selector")
+	assert_string_contains(labels, "UI", "UI work is visible in the selector")
+	assert_gte(panel._preset_label.get_theme_font_size("font_size"), 13, "Compact profile label stays readable")
 
-func test_quick_start_applies_a_task_profile_and_reports_the_next_step():
+func test_profile_toolbar_applies_a_task_without_unrelated_tools():
 	var panel: Node = _make_panel()
 	var content: VBoxContainer = VBoxContainer.new()
 	autofree(content)
 	panel._server_core = FakeServerCore.new()
-	panel._build_quick_start(content)
-	panel._on_quick_start_pressed("game_2d")
-	assert_true(panel._server_core.states.get("create_node", false), "A quick task enables its required core tools")
+	panel._build_preset_row(content)
+	var index: int = panel._preset_manager.get_preset_ids().find("game_2d")
+	panel._preset_option.select(index)
+	panel._on_preset_selected(index)
+	panel._on_apply_preset_pressed()
+	assert_true(panel._server_core.states.get("create_node", false), "A task profile enables its required core tools")
 	assert_false(panel._server_core.states.get("generate_3d_asset", true), "The 2D task leaves unrelated 3D tooling disabled")
-	assert_false(panel._quick_start_status_label.text.is_empty(), "Applying a task produces visible feedback")
-	assert_string_contains(panel._quick_start_status_label.text, "2D", "Feedback identifies the selected task")
+	assert_string_contains(panel._preset_count_label.text, "47", "The compact toolbar reports the selected tool count")
