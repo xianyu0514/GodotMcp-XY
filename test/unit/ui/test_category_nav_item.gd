@@ -16,6 +16,14 @@ func test_setup_stores_key():
 	assert_gte(item.custom_minimum_size.y, 42.0, "Navigation targets match the editor's click scale")
 	assert_gte(item.get_theme_font_size("font_size"), 15, "Navigation labels match the editor text scale")
 
+func test_compact_mode_matches_native_filter_bar_density():
+	var group: ButtonGroup = ButtonGroup.new()
+	var item: MCPCategoryNavItem = MCPCategoryNavItem.new()
+	add_child_autofree(item)
+	item.setup("__all__", "All", null, group, 15, 1.0, true)
+	assert_lte(item.custom_minimum_size.y, 36.0, "Filter chips stay as compact as Godot toolbar controls")
+	assert_gte(item.get_theme_font_size("font_size"), 14, "Compact chips remain readable")
+
 func test_count_appears_in_text():
 	var item: MCPCategoryNavItem = _make_item("Node-Read", "Nodes")
 	item.set_count(3, 5)
