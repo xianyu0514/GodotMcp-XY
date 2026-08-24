@@ -38,7 +38,7 @@ The addon registers 221 tools:
 - 189 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 4 always-on meta tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
 
-Discovery is progressive and cache-friendly: one `enable_tools` call with `workflow_query` locally routes an English/Chinese goal and atomically activates a bounded inspect/execute/verify set. The adaptive route covers all 217 non-meta atomic tools, returns names without schemas and defaults to an 8-tool budget. It preserves core/meta and replaces old supplementary task tools by default, while `replace_supplementary=false` adds tools incrementally. Catalog revisions and dependency-tagged result revisions avoid flushing unrelated scene/script/resource reads; exact script and resource paths expire lazily.
+Discovery is progressive and cache-friendly: one `enable_tools` call with `workflow_query` locally routes an English/Chinese goal and atomically activates a bounded inspect/execute/verify set. An immutable normalized index covers all 217 non-meta atomic tools by exact name and official English/Chinese description, returns names without schemas and defaults to an 8-tool budget. A 64-entry LRU reuses normalized goals; visibility changes preserve its definition revision, index and routes. The activation path preserves core/meta and replaces old supplementary task tools by default, while `replace_supplementary=false` adds tools incrementally. Catalog revisions and dependency-tagged result revisions avoid flushing unrelated scene/script/resource reads; exact script and resource paths expire lazily.
 
 See the project-level [Tools Reference](../../docs/tools/README.md).
 
