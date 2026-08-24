@@ -73,6 +73,19 @@ func test_unregister_tool():
 	_core.unregister_tool("test_tool")
 	assert_false(_core.has_tool("test_tool"), "Should not have unregistered tool")
 
+func test_registry_revision_ignores_visibility_changes() -> void:
+	var initial_revision: int = _core.get_tool_registry_revision()
+	_core.register_tool("revision_probe", "Probe", {"type": "object"}, func(args): return {},
+		{}, {}, "supplementary", "Debug-Advanced")
+	var registered_revision: int = _core.get_tool_registry_revision()
+	assert_eq(registered_revision, initial_revision + 1, "Registration advances immutable registry revision")
+	_core.set_tool_enabled("revision_probe", true)
+	assert_eq(_core.get_tool_registry_revision(), registered_revision,
+		"Visibility changes must not invalidate immutable routing data")
+	_core.unregister_tool("revision_probe")
+	assert_eq(_core.get_tool_registry_revision(), registered_revision + 1,
+		"Unregistration advances immutable registry revision")
+
 func test_set_tool_enabled():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.set_tool_enabled("test_tool", false)

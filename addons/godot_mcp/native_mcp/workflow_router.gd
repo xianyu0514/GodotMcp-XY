@@ -9,8 +9,19 @@ extends RefCounted
 
 const DEFAULT_TOOL_BUDGET: int = 8
 const MAX_TOOL_BUDGET: int = 10
+const ROUTE_CACHE_MAX: int = 64
 const MIN_CURATED_SCORE: int = 40
 const CURATED_MIN_TOOLS: int = 4
+
+var _indexed_revision: int = -1
+var _indexed_tools: Array = []
+var _route_cache: Dictionary = {}
+var _route_lru: Array[String] = []
+var _sorted_alias_keys: Array = []
+var _index_builds: int = 0
+var _route_computations: int = 0
+var _route_cache_hits: int = 0
+var _curated_index: Array = []
 
 const INTENT_ALIASES: Dictionary = {
 	"场景": ["scene"], "节点": ["node"], "脚本": ["script"],
@@ -114,14 +125,14 @@ const VERIFY_PREFIXES: Array[String] = ["assert_", "compare_", "smoke_test_", "v
 const VERIFY_TOOL_NAMES: Array[String] = ["audit_project_health", "play_and_verify", "run_project_test", "run_project_tests"]
 
 func normalize_search_text(value: String) -> String:
-	return value.strip_edges().to_lower().replace("_", " ").replace("-", " ").replace("\t", " ").replace("\n", " ")
+	var normalized: String = value.strip_edges().to_lower().replace("_", " ").replace("-", " ").replace("\t", " ").replace("\n", " ")
+	while normalized.contains("  "):
+		normalized = normalized.replace("  ", " ")
+	return normalized
 
 func build_query_terms(query_raw: String, drop_stop_words: bool = false) -> Array:
 	var terms: Array = []
-	var alias_keys: Array = INTENT_ALIASES.keys()
-	alias_keys.sort_custom(func(a: String, b: String) -> bool:
-		return a.length() > b.length()
-	)
+	var alias_keys: Array = _get_sorted_alias_keys()
 	for token_value in normalize_search_text(query_raw).split(" ", false):
 		var token: String = String(token_value).strip_edges()
 		if token.is_empty() or (drop_stop_words and token in WORKFLOW_STOP_WORDS):
@@ -143,13 +154,28 @@ func build_query_terms(query_raw: String, drop_stop_words: bool = false) -> Arra
 			terms.append([token])
 	return terms
 
+func _get_sorted_alias_keys() -> Array:
+	if _sorted_alias_keys.is_empty():
+		_sorted_alias_keys = INTENT_ALIASES.keys()
+		_sorted_alias_keys.sort_custom(func(a: String, b: String) -> bool:
+			return a.length() > b.length()
+		)
+	return _sorted_alias_keys
+
 func _contains_search_token(haystack: String, needle: String) -> bool:
 	return (" " + haystack + " ").contains(" " + needle + " ")
 
 func _score_term(info: Dictionary, variants: Array) -> int:
-	var name: String = normalize_search_text(String(info.get("name", "")))
-	var group: String = normalize_search_text(String(info.get("group", "")))
-	var description: String = normalize_search_text(String(info.get("description", "")))
+	var name: String = String(info.get("_name_text", ""))
+	if name.is_empty():
+		name = normalize_search_text(String(info.get("name", "")))
+	var group: String = String(info.get("_group_text", ""))
+	if group.is_empty():
+		group = normalize_search_text(String(info.get("group", "")))
+	var description: String = String(info.get("_description_text", ""))
+	if description.is_empty():
+		description = normalize_search_text(String(info.get("description", "")))
+	var routing_texts: Array = info.get("_routing_texts", [])
 	var best: int = 0
 	for variant_value in variants:
 		var variant: String = String(variant_value)
@@ -163,6 +189,11 @@ func _score_term(info: Dictionary, variants: Array) -> int:
 			best = max(best, 50)
 		elif description.contains(variant):
 			best = max(best, 20)
+		else:
+			for routing_text_value in routing_texts:
+				if String(routing_text_value).contains(variant):
+					best = max(best, 20)
+					break
 	return best
 
 func score_tool_match(info: Dictionary, query_raw: String, terms: Array) -> int:
@@ -194,10 +225,93 @@ func _sorted_atomic_tools(registered: Array) -> Array:
 	)
 	return tools
 
+func _build_capability_index(registered: Array, routing_hints: Dictionary) -> Array:
+	var tools: Array = []
+	for info_value in registered:
+		var info: Dictionary = info_value
+		if String(info.get("category", "")) == "meta":
+			continue
+		var name: String = String(info.get("name", ""))
+		var routing_texts: Array[String] = []
+		var hint_value: Variant = routing_hints.get(name, "")
+		if hint_value is Array:
+			for hint_item in hint_value:
+				var normalized_hint: String = normalize_search_text(String(hint_item))
+				if not normalized_hint.is_empty() and normalized_hint not in routing_texts:
+					routing_texts.append(normalized_hint)
+		else:
+			var normalized_hint: String = normalize_search_text(String(hint_value))
+			if not normalized_hint.is_empty():
+				routing_texts.append(normalized_hint)
+		tools.append({
+			"name": name,
+			"category": String(info.get("category", "")),
+			"group": String(info.get("group", "")),
+			"description": String(info.get("description", "")),
+			"_name_text": normalize_search_text(name),
+			"_group_text": normalize_search_text(String(info.get("group", ""))),
+			"_description_text": normalize_search_text(String(info.get("description", ""))),
+			"_routing_texts": routing_texts
+		})
+	tools.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return String(a.get("name", "")) < String(b.get("name", ""))
+	)
+	return tools
+
+func _ensure_capability_index(registered: Array, registry_revision: int, routing_hints: Dictionary) -> Array:
+	if registry_revision < 0:
+		return _build_capability_index(registered, routing_hints)
+	if _indexed_revision != registry_revision:
+		_indexed_tools = _build_capability_index(registered, routing_hints)
+		_indexed_revision = registry_revision
+		_index_builds += 1
+		_route_cache.clear()
+		_route_lru.clear()
+	return _indexed_tools
+
+func _matches_canonical_intent(info: Dictionary, normalized_query: String) -> bool:
+	if String(info.get("_name_text", "")) == normalized_query:
+		return true
+	if String(info.get("_description_text", "")) == normalized_query:
+		return true
+	for routing_text_value in info.get("_routing_texts", []):
+		if String(routing_text_value) == normalized_query:
+			return true
+	return false
+
+func _route_cache_key(query: String, budget: int) -> String:
+	return normalize_search_text(query) + "|" + str(budget)
+
+func _get_cached_route(cache_key: String) -> Dictionary:
+	if not _route_cache.has(cache_key):
+		return {}
+	_route_lru.erase(cache_key)
+	_route_lru.append(cache_key)
+	_route_cache_hits += 1
+	return (_route_cache[cache_key] as Dictionary).duplicate(true)
+
+func _store_cached_route(cache_key: String, result: Dictionary) -> void:
+	if _route_cache.has(cache_key):
+		_route_lru.erase(cache_key)
+	_route_cache[cache_key] = result.duplicate(true)
+	_route_lru.append(cache_key)
+	while _route_lru.size() > ROUTE_CACHE_MAX:
+		var oldest_key: String = _route_lru.pop_front()
+		_route_cache.erase(oldest_key)
+
+func get_diagnostics() -> Dictionary:
+	return {
+		"indexed_revision": _indexed_revision,
+		"indexed_tools": _indexed_tools.size(),
+		"index_builds": _index_builds,
+		"route_computations": _route_computations,
+		"route_cache_hits": _route_cache_hits,
+		"route_cache_entries": _route_cache.size(),
+		"route_cache_capacity": ROUTE_CACHE_MAX
+	}
+
 func _score_curated_workflow(workflow: Dictionary, terms: Array, normalized_query: String) -> int:
-	var haystack: String = normalize_search_text(
-		String(workflow.get("id", "")) + " " + String(workflow.get("title", "")) + " " +
-		" ".join(workflow.get("keywords", [])))
+	var haystack: String = String(workflow.get("_search_text", ""))
 	var score: int = 0
 	for variants_value in terms:
 		var variants: Array = variants_value
@@ -206,16 +320,30 @@ func _score_curated_workflow(workflow: Dictionary, terms: Array, normalized_quer
 			if _contains_search_token(haystack, variant) or haystack.contains(variant):
 				score += 25
 				break
-	for keyword_value in workflow.get("keywords", []):
-		var keyword: String = normalize_search_text(String(keyword_value))
+	for keyword_value in workflow.get("_normalized_keywords", []):
+		var keyword: String = String(keyword_value)
 		if keyword.length() >= 2 and normalized_query.contains(keyword):
 			score += 5
 	return score
 
+func _get_curated_index() -> Array:
+	if _curated_index.is_empty():
+		for workflow_value in CURATED_WORKFLOWS:
+			var workflow: Dictionary = (workflow_value as Dictionary).duplicate(true)
+			workflow["_search_text"] = normalize_search_text(
+				String(workflow.get("id", "")) + " " + String(workflow.get("title", "")) + " " +
+				" ".join(workflow.get("keywords", [])))
+			var normalized_keywords: Array[String] = []
+			for keyword_value in workflow.get("keywords", []):
+				normalized_keywords.append(normalize_search_text(String(keyword_value)))
+			workflow["_normalized_keywords"] = normalized_keywords
+			_curated_index.append(workflow)
+	return _curated_index
+
 func _best_curated_workflow(terms: Array, normalized_query: String) -> Dictionary:
 	var best: Dictionary = {}
 	var best_score: int = 0
-	for workflow_value in CURATED_WORKFLOWS:
+	for workflow_value in _get_curated_index():
 		var workflow: Dictionary = workflow_value
 		var score: int = _score_curated_workflow(workflow, terms, normalized_query)
 		if score > best_score or (score == best_score and score > 0 and String(workflow.get("id", "")) < String(best.get("id", ""))):
@@ -257,22 +385,42 @@ func _build_stages(selected: Array[String]) -> Array[Dictionary]:
 			stages.append({"phase": phase, "tools": buckets[phase]})
 	return stages
 
-func route(query_raw: String, registered: Array, requested_budget: int = DEFAULT_TOOL_BUDGET) -> Dictionary:
+func route(
+	query_raw: String,
+	registered: Array,
+	requested_budget: int = DEFAULT_TOOL_BUDGET,
+	registry_revision: int = -1,
+	routing_hints: Dictionary = {}
+) -> Dictionary:
 	var query: String = query_raw.strip_edges()
 	if query.is_empty():
 		return {"error": "Missing required workflow intent"}
 	var budget: int = clamp(requested_budget, 1, MAX_TOOL_BUDGET)
-	var atomic_tools: Array = _sorted_atomic_tools(registered)
+	var atomic_tools: Array = _ensure_capability_index(registered, registry_revision, routing_hints)
+	var cache_key: String = _route_cache_key(query, budget)
+	if registry_revision >= 0 and _route_cache.has(cache_key):
+		return _get_cached_route(cache_key)
+	_route_computations += 1
+	var result: Dictionary = _compute_route(query, atomic_tools, budget)
+	if registry_revision >= 0:
+		_store_cached_route(cache_key, result)
+	return result
+
+func _compute_route(query: String, atomic_tools: Array, budget: int) -> Dictionary:
 	var terms: Array = build_query_terms(query, true)
 	if terms.is_empty():
 		terms = [[normalize_search_text(query)]]
 	var normalized_query: String = normalize_search_text(query)
+	var atomic_names: Dictionary = {}
+	for info_value in atomic_tools:
+		atomic_names[String((info_value as Dictionary).get("name", ""))] = true
 	# Exact atomic names are an escape hatch with strict priority. This guarantees
-	# complete coverage and avoids adding workflow companions to a one-tool intent.
+	# complete bilingual coverage and avoids adding workflow companions to a
+	# one-tool intent when an official capability description is supplied.
 	for info_value in atomic_tools:
 		var exact_info: Dictionary = info_value
 		var exact_name: String = String(exact_info.get("name", ""))
-		if normalize_search_text(exact_name) == normalized_query:
+		if _matches_canonical_intent(exact_info, normalized_query):
 			var exact_labels: Array[String] = []
 			for variants_value in terms:
 				exact_labels.append(_term_label(variants_value))
@@ -306,8 +454,6 @@ func route(query_raw: String, registered: Array, requested_budget: int = DEFAULT
 				matches.append(term_index)
 		if name in curated_names:
 			score += 80
-		if bool(info.get("enabled", false)):
-			score += 5
 		if score > 0:
 			candidates.append({"name": name, "matches": matches, "score": score})
 
@@ -318,14 +464,14 @@ func route(query_raw: String, registered: Array, requested_budget: int = DEFAULT
 	var forced_tools: Array[String] = []
 	if not curated.is_empty() and _has_term_label(terms, ["运行", "run", "launch", "execute"]):
 		for preferred_name in ["run_project", "play_and_verify", "run_export", "run_project_tests"]:
-			if preferred_name in curated_names and _registered_has_name(atomic_tools, preferred_name):
+			if preferred_name in curated_names and atomic_names.has(preferred_name):
 				forced_tools.append(preferred_name)
 				break
 	if not curated.is_empty() and _has_term_label(terms, ["验证", "测试", "verify", "validate", "assert", "test"]):
 		for tool_value in curated_names:
 			var verifier_name: String = String(tool_value)
 			if (_stage_for_tool(verifier_name) == "verify" and verifier_name not in forced_tools
-					and _registered_has_name(atomic_tools, verifier_name)):
+					and atomic_names.has(verifier_name)):
 				forced_tools.append(verifier_name)
 				break
 	for forced_name in forced_tools:
@@ -371,7 +517,7 @@ func route(query_raw: String, registered: Array, requested_budget: int = DEFAULT
 			if selected.size() >= min(budget, CURATED_MIN_TOOLS):
 				break
 			var tool_name: String = String(tool_value)
-			if tool_name not in selected and _registered_has_name(atomic_tools, tool_name):
+			if tool_name not in selected and atomic_names.has(tool_name):
 				selected.append(tool_name)
 
 	var covered_terms: Array[String] = []
@@ -395,12 +541,6 @@ func route(query_raw: String, registered: Array, requested_budget: int = DEFAULT
 		"coverage_ratio": ratio,
 		"tool_budget": budget
 	}
-
-func _registered_has_name(registered: Array, tool_name: String) -> bool:
-	for info_value in registered:
-		if String((info_value as Dictionary).get("name", "")) == tool_name:
-			return true
-	return false
 
 func validate_curated_tool_references(registered: Array) -> Array[String]:
 	var registered_names: Dictionary = {}
