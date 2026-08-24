@@ -579,13 +579,13 @@ func test_all_cacheable_read_tools_are_served_from_cache():
 		await _core._handle_request(msg)
 		assert_eq(calls[0], 1, "%s should be served from cache on the second call" % tool_name)
 
-func test_all_cacheable_read_tools_invalidated_by_mutation():
-	# A mutating tool must invalidate the cache for every listed cacheable read,
-	# so none of them can serve stale data after the project/scene changes.
-	_core.register_tool("create_node", "Mutate", {"type": "object"},
+func test_unknown_mutation_invalidates_all_cacheable_read_tools():
+	# Plugin-defined writers have no dependency metadata, so they must fail safe
+	# to the global revision and invalidate every cacheable read domain.
+	_core.register_tool("plugin_defined_writer", "Mutate", {"type": "object"},
 		func(args): return {"status": "success"},
-		{}, {"readOnlyHint": false})
-	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "create_node", "arguments": {}}}
+		{}, {"readOnlyHint": false}, "core", "Custom")
+	var mutate_msg: Dictionary = {"jsonrpc": "2.0", "id": 99, "method": "tools/call", "params": {"name": "plugin_defined_writer", "arguments": {}}}
 	for tool_name in _core.CACHEABLE_READ_TOOLS:
 		var calls: Array = [0]
 		_core.register_tool(tool_name, "Read", {"type": "object"},
@@ -599,10 +599,10 @@ func test_all_cacheable_read_tools_invalidated_by_mutation():
 		assert_eq(calls[0], 1, "%s should be cached before mutation" % tool_name)
 		await _core._handle_request(mutate_msg)
 		await _core._handle_request(read_msg)
-		assert_eq(calls[0], 2, "%s must recompute after a mutating tool" % tool_name)
+		assert_eq(calls[0], 2, "%s must recompute after an unknown mutating tool" % tool_name)
 
 # ============================================================================
-# 通用结果缓存（LRU + 确定性 key + 事件失效）
+# 通用结果缓存（LRU + 确定性 key + 依赖 revision 懒失效）
 # ============================================================================
 
 func test_result_cache_hit_serves_cached():
@@ -641,8 +641,8 @@ func test_result_cache_key_canonical():
 	assert_eq(calls[0], 1, "Reordered arguments must share one cache entry")
 
 func test_mutating_tool_invalidates_cache():
-	# A mutating tool (readOnlyHint == false) clears the whole result cache, so
-	# the next read recomputes instead of serving the stale entry.
+	# A scene mutation advances the scene revision, so the next scene read
+	# recomputes instead of serving the stale entry.
 	var calls: Array = [0]
 	_core.register_tool("get_scene_tree", "Read tree", {"type": "object"},
 		func(args):

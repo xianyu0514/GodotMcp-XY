@@ -491,6 +491,17 @@ func test_manifest_matches_registered_tools():
 	assert_eq(mismatches.size(), 0,
 		"register_tool 与 manifest 分类/分组不一致的工具: " + str(mismatches))
 
+	var invalid_cache_reads: Array[String] = []
+	for tool_name in _core.CACHEABLE_READ_TOOLS:
+		if not registered.has(tool_name):
+			invalid_cache_reads.append(tool_name + " (not registered)")
+			continue
+		var cached_tool = registered[tool_name]
+		if not bool(cached_tool.annotations.get("readOnlyHint", false)):
+			invalid_cache_reads.append(tool_name + " (not read-only)")
+	assert_eq(invalid_cache_reads.size(), 0,
+		"结果缓存只允许已注册且 readOnlyHint=true 的工具: " + str(invalid_cache_reads))
+
 ## manifest 计数基线：221 总 / 28 core / 189 supplementary / 4 meta。
 func test_manifest_counts():
 	assert_eq(ManifestScript.TOOLS.size(), 221, "manifest 应包含 221 个工具")
