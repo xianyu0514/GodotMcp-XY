@@ -9,29 +9,13 @@ class_name MetaToolsNative
 extends RefCounted
 
 const PRESET_MANAGER_PATH: String = "res://addons/godot_mcp/native_mcp/mcp_tool_preset_manager.gd"
+const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const SEARCH_LIMIT_DEFAULT: int = 12
 const SEARCH_LIMIT_MAX: int = 50
 
-## Lightweight bilingual intent aliases. This keeps discovery local and
-## deterministic: no embedding model, network call, or extra inference pass is
-## needed for common Chinese Godot/game-development requests.
-const SEARCH_ALIASES: Dictionary = {
-	"场景": ["scene"], "节点": ["node"], "脚本": ["script"],
-	"调试": ["debug", "runtime"], "运行时": ["runtime"], "运行": ["run", "runtime"],
-	"信息": ["info", "status", "details"], "状态": ["status", "info"],
-	"动画": ["animation"], "音频": ["audio"], "输入": ["input"],
-	"导出": ["export"], "资源": ["resource", "asset"], "素材": ["asset", "resource"],
-	"测试": ["test", "verify"], "验证": ["verify", "assert", "test"],
-	"截图": ["screenshot"], "着色器": ["shader"], "瓦片": ["tile", "tilemap", "tileset"],
-	"信号": ["signal"], "本地化": ["localization"], "翻译": ["translation", "localization"],
-	"性能": ["performance"], "项目": ["project"], "界面": ["ui", "control"],
-	"二维": ["2d"], "三维": ["3d"], "创建": ["create", "add"],
-	"删除": ["delete", "remove"], "修改": ["update", "modify", "set"],
-	"读取": ["get", "read", "list", "inspect"], "游戏": ["game", "runtime"]
-}
-
 var _server_core: RefCounted = null
 var _preset_manager: RefCounted = null
+var _workflow_router: RefCounted = WorkflowRouterScript.new()
 
 func initialize(_editor_interface: EditorInterface) -> void:
 	pass
@@ -77,73 +61,16 @@ func _sorted_registered_tools() -> Array:
 	return registered
 
 func _normalize_search_text(value: String) -> String:
-	return value.strip_edges().to_lower().replace("_", " ").replace("-", " ").replace("\t", " ").replace("\n", " ")
+	return _workflow_router.normalize_search_text(value)
 
 func _build_query_terms(query_raw: String) -> Array:
-	var terms: Array = []
-	var alias_keys: Array = SEARCH_ALIASES.keys()
-	alias_keys.sort_custom(func(a: String, b: String) -> bool:
-		return a.length() > b.length()
-	)
-	for token_value in _normalize_search_text(query_raw).split(" ", false):
-		var token: String = String(token_value).strip_edges()
-		if token.is_empty():
-			continue
-		var matched_alias: bool = false
-		for alias_key_value in alias_keys:
-			var alias_key: String = String(alias_key_value)
-			if not token.contains(alias_key):
-				continue
-			var variants: Array[String] = [alias_key]
-			for alias_value in SEARCH_ALIASES[alias_key]:
-				var alias: String = _normalize_search_text(String(alias_value))
-				if not alias.is_empty() and alias not in variants:
-					variants.append(alias)
-			if variants not in terms:
-				terms.append(variants)
-			matched_alias = true
-		if not matched_alias:
-			terms.append([token])
-	return terms
-
-func _contains_search_token(haystack: String, needle: String) -> bool:
-	return (" " + haystack + " ").contains(" " + needle + " ")
+	return _workflow_router.build_query_terms(query_raw)
 
 ## BM25 would be unnecessary overhead for a 221-item in-memory catalog. This
 ## weighted lexical scorer captures the useful ordering properties with one
 ## cheap scan and deterministic tie-breaking.
 func _score_tool_match(info: Dictionary, query_raw: String, terms: Array) -> int:
-	var name: String = _normalize_search_text(String(info.get("name", "")))
-	var group: String = _normalize_search_text(String(info.get("group", "")))
-	var description: String = _normalize_search_text(String(info.get("description", "")))
-	var normalized_query: String = _normalize_search_text(query_raw)
-	var score: int = 0
-	if name == normalized_query:
-		score += 1000
-	elif name.begins_with(normalized_query):
-		score += 500
-
-	for term_value in terms:
-		var variants: Array = term_value
-		var best_term_score: int = 0
-		for variant_value in variants:
-			var variant: String = String(variant_value)
-			if name == variant:
-				best_term_score = max(best_term_score, 300)
-			elif _contains_search_token(name, variant):
-				best_term_score = max(best_term_score, 160)
-			elif name.contains(variant):
-				best_term_score = max(best_term_score, 120)
-			elif _contains_search_token(group, variant) or group.contains(variant):
-				best_term_score = max(best_term_score, 50)
-			elif description.contains(variant):
-				best_term_score = max(best_term_score, 20)
-		if best_term_score == 0:
-			return -1
-		score += best_term_score
-	if bool(info.get("enabled", false)):
-		score += 5
-	return score
+	return _workflow_router.score_tool_match(info, query_raw, terms)
 
 # ============================================================================
 # list_tool_catalog
@@ -165,7 +92,7 @@ func _register_list_tool_catalog(server_core: RefCounted) -> void:
 			}
 		},
 		Callable(self, "_tool_list_tool_catalog"),
-		{"type": "object", "properties": {"groups": {"type": "object"}, "presets": {"type": "array"}, "total_registered": {"type": "integer"}, "total_matched": {"type": "integer"}, "enabled_count": {"type": "integer"}, "catalog_revision": {"type": "integer"}, "not_modified": {"type": "boolean"}}},
+		{"type": "object", "properties": {"groups": {"type": "object"}, "presets": {"type": "array"}, "total_registered": {"type": "integer"}, "total_matched": {"type": "integer"}, "enabled_count": {"type": "integer"}, "catalog_revision": {"type": "integer"}, "not_modified": {"type": "boolean"}, "workflow_coverage": {"type": "object"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
 		"meta", "Meta"
 	)
@@ -238,7 +165,8 @@ func _tool_list_tool_catalog(params: Dictionary) -> Dictionary:
 		"total_matched": total_matched,
 		"enabled_count": enabled_count,
 		"catalog_revision": catalog_revision,
-		"not_modified": false
+		"not_modified": false,
+		"workflow_coverage": _workflow_router.get_coverage_report(registered)
 	}
 
 # ============================================================================
@@ -248,20 +176,22 @@ func _tool_list_tool_catalog(params: Dictionary) -> Dictionary:
 func _register_search_tools(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"search_tools",
-		"Search and rank the registered MCP tool catalog from a short task intent in English or Chinese. Every space-separated intent term must match, while common Chinese Godot terms are expanded locally without embeddings or another model call. Enable exact result names and use the refreshed tools/list schema; call get_tool_details only when comparing candidates.",
+		"Find tools locally from an English or Chinese intent. mode='tools' ranks single capabilities; mode='workflow' returns at most 10 schema-free names grouped as inspect/execute/verify and can route every non-meta atomic tool. Enable returned names in one call.",
 		{
 			"type": "object",
 			"properties": {
-				"query": {"type": "string", "description": "Required short task intent in English or Chinese. Space-separated terms use AND semantics; aliases such as 场景/节点/脚本/调试/动画/导出 are expanded locally."},
-				"group": {"type": "string", "description": "Filter to a single classifier group (e.g. 'Script-Advanced')."},
-				"enabled_only": {"type": "boolean", "default": false, "description": "Only include tools that are currently enabled (visible in tools/list)."},
-				"include_descriptions": {"type": "boolean", "default": true, "description": "Include a one-line description per tool. Set false for a name-only listing."},
-				"limit": {"type": "integer", "default": 12, "description": "Maximum ranked matches to return. Values are clamped to 1..50; total_matched reports the full count."}
+				"query": {"type": "string", "description": "Required English or Chinese task intent."},
+				"mode": {"type": "string", "enum": ["tools", "workflow"], "default": "tools", "description": "One capability or a compact multi-stage route."},
+				"group": {"type": "string", "description": "Optional exact classifier group."},
+				"enabled_only": {"type": "boolean", "default": false, "description": "Restrict results to enabled tools."},
+				"include_descriptions": {"type": "boolean", "default": true, "description": "tools mode: include one-line descriptions."},
+				"limit": {"type": "integer", "default": 12, "description": "tools mode: result limit, clamped to 1..50."},
+				"workflow_tool_budget": {"type": "integer", "default": 8, "description": "workflow mode: tool limit, clamped to 1..10."}
 			},
 			"required": ["query"]
 		},
 		Callable(self, "_tool_search_tools"),
-		{"type": "object", "properties": {"tools": {"type": "array", "items": {"type": "object"}}, "total_matched": {"type": "integer"}, "query": {"type": "string"}, "catalog_revision": {"type": "integer"}}},
+		{"type": "object", "properties": {"tools": {"type": "array", "items": {"type": "object"}}, "workflow": {"type": "object"}, "total_matched": {"type": "integer"}, "query": {"type": "string"}, "catalog_revision": {"type": "integer"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
 		"meta", "Meta"
 	)
@@ -273,22 +203,36 @@ func _tool_search_tools(params: Dictionary) -> Dictionary:
 	var query_raw: String = String(params.get("query", "")).strip_edges()
 	if query_raw.is_empty():
 		return {"error": "Missing required parameter: query"}
-
-	var terms: Array = _build_query_terms(query_raw)
+	var mode: String = String(params.get("mode", "tools")).strip_edges().to_lower()
+	if mode not in ["tools", "workflow"]:
+		return {"error": "Unknown search mode: '%s'. Use 'tools' or 'workflow'." % mode}
 
 	var group_filter: String = String(params.get("group", "")).strip_edges()
 	var enabled_only: bool = bool(params.get("enabled_only", false))
-	var include_descriptions: bool = bool(params.get("include_descriptions", true))
-	var limit: int = clamp(int(params.get("limit", SEARCH_LIMIT_DEFAULT)), 1, SEARCH_LIMIT_MAX)
-
-	var tools: Array = []
-	for info in _sorted_registered_tools():
-		var name: String = String(info.get("name", ""))
-		var description: String = String(info.get("description", ""))
+	var registered: Array = []
+	for info_value in _sorted_registered_tools():
+		var info: Dictionary = info_value
 		if not group_filter.is_empty() and String(info.get("group", "")) != group_filter:
 			continue
 		if enabled_only and not bool(info.get("enabled", false)):
 			continue
+		registered.append(info)
+	if mode == "workflow":
+		var workflow_budget: int = int(params.get("workflow_tool_budget", 8))
+		return {
+			"workflow": _workflow_router.route(query_raw, registered, workflow_budget),
+			"query": query_raw,
+			"catalog_revision": _get_catalog_revision()
+		}
+
+	var terms: Array = _build_query_terms(query_raw)
+	var include_descriptions: bool = bool(params.get("include_descriptions", true))
+	var limit: int = clamp(int(params.get("limit", SEARCH_LIMIT_DEFAULT)), 1, SEARCH_LIMIT_MAX)
+
+	var tools: Array = []
+	for info in registered:
+		var name: String = String(info.get("name", ""))
+		var description: String = String(info.get("description", ""))
 
 		var score: int = _score_tool_match(info, query_raw, terms)
 		if score < 0:

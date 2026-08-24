@@ -68,7 +68,7 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | Always-on tool discovery and on-demand enablement |
 | **Total** | **221** | **28** | **189** | |
 
-Only core and meta tools are visible to `tools/list` at startup. `search_tools` ranks a small English/Chinese task-intent result set locally, then `enable_tools` applies names, groups or one of 12 practical presets in one atomic update. Group summaries, catalog revisions and targeted cache invalidation keep discovery responses small without evicting unrelated project reads. See the [Tools Reference](docs/tools/README.md).
+Only core and meta tools are visible to `tools/list` at startup. `search_tools` keeps its compact exact-candidate mode and adds a local workflow mode that turns a multi-step English/Chinese goal into a bounded `inspect → execute → verify` route. The adaptive index covers all 217 non-meta atomic tools, returns names rather than duplicated schemas, and defaults to at most 8 selected tools. `enable_tools` applies those names, a group or one of 12 presets in one atomic update. Catalog revisions and targeted invalidation keep discovery responses small without evicting unrelated project reads. See the [Tools Reference](docs/tools/README.md).
 
 ## Example prompts
 

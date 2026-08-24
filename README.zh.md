@@ -68,7 +68,7 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 | [Meta](docs/tools/meta-tools.md) | 4 | — | — | 常驻工具发现和按需启用 |
 | **总计** | **221** | **28** | **189** | |
 
-启动时只有核心工具和元工具会出现在 `tools/list` 中。`search_tools` 会在本地按中英文任务意图返回少量相关性排序结果，随后 `enable_tools` 可用一次原子更新启用工具、分组或 12 个实用预设。分组摘要、目录版本号与选择性缓存失效可缩小发现响应，同时保留无关项目读取缓存。详见 [Tools Reference](docs/tools/README.md)。
+启动时只有核心工具和元工具会出现在 `tools/list` 中。`search_tools` 保留精简的单工具候选模式，并新增纯本地工作流模式：把复杂的中英文目标压缩为有界的“检查 → 执行 → 验证”路线。自适应索引覆盖全部 217 个非 Meta 原子工具，只返回工具名而不复制 Schema，默认最多选择 8 个工具。随后 `enable_tools` 用一次原子更新启用这些名称、分组或 12 个实用预设。目录版本号和选择性缓存失效会保留无关的项目读取缓存。详见 [Tools Reference](docs/tools/README.md)。
 
 ## 示例提示词
 

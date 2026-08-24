@@ -50,6 +50,7 @@ addons/godot_mcp/
 │   ├── mcp_types.gd            # JSON-RPC 和 MCP 协议常量、MCPTool 数据类
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── tools_manifest.gd       # 单一数据表（唯一真相）：221 个工具 name → {category, group}
+│   ├── workflow_router.gd      # 纯本地意图路由：217 个原子工具全覆盖，输出有界的检查/执行/验证工具名路线
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_auth_manager.gd     # HTTP Bearer Token 认证
 │   ├── config_manager.gd       # 插件配置读写
