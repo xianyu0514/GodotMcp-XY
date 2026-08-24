@@ -55,6 +55,12 @@ func test_find_header_terminator_not_found():
 	var raw: PackedByteArray = "POST /mcp HTTP/1.1\r\nContent-Length: 2".to_utf8_buffer()
 	assert_eq(_http_server._find_header_terminator(raw), -1, "Should return -1 when no terminator present")
 
+func test_find_header_terminator_from_incremental_scan_offset():
+	var raw: PackedByteArray = "POST /mcp HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}".to_utf8_buffer()
+	var expected: int = raw.get_string_from_utf8().find("\r\n\r\n")
+	assert_eq(_http_server._find_header_terminator(raw, expected - 2), expected, "Incremental scan should find a terminator that crosses the previous chunk boundary")
+	assert_eq(_http_server._find_header_terminator(raw, expected + 1), -1, "Incremental scan should not rescan bytes before its safe offset")
+
 func test_utf8_body_survives_chunk_boundary():
 	# 模拟中文负载被 TCP 拆分到多字节字符中间后，累积全部字节再整体解码不应乱码
 	var body: String = '{"name":"我的游戏标题","desc":"角色描述"}'
@@ -223,12 +229,14 @@ func test_remove_connection_at_cleans_peer_state():
 	_http_server._sse_connections[peer] = "sess-remove"
 	_http_server._sessions["sess-remove"] = {"created": true}
 	_http_server._post_response_formats[peer] = "sse"
+	_http_server._request_states[peer] = {"request_bytes": PackedByteArray(), "started_at": 1}
 	_http_server._remove_connection_at(0)
 
 	assert_eq(_http_server._connections.size(), 0, "Peer should be removed from the connection table")
 	assert_false(_http_server._sse_connections.has(peer), "SSE connection mapping should be removed")
 	assert_false(_http_server._post_response_formats.has(peer), "POST response format mapping should be removed")
 	assert_false(_http_server._sessions.has("sess-remove"), "SSE session data should be removed")
+	assert_false(_http_server._request_states.has(peer), "Partial request state should be removed")
 
 func test_remove_connection_at_invalid_index_is_noop():
 	_http_server._remove_connection_at(-1)
@@ -246,6 +254,88 @@ func test_start_stop_lifecycle():
 		assert_true(_http_server.is_running(), "Server should be running after start")
 		_http_server.stop()
 		assert_false(_http_server.is_running(), "Server should stop cleanly")
+
+func test_partial_request_does_not_block_other_clients():
+	# 一个慢客户端只发送部分正文时，服务器线程必须继续服务其他连接。
+	# 回归旧行为：_handle_http_request 会同步等待剩余正文最多 30 秒，
+	# 导致所有其他请求发生队头阻塞。
+	_http_server.set_port(23144)
+	var started: bool = _http_server.start()
+	assert_true(started, "Server should start on a free port")
+	if not started:
+		return
+
+	var slow_client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(slow_client.connect_to_host("127.0.0.1", 23144), OK, "Slow client should initiate connection")
+	var slow_server_peer: StreamPeerTCP = _wait_for_server_peer(slow_client)
+	assert_ne(slow_server_peer, null, "Server should accept the slow client")
+	if slow_server_peer == null:
+		slow_client.disconnect_from_host()
+		return
+
+	var body: String = '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+	var partial_request: String = "POST /mcp HTTP/1.1\r\n"
+	partial_request += "Content-Type: application/json\r\n"
+	partial_request += "Content-Length: " + str(body.to_utf8_buffer().size()) + "\r\n\r\n"
+	partial_request += body.left(body.length() - 1)
+	assert_eq(slow_client.put_data(partial_request.to_utf8_buffer()), OK, "Slow client should send an incomplete request")
+	OS.delay_msec(50)
+
+	var fast_client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(fast_client.connect_to_host("127.0.0.1", 23144), OK, "Fast client should initiate connection")
+	var attempts: int = 0
+	while attempts < 200 and fast_client.get_status() != StreamPeerTCP.STATUS_CONNECTED:
+		fast_client.poll()
+		OS.delay_msec(5)
+		attempts += 1
+	assert_eq(fast_client.get_status(), StreamPeerTCP.STATUS_CONNECTED, "Fast client should connect while the slow request is incomplete")
+	assert_eq(fast_client.put_data("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".to_utf8_buffer()), OK, "Fast client should send a health request")
+
+	var fast_response: String = _read_client_data(fast_client)
+	assert_true(fast_response.contains("HTTP/1.1 200 OK"), "Fast client should receive a response without waiting for the slow request")
+
+	# Complete the slow request even when the assertion above fails, so the old
+	# blocking implementation can exit cleanly during the RED test run.
+	slow_client.put_data(body.right(1).to_utf8_buffer())
+	OS.delay_msec(50)
+	slow_client.disconnect_from_host()
+	fast_client.disconnect_from_host()
+
+func test_invalid_content_length_is_rejected_and_state_cleared():
+	_http_server.set_port(23145)
+	assert_true(_http_server.start(), "Server should start on a free port")
+	var client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(client.connect_to_host("127.0.0.1", 23145), OK, "Client should initiate connection")
+	var server_peer: StreamPeerTCP = _wait_for_server_peer(client)
+	assert_ne(server_peer, null, "Server should accept the client")
+	if server_peer == null:
+		client.disconnect_from_host()
+		return
+
+	var request: String = "POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: invalid\r\n\r\n{}"
+	assert_eq(client.put_data(request.to_utf8_buffer()), OK, "Client should send the malformed request")
+	var response: String = _read_client_data(client)
+	assert_true(response.contains("HTTP/1.1 400 Bad Request"), "Invalid Content-Length should receive HTTP 400")
+	assert_false(_http_server._request_states.has(server_peer), "Rejected request state should be cleared")
+	client.disconnect_from_host()
+
+func test_oversized_declared_body_is_rejected_without_waiting_for_body():
+	_http_server.set_port(23146)
+	assert_true(_http_server.start(), "Server should start on a free port")
+	var client: StreamPeerTCP = StreamPeerTCP.new()
+	assert_eq(client.connect_to_host("127.0.0.1", 23146), OK, "Client should initiate connection")
+	var server_peer: StreamPeerTCP = _wait_for_server_peer(client)
+	assert_ne(server_peer, null, "Server should accept the client")
+	if server_peer == null:
+		client.disconnect_from_host()
+		return
+
+	var request: String = "POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " + str(_http_server.MAX_REQUEST_SIZE + 1) + "\r\n\r\n"
+	assert_eq(client.put_data(request.to_utf8_buffer()), OK, "Client should send headers without the oversized body")
+	var response: String = _read_client_data(client)
+	assert_true(response.contains("HTTP/1.1 413 Request Too Large"), "Oversized declared body should be rejected immediately")
+	assert_false(_http_server._request_states.has(server_peer), "Oversized request state should be cleared")
+	client.disconnect_from_host()
 
 # ==============================================================================
 # Streamable HTTP 双轨：Accept 协商、stateless 会话头与 SSE POST 响应

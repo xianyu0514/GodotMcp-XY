@@ -69,6 +69,10 @@ var _sessions: Dictionary = {}  # session_id -> session_data
 ## 与 _sse_connections 相同的既有跨线程访问模式（服务器线程写、主线程读）。
 var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
 
+## 尚未接收完整的 HTTP 请求状态。服务器线程按轮询增量组装每个 peer 的请求，
+## 避免一个慢客户端在等待剩余正文时阻塞其他连接与 SSE 心跳。
+var _request_states: Dictionary = {}  # peer -> request state
+
 ## 插件进程级稳定会话 ID（stateless 服务器仍返回该 id，兼容 stateful 客户端）
 var _server_session_id: String = ""
 
@@ -247,6 +251,7 @@ func stop() -> void:
 	
 	_connections.clear()
 	_post_response_formats.clear()
+	_request_states.clear()
 	
 	server_stopped.emit()
 	if _log_callback.is_valid():
@@ -299,8 +304,11 @@ func _http_server_loop() -> void:
 				index -= 1
 				continue
 			
-			if p.get_available_bytes() > 0:
-				_handle_http_request(p)
+			# 已开始但尚未完成的请求即使本轮没有新字节也要推进，以便执行
+			# 超时检查；没有请求状态的空闲 SSE 连接不会被误判为新请求。
+			var available_bytes: int = p.get_available_bytes()
+			if available_bytes > 0 or _request_states.has(p):
+				_handle_http_request(p, available_bytes)
 			
 			index -= 1
 		
@@ -329,6 +337,8 @@ func _remove_connection_at(index: int) -> void:
 		_close_sse_connection(p)
 	if _post_response_formats.has(p):
 		_post_response_formats.erase(p)
+	if _request_states.has(p):
+		_request_states.erase(p)
 	_connections.remove_at(index)
 
 ## 发送 SSE 心跳
@@ -362,66 +372,91 @@ func _cleanup_all_sse_connections() -> void:
 
 ## 处理 HTTP 请求
 ## @param peer: StreamPeerTCP - 客户端连接
-func _handle_http_request(peer: StreamPeerTCP) -> void:
+## @param available_bytes: int - 本轮已查询的可读字节数；省略时现场查询
+func _handle_http_request(peer: StreamPeerTCP, available_bytes: int = -1) -> void:
 	# 以原始字节累积请求，最后一次性按 UTF-8 解码。
 	# 不可按 TCP 分片逐段解码：中文等多字节字符可能被拆到分片边界，
 	# 单独解码任一分片都会损坏该字符（即“乱码”）。
-	var request_bytes: PackedByteArray = PackedByteArray()
-	var start_time: int = Time.get_ticks_msec()
-	var headers_complete: bool = false
-	var content_length: int = -1
-	var header_end: int = -1
-	
-	while true:
-		var available: int = peer.get_available_bytes()
-		if available > 0:
-			var read_result: Array = peer.get_partial_data(available)
-			var read_error: int = read_result[0]
-			if read_error != OK:
-				_send_http_error(peer, 400, "Failed to read request data.")
-				return
-			request_bytes.append_array(read_result[1])
-		
-		if request_bytes.size() > MAX_REQUEST_SIZE:
+	var state: Dictionary = _request_states.get(peer, {})
+	if state.is_empty():
+		state = {
+			"request_bytes": PackedByteArray(),
+			"started_at": Time.get_ticks_msec(),
+			"headers_complete": false,
+			"content_length": -1,
+			"header_end": -1,
+			"header_scan_offset": 0
+		}
+		_request_states[peer] = state
+
+	var request_bytes: PackedByteArray = state["request_bytes"]
+	var available: int = available_bytes if available_bytes >= 0 else peer.get_available_bytes()
+	if available > 0:
+		var read_result: Array = peer.get_partial_data(available)
+		var read_error: int = read_result[0]
+		if read_error != OK:
+			_request_states.erase(peer)
+			_send_http_error(peer, 400, "Failed to read request data.")
+			return
+		request_bytes.append_array(read_result[1])
+		state["request_bytes"] = request_bytes
+
+	if request_bytes.size() > MAX_REQUEST_SIZE:
+		_request_states.erase(peer)
+		_send_http_error(peer, 413, "Request too large. Maximum size is " + str(MAX_REQUEST_SIZE / 1024) + "KB")
+		return
+
+	var current_time: int = Time.get_ticks_msec()
+	if current_time - int(state["started_at"]) > REQUEST_TIMEOUT * 1000:
+		_request_states.erase(peer)
+		_send_http_error(peer, 408, "Request timeout. Please ensure the request is sent completely within " + str(REQUEST_TIMEOUT) + " seconds.")
+		return
+
+	if not bool(state["headers_complete"]):
+		var scan_offset: int = int(state["header_scan_offset"])
+		var header_end: int = _find_header_terminator(request_bytes, scan_offset)
+		if header_end == -1:
+			# 保留最后 3 个字节作为下轮扫描的重叠区，因为分隔符本身有 4 字节。
+			state["header_scan_offset"] = maxi(0, request_bytes.size() - 3)
+			return
+
+		state["headers_complete"] = true
+		state["header_end"] = header_end
+		# 头部为 ASCII，可安全解码。
+		var header_section: String = request_bytes.slice(0, header_end).get_string_from_utf8()
+		var header_lines: PackedStringArray = header_section.split("\r\n")
+		for line in header_lines:
+			var lower_line: String = line.to_lower()
+			if lower_line.begins_with("content-length:"):
+				var cl_str: String = line.substr(15).strip_edges()
+				if not cl_str.is_valid_int() or cl_str.to_int() < 0:
+					_request_states.erase(peer)
+					_send_http_error(peer, 400, "Invalid Content-Length header.")
+					return
+				state["content_length"] = cl_str.to_int()
+				break
+
+		var expected_size: int = header_end + 4 + maxi(0, int(state["content_length"]))
+		if expected_size > MAX_REQUEST_SIZE:
+			_request_states.erase(peer)
 			_send_http_error(peer, 413, "Request too large. Maximum size is " + str(MAX_REQUEST_SIZE / 1024) + "KB")
 			return
-		
-		var current_time: int = Time.get_ticks_msec()
-		if current_time - start_time > REQUEST_TIMEOUT * 1000:
-			_send_http_error(peer, 408, "Request timeout. Please ensure the request is sent completely within " + str(REQUEST_TIMEOUT) + " seconds.")
-			return
-		
-		if not headers_complete:
-			header_end = _find_header_terminator(request_bytes)
-			if header_end != -1:
-				headers_complete = true
-				# 头部为 ASCII，可安全解码
-				var header_section: String = request_bytes.slice(0, header_end).get_string_from_utf8()
-				var header_lines: PackedStringArray = header_section.split("\r\n")
-				for line in header_lines:
-					var lower_line: String = line.to_lower()
-					if lower_line.begins_with("content-length:"):
-						var cl_str: String = line.substr(15).strip_edges()
-						content_length = cl_str.to_int()
-						break
-			else:
-				OS.delay_msec(1)
-				continue
-		
-		if headers_complete:
-			var body_received: int = request_bytes.size() - (header_end + 4)
-			
-			if content_length >= 0:
-				if body_received >= content_length:
-					break
-				else:
-					OS.delay_msec(1)
-					continue
-			else:
-				break
+
+	var completed_header_end: int = int(state["header_end"])
+	var content_length: int = int(state["content_length"])
+	var body_received: int = request_bytes.size() - (completed_header_end + 4)
+	if content_length >= 0 and body_received < content_length:
+		return
 	
 	if request_bytes.is_empty():
+		_request_states.erase(peer)
 		return
+
+	# 请求已完整，先移除增量状态再路由；后续响应可能立即断开 peer。
+	_request_states.erase(peer)
+	if content_length >= 0:
+		var request_end: int = completed_header_end + 4 + content_length
+		request_bytes = request_bytes.slice(0, request_end)
 	
 	# 一次性按 UTF-8 解码完整请求，确保多字节字符（如中文）不被损坏
 	var request: String = request_bytes.get_string_from_utf8()
@@ -447,10 +482,12 @@ func _handle_http_request(peer: StreamPeerTCP) -> void:
 
 ## 在原始字节中查找 HTTP 头与正文的分隔符 "\r\n\r\n"
 ## @param bytes: PackedByteArray - 已累积的请求字节
+## @param start_index: int - 增量扫描起点；调用方应保留最多 3 字节重叠区
 ## @returns: int - 分隔符起始下标；未找到返回 -1
-func _find_header_terminator(bytes: PackedByteArray) -> int:
+func _find_header_terminator(bytes: PackedByteArray, start_index: int = 0) -> int:
 	# \r=13, \n=10
-	for i in range(bytes.size() - 3):
+	var stop: int = bytes.size() - 3
+	for i in range(clampi(start_index, 0, maxi(0, stop)), stop):
 		if bytes[i] == 13 and bytes[i + 1] == 10 and bytes[i + 2] == 13 and bytes[i + 3] == 10:
 			return i
 	return -1
