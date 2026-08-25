@@ -219,6 +219,22 @@ var _cache_generation: int = 0
 # instead of scanning and clearing the full result cache.
 var _cache_revision_index = CACHE_REVISION_INDEX_SCRIPT.new()
 
+# 内部测试计数器（非 MCP 工具，仅经 get_cache_diagnostics()/reset_cache_diagnostics()
+# 暴露给单元测试与诊断）。持续量化命中/未命中/逐出/失效/单飞/超限拒绝，
+# 便于在不膨胀工具 Schema 的前提下回归验收缓存语义。
+var _result_cache_hits: int = 0                 # 顺序重复只读调用命中共享结果缓存
+var _result_cache_misses: int = 0               # 必须真正执行 handler 的只读调用
+var _result_cache_evictions: int = 0            # LRU 容量触发的逐出
+var _result_cache_stale_evictions: int = 0      # TTL 过期或依赖 revision 失配的惰性逐出
+var _result_cache_single_flight_serves: int = 0 # 并发同 key 合并执行后由 twin 提供结果
+var _read_snapshot_hits: int = 0                # 分页扫描快照命中
+var _read_snapshot_misses: int = 0              # 必须执行一次完整扫描的快照请求
+var _read_snapshot_oversized_rejects: int = 0   # 超 READ_SNAPSHOT_MAX_BYTES 而拒绝保留内存
+var _tool_list_cache_hits: int = 0              # tools/list 定义缓存命中
+var _tool_list_cache_misses: int = 0            # tools/list 定义缓存重建
+var _spill_writes: int = 0                      # 大结果 spill 落盘写入次数
+var _spill_reuses: int = 0                      # 相同内容复用既有不可变 spill 文件次数
+
 ## Requests the client asked to cancel via `notifications/cancelled`
 ## (request id -> true). Long-running tools poll `is_request_cancelled()` /
 ## `is_current_tool_cancelled()` while they run and abort early when set.
@@ -673,7 +689,10 @@ func _handle_tools_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
 	
 	if not _tool_list_cache_valid:
+		_tool_list_cache_misses += 1
 		_rebuild_tool_list_cache()
+	else:
+		_tool_list_cache_hits += 1
 	
 	var result: Dictionary = {"tools": _tool_list_cache}
 	# 2026-07-28 MCP 规范：列表结果需带 _meta（ttlMs/cacheScope），Claude Code 缺失会拒绝。
@@ -766,10 +785,12 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		cache_revision_snapshot_at_start = _cache_revision_index.snapshot(dependency_tags)
 		var cached_formatted: Variant = _result_cache_get_formatted(cache_key)
 		if cached_formatted is Dictionary:
+			_result_cache_hits += 1
 			_log_info("Serving cached result for: " + tool_name)
 			return MCPTypes.create_response(id, cached_formatted)
 		var cached: Variant = _result_cache_get(cache_key)
 		if cached != null:
+			_result_cache_hits += 1
 			_log_info("Serving cached result (legacy entry) for: " + tool_name)
 			return MCPTypes.create_response(id, _format_tool_result(cached, tool))
 		if _cache_inflight.has(cache_key):
@@ -782,12 +803,15 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 				await main_loop.process_frame
 			var retried_formatted: Variant = _result_cache_get_formatted(cache_key)
 			if retried_formatted is Dictionary:
+				_result_cache_single_flight_serves += 1
 				_log_info("Serving result from in-flight twin for: " + tool_name)
 				return MCPTypes.create_response(id, retried_formatted)
 			var retried: Variant = _result_cache_get(cache_key)
 			if retried != null:
+				_result_cache_single_flight_serves += 1
 				_log_info("Serving result from in-flight twin for: " + tool_name)
 				return MCPTypes.create_response(id, _format_tool_result(retried, tool))
+		_result_cache_misses += 1
 		_cache_inflight[cache_key] = cache_revision_snapshot_at_start
 	
 	# 发送开始信号
@@ -1494,10 +1518,12 @@ func _result_cache_get_entry(key: String) -> Dictionary:
 		return {}
 	var entry: Dictionary = _result_cache[key]
 	if Time.get_ticks_msec() - int(entry.get("last_access", 0)) > RESULT_CACHE_TTL_MS:
+		_result_cache_stale_evictions += 1
 		_erase_result_cache_key(key)
 		return {}
 	var revision_snapshot: Variant = entry.get("revision_snapshot", null)
 	if revision_snapshot is Dictionary and not _cache_revision_index.is_current(revision_snapshot):
+		_result_cache_stale_evictions += 1
 		_erase_result_cache_key(key)
 		return {}
 	entry["last_access"] = Time.get_ticks_msec()
@@ -1542,6 +1568,7 @@ func _result_cache_put(key: String, value: Variant, formatted: Variant = null,
 		var evicted_key: String = _result_cache_order.pop_back()
 		_result_cache.erase(evicted_key)
 		_cache_inflight.erase(evicted_key)
+		_result_cache_evictions += 1
 
 ## Remove one entry from both the value map and the recency index.
 func _erase_result_cache_key(key: String) -> void:
@@ -1570,7 +1597,9 @@ func get_or_compute_read_snapshot(tool_name: String, arguments: Dictionary,
 	var key: String = tool_name + ":@snapshot:" + _canonical_json(arguments)
 	var cached: Variant = _result_cache_get(key)
 	if cached is Dictionary:
+		_read_snapshot_hits += 1
 		return cached
+	_read_snapshot_misses += 1
 	var dependency_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.read_tags(
 		tool_name, arguments)
 	var revision_snapshot: Dictionary = _cache_revision_index.snapshot(dependency_tags)
@@ -1582,6 +1611,7 @@ func get_or_compute_read_snapshot(tool_name: String, arguments: Dictionary,
 		return result
 	var encoded: String = JSON.stringify(result)
 	if encoded.to_utf8_buffer().size() > READ_SNAPSHOT_MAX_BYTES:
+		_read_snapshot_oversized_rejects += 1
 		return result
 	_result_cache_put(key, result, null, revision_snapshot)
 	_enforce_read_snapshot_cache_limit()
@@ -1675,6 +1705,67 @@ func clear_cache() -> void:
 	_invalidate_result_cache()
 	_log_info("Cache cleared")
 
+
+## 内部测试接口：返回各缓存层的持续量化计数（命中/未命中/逐出/失效/单飞/超限拒绝）
+## 与当前占用/上限。这不是 MCP 工具——只供单元测试与诊断读取，避免 Schema 膨胀。
+func get_cache_diagnostics() -> Dictionary:
+	var snapshot_entries: int = 0
+	for key_value in _result_cache:
+		if _is_read_snapshot_cache_key(String(key_value)):
+			snapshot_entries += 1
+	var result_attempts: int = maxi(1, _result_cache_hits + _result_cache_misses)
+	var spill_repeat_opportunities: int = maxi(1, _spill_reuses + maxi(0, _spill_writes - 1))
+	return {
+		"result_cache": {
+			"hits": _result_cache_hits,
+			"misses": _result_cache_misses,
+			"evictions": _result_cache_evictions,
+			"stale_evictions": _result_cache_stale_evictions,
+			"single_flight_serves": _result_cache_single_flight_serves,
+			"entries": _result_cache.size(),
+			"capacity": RESULT_CACHE_MAX,
+			"generation": _cache_generation,
+			"hit_rate": float(_result_cache_hits) / float(result_attempts)
+		},
+		"tool_list_cache": {
+			"hits": _tool_list_cache_hits,
+			"misses": _tool_list_cache_misses,
+			"entries": _tool_list_cache.size(),
+			"valid": _tool_list_cache_valid
+		},
+		"read_snapshot_cache": {
+			"hits": _read_snapshot_hits,
+			"misses": _read_snapshot_misses,
+			"oversized_rejects": _read_snapshot_oversized_rejects,
+			"entries": snapshot_entries,
+			"capacity": READ_SNAPSHOT_CACHE_MAX,
+			"max_bytes": READ_SNAPSHOT_MAX_BYTES
+		},
+		"spill": {
+			"writes": _spill_writes,
+			"reuses": _spill_reuses,
+			"reuse_rate": float(_spill_reuses) / float(spill_repeat_opportunities),
+			"inline_limit_bytes": MAX_INLINE_RESULT_BYTES
+		}
+	}
+
+
+## 内部测试接口：清零全部缓存计数器（不触碰缓存内容），用于在干净窗口内
+## 测量某一段调用轨迹的命中率/复用率。
+func reset_cache_diagnostics() -> void:
+	_result_cache_hits = 0
+	_result_cache_misses = 0
+	_result_cache_evictions = 0
+	_result_cache_stale_evictions = 0
+	_result_cache_single_flight_serves = 0
+	_read_snapshot_hits = 0
+	_read_snapshot_misses = 0
+	_read_snapshot_oversized_rejects = 0
+	_tool_list_cache_hits = 0
+	_tool_list_cache_misses = 0
+	_spill_writes = 0
+	_spill_reuses = 0
+
 # ============================================================================
 # 结果体积控制（spill 落盘）
 # ============================================================================
@@ -1743,6 +1834,7 @@ func _spill_result_to_disk(json_bytes: PackedByteArray, content_sha256: String) 
 		# Do not trust a same-sized file: project-local output can be edited out of
 		# band. Reuse only when its digest still matches the content-addressed URI.
 		if FileAccess.get_sha256(path) == content_sha256:
+			_spill_reuses += 1
 			return path
 	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
 	if not file:
@@ -1750,6 +1842,7 @@ func _spill_result_to_disk(json_bytes: PackedByteArray, content_sha256: String) 
 		return ""
 	file.store_buffer(json_bytes)
 	file.close()
+	_spill_writes += 1
 	_log_info("Spilled large result (%d bytes) to %s" % [json_bytes.size(), path])
 	return path
 

@@ -31,6 +31,8 @@ var _sorted_alias_keys: Array = []
 var _index_builds: int = 0
 var _route_computations: int = 0
 var _route_cache_hits: int = 0
+var _route_cache_misses: int = 0
+var _route_cache_evictions: int = 0
 var _curated_index: Array = []
 
 const INTENT_ALIASES: Dictionary = {
@@ -632,6 +634,7 @@ func _store_cached_route(cache_key: String, result: Dictionary) -> void:
 	while _route_lru.size() > ROUTE_CACHE_MAX:
 		var oldest_key: String = _route_lru.pop_front()
 		_route_cache.erase(oldest_key)
+		_route_cache_evictions += 1
 
 func get_diagnostics() -> Dictionary:
 	return {
@@ -640,9 +643,19 @@ func get_diagnostics() -> Dictionary:
 		"index_builds": _index_builds,
 		"route_computations": _route_computations,
 		"route_cache_hits": _route_cache_hits,
+		"route_cache_misses": _route_cache_misses,
+		"route_cache_evictions": _route_cache_evictions,
 		"route_cache_entries": _route_cache.size(),
 		"route_cache_capacity": ROUTE_CACHE_MAX
 	}
+
+
+## 测试接口：清零路由缓存计数（不触碰缓存内容），用于干净窗口内测量命中率。
+func reset_diagnostics() -> void:
+	_route_computations = 0
+	_route_cache_hits = 0
+	_route_cache_misses = 0
+	_route_cache_evictions = 0
 
 func _score_curated_workflow(workflow: Dictionary, terms: Array, normalized_query: String) -> int:
 	var haystack: String = String(workflow.get("_search_text", ""))
@@ -754,6 +767,7 @@ func route(
 	var cache_key: String = _route_cache_key(query, budget)
 	if registry_revision >= 0 and _route_cache.has(cache_key):
 		return _get_cached_route(cache_key)
+	_route_cache_misses += 1
 	_route_computations += 1
 	var atomic_by_name: Dictionary = _indexed_by_name
 	var exact_by_intent: Dictionary = _indexed_exact_by_intent
