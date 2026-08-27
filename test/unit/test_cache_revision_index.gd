@@ -83,3 +83,66 @@ func test_cross_file_scans_watch_single_file_aggregate_revisions() -> void:
 		index.advance([changed_tag])
 		assert_false(index.is_current(snapshot),
 			"%s must expire after %s changes" % [tool_name, changed_tag])
+
+
+func test_external_script_reload_uses_exact_path_without_script_wildcard() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.external_change_tags({
+		"paths": PackedStringArray(["res:\\scripts\\player.gd"])
+	})
+	assert_has(tags, "script:res://scripts/player.gd")
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE)
+	assert_has(tags, "resource:res://scripts/player.gd")
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_SCRIPT_ALL,
+		"Known external paths must preserve unrelated script reads")
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_RESOURCE_ALL,
+		"Known external paths must preserve unrelated resource reads")
+
+
+func test_external_structural_changes_advance_only_relevant_catalogs() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.external_change_tags({
+		"paths": PackedStringArray([
+			"res://scripts/new_player.gd",
+			"res://levels/removed_level.tscn",
+			"res://art/new_icon.png"
+		]),
+		"structural_paths": PackedStringArray([
+			"res://scripts/new_player.gd",
+			"res://levels/removed_level.tscn",
+			"res://art/new_icon.png"
+		])
+	})
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_CATALOG)
+	assert_has(tags, INDEX_SCRIPT.TAG_SCENE_CATALOG)
+	assert_has(tags, INDEX_SCRIPT.TAG_RESOURCE_CATALOG)
+	assert_has(tags, INDEX_SCRIPT.TAG_PROJECT_TREE)
+	assert_has(tags, INDEX_SCRIPT.TAG_SCENE_CONTENT)
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_GLOBAL,
+		"A structural file diff is still narrower than global invalidation")
+
+
+func test_external_reimport_and_project_signals_map_to_owned_domains() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.external_change_tags({
+		"paths": PackedStringArray(["res://art/hero.png"]),
+		"reimported": true,
+		"script_classes_updated": true,
+		"project_settings_changed": true
+	})
+	assert_has(tags, "resource:res://art/hero.png")
+	assert_has(tags, INDEX_SCRIPT.TAG_IMPORT_STATE)
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE)
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_CATALOG)
+	assert_has(tags, INDEX_SCRIPT.TAG_PROJECT_SETTINGS)
+
+
+func test_pathless_filesystem_event_fails_safe_without_tool_catalog_churn() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.external_change_tags({
+		"filesystem_fallback": true
+	})
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_ALL)
+	assert_has(tags, INDEX_SCRIPT.TAG_RESOURCE_ALL)
+	assert_has(tags, INDEX_SCRIPT.TAG_SCENE_CONTENT)
+	assert_has(tags, INDEX_SCRIPT.TAG_PROJECT_SETTINGS)
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_TOOL_CATALOG,
+		"Unknown file changes must not rebuild immutable tool discovery state")
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_GLOBAL,
+		"Fallback remains bounded to file-backed dependency domains")

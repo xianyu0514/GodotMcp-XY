@@ -131,6 +131,59 @@ func test_stale_counter_on_revision_invalidation_and_no_stale_return() -> void:
 	assert_eq(int(_result_text(response).get("calls", -1)), 2, "Response carries fresh data, not the stale payload")
 
 
+func test_external_script_event_invalidates_only_matching_cached_path() -> void:
+	_register_read("read_script", "Script")
+	var path_a: String = "res://scripts/a.gd"
+	var path_b: String = "res://scripts/b.gd"
+	await _core._handle_tool_call(_call("read_script", {"script_path": path_a}))
+	await _core._handle_tool_call(_call("read_script", {"script_path": path_b}))
+	_core.reset_cache_diagnostics()
+
+	_core.notify_external_changes({
+		"paths": PackedStringArray([path_a]),
+		"has_changes": true
+	})
+	await _core._handle_tool_call(_call("read_script", {"script_path": path_a}))
+	await _core._handle_tool_call(_call("read_script", {"script_path": path_b}))
+
+	var diagnostics: Dictionary = _core.get_cache_diagnostics()
+	var result_diag: Dictionary = diagnostics.get("result_cache", {})
+	var external_diag: Dictionary = diagnostics.get("external_change_invalidation", {})
+	assert_eq(_calls.get(path_a, 0), 2,
+		"The externally changed script recomputes before it can serve stale data")
+	assert_eq(_calls.get(path_b, 0), 1,
+		"An unrelated script remains hot after exact-path invalidation")
+	assert_eq(int(result_diag.get("stale_evictions", -1)), 1)
+	assert_eq(int(result_diag.get("hits", -1)), 1)
+	assert_eq(int(external_diag.get("events", -1)), 1)
+	assert_eq(int(external_diag.get("precise_paths", -1)), 1)
+	assert_eq(int(external_diag.get("fallback_events", -1)), 0)
+
+
+func test_pathless_external_event_uses_bounded_safe_fallback() -> void:
+	_register_read("read_script", "Script")
+	_register_read("get_scene_structure", "Scene")
+	await _core._handle_tool_call(_call("read_script", {
+		"script_path": "res://scripts/player.gd"
+	}))
+	await _core._handle_tool_call(_call("get_scene_structure", {"key": "scene"}))
+	_core.reset_cache_diagnostics()
+
+	_core.notify_external_changes({
+		"filesystem_fallback": true,
+		"has_changes": true
+	})
+	await _core._handle_tool_call(_call("read_script", {
+		"script_path": "res://scripts/player.gd"
+	}))
+	await _core._handle_tool_call(_call("get_scene_structure", {"key": "scene"}))
+
+	var diagnostics: Dictionary = _core.get_cache_diagnostics()
+	assert_eq(int(diagnostics["result_cache"].get("stale_evictions", -1)), 2,
+		"A pathless editor event safely expires every file-backed cached read")
+	assert_eq(int(diagnostics["external_change_invalidation"].get("fallback_events", -1)), 1)
+
+
 func test_stale_counter_on_ttl_expiry() -> void:
 	_register_read("get_scene_structure", "Scene")
 	await _core._handle_tool_call(_call("get_scene_structure", {"key": "ttl"}))

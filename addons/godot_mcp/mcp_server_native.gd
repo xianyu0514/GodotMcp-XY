@@ -99,9 +99,16 @@ var _mcp_server_mode: bool = false
 var _tool_instances: Dictionary = {}
 var _debugger_bridge: MCPDebuggerBridge = null
 var _prompt_workflows: RefCounted = null  # prompt_workflows.gd 实例（MCP prompts 工作流模板）
+var _cache_change_tracker: RefCounted = null
+var _editor_filesystem: EditorFileSystem = null
+var _cache_change_flush_pending: bool = false
+var _cache_filesystem_snapshot_pending: bool = false
 # 本次插件会话是否由 _ensure_runtime_probe_autoload() 新增了 runtime probe autoload。
 # 若 project.godot 本来就声明了该 autoload（当前仓库正是如此），退出时不得删除它。
 var _probe_autoload_added_this_session: bool = false
+
+const CACHE_CHANGE_TRACKER_SCRIPT = preload(
+	"res://addons/godot_mcp/native_mcp/cache_change_tracker.gd")
 
 const TOOL_SCRIPT_PATHS: Dictionary = {
 	"NodeToolsNative": "res://addons/godot_mcp/tools/node_tools_native.gd",
@@ -201,6 +208,7 @@ func _enter_tree() -> void:
 	_native_server.tool_execution_completed.connect(_on_tool_completed)
 	_native_server.tool_execution_failed.connect(_on_tool_failed)
 	_native_server.log_message.connect(_on_log_message)
+	_connect_cache_change_signals()
 	
 	# 注册所有工具
 	_register_all_tools()
@@ -241,6 +249,7 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	_log_info("Godot Native MCP Plugin exiting tree...")
+	_disconnect_cache_change_signals()
 	
 	if _native_server and _native_server.is_running():
 		_native_server.stop()
@@ -954,6 +963,179 @@ static func _get_godot_version() -> Dictionary:
 		"minor": Engine.get_version_info()["minor"],
 		"patch": Engine.get_version_info()["patch"]
 	}
+
+# ============================================================================
+# 编辑器/外部文件变更 → 结果缓存 dependency revision
+# ============================================================================
+
+## Subscribe once to every path-bearing Godot 4.7 editor signal that can explain
+## a changed file. Generic filesystem_changed events are paired with a recursive
+## path-set diff; all signals are coalesced into one deferred batch per frame.
+func _connect_cache_change_signals() -> void:
+	if not _native_server or not _editor_interface:
+		return
+	_cache_change_tracker = CACHE_CHANGE_TRACKER_SCRIPT.new()
+	_editor_filesystem = _editor_interface.get_resource_filesystem()
+	if _editor_filesystem:
+		_cache_change_tracker.seed_paths(_snapshot_editor_filesystem_paths())
+		_connect_cache_signal(_editor_filesystem, &"filesystem_changed",
+			Callable(self, "_on_cache_filesystem_changed"))
+		_connect_cache_signal(_editor_filesystem, &"resources_reload",
+			Callable(self, "_on_cache_resources_reload"))
+		_connect_cache_signal(_editor_filesystem, &"resources_reimporting",
+			Callable(self, "_on_cache_resources_reimporting"))
+		_connect_cache_signal(_editor_filesystem, &"resources_reimported",
+			Callable(self, "_on_cache_resources_reimported"))
+		_connect_cache_signal(_editor_filesystem, &"script_classes_updated",
+			Callable(self, "_on_cache_script_classes_updated"))
+		_connect_cache_signal(_editor_filesystem, &"sources_changed",
+			Callable(self, "_on_cache_sources_changed"))
+	_connect_cache_signal(self, &"resource_saved", Callable(self, "_on_cache_resource_saved"))
+	_connect_cache_signal(self, &"scene_saved", Callable(self, "_on_cache_scene_saved"))
+	_connect_cache_signal(ProjectSettings, &"settings_changed",
+		Callable(self, "_on_cache_project_settings_changed"))
+
+
+func _disconnect_cache_change_signals() -> void:
+	if _editor_filesystem:
+		_disconnect_cache_signal(_editor_filesystem, &"filesystem_changed",
+			Callable(self, "_on_cache_filesystem_changed"))
+		_disconnect_cache_signal(_editor_filesystem, &"resources_reload",
+			Callable(self, "_on_cache_resources_reload"))
+		_disconnect_cache_signal(_editor_filesystem, &"resources_reimporting",
+			Callable(self, "_on_cache_resources_reimporting"))
+		_disconnect_cache_signal(_editor_filesystem, &"resources_reimported",
+			Callable(self, "_on_cache_resources_reimported"))
+		_disconnect_cache_signal(_editor_filesystem, &"script_classes_updated",
+			Callable(self, "_on_cache_script_classes_updated"))
+		_disconnect_cache_signal(_editor_filesystem, &"sources_changed",
+			Callable(self, "_on_cache_sources_changed"))
+	_disconnect_cache_signal(self, &"resource_saved", Callable(self, "_on_cache_resource_saved"))
+	_disconnect_cache_signal(self, &"scene_saved", Callable(self, "_on_cache_scene_saved"))
+	_disconnect_cache_signal(ProjectSettings, &"settings_changed",
+		Callable(self, "_on_cache_project_settings_changed"))
+	_cache_change_flush_pending = false
+	_cache_filesystem_snapshot_pending = false
+	_cache_change_tracker = null
+	_editor_filesystem = null
+
+
+func _connect_cache_signal(source: Object, signal_name: StringName, callback: Callable) -> void:
+	if source and source.has_signal(signal_name) and not source.is_connected(signal_name, callback):
+		source.connect(signal_name, callback)
+
+
+func _disconnect_cache_signal(source: Object, signal_name: StringName, callback: Callable) -> void:
+	if source and source.has_signal(signal_name) and source.is_connected(signal_name, callback):
+		source.disconnect(signal_name, callback)
+
+
+func _on_cache_filesystem_changed() -> void:
+	if not _cache_change_tracker:
+		return
+	# Several EditorFileSystem signals can arrive in one process frame. Defer the
+	# recursive path snapshot so even a burst walks the editor tree only once.
+	_cache_filesystem_snapshot_pending = true
+	_schedule_cache_change_flush()
+
+
+func _on_cache_resources_reload(resources: PackedStringArray) -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_paths(resources)
+		_schedule_cache_change_flush()
+
+
+func _on_cache_resources_reimporting(resources: PackedStringArray) -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_paths(resources, true)
+		_schedule_cache_change_flush()
+
+
+func _on_cache_resources_reimported(resources: PackedStringArray) -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_paths(resources, true)
+		_schedule_cache_change_flush()
+
+
+func _on_cache_script_classes_updated() -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_script_classes_updated()
+		_schedule_cache_change_flush()
+
+
+func _on_cache_sources_changed(_exist: bool) -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_sources_changed()
+		_schedule_cache_change_flush()
+
+
+func _on_cache_resource_saved(resource: Resource) -> void:
+	if not _cache_change_tracker:
+		return
+	var path: String = resource.resource_path if resource else ""
+	if not path.is_empty():
+		_cache_change_tracker.queue_paths(PackedStringArray([path]))
+		_schedule_cache_change_flush()
+
+
+func _on_cache_scene_saved(filepath: String) -> void:
+	if _cache_change_tracker and not filepath.is_empty():
+		_cache_change_tracker.queue_paths(PackedStringArray([filepath]))
+		_schedule_cache_change_flush()
+
+
+func _on_cache_project_settings_changed() -> void:
+	if _cache_change_tracker:
+		_cache_change_tracker.queue_project_settings_changed()
+		_schedule_cache_change_flush()
+
+
+func _schedule_cache_change_flush() -> void:
+	if _cache_change_flush_pending:
+		return
+	_cache_change_flush_pending = true
+	call_deferred("_flush_cache_change_events")
+
+
+func _flush_cache_change_events() -> void:
+	_cache_change_flush_pending = false
+	if not _cache_change_tracker or not _native_server:
+		return
+	if _cache_filesystem_snapshot_pending:
+		_cache_filesystem_snapshot_pending = false
+		_cache_change_tracker.queue_filesystem_snapshot(_snapshot_editor_filesystem_paths())
+	var batch: Dictionary = _cache_change_tracker.flush()
+	if not bool(batch.get("has_changes", false)):
+		return
+	var changed_paths: PackedStringArray = batch.get("paths", PackedStringArray())
+	var tags: Array[String] = _native_server.notify_external_changes(batch)
+	_log_debug("Coalesced editor cache invalidation: %d paths, %d tags%s" % [
+		changed_paths.size(),
+		tags.size(),
+		" (fallback)" if bool(batch.get("filesystem_fallback", false)) else ""
+	])
+
+
+func _snapshot_editor_filesystem_paths() -> PackedStringArray:
+	var paths: PackedStringArray = PackedStringArray()
+	if _editor_filesystem:
+		_collect_editor_filesystem_paths(_editor_filesystem.get_filesystem(), paths)
+	# project.godot is not an imported resource but is cache-relevant and can be
+	# changed outside the editor.
+	if FileAccess.file_exists("res://project.godot"):
+		paths.append("res://project.godot")
+	paths.sort()
+	return paths
+
+
+static func _collect_editor_filesystem_paths(directory: EditorFileSystemDirectory,
+		paths: PackedStringArray) -> void:
+	if not directory:
+		return
+	for file_index in range(directory.get_file_count()):
+		paths.append(directory.get_file_path(file_index))
+	for directory_index in range(directory.get_subdir_count()):
+		_collect_editor_filesystem_paths(directory.get_subdir(directory_index), paths)
 
 # ============================================================================
 # UI面板创建

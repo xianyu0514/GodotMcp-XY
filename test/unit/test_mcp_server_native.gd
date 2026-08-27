@@ -155,6 +155,28 @@ func test_should_enable_auth_gating():
 	assert_false(_plugin_script.should_enable_auth(true, "stdio"), "stdio transport should not enable HTTP auth")
 	assert_false(_plugin_script.should_enable_auth(false, "stdio"), "Disabled + stdio should not enable auth")
 
+
+func test_plugin_exposes_cache_change_signal_lifecycle_hooks() -> void:
+	var method_names: Array[String] = []
+	for method_info in _plugin_script.get_script_method_list():
+		method_names.append(String(method_info.get("name", "")))
+	for method_name in [
+		"_connect_cache_change_signals",
+		"_disconnect_cache_change_signals",
+		"_on_cache_filesystem_changed",
+		"_on_cache_resources_reload",
+		"_on_cache_resources_reimporting",
+		"_on_cache_resources_reimported",
+		"_on_cache_script_classes_updated",
+		"_on_cache_sources_changed",
+		"_on_cache_resource_saved",
+		"_on_cache_scene_saved",
+		"_on_cache_project_settings_changed",
+		"_flush_cache_change_events"
+	]:
+		assert_has(method_names, method_name,
+			"Editor lifecycle must own cache event hook: %s" % method_name)
+
 func test_apply_auth_config_called_in_start_path():
 	var source_code: String = _plugin_script.source_code
 	var start_pos: int = source_code.find("func _start_native_server")
