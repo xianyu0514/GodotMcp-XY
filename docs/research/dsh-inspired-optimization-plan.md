@@ -32,7 +32,7 @@
 ### M3. 工具结果缓存（确定性 key + 事件失效）
 - `mcp_server_core.gd` 现有 scene-structure 缓存（5min TTL）扩展为**通用结果缓存**：
   - key：工具名 + 规范化参数（字典 key 排序后 JSON，确定性）；
-  - 容量：LRU 上限（如 64 条目）；
+  - 容量：LRU 同时受 64 条目与 32 MiB 序列化原始结果预算约束；超预算只是不缓存，本次结果仍完整返回；
   - 失效：写工具（readOnlyHint=false）执行后全失效 + 可选 mtime 指纹 + TTL 兜底（如 60s）；
   - 单飞：同一 key 并发请求合并为一次执行（防重复算力）。
 - 只缓存**幂等读工具**（readOnlyHint=true 且显式 opt-in 清单，如 get_scene_structure/list_nodes/list_project_scenes/list_project_scripts）。
@@ -90,5 +90,6 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已追加 | tools/list 服务端缓存 + 确定性排序；结果缓存同时保存 formatted payload（命中跳过 JSON.stringify/spill 检查）；meta 发现工具（list_tool_catalog/search_tools/get_tool_details）纳入只读结果缓存；HTTP 轮询去除每轮 `_connections.duplicate()` | ✅ 全量 GUT 0 失败（678006f / f630cc9 / 3530489 / 7c67f8e） |
 | 已完成 | M5（无损 list 分页 + revision 安全扫描快照） | ✅ 7 条稳定读路径补齐；跨页单扫描；8 项 / 4 MiB 门禁；写工具不以重执行换分页 |
 | 已完成 | P3.3 工作流路由质量门禁 | ✅ 48 个中英真实制作任务 / 12 领域 / 174 个原子期望；Recall@8 与完整任务成功率 100%，验证阶段召回 97.30%，已知跨域误选 0，平均 Schema 节省 97.34%；默认预算仍为 8，未新增工具/Schema/模型调用 |
-| 下轮 | P3.4 缓存可观测性与真实命中基线 | 给 tools/list、结果缓存和工作流 LRU 增加无 Schema 成本的诊断/测试基线，量化冷启动、任务切换与重复目标命中，不为追求命中率放宽失效正确性 |
+| 已完成 | P3.4 缓存可观测性与真实命中基线 | 无新增工具/Schema；统一量化 tools/list、结果 LRU、单飞、扫描快照、工作流路线与 spill。确定性“检查→编辑→运行→调试→验证”会话门禁记录结果复用 50%、路线 50%、tools/list 80%、快照 80%、spill 50%，并证明相关脚本精确失效、无关场景/项目信息保持命中；结果缓存新增 32 MiB 总预算 |
+| 下轮 | P3.5 外部文件变更的事件驱动精确失效 | 接入 Godot `EditorFileSystem` 与脚本变更信号，把外部编辑映射到现有 dependency revision；完整证明事件覆盖前继续保留 60 秒 TTL 保险 |
 | 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |

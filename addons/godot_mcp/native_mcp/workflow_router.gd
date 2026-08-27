@@ -637,6 +637,7 @@ func _store_cached_route(cache_key: String, result: Dictionary) -> void:
 		_route_cache_evictions += 1
 
 func get_diagnostics() -> Dictionary:
+	var route_requests: int = _route_cache_hits + _route_cache_misses
 	return {
 		"indexed_revision": _indexed_revision,
 		"indexed_tools": _indexed_tools.size(),
@@ -644,6 +645,8 @@ func get_diagnostics() -> Dictionary:
 		"route_computations": _route_computations,
 		"route_cache_hits": _route_cache_hits,
 		"route_cache_misses": _route_cache_misses,
+		"route_cache_requests": route_requests,
+		"route_cache_hit_rate": float(_route_cache_hits) / float(maxi(1, route_requests)),
 		"route_cache_evictions": _route_cache_evictions,
 		"route_cache_entries": _route_cache.size(),
 		"route_cache_capacity": ROUTE_CACHE_MAX

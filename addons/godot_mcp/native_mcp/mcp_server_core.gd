@@ -89,6 +89,18 @@ const CACHE_PRESERVING_MUTATION_TOOLS: Array[String] = ["enable_tools"]
 ## evicted.
 const RESULT_CACHE_MAX: int = 64
 
+## Count-only limits do not bound a cache containing large scene/resource scans.
+## Cap the serialized raw values as well; formatted inline responses add at most
+## MAX_INLINE_RESULT_BYTES per entry, while spilled responses retain only their
+## small preview. Oversized values remain fully returned but are not retained.
+const RESULT_CACHE_MAX_BYTES: int = 32 * 1024 * 1024
+
+## Direct concurrent callers wait for the owner of an identical cache key to
+## finish instead of assuming every read resolves within one frame. The normal
+## MCP queue is serial, but this bounded fallback also protects embedded/direct
+## users from duplicate long-running scans.
+const RESULT_CACHE_SINGLE_FLIGHT_WAIT_MS: int = 30000
+
 ## Full scan snapshots are shared by every limit/offset view of the same query.
 ## They live in the existing revision-aware LRU but have tighter count/size
 ## gates so improved cross-page hit rate cannot create unbounded memory use.
@@ -207,10 +219,12 @@ var _request_count: Dictionary = {}  # String (client_id) -> int
 var _request_timestamps: Dictionary = {}  # String (client_id) -> Array[int]
 
 # 结果缓存（LRU + 依赖域 revision 懒失效）
-# _result_cache: key -> {"value", "last_access", "revision_snapshot"}
+# _result_cache: key -> {"value", "last_access", "revision_snapshot", "size_bytes"}
 var _result_cache: Dictionary = {}
 # LRU 最近使用列表：下标 0 = 最常使用，与 _result_cache 的 key 一一对应
 var _result_cache_order: Array[String] = []
+# Cached raw-result size proxy (deterministic serialized UTF-8 bytes).
+var _result_cache_bytes: int = 0
 # 单飞标记：正在执行的 key -> revision snapshot（同一 key 并发时合并执行）
 var _cache_inflight: Dictionary = {}
 # 缓存状态变更计数（兼容诊断/测试）；正确性由依赖 revision snapshot 保证。
@@ -227,6 +241,7 @@ var _result_cache_misses: int = 0               # 必须真正执行 handler 的
 var _result_cache_evictions: int = 0            # LRU 容量触发的逐出
 var _result_cache_stale_evictions: int = 0      # TTL 过期或依赖 revision 失配的惰性逐出
 var _result_cache_single_flight_serves: int = 0 # 并发同 key 合并执行后由 twin 提供结果
+var _result_cache_oversized_rejects: int = 0    # 单项超过总字节预算，不保留但完整返回
 var _read_snapshot_hits: int = 0                # 分页扫描快照命中
 var _read_snapshot_misses: int = 0              # 必须执行一次完整扫描的快照请求
 var _read_snapshot_oversized_rejects: int = 0   # 超 READ_SNAPSHOT_MAX_BYTES 而拒绝保留内存
@@ -799,7 +814,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 				_cache_inflight.erase(cache_key)
 		if _cache_inflight.has(cache_key):
 			var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
-			if main_loop:
+			var wait_deadline_msec: int = (
+				Time.get_ticks_msec() + RESULT_CACHE_SINGLE_FLIGHT_WAIT_MS)
+			while main_loop and _cache_inflight.has(cache_key) and Time.get_ticks_msec() < wait_deadline_msec:
 				await main_loop.process_frame
 			var retried_formatted: Variant = _result_cache_get_formatted(cache_key)
 			if retried_formatted is Dictionary:
@@ -864,6 +881,7 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	
 	var has_error: bool = result is Dictionary and result.has("error")
 	var response_result: Dictionary = _format_tool_result(result, tool)
+	var serialized_size_bytes: int = _formatted_result_source_size_bytes(response_result)
 
 	# Keep the result cache coherent: store successful cacheable reads together
 	# with their formatted payload and dependency-revision snapshot. Mutations
@@ -872,7 +890,8 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	# because its captured snapshot no longer matches.
 	if is_cacheable_read:
 		if not has_error and result is Dictionary and _cache_revision_index.is_current(cache_revision_snapshot_at_start):
-			_result_cache_put(cache_key, result, response_result, cache_revision_snapshot_at_start)
+			_result_cache_put(cache_key, result, response_result,
+				cache_revision_snapshot_at_start, serialized_size_bytes)
 		else:
 			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)) and tool_name not in CACHE_PRESERVING_MUTATION_TOOLS:
@@ -919,6 +938,28 @@ func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 	if not has_error and tool.output_schema.size() > 0 and spilled.is_empty():
 		response_result["structuredContent"] = result
 	return response_result
+
+## Recover the complete raw JSON byte count from the response that was already
+## formatted for the client. Inline results carry that JSON in the first text
+## block; spilled results advertise the complete size on their resource_link.
+## Returning -1 lets legacy/unusual shapes fall back to deterministic encoding
+## inside _result_cache_put.
+static func _formatted_result_source_size_bytes(response_result: Dictionary) -> int:
+	var content: Variant = response_result.get("content", [])
+	if not (content is Array):
+		return -1
+	for block_value in content:
+		if not (block_value is Dictionary):
+			continue
+		var block: Dictionary = block_value
+		if String(block.get("type", "")) == "resource_link" and block.has("size"):
+			return int(block.get("size", -1))
+	for block_value in content:
+		if block_value is Dictionary:
+			var block: Dictionary = block_value
+			if String(block.get("type", "")) == "text":
+				return String(block.get("text", "")).to_utf8_buffer().size()
+	return -1
 
 func _handle_resources_list(message: Dictionary) -> Dictionary:
 	var id: Variant = message.get("id")
@@ -1553,25 +1594,40 @@ func _result_cache_get_formatted(key: String) -> Variant:
 ## `_format_tool_result`; storing it lets cache hits skip JSON.stringify and
 ## spill re-checks.
 func _result_cache_put(key: String, value: Variant, formatted: Variant = null,
-		revision_snapshot: Dictionary = {}) -> void:
+		revision_snapshot: Dictionary = {}, serialized_size_bytes: int = -1) -> void:
 	if _result_cache.has(key):
 		_erase_result_cache_key(key)
-	var entry: Dictionary = {"value": value, "last_access": Time.get_ticks_msec()}
+	var entry_size_bytes: int = serialized_size_bytes
+	if entry_size_bytes < 0:
+		entry_size_bytes = JSON.stringify(value).to_utf8_buffer().size()
+	if entry_size_bytes > RESULT_CACHE_MAX_BYTES:
+		_result_cache_oversized_rejects += 1
+		_cache_inflight.erase(key)
+		return
+	var entry: Dictionary = {
+		"value": value,
+		"last_access": Time.get_ticks_msec(),
+		"size_bytes": maxi(0, entry_size_bytes)
+	}
 	if formatted != null:
 		entry["formatted"] = formatted
 	if not revision_snapshot.is_empty():
 		entry["revision_snapshot"] = revision_snapshot.duplicate()
 	_result_cache[key] = entry
+	_result_cache_bytes += int(entry.get("size_bytes", 0))
 	_cache_inflight.erase(key)
 	_result_cache_order.push_front(key)
-	while _result_cache_order.size() > RESULT_CACHE_MAX:
+	while _result_cache_order.size() > RESULT_CACHE_MAX or _result_cache_bytes > RESULT_CACHE_MAX_BYTES:
 		var evicted_key: String = _result_cache_order.pop_back()
-		_result_cache.erase(evicted_key)
-		_cache_inflight.erase(evicted_key)
+		_erase_result_cache_key(evicted_key)
 		_result_cache_evictions += 1
 
 ## Remove one entry from both the value map and the recency index.
 func _erase_result_cache_key(key: String) -> void:
+	if _result_cache.has(key):
+		var entry: Dictionary = _result_cache[key]
+		_result_cache_bytes = maxi(
+			0, _result_cache_bytes - int(entry.get("size_bytes", 0)))
 	_result_cache.erase(key)
 	_result_cache_order.erase(key)
 	_cache_inflight.erase(key)
@@ -1610,10 +1666,11 @@ func get_or_compute_read_snapshot(tool_name: String, arguments: Dictionary,
 	if result.has("error") or not _cache_revision_index.is_current(revision_snapshot):
 		return result
 	var encoded: String = JSON.stringify(result)
-	if encoded.to_utf8_buffer().size() > READ_SNAPSHOT_MAX_BYTES:
+	var encoded_size_bytes: int = encoded.to_utf8_buffer().size()
+	if encoded_size_bytes > READ_SNAPSHOT_MAX_BYTES:
 		_read_snapshot_oversized_rejects += 1
 		return result
-	_result_cache_put(key, result, null, revision_snapshot)
+	_result_cache_put(key, result, null, revision_snapshot, encoded_size_bytes)
 	_enforce_read_snapshot_cache_limit()
 	return result
 
@@ -1635,10 +1692,12 @@ func _invalidate_result_cache() -> void:
 	_cache_generation += 1
 	_cache_revision_index.advance([CACHE_REVISION_INDEX_SCRIPT.TAG_GLOBAL])
 	if _result_cache.is_empty() and _cache_inflight.is_empty():
+		_result_cache_bytes = 0
 		return
 	_result_cache.clear()
 	_result_cache_order.clear()
 	_cache_inflight.clear()
+	_result_cache_bytes = 0
 	_log_debug("Result cache invalidated")
 
 ## O(affected tags) mutation path. Cached values are not scanned: their snapshots
@@ -1671,8 +1730,7 @@ func _invalidate_result_cache_for_tools(tool_names: Array[String]) -> void:
 		var separator: int = key.find(":")
 		var cached_tool: String = key.substr(0, separator) if separator >= 0 else key
 		if targets.has(cached_tool):
-			_result_cache.erase(key)
-			_result_cache_order.erase(key)
+			_erase_result_cache_key(key)
 			removed_count += 1
 	for inflight_key_value in _cache_inflight.keys():
 		var inflight_key: String = String(inflight_key_value)
@@ -1713,29 +1771,45 @@ func get_cache_diagnostics() -> Dictionary:
 	for key_value in _result_cache:
 		if _is_read_snapshot_cache_key(String(key_value)):
 			snapshot_entries += 1
-	var result_attempts: int = maxi(1, _result_cache_hits + _result_cache_misses)
-	var spill_repeat_opportunities: int = maxi(1, _spill_reuses + maxi(0, _spill_writes - 1))
+	var result_requests: int = _result_cache_hits + _result_cache_misses + _result_cache_single_flight_serves
+	var result_reuse_serves: int = _result_cache_hits + _result_cache_single_flight_serves
+	var sequential_result_attempts: int = _result_cache_hits + _result_cache_misses
+	var tool_list_requests: int = _tool_list_cache_hits + _tool_list_cache_misses
+	var snapshot_requests: int = _read_snapshot_hits + _read_snapshot_misses
+	var spill_requests: int = _spill_writes + _spill_reuses
 	return {
 		"result_cache": {
 			"hits": _result_cache_hits,
 			"misses": _result_cache_misses,
+			"requests": result_requests,
+			"handler_executions": _result_cache_misses,
+			"reuse_serves": result_reuse_serves,
 			"evictions": _result_cache_evictions,
 			"stale_evictions": _result_cache_stale_evictions,
 			"single_flight_serves": _result_cache_single_flight_serves,
+			"oversized_rejects": _result_cache_oversized_rejects,
 			"entries": _result_cache.size(),
 			"capacity": RESULT_CACHE_MAX,
+			"bytes": _result_cache_bytes,
+			"capacity_bytes": RESULT_CACHE_MAX_BYTES,
+			"byte_load_ratio": float(_result_cache_bytes) / float(RESULT_CACHE_MAX_BYTES),
 			"generation": _cache_generation,
-			"hit_rate": float(_result_cache_hits) / float(result_attempts)
+			"hit_rate": float(_result_cache_hits) / float(maxi(1, sequential_result_attempts)),
+			"reuse_rate": float(result_reuse_serves) / float(maxi(1, result_requests))
 		},
 		"tool_list_cache": {
 			"hits": _tool_list_cache_hits,
 			"misses": _tool_list_cache_misses,
+			"requests": tool_list_requests,
+			"hit_rate": float(_tool_list_cache_hits) / float(maxi(1, tool_list_requests)),
 			"entries": _tool_list_cache.size(),
 			"valid": _tool_list_cache_valid
 		},
 		"read_snapshot_cache": {
 			"hits": _read_snapshot_hits,
 			"misses": _read_snapshot_misses,
+			"requests": snapshot_requests,
+			"hit_rate": float(_read_snapshot_hits) / float(maxi(1, snapshot_requests)),
 			"oversized_rejects": _read_snapshot_oversized_rejects,
 			"entries": snapshot_entries,
 			"capacity": READ_SNAPSHOT_CACHE_MAX,
@@ -1744,7 +1818,8 @@ func get_cache_diagnostics() -> Dictionary:
 		"spill": {
 			"writes": _spill_writes,
 			"reuses": _spill_reuses,
-			"reuse_rate": float(_spill_reuses) / float(spill_repeat_opportunities),
+			"requests": spill_requests,
+			"reuse_rate": float(_spill_reuses) / float(maxi(1, spill_requests)),
 			"inline_limit_bytes": MAX_INLINE_RESULT_BYTES
 		}
 	}
@@ -1758,6 +1833,7 @@ func reset_cache_diagnostics() -> void:
 	_result_cache_evictions = 0
 	_result_cache_stale_evictions = 0
 	_result_cache_single_flight_serves = 0
+	_result_cache_oversized_rejects = 0
 	_read_snapshot_hits = 0
 	_read_snapshot_misses = 0
 	_read_snapshot_oversized_rejects = 0
