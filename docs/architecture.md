@@ -100,7 +100,7 @@ The direct `enable_tools` path routes and applies the result in one MCP call. It
 
 ## Result cache and revisions
 
-Expensive deterministic reads use a 64-entry in-memory LRU with canonical argument keys, preformatted MCP payloads, single-flight deduplication and a 60-second out-of-band edit backstop. `cache_revision_index.gd` assigns each cached read a compact dependency snapshot (scene content, file catalogs, project settings, import state, tool catalog, or exact script/resource paths).
+Expensive deterministic reads use an in-memory LRU bounded by both 64 entries and 32 MiB of serialized raw-result bytes, with canonical argument keys, preformatted MCP payloads, single-flight deduplication and a 60-second out-of-band edit backstop. Byte-pressure and count-pressure share the same recency order; a value larger than the total byte budget is returned normally but not retained. `cache_revision_index.gd` assigns each cached read a compact dependency snapshot (scene content, file catalogs, project settings, import state, tool catalog, or exact script/resource paths).
 
 Mutating tools advance only the revisions they can affect. The write path therefore touches a bounded number of integers and never scans or clears the LRU. Stale entries are removed lazily when their key is requested, while unrelated entries stay hot. Script and resource reads are path-scoped; runtime-only debugger writes preserve all editor/project entries. Unknown or plugin-defined writers fail safe by advancing the global revision. This increases hit rate without weakening correctness, and the existing TTL still bounds changes made outside MCP.
 
@@ -109,6 +109,12 @@ Stable directory and source scans add a view-independent snapshot layer inside t
 Successful JSON payloads above 50,000 UTF-8 bytes use lossless late materialization. The normal tool result retains the existing head/tail preview and appends an MCP [`resource_link`](https://modelcontextprotocol.io/specification/2025-11-25/schema#resourcelink) whose `godot-mcp://result/<sha256>` URI addresses the immutable spill file. A client retrieves it through standard [`resources/read`](https://modelcontextprotocol.io/specification/2025-11-25/server/resources#reading-resources); each response contains at most 16 KiB, ends on a UTF-8 code-point boundary and advertises the exact next URI in `_meta.nextUri`. Concatenating pages yields the byte-identical JSON and the advertised SHA-256 provides an end-to-end integrity check.
 
 This path adds no MCP tool, no tool schema and no `resources/list` entry, so it does not enlarge the persistent model prefix or churn discovery caches. Content addressing reuses an existing verified spill file for identical results. Actionable errors and source/log readers remain complete inline, and hashing, directory or write failures return the complete inline result instead of sacrificing functionality. The regression gate uses a 204,211-byte multilingual payload: its initial MCP result is 8,951 bytes (95.62% avoided), while 13 bounded reads reconstruct the exact original.
+
+### Cache diagnostics and session gate
+
+`MCPServerCore.get_cache_diagnostics()` and `WorkflowRouter.get_diagnostics()` are internal test/diagnostic surfaces, not MCP tools. They expose common request, hit/reuse, handler-execution, eviction and capacity metrics for the result LRU, `tools/list`, scan snapshots, workflow routes and spill files. Sequential cache hits and single-flight twin serves remain individually visible, while the aggregate result `reuse_rate` counts both as avoided handler executions.
+
+The deterministic fixture in `test/unit/fixtures/cache_session_trace.json` replays one representative `inspect → edit → run → debug → verify` task. It primes scene, script and project reads; performs a path-scoped script mutation; proves unrelated scene/project entries stay hot while the modified script is recomputed; reuses one resource scan across five pages; and repeats normalized routes, tool-list requests and a content-addressed spill. CI prints the measured rates and fails if any layer falls below its checked baseline. This adds no network, model call, runtime monitor, tool or schema.
 
 ## Runtime probe
 
