@@ -58,6 +58,11 @@ func test_cache_stores_and_reuses_formatted_payload() -> void:
 	var entry: Dictionary = _core._result_cache[cache_key]
 	assert_true(entry.has("formatted"), "Cache entry should store the formatted response payload")
 	assert_true(entry.has("value"), "Cache entry should keep the raw tool result")
+	var expected_bytes: int = JSON.stringify(entry["value"]).to_utf8_buffer().size()
+	assert_eq(int(entry.get("size_bytes", -1)), expected_bytes,
+		"Cache admission reuses the already formatted raw JSON byte count")
+	assert_eq(int(_core.get_cache_diagnostics()["result_cache"].get("bytes", -1)), expected_bytes,
+		"Diagnostics expose the admitted raw-result byte budget")
 
 	var second: Dictionary = await _core._handle_tool_call(msg)
 	assert_eq(_calls, 1, "Cache hit must not re-execute the tool handler")

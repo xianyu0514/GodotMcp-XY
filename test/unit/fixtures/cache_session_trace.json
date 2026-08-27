@@ -1,0 +1,47 @@
+{
+  "name": "inspect_edit_run_debug_verify",
+  "phases": [
+    {
+      "id": "inspect",
+      "goal": "Inspect the player scene, script, project settings, and resources",
+      "repeat_goal": "  INSPECT   THE PLAYER SCENE, SCRIPT, PROJECT SETTINGS, AND RESOURCES  "
+    },
+    {
+      "id": "edit",
+      "goal": "Modify the player script and preserve unrelated scene reads",
+      "repeat_goal": " MODIFY THE PLAYER SCRIPT AND PRESERVE UNRELATED SCENE READS "
+    },
+    {
+      "id": "run",
+      "goal": "Run the project after editing the player controller",
+      "repeat_goal": " RUN THE PROJECT AFTER EDITING THE PLAYER CONTROLLER "
+    },
+    {
+      "id": "debug",
+      "goal": "Debug the running player and inspect the unchanged scene",
+      "repeat_goal": " DEBUG THE RUNNING PLAYER AND INSPECT THE UNCHANGED SCENE "
+    },
+    {
+      "id": "verify",
+      "goal": "Verify the modified script and confirm project state",
+      "repeat_goal": " VERIFY THE MODIFIED SCRIPT AND CONFIRM PROJECT STATE "
+    }
+  ],
+  "operations": [
+    {"kind": "read", "tool": "get_scene_structure", "group": "Scene", "key": "scene", "repeat": 2},
+    {"kind": "read", "tool": "read_script", "group": "Script", "script_path": "res://player.gd", "key": "script", "repeat": 2},
+    {"kind": "read", "tool": "get_project_info", "group": "Project", "key": "project", "repeat": 1},
+    {"kind": "write", "tool": "modify_script", "group": "Script-Write", "script_path": "res://player.gd"},
+    {"kind": "write", "tool": "run_project", "group": "Editor-Write"},
+    {"kind": "read", "tool": "get_scene_structure", "group": "Scene", "key": "scene", "repeat": 1},
+    {"kind": "read", "tool": "get_project_info", "group": "Project", "key": "project", "repeat": 1},
+    {"kind": "read", "tool": "read_script", "group": "Script", "script_path": "res://player.gd", "key": "script", "repeat": 1}
+  ],
+  "thresholds": {
+    "minimum_result_reuse_rate": 0.50,
+    "minimum_route_hit_rate": 0.50,
+    "minimum_tool_list_hit_rate": 0.80,
+    "minimum_snapshot_hit_rate": 0.80,
+    "minimum_spill_reuse_rate": 0.50
+  }
+}

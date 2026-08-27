@@ -149,7 +149,8 @@ func test_single_flight_merges_concurrent_duplicate() -> void:
 	_core.register_tool("get_scene_structure", "Slow scene read", {"type": "object"},
 		func(_args):
 			execution_count[0] += 1
-			await get_tree().process_frame
+			for _frame_index in range(3):
+				await get_tree().process_frame
 			return {"value": execution_count[0]},
 		{}, MCPTypes.MCPTool.create_annotations(true, false, true, false), "core", "Scene")
 	var msg: Dictionary = _call("get_scene_structure", {"key": "slow"})
@@ -159,13 +160,18 @@ func test_single_flight_merges_concurrent_duplicate() -> void:
 	_core.reset_cache_diagnostics()
 	first.call()
 	second.call()
-	for _index in range(4):
+	for _index in range(8):
 		await get_tree().process_frame
 	var diag: Dictionary = _core.get_cache_diagnostics()["result_cache"]
 	assert_eq(execution_count[0], 1, "Concurrent duplicates must share one handler execution")
 	assert_eq(diag.get("single_flight_serves", -1), 1, "In-flight twin serve is counted separately")
 	assert_eq(diag.get("misses", -1), 1, "Only the first twin is a real miss")
 	assert_eq(diag.get("hits", -1), 0, "Single-flight serve is distinct from a sequential hit")
+	assert_eq(diag.get("requests", -1), 2, "Diagnostics count both concurrent callers")
+	assert_eq(diag.get("handler_executions", -1), 1, "Only a cache miss executes the handler")
+	assert_eq(diag.get("reuse_serves", -1), 1, "The twin is one avoided handler execution")
+	assert_true(abs(float(diag.get("reuse_rate", 0.0)) - 0.5) < 0.0001,
+		"Reuse rate includes single-flight serves instead of reporting a false zero")
 	assert_eq(JSON.stringify(results[0]), JSON.stringify(results[1]), "Both callers get the identical payload")
 
 
@@ -222,12 +228,16 @@ func test_identical_large_result_reuses_spill_file_100pct() -> void:
 	_core.register_tool("big_result_tool", "Big result", {"type": "object"},
 		func(_args): return big_value,
 		{}, {"readOnlyHint": true})
-	_core.reset_cache_diagnostics()
+	var expected_sha: String = _core._hash_string(JSON.stringify(big_value))
+	var expected_path: String = _core.SPILL_OUTPUT_DIR + "/" + expected_sha + ".json"
+	if FileAccess.file_exists(expected_path):
+		DirAccess.remove_absolute(expected_path)
 	var first_response: Dictionary = await _core._handle_tool_call(_call("big_result_tool"))
+	_core.reset_cache_diagnostics()
 	var second_response: Dictionary = await _core._handle_tool_call(_call("big_result_tool"))
 	var diag: Dictionary = _core.get_cache_diagnostics()["spill"]
-	assert_eq(diag.get("writes", -1), 1, "First identical spill writes one immutable file")
-	assert_eq(diag.get("reuses", -1), 1, "Second identical spill reuses the content-addressed file")
+	assert_eq(diag.get("writes", -1), 0, "Warm identical spill performs no additional write")
+	assert_eq(diag.get("reuses", -1), 1, "Warm identical spill reuses the content-addressed file")
 	assert_true(abs(float(diag.get("reuse_rate", 0.0)) - 1.0) < 0.0001,
 		"After the priming write, identical content reuses 100%")
 	var first_uri: String = str(_result_text(first_response).get("resource_uri", ""))
@@ -280,6 +290,58 @@ func test_cache_memory_stays_within_fixed_bounds() -> void:
 		if _core._is_read_snapshot_cache_key(String(key_value)):
 			snapshot_entries += 1
 	assert_lte(snapshot_entries, _core.READ_SNAPSHOT_CACHE_MAX, "Snapshot cache is hard-capped")
+
+	# Entry count alone is not a memory bound: a handful of multi-megabyte reads
+	# must also be constrained by one deterministic serialized-byte budget.
+	_core.clear_cache()
+	_core.reset_cache_diagnostics()
+	var measured_value: Dictionary = {"payload": "界"}
+	var measured_bytes: int = JSON.stringify(measured_value).to_utf8_buffer().size()
+	_core._result_cache_put("measured", measured_value)
+	diag = _core.get_cache_diagnostics()["result_cache"]
+	assert_eq(int(diag.get("bytes", -1)), measured_bytes,
+		"Default admission measures deterministic UTF-8 JSON bytes")
+	_core.clear_cache()
+	_core.reset_cache_diagnostics()
+	for index in range(40):
+		# A size hint mirrors the JSON byte count already known by scan callers and
+		# keeps this capacity test from allocating/serializing 40 MiB itself.
+		_core._result_cache_put("large-%d" % index, {"payload": index}, null, {}, 1024 * 1024)
+	diag = _core.get_cache_diagnostics()["result_cache"]
+	assert_lte(int(diag.get("bytes", 999999999)), int(diag.get("capacity_bytes", 0)),
+		"Serialized result payloads stay below the fixed byte budget")
+	assert_lt(int(diag.get("entries", 999999)), 40,
+		"Byte pressure evicts entries before the count-only limit is reached")
+	assert_gt(int(diag.get("evictions", 0)), 0,
+		"Byte-budget evictions are observable through the existing LRU counter")
+
+
+func test_cache_byte_accounting_survives_replace_selective_invalidate_and_reject() -> void:
+	_core._result_cache_put("read_script:{\"path\":\"a\"}", {"value": "a"}, null, {}, 100)
+	_core._result_cache_put("get_scene_structure:{}", {"value": "scene"}, null, {}, 200)
+	assert_eq(int(_core.get_cache_diagnostics()["result_cache"].get("bytes", -1)), 300,
+		"Admission adds each entry's serialized byte size")
+	_core._result_cache_put("get_scene_structure:{}", {"value": "new scene"}, null, {}, 250)
+	assert_eq(int(_core.get_cache_diagnostics()["result_cache"].get("bytes", -1)), 350,
+		"Replacing a key subtracts its old size before adding the new size")
+	var invalidated_tools: Array[String] = ["read_script"]
+	_core._invalidate_result_cache_for_tools(invalidated_tools)
+	assert_eq(int(_core.get_cache_diagnostics()["result_cache"].get("bytes", -1)), 250,
+		"Selective invalidation releases only the targeted entry's byte budget")
+
+	_core.reset_cache_diagnostics()
+	_core._result_cache_put("too-large", {"value": "returned elsewhere"}, null, {},
+		_core.RESULT_CACHE_MAX_BYTES + 1)
+	var diag: Dictionary = _core.get_cache_diagnostics()["result_cache"]
+	assert_false(_core._result_cache.has("too-large"),
+		"An individually oversized value is not retained")
+	assert_eq(int(diag.get("oversized_rejects", -1)), 1,
+		"Oversized admission rejection is observable")
+	assert_eq(int(diag.get("bytes", -1)), 250,
+		"Rejecting a value does not consume the byte budget")
+	_core.clear_cache()
+	assert_eq(int(_core.get_cache_diagnostics()["result_cache"].get("bytes", -1)), 0,
+		"Explicit cache clearing resets byte accounting")
 
 
 # ============================================================================
