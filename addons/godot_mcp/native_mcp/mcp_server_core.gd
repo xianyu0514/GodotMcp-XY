@@ -249,6 +249,9 @@ var _tool_list_cache_hits: int = 0              # tools/list 定义缓存命中
 var _tool_list_cache_misses: int = 0            # tools/list 定义缓存重建
 var _spill_writes: int = 0                      # 大结果 spill 落盘写入次数
 var _spill_reuses: int = 0                      # 相同内容复用既有不可变 spill 文件次数
+var _external_change_events: int = 0            # 合并后的编辑器/文件系统失效批次
+var _external_change_precise_paths: int = 0     # 已知路径，可精确推进 dependency revision
+var _external_change_fallback_events: int = 0   # 无路径事件，安全退化到文件相关域
 
 ## Requests the client asked to cancel via `notifications/cancelled`
 ## (request id -> true). Long-running tools poll `is_request_cancelled()` /
@@ -1715,6 +1718,27 @@ func _advance_result_cache_revisions(tags: Array[String], tool_name: String = ""
 			_cache_inflight.erase(key)
 	_log_debug("Advanced result-cache revisions for %s: %s" % [tool_name, ",".join(tags)])
 
+
+## Receive one per-frame batch from the editor change tracker. Known paths are
+## mapped to exact dependency tags; an unexplained filesystem event advances all
+## file-backed domains without touching immutable tool discovery. Returns the
+## advanced tags for lightweight editor logging/tests. This is not an MCP tool.
+func notify_external_changes(batch: Dictionary) -> Array[String]:
+	var tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.external_change_tags(batch)
+	if tags.is_empty():
+		return tags
+	_external_change_events += 1
+	var unique_paths: Dictionary = {}
+	for path_value in batch.get("paths", []):
+		var path: String = str(path_value).strip_edges().replace("\\", "/")
+		if not path.is_empty():
+			unique_paths[path] = true
+	_external_change_precise_paths += unique_paths.size()
+	if bool(batch.get("filesystem_fallback", false)):
+		_external_change_fallback_events += 1
+	_advance_result_cache_revisions(tags, "editor_file_events")
+	return tags
+
 ## Evict cache entries produced by specific tools while retaining unrelated
 ## scene/project reads. The tool-catalog revision also advances so an in-flight
 ## discovery result cannot repopulate a stale entry afterward.
@@ -1815,6 +1839,12 @@ func get_cache_diagnostics() -> Dictionary:
 			"capacity": READ_SNAPSHOT_CACHE_MAX,
 			"max_bytes": READ_SNAPSHOT_MAX_BYTES
 		},
+		"external_change_invalidation": {
+			"events": _external_change_events,
+			"precise_paths": _external_change_precise_paths,
+			"fallback_events": _external_change_fallback_events,
+			"ttl_backstop_ms": RESULT_CACHE_TTL_MS
+		},
 		"spill": {
 			"writes": _spill_writes,
 			"reuses": _spill_reuses,
@@ -1841,6 +1871,9 @@ func reset_cache_diagnostics() -> void:
 	_tool_list_cache_misses = 0
 	_spill_writes = 0
 	_spill_reuses = 0
+	_external_change_events = 0
+	_external_change_precise_paths = 0
+	_external_change_fallback_events = 0
 
 # ============================================================================
 # 结果体积控制（spill 落盘）

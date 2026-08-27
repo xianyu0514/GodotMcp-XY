@@ -76,6 +76,8 @@ High-volume stable reads expose the same lossless continuation contract: `total_
 
 Cache efficiency is guarded by an offline `inspect → edit → run → debug → verify` session replay rather than isolated hit assertions alone. Internal diagnostics count requests, handler executions, sequential hits, single-flight reuse, stale eviction, scan snapshots, tool-list definitions, workflow routes and content-addressed spill reuse without adding an MCP tool or schema. The shared result LRU is bounded by both 64 entries and 32 MiB of serialized raw payloads; values rejected by the memory budget are still returned completely for the current call.
 
+External editor changes now advance those same dependency revisions immediately. Godot 4.7 filesystem reload/reimport/source/class signals, resource and scene saves, and project-setting changes are coalesced once per frame. Known paths invalidate only their exact script/resource dependencies, while path-set diffs identify additions, deletions and renames for catalog invalidation. An unexplained pathless filesystem event safely expires all file-backed domains; the 60-second TTL remains a final backstop. This adds no MCP tool or schema.
+
 ## Example prompts
 
 ```text

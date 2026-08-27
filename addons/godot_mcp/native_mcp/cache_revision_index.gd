@@ -20,6 +20,9 @@ const TAG_PROJECT_SETTINGS: String = "project_settings"
 const TAG_PROJECT_TREE: String = "project_tree"
 const TAG_IMPORT_STATE: String = "import_state"
 
+const SCRIPT_FILE_EXTENSIONS: Array[String] = ["gd", "cs"]
+const SCENE_FILE_EXTENSIONS: Array[String] = ["tscn", "scn"]
+
 ## This is the single source of truth for reads admitted to the shared result
 ## cache. Every name must be covered by read_tags(); a unit test enforces it.
 const CACHEABLE_READ_TOOLS: Array[String] = [
@@ -240,6 +243,69 @@ static func mutation_tags(tool_name: String, group: String, arguments: Dictionar
 	if group in RUNTIME_ONLY_GROUPS:
 		return []
 	return [TAG_GLOBAL]
+
+
+## Map one coalesced batch of editor/file-system events to the smallest safe
+## dependency revision set. Known paths advance exact script/resource tags;
+## structural additions/removals also advance the relevant catalogs. A pathless
+## filesystem event falls back to every file-backed domain, but deliberately
+## preserves immutable tool discovery and runtime-only state.
+static func external_change_tags(batch: Dictionary) -> Array[String]:
+	var tags: Array[String] = []
+	var structural_paths: Dictionary = {}
+	for path_value in batch.get("structural_paths", []):
+		var structural_path: String = _normalized_path(path_value)
+		if not structural_path.is_empty():
+			structural_paths[structural_path] = true
+
+	for path_value in batch.get("paths", []):
+		var path: String = _normalized_path(path_value)
+		if path.is_empty():
+			continue
+		if path == "res://project.godot" or path.ends_with("/project.godot"):
+			tags.append(TAG_PROJECT_SETTINGS)
+			if structural_paths.has(path):
+				tags.append(TAG_PROJECT_TREE)
+			continue
+
+		var extension: String = path.get_extension().to_lower()
+		_append_path_tag(tags, "resource", path)
+		tags.append(TAG_RESOURCE_AGGREGATE)
+		if extension in SCRIPT_FILE_EXTENSIONS:
+			_append_path_tag(tags, "script", path)
+			tags.append(TAG_SCRIPT_AGGREGATE)
+		elif extension in SCENE_FILE_EXTENSIONS:
+			tags.append(TAG_SCENE_CONTENT)
+
+		if structural_paths.has(path):
+			tags.append(TAG_PROJECT_TREE)
+			tags.append(TAG_RESOURCE_CATALOG)
+			if extension in SCRIPT_FILE_EXTENSIONS:
+				tags.append(TAG_SCRIPT_CATALOG)
+			elif extension in SCENE_FILE_EXTENSIONS:
+				tags.append(TAG_SCENE_CATALOG)
+
+	if bool(batch.get("reimported", false)):
+		tags.append(TAG_IMPORT_STATE)
+		tags.append(TAG_RESOURCE_AGGREGATE)
+	if bool(batch.get("sources_changed", false)):
+		# The signal carries no paths and precedes reimport. The import-status read
+		# must refresh immediately; exact resource tags arrive with reimported.
+		tags.append(TAG_IMPORT_STATE)
+	if bool(batch.get("script_classes_updated", false)):
+		tags.append(TAG_SCRIPT_AGGREGATE)
+		tags.append(TAG_SCRIPT_CATALOG)
+	if bool(batch.get("project_settings_changed", false)):
+		tags.append(TAG_PROJECT_SETTINGS)
+
+	if bool(batch.get("filesystem_fallback", false)):
+		tags.append_array([
+			TAG_SCENE_CONTENT, TAG_SCENE_CATALOG,
+			TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE, TAG_SCRIPT_CATALOG,
+			TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE, TAG_RESOURCE_CATALOG,
+			TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE, TAG_IMPORT_STATE
+		])
+	return _deduplicated_sorted(tags)
 
 
 static func _append_first_path_tag(tags: Array[String], prefix: String,

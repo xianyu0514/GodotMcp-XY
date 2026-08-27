@@ -91,5 +91,6 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已完成 | M5（无损 list 分页 + revision 安全扫描快照） | ✅ 7 条稳定读路径补齐；跨页单扫描；8 项 / 4 MiB 门禁；写工具不以重执行换分页 |
 | 已完成 | P3.3 工作流路由质量门禁 | ✅ 48 个中英真实制作任务 / 12 领域 / 174 个原子期望；Recall@8 与完整任务成功率 100%，验证阶段召回 97.30%，已知跨域误选 0，平均 Schema 节省 97.34%；默认预算仍为 8，未新增工具/Schema/模型调用 |
 | 已完成 | P3.4 缓存可观测性与真实命中基线 | 无新增工具/Schema；统一量化 tools/list、结果 LRU、单飞、扫描快照、工作流路线与 spill。确定性“检查→编辑→运行→调试→验证”会话门禁记录结果复用 50%、路线 50%、tools/list 80%、快照 80%、spill 50%，并证明相关脚本精确失效、无关场景/项目信息保持命中；结果缓存新增 32 MiB 总预算 |
-| 下轮 | P3.5 外部文件变更的事件驱动精确失效 | 接入 Godot `EditorFileSystem` 与脚本变更信号，把外部编辑映射到现有 dependency revision；完整证明事件覆盖前继续保留 60 秒 TTL 保险 |
+| 已完成 | P3.5 外部文件变更的事件驱动精确失效 | 接入 Godot 4.7 `EditorFileSystem` reload/reimport/source/class/filesystem、`EditorPlugin` resource/scene save 和 `ProjectSettings.settings_changed` 信号；同帧事件只合并、扫描一次，已知路径精确失效，新增/删除/重命名由路径集差分更新目录，无路径事件安全退化到文件域；保留 60 秒 TTL，不增加工具/Schema |
+| 下轮 | P4 端到端 AI 游戏制作基准 | 从空项目到可运行 2D 切片，固定记录任务成功率、工具调用/重试/MCP 往返、Schema/结果 token、重复扫描与自动修复成功率；作为以后所有性能优化不降低功能收益的总门禁 |
 | 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |
