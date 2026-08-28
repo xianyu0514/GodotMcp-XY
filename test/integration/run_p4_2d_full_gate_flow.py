@@ -2,8 +2,9 @@
 
 The gate keeps exploring after a capability failure, but never hides it. A
 minimal startup seed PNG/WAV lets downstream 2D tools continue when a generated
-asset cannot be consumed. Consumer failure itself is the authoritative
-chainability signal; import metadata is diagnostic only.
+asset cannot be consumed. Nested-file writers that fail on missing parent
+directories are also recorded as capability gaps and retried at res:// root so
+one defect cannot hide the rest of the end-to-end matrix.
 """
 from __future__ import annotations
 
@@ -31,8 +32,18 @@ _original_prepare_project = gate.prepare_project
 _original_coverage_gate = gate.coverage_gate
 _generated_sources: list[str] = []
 _capability_gaps: list[str] = []
+_path_aliases: dict[str, str] = {}
 _import_attempted = False
 _seed_ready = False
+
+_NESTED_WRITERS = {
+    "create_resource": "resource_path",
+    "create_theme": "theme_path",
+    "create_script": "script_path",
+    "create_scene": "scene_path",
+    "create_animation": "animation_path",
+    "save_branch_as_scene": "scene_path",
+}
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -124,6 +135,16 @@ def _fallback_path(path: str) -> str:
     return "res://seed.png"
 
 
+def _apply_aliases(value):
+    if isinstance(value, str):
+        return _path_aliases.get(value, value)
+    if isinstance(value, list):
+        return [_apply_aliases(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _apply_aliases(v) for k, v in value.items()}
+    return value
+
+
 def _replace_generated_inputs(name: str, args: dict) -> dict:
     fallback = copy.deepcopy(args)
     if name == "draw_on_texture":
@@ -154,9 +175,15 @@ def _has_generated_input(name: str, args: dict) -> bool:
     return False
 
 
+def _root_retry_path(original: str) -> str:
+    name = original.rsplit("/", 1)[-1]
+    return "res://" + name
+
+
 def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool = False) -> dict:
     global _import_attempted
-    args = copy.deepcopy(arguments or {})
+    raw_args = copy.deepcopy(arguments or {})
+    args = _apply_aliases(raw_args)
 
     if name == "generate_asset":
         result = _original_tool_call(name, args, allow_error)
@@ -189,12 +216,31 @@ def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool
     if name == "get_import_metadata" and str(args.get("resource_path", "")) in _generated_sources and _capability_gaps:
         return _original_tool_call(name, args, allow_error=True)
 
+    if name in _NESTED_WRITERS:
+        path_key = _NESTED_WRITERS[name]
+        original_path = str(raw_args.get(path_key, ""))
+        effective_path = str(args.get(path_key, ""))
+        try:
+            return _original_tool_call(name, args, allow_error)
+        except AssertionError as exc:
+            if not effective_path.startswith("res://") or "/" not in effective_path[len("res://"):]:
+                raise
+            _record_gap(f"{name}_missing_parent_directory", exc)
+            retry = copy.deepcopy(args)
+            retry_path = _root_retry_path(effective_path)
+            retry[path_key] = retry_path
+            result = _original_tool_call(name, retry, allow_error)
+            _path_aliases[original_path] = retry_path
+            _path_aliases[effective_path] = retry_path
+            return result
+
     return _original_tool_call(name, args, allow_error)
 
 
 def coverage_gate_with_capability_gaps(report: dict) -> None:
     _original_coverage_gate(report)
     report["capability_gaps"] = list(_capability_gaps)
+    report["path_aliases"] = dict(_path_aliases)
     if _capability_gaps:
         raise AssertionError("Unresolved capability gaps after full matrix: " + " | ".join(_capability_gaps))
 
