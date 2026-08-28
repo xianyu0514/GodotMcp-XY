@@ -14,11 +14,13 @@ Godot MCP Native is configured primarily from the **MCP** dock. Settings are per
 | `auto_start` | bool | `false` | Starts the MCP server automatically when the plugin loads. |
 | `security_level` | int | `1` | `0` = permissive, `1` = strict path/security checks. |
 | `rate_limit` | int | `1000` | Maximum requests per rate-limit window. |
-| `cloudflared_path` | string | `""` | Optional path to a `cloudflared` binary used for Quick Tunnel access. |
+| `cloudflared_path` | string | `""` | Optional local override for Quick Tunnel access. When empty or missing, the plugin checks `PATH`, its cross-project shared cache, and verified legacy project caches before downloading. |
 
 ### Persistence
 
 User-facing settings are stored under Godot's `user://` data directory, not in the project repository. This keeps local tokens and machine-specific paths out of source control.
+
+The managed `cloudflared` executable is the deliberate exception: it is stored in an OS-user shared cache, partitioned by pinned version and platform, so opening another Godot project does not download the same binary again. See [Remote & Cloud Access](remote-access.md#option-a--built-in-cloudflare-quick-tunnel).
 
 ## Transports
 

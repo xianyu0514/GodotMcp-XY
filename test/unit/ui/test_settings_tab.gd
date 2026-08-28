@@ -3,7 +3,6 @@ extends "res://addons/gut/test.gd"
 # Tests for the card-based Settings tab layout (mcp_panel_native.gd).
 
 const PanelScript = preload("res://addons/godot_mcp/ui/mcp_panel_native.gd")
-const ProviderScript = preload("res://addons/godot_mcp/native_mcp/mcp_cloudflared_provider.gd")
 
 func _make_panel() -> Node:
 	var panel: Node = PanelScript.new()
@@ -31,12 +30,16 @@ func test_settings_registers_section_titles() -> void:
 	autofree(panel._create_settings_tab())
 	assert_eq(panel._section_titles.size(), 6, "Relabelable section titles registered for refresh")
 
-func test_manual_path_field_visibility_matches_platform_support() -> void:
+func test_manual_path_field_is_always_visible_as_a_local_reuse_fallback() -> void:
 	var panel: Node = _make_panel()
 	autofree(panel._create_settings_tab())
 	assert_not_null(panel._tunnel_binary_edit, "Manual cloudflared path field still exists")
-	var supported: bool = not ProviderScript.detect_platform_key().is_empty()
-	assert_eq(panel._tunnel_binary_row.visible, not supported, "Manual path row visible only when no prebuilt binary exists")
+	assert_true(panel._tunnel_binary_row.visible, "Every platform should allow selecting an existing local cloudflared binary")
+
+func test_tunnel_start_uses_local_binary_resolution_before_download() -> void:
+	var panel: Node = _make_panel()
+	var source: String = panel.get_script().source_code
+	assert_true(source.contains("resolve_local_binary"), "Tunnel start should probe configured, PATH, shared and legacy installs")
 
 func test_settings_exposes_asset_provider_card() -> void:
 	var panel: Node = _make_panel()

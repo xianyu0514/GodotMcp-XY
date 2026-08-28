@@ -28,6 +28,25 @@ The MCP panel can manage a Cloudflare Quick Tunnel through `cloudflared`.
 4. Copy the generated `https://*.trycloudflare.com` URL.
 5. Configure the client with `<public-url>/mcp`.
 
+The Start action is local-first and checks these sources in order:
+
+1. The optional **Local cloudflared** override in the panel.
+2. A `cloudflared` executable already available on the editor process `PATH`.
+3. The plugin's checksum-verified shared cache.
+4. Checksum-verified `user://cloudflared` caches from the current or another local Godot project; a match is copied into the shared cache without deleting the old file.
+
+Only when no local source is reusable does the plugin download the pinned official binary. Managed downloads are shared across all Godot projects for the current OS user and isolated by pinned version plus OS/architecture:
+
+| OS | Shared cache root |
+| --- | --- |
+| Windows | `%APPDATA%\GodotMcp-XY\cloudflared` |
+| macOS | `~/Library/Application Support/GodotMcp-XY/cloudflared` |
+| Linux/BSD | `$XDG_DATA_HOME/GodotMcp-XY/cloudflared`, normally `~/.local/share/GodotMcp-XY/cloudflared` |
+
+The cache root contains `<pinned-version>/<platform>/`, so different plugin versions, x64 and ARM builds cannot overwrite one another.
+
+The manual path field remains available on supported platforms. Use it when Godot was launched from a desktop environment whose `PATH` does not include a package-manager installation.
+
 Example client config:
 
 ```json
@@ -101,6 +120,7 @@ If the client only supports stdio but can run a local command, bridge with `mcp-
 | Public URL opens but MCP calls fail | Ensure the client URL ends with `/mcp`. |
 | 401/403 responses | Confirm the Bearer token exactly matches `auth_token`. |
 | Tunnel starts but no URL appears | Check the MCP panel logs or run the tunnel command manually. |
+| The panel wants to download again | Check that the local override points to a file, or place `cloudflared` on the editor process `PATH`. Current-version managed and legacy files must pass the pinned SHA-256 check before reuse. |
 | Client connects but tools are missing | Enable the required advanced groups with the MCP panel or `enable_tools`. |
 | Connection is slow | Prefer a tunnel geographically close to the client and avoid enabling all advanced tools. |
 

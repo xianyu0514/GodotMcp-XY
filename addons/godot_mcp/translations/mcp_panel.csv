@@ -185,11 +185,11 @@ ui.remote_copy_bridge,Copy Claude (mcp-remote),Copy Claude (mcp-remote),复制 C
 ui.remote_copy_tunnel,Copy tunnel command,Copy tunnel command,复制隧道命令
 ui.tunnel_start,Start free tunnel,Start free tunnel,启动免费隧道
 ui.tunnel_stop,Stop tunnel,Stop tunnel,停止隧道
-ui.tunnel_binary,cloudflared path,cloudflared path,cloudflared 路径
-ui.tunnel_binary_placeholder,Path to a cloudflared binary,Path to a cloudflared binary,cloudflared 二进制文件路径
+ui.tunnel_binary,Local cloudflared,Local cloudflared,本地 cloudflared
+ui.tunnel_binary_placeholder,Optional override; PATH and shared cache are detected automatically,Optional override; PATH and shared cache are detected automatically,可选覆盖路径；自动检测 PATH 和共享缓存
 ui.tunnel_idle,Tunnel not running.,Tunnel not running.,隧道未运行。
 ui.tunnel_unsupported,No prebuilt cloudflared for this platform; set a path below.,No prebuilt cloudflared for this platform; set a path below.,该平台暂无预编译 cloudflared，请在下方指定路径。
-ui.tunnel_downloading,Downloading cloudflared (first run only)...,Downloading cloudflared (first run only)...,正在下载 cloudflared（仅首次）...
+ui.tunnel_downloading,Downloading cloudflared to the shared cache (once per version/platform)...,Downloading cloudflared to the shared cache (once per version/platform)...,正在将 cloudflared 下载到本机共享缓存（每个版本/平台一次）...
 ui.tunnel_download_failed,Download failed; check your connection.,Download failed; check your connection.,下载失败，请检查网络连接。
 ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
 ui.tunnel_starting,Starting tunnel...,Starting tunnel...,正在启动隧道...
