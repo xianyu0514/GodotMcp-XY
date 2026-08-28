@@ -40,8 +40,11 @@ func test_composable_profiles_build_a_persistent_dag_beyond_discovery_budget() -
 	assert_eq(plan.get("goal", ""), "Create a playable controller and polished pause menu, then test it")
 	assert_eq((plan.get("workflow", {}) as Dictionary).get("state", ""), "planned")
 	assert_gt(((plan.get("workflow", {}) as Dictionary).get("objective_gate_ids", []) as Array).size(), 0)
-	var create_scene_tasks: Array = (plan.get("tasks", []) as Array).filter(func(task: Dictionary) -> bool:
-		return String(task.get("tool_name", "")) == "create_scene")
+	var create_scene_tasks: Array[Dictionary] = []
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "create_scene":
+			create_scene_tasks.append(task)
 	assert_eq(create_scene_tasks.size(), 2,
 		"Gameplay and UI scenes are distinct writes and must never be deduplicated")
 	assert_eq(create_scene_tasks[0].get("profile", ""), "gameplay_feature")

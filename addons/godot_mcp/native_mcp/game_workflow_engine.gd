@@ -135,10 +135,10 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 	required_capabilities.sort()
 
 	var specs: Array[Dictionary] = []
-	var ordered_profiles: Array[String] = profiles.duplicate()
-	ordered_profiles.sort_custom(func(a: String, b: String) -> bool:
-		return PROFILE_COMPOSITION_ORDER.find(a) < PROFILE_COMPOSITION_ORDER.find(b)
-	)
+	var ordered_profiles: Array[String] = []
+	for known_profile in PROFILE_COMPOSITION_ORDER:
+		if known_profile in profiles:
+			ordered_profiles.append(known_profile)
 	for profile_id in ordered_profiles:
 		for spec_value in _profile_specs(profile_id, clean_objective, platform):
 			var profile_spec: Dictionary = (spec_value as Dictionary).duplicate(true)
