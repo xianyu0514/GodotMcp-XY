@@ -2,9 +2,9 @@
 
 The gate keeps exploring after a capability failure, but never hides it. A
 minimal startup seed PNG/WAV lets downstream 2D tools continue when a generated
-asset cannot be consumed. Nested-file writers that fail on missing parent
-directories are also recorded as capability gaps and retried at res:// root so
-one defect cannot hide the rest of the end-to-end matrix.
+asset cannot be consumed. Nested-file writers and batch scene parent-child
+ordering failures are recorded as capability gaps and retried with safe,
+smaller-grained operations so one defect cannot hide the remaining matrix.
 """
 from __future__ import annotations
 
@@ -176,8 +176,25 @@ def _has_generated_input(name: str, args: dict) -> bool:
 
 
 def _root_retry_path(original: str) -> str:
-    name = original.rsplit("/", 1)[-1]
-    return "res://" + name
+    return "res://" + original.rsplit("/", 1)[-1]
+
+
+def _fallback_batch_scene_edits(args: dict) -> dict:
+    results = []
+    for operation in args.get("operations", []):
+        kind = str(operation.get("type", ""))
+        if kind == "create":
+            results.append(_original_tool_call("create_node", {
+                "parent_path": operation["parent_path"],
+                "node_type": operation["node_type"],
+                "node_name": operation["node_name"],
+                "on_name_conflict": "error",
+            }))
+        elif kind == "delete":
+            results.append(_original_tool_call("delete_node", {"node_path": operation["node_path"]}))
+        else:
+            raise AssertionError(f"Unsupported fallback batch operation: {operation}")
+    return {"status": "fallback_completed", "operations": results, "count": len(results)}
 
 
 def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool = False) -> dict:
@@ -215,6 +232,13 @@ def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool
 
     if name == "get_import_metadata" and str(args.get("resource_path", "")) in _generated_sources and _capability_gaps:
         return _original_tool_call(name, args, allow_error=True)
+
+    if name == "batch_scene_node_edits":
+        try:
+            return _original_tool_call(name, args, allow_error)
+        except AssertionError as exc:
+            _record_gap("batch_scene_node_edits_parent_child_ordering", exc)
+            return _fallback_batch_scene_edits(args)
 
     if name in _NESTED_WRITERS:
         path_key = _NESTED_WRITERS[name]
