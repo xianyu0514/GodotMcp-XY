@@ -33,6 +33,25 @@ const PROFILE_IDS: Array[String] = [
 	"release_export"
 ]
 
+# Build mutations from different profiles stay in production order so
+# editor-current-scene operations remain adjacent. Inspection and verification
+# still share their global phases, where duplicate computation is absorbed by
+# the normal revision-aware result cache instead of deleting semantic steps.
+const PROFILE_COMPOSITION_ORDER: Array[String] = [
+	"asset_pipeline",
+	"level_design",
+	"gameplay_feature",
+	"ui_screen",
+	"animation_audio",
+	"localization",
+	"script_repair",
+	"project_health",
+	"performance",
+	"quality_assurance",
+	"runtime_debug",
+	"release_export"
+]
+
 const PROFILE_KEYWORDS: Dictionary = {
 	"gameplay_feature": ["gameplay", "player", "movement", "controller", "mechanic", "collision", "玩家", "移动", "控制", "玩法", "游戏机制", "碰撞"],
 	"ui_screen": [" ui ", "menu", "hud", "pause", "button", "interface", "screen", "界面", "菜单", "暂停", "按钮", "主题", "屏幕"],
@@ -51,8 +70,8 @@ const PROFILE_KEYWORDS: Dictionary = {
 const STAGE_RANK: Dictionary = {
 	"offline_inspect": 10,
 	"build_create": 20,
-	"build_configure": 22,
-	"build_save": 25,
+	"build_configure": 20,
+	"build_save": 20,
 	"static_verify": 30,
 	"runtime_probe": 40,
 	"runtime_run": 45,
@@ -116,9 +135,15 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 	required_capabilities.sort()
 
 	var specs: Array[Dictionary] = []
-	for profile_id in profiles:
+	var ordered_profiles: Array[String] = profiles.duplicate()
+	ordered_profiles.sort_custom(func(a: String, b: String) -> bool:
+		return PROFILE_COMPOSITION_ORDER.find(a) < PROFILE_COMPOSITION_ORDER.find(b)
+	)
+	for profile_id in ordered_profiles:
 		for spec_value in _profile_specs(profile_id, clean_objective, platform):
-			specs.append((spec_value as Dictionary).duplicate(true))
+			var profile_spec: Dictionary = (spec_value as Dictionary).duplicate(true)
+			profile_spec["profile"] = profile_id
+			specs.append(profile_spec)
 	for capability in required_capabilities:
 		if capability in FORBIDDEN_NESTED_CAPABILITIES:
 			return {
@@ -127,13 +152,20 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 				"missing_capabilities": [capability]
 			}
 		if not _specs_contain_tool(specs, capability):
-			specs.append(_spec(capability, capability, _infer_stage(capability)))
-	specs = _deduplicate_specs(specs)
+			var required_spec: Dictionary = _spec(capability, capability, _infer_stage(capability))
+			required_spec["profile"] = "required_capability"
+			specs.append(required_spec)
 	if _specs_need_runtime(specs):
 		if not _specs_contain_tool(specs, "install_runtime_probe"):
-			specs.append(_spec("runtime_probe", "install_runtime_probe", "runtime_probe"))
+			var probe_spec: Dictionary = _spec("runtime_probe", "install_runtime_probe", "runtime_probe")
+			probe_spec["profile"] = "runtime_prerequisite"
+			specs.append(probe_spec)
 		if not _specs_contain_tool(specs, "run_project"):
-			specs.append(_spec("runtime_run", "run_project", "runtime_run"))
+			var run_spec: Dictionary = _spec("runtime_run", "run_project", "runtime_run")
+			run_spec["profile"] = "runtime_prerequisite"
+			specs.append(run_spec)
+	for index in range(specs.size()):
+		specs[index]["_compose_order"] = index
 	specs = _sort_specs(specs)
 
 	var missing: Array[String] = []
@@ -390,24 +422,6 @@ func _specs_need_runtime(specs: Array[Dictionary]) -> bool:
 			return true
 	return false
 
-func _deduplicate_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
-	var result: Array[Dictionary] = []
-	var by_identity: Dictionary = {}
-	for value in specs:
-		var spec: Dictionary = value
-		var arguments: Dictionary = spec.get("arguments", {})
-		var identity: String = String(spec.get("tool_name", "")) + ":" + JSON.stringify(arguments)
-		if by_identity.has(identity):
-			var index: int = int(by_identity[identity])
-			if bool(spec.get("objective_gate", false)):
-				result[index]["objective_gate"] = true
-			if String(result[index].get("repair_tool", "")).is_empty():
-				result[index]["repair_tool"] = String(spec.get("repair_tool", ""))
-			continue
-		by_identity[identity] = result.size()
-		result.append(spec.duplicate(true))
-	return result
-
 func _sort_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
 	var result: Array[Dictionary] = specs.duplicate(true)
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -415,6 +429,10 @@ func _sort_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
 		var br: int = int(STAGE_RANK.get(String(b.get("stage", "")), 999))
 		if ar != br:
 			return ar < br
+		var ao: int = int(a.get("_compose_order", 0))
+		var bo: int = int(b.get("_compose_order", 0))
+		if ao != bo:
+			return ao < bo
 		return String(a.get("key", "")) < String(b.get("key", ""))
 	)
 	return result
@@ -433,7 +451,7 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 		var repair_tool: String = String(spec.get("repair_tool", ""))
 		var task: Dictionary = {
 			"id": step_id,
-			"title": "%s: %s" % [String(spec.get("stage", "")), String(spec.get("tool_name", ""))],
+			"title": "%s / %s: %s" % [String(spec.get("profile", "")), String(spec.get("stage", "")), String(spec.get("tool_name", ""))],
 			"description": "Execute the plan-authorized atomic MCP capability and retain compact evidence.",
 			"status": "pending",
 			"depends_on": prior_ids.duplicate(),
@@ -443,6 +461,8 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 			"created_at": plan.get("created_at", ""),
 			"updated_at": plan.get("created_at", ""),
 			"tool_name": String(spec.get("tool_name", "")),
+			"profile": String(spec.get("profile", "")),
+			"step_key": String(spec.get("key", "")),
 			"stage": String(spec.get("stage", "")),
 			"arguments": (spec.get("arguments", {}) as Dictionary).duplicate(true),
 			"objective_gate": is_gate,
@@ -482,6 +502,8 @@ func _task_blueprint(task: Dictionary) -> Dictionary:
 	return {
 		"id": String(task.get("id", "")),
 		"tool_name": String(task.get("tool_name", "")),
+		"profile": String(task.get("profile", "")),
+		"step_key": String(task.get("step_key", "")),
 		"stage": String(task.get("stage", "")),
 		"depends_on": (task.get("depends_on", []) as Array).duplicate(),
 		"arguments": (task.get("arguments", {}) as Dictionary).duplicate(true),

@@ -120,6 +120,8 @@ func test_missing_current_step_inputs_waits_without_invoking_or_losing_plan() ->
 	assert_eq(result.get("status", ""), "needs_input")
 	assert_eq(_core.calls.size(), 2, "Only the two no-input inspections run before the missing build input")
 	assert_true("scene_name" in result.get("missing_inputs", []))
+	assert_eq((result.get("input_schema", {}) as Dictionary).get("required", []), ["scene_name"],
+		"The current atomic schema is returned on demand without expanding tools/list")
 	var step_id: String = String(result.get("step_id", ""))
 	var resumed: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path,

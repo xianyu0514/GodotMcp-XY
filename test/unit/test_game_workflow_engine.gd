@@ -40,6 +40,16 @@ func test_composable_profiles_build_a_persistent_dag_beyond_discovery_budget() -
 	assert_eq(plan.get("goal", ""), "Create a playable controller and polished pause menu, then test it")
 	assert_eq((plan.get("workflow", {}) as Dictionary).get("state", ""), "planned")
 	assert_gt(((plan.get("workflow", {}) as Dictionary).get("objective_gate_ids", []) as Array).size(), 0)
+	var create_scene_tasks: Array = (plan.get("tasks", []) as Array).filter(func(task: Dictionary) -> bool:
+		return String(task.get("tool_name", "")) == "create_scene")
+	assert_eq(create_scene_tasks.size(), 2,
+		"Gameplay and UI scenes are distinct writes and must never be deduplicated")
+	assert_eq(create_scene_tasks[0].get("profile", ""), "gameplay_feature")
+	assert_eq(create_scene_tasks[1].get("profile", ""), "ui_screen")
+	assert_ne(create_scene_tasks[0].get("step_key", ""), create_scene_tasks[1].get("step_key", ""))
+	var tool_sequence: Array[String] = _tool_names(plan)
+	assert_lt(tool_sequence.find("attach_script"), tool_sequence.rfind("create_scene"),
+		"Gameplay scene mutations stay together before the UI scene changes editor context")
 
 func test_unknown_objective_requests_clarification_instead_of_guessing() -> void:
 	var result: Dictionary = _compile("Make the mysterious thing exactly right")

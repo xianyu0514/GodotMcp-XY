@@ -93,6 +93,7 @@ func _register_run_tool(server_core: RefCounted) -> void:
 				"step_id": {"type": "string"},
 				"tool_name": {"type": "string"},
 				"missing_inputs": {"type": "array"},
+				"input_schema": {"type": "object"},
 				"blocked_reason": {"type": "string"}
 			}
 		},
@@ -269,7 +270,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			if input_save.has("error"):
 				return input_save
 			return _runner_response(plan, plan_path, "needs_input", executed, {
-				"step_id": task.get("id", ""), "tool_name": tool_name, "missing_inputs": missing
+				"step_id": task.get("id", ""), "tool_name": tool_name,
+				"missing_inputs": missing, "input_schema": _tool_input_schema(tool_name)
 			})
 		var allowed: Dictionary = _engine.arguments_allowed(plan, arguments)
 		if allowed.has("error"):
@@ -333,7 +335,8 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 			return {"stop": true, "status": "blocked", "error": missing_save["error"]}
 		return {
 			"stop": true, "status": "needs_input", "step_id": task.get("id", ""),
-			"tool_name": repair_tool, "repair": true, "missing_inputs": missing
+			"tool_name": repair_tool, "repair": true, "missing_inputs": missing,
+			"input_schema": _tool_input_schema(repair_tool)
 		}
 	var allowed: Dictionary = _engine.arguments_allowed(plan, arguments)
 	if allowed.has("error"):
@@ -387,13 +390,7 @@ func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) ->
 	return arguments
 
 func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array[String]:
-	var schema: Dictionary = {}
-	if _server_core.has_method("get_tool_input_schema"):
-		schema = _server_core.get_tool_input_schema(tool_name)
-	elif _server_core.has_method("get_tool"):
-		var tool: Variant = _server_core.get_tool(tool_name)
-		if tool != null:
-			schema = tool.input_schema
+	var schema: Dictionary = _tool_input_schema(tool_name)
 	var missing: Array[String] = []
 	for required_value in schema.get("required", []):
 		var required_name: String = String(required_value)
@@ -402,6 +399,16 @@ func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array
 		elif arguments[required_name] is String and String(arguments[required_name]).strip_edges().is_empty():
 			missing.append(required_name)
 	return missing
+
+func _tool_input_schema(tool_name: String) -> Dictionary:
+	var schema: Dictionary = {}
+	if _server_core.has_method("get_tool_input_schema"):
+		schema = _server_core.get_tool_input_schema(tool_name)
+	elif _server_core.has_method("get_tool"):
+		var tool: Variant = _server_core.get_tool(tool_name)
+		if tool != null:
+			schema = tool.input_schema
+	return schema.duplicate(true)
 
 func _find_repair_pending(plan: Dictionary) -> Dictionary:
 	for task_value in plan.get("tasks", []):
