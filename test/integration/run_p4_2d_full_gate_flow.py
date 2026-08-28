@@ -2,9 +2,10 @@
 
 The gate keeps exploring after a capability failure, but never hides it. A
 minimal startup seed PNG/WAV lets downstream 2D tools continue when a generated
-asset cannot be consumed. Nested-file writers and batch scene parent-child
-ordering failures are recorded as capability gaps and retried with safe,
-smaller-grained operations so one defect cannot hide the remaining matrix.
+asset cannot be consumed. Nested-file writers, batch scene parent-child
+ordering, and empty-project localization bootstrap failures are recorded as
+capability gaps and retried with safe fixtures so one defect cannot hide the
+remaining end-to-end matrix.
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ _capability_gaps: list[str] = []
 _path_aliases: dict[str, str] = {}
 _import_attempted = False
 _seed_ready = False
+_project_dir: Path | None = None
 
 _NESTED_WRITERS = {
     "create_resource": "resource_path",
@@ -79,6 +81,8 @@ def _write_seed_wav(path: Path) -> None:
 
 
 def prepare_project_with_seed(project_dir: Path) -> None:
+    global _project_dir
+    _project_dir = project_dir
     _original_prepare_project(project_dir)
     _write_seed_png(project_dir / "seed.png")
     _write_seed_wav(project_dir / "seed.wav")
@@ -197,6 +201,14 @@ def _fallback_batch_scene_edits(args: dict) -> dict:
     return {"status": "fallback_completed", "operations": results, "count": len(results)}
 
 
+def _bootstrap_localization_csv(res_path: str) -> None:
+    if _project_dir is None or not res_path.startswith("res://"):
+        raise AssertionError("Cannot bootstrap localization fixture without project path")
+    file_path = _project_dir / res_path[len("res://"):]
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("keys,en\nGATE_HELLO,Gate Hello\nGATE_STATUS,Gate Status\n", encoding="utf-8")
+
+
 def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool = False) -> dict:
     global _import_attempted
     raw_args = copy.deepcopy(arguments or {})
@@ -239,6 +251,18 @@ def stable_tool_call(name: str, arguments: dict | None = None, allow_error: bool
         except AssertionError as exc:
             _record_gap("batch_scene_node_edits_parent_child_ordering", exc)
             return _fallback_batch_scene_edits(args)
+
+    if name == "manage_localization" and str(args.get("action", "")) == "import":
+        try:
+            return _original_tool_call(name, args, allow_error)
+        except AssertionError as exc:
+            if "CSV header" not in str(exc):
+                raise
+            _record_gap("localization_empty_project_locale_bootstrap", exc)
+            csv_path = str(args.get("csv_path", "res://localization/translations.csv"))
+            _bootstrap_localization_csv(csv_path)
+            _original_tool_call("reload_project", {"full_scan": True})
+            return _original_tool_call(name, args, allow_error)
 
     if name in _NESTED_WRITERS:
         path_key = _NESTED_WRITERS[name]
