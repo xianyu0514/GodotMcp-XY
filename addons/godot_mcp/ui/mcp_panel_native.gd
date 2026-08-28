@@ -527,8 +527,8 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_tunnel_status_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
 	body.add_child(_tunnel_status_label)
 
-	# Manual cloudflared path: a fallback shown only on platforms without a
-	# prebuilt binary, where auto-download/launch cannot work.
+	# Optional manual override. Keep this visible on every platform so an
+	# existing package-manager or portable install can always be reused.
 	_tunnel_binary_row = HBoxContainer.new()
 	_tunnel_binary_row.add_theme_constant_override("separation", 10)
 	body.add_child(_tunnel_binary_row)
@@ -542,7 +542,7 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	_tunnel_binary_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_tunnel_binary_edit.text_changed.connect(_on_tunnel_binary_changed)
 	_tunnel_binary_row.add_child(_tunnel_binary_edit)
-	_tunnel_binary_row.visible = MCPCloudflaredProvider.detect_platform_key().is_empty()
+	_tunnel_binary_row.visible = true
 
 	_remote_url_label = Label.new()
 	_remote_url_label.text = _tr("ui.remote_url")
@@ -713,23 +713,18 @@ func _on_tunnel_start_pressed() -> void:
 		_set_tunnel_status("ui.tunnel_already")
 		return
 
-	# Manual override (shown only on unsupported platforms): launch directly.
 	var override: String = _override_binary_path()
-	if not override.is_empty():
-		if not FileAccess.file_exists(override):
-			_set_tunnel_status("ui.tunnel_start_failed")
-			return
-		_launch_tunnel(override)
+	_tunnel_platform_key = MCPCloudflaredProvider.detect_platform_key()
+	var local_binary: Dictionary = MCPCloudflaredProvider.resolve_local_binary(
+		_tunnel_platform_key,
+		override
+	)
+	if not local_binary.is_empty():
+		_launch_tunnel(String(local_binary.get("path", "")))
 		return
 
-	_tunnel_platform_key = MCPCloudflaredProvider.detect_platform_key()
 	if _tunnel_platform_key.is_empty():
 		_set_tunnel_status("ui.tunnel_unsupported")
-		return
-
-	if MCPCloudflaredProvider.is_installed(_tunnel_platform_key):
-		var bin: String = ProjectSettings.globalize_path(MCPCloudflaredProvider.binary_path(_tunnel_platform_key))
-		_launch_tunnel(bin)
 		return
 
 	_download_cloudflared(_tunnel_platform_key)
@@ -740,7 +735,9 @@ func _download_cloudflared(key: String) -> void:
 		_set_tunnel_status("ui.tunnel_unsupported")
 		return
 	_tunnel_download_index = 0
-	DirAccess.make_dir_recursive_absolute(MCPCloudflaredProvider.INSTALL_DIR)
+	if DirAccess.make_dir_recursive_absolute(MCPCloudflaredProvider.install_dir(key)) != OK:
+		_set_tunnel_status("ui.tunnel_start_failed")
+		return
 	if _tunnel_http == null or not is_instance_valid(_tunnel_http):
 		_tunnel_http = HTTPRequest.new()
 		add_child(_tunnel_http)
@@ -775,7 +772,7 @@ func _on_tunnel_download_completed(result: int, response_code: int, _headers: Pa
 	var key: String = _tunnel_platform_key
 	var target: String = MCPCloudflaredProvider.download_target(key)
 	if not MCPCloudflaredProvider.verify_checksum(target, key):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(target))
+		DirAccess.remove_absolute(target)
 		_advance_or_fail_download("ui.tunnel_verify_failed")
 		return
 	if _tunnel_start_button:
@@ -789,17 +786,16 @@ func _on_tunnel_download_completed(result: int, response_code: int, _headers: Pa
 ## Moves/extracts the verified download into the runnable binary path and makes it
 ## executable. Returns the absolute binary path, or "" on failure.
 func _install_binary(key: String, target: String) -> String:
-	var bin_rel: String = MCPCloudflaredProvider.binary_path(key)
-	var bin_abs: String = ProjectSettings.globalize_path(bin_rel)
-	var target_abs: String = ProjectSettings.globalize_path(target)
+	var bin_abs: String = MCPCloudflaredProvider.binary_path(key)
+	var target_abs: String = target
 	if MCPCloudflaredProvider.is_archive(key):
-		var dir_abs: String = ProjectSettings.globalize_path(MCPCloudflaredProvider.INSTALL_DIR)
+		var dir_abs: String = MCPCloudflaredProvider.install_dir(key)
 		var out: Array = []
 		var code: int = OS.execute("tar", PackedStringArray(["-xzf", target_abs, "-C", dir_abs]), out, true)
-		if code != 0 or not FileAccess.file_exists(bin_rel):
+		if code != 0 or not FileAccess.file_exists(bin_abs):
 			return ""
 	else:
-		if FileAccess.file_exists(bin_rel):
+		if FileAccess.file_exists(bin_abs):
 			DirAccess.remove_absolute(bin_abs)
 		var derr: int = DirAccess.rename_absolute(target_abs, bin_abs)
 		if derr != OK:
