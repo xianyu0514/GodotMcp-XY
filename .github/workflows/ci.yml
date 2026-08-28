@@ -89,7 +89,7 @@ jobs:
           P4_2D_GATE_REQUIRE_EXPORT: "0"
         run: |
           set -euo pipefail
-          xvfb-run -a python3 test/integration/run_p4_2d_full_gate_flow.py 2>&1 | tee p4-2d-gate.log
+          xvfb-run -a python3 test/integration/run_p4_2d_gate_persistent_signals.py 2>&1 | tee p4-2d-gate.log
           grep '^P4_2D_GATE_REPORT=' p4-2d-gate.log
 
       - name: Upload gate log
