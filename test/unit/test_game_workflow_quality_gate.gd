@@ -31,6 +31,12 @@ const CASES: Array[Dictionary] = [
 	{"goal": "Create player gameplay, a pause UI menu, and run project tests", "profiles": ["gameplay_feature", "quality_assurance", "ui_screen"], "tools": ["create_script", "create_theme", "play_and_verify", "run_project_tests"]}
 ]
 
+const CROSS_DOMAIN_CASES: Array[Dictionary] = [
+	{"goal": "Build a polished pause UI menu and verify its visuals", "forbidden": ["release_export"]},
+	{"goal": "导入模型资源并检查依赖", "forbidden": ["project_health"]},
+	{"goal": "Create a gameplay build with collision", "forbidden": ["release_export"]}
+]
+
 func _tool_names(plan: Dictionary) -> Array[String]:
 	var names: Array[String] = []
 	for task_value in plan.get("tasks", []):
@@ -73,3 +79,16 @@ func test_bilingual_complete_game_goals_have_full_declared_recall_without_unrela
 	var p95_ms: float = float(timings[p95_index]) / 1000.0
 	print("[GameWorkflowQuality] goals=%d capability_recall=100%% profile_recall=100%% p95=%.3fms" % [CASES.size(), p95_ms])
 	assert_lt(p95_ms, 5.0, "Uncached local workflow compilation P95 must stay below 5ms")
+
+func test_generic_build_and_dependency_terms_do_not_add_cross_domain_profiles() -> void:
+	var engine: RefCounted = EngineScript.new()
+	var available: Array[String] = ManifestScript.tool_names()
+	for case_value in CROSS_DOMAIN_CASES:
+		var result: Dictionary = engine.compile(String(case_value["goal"]), {}, available)
+		assert_false(result.has("error"), String(result.get("error", "")))
+		if result.has("error"):
+			continue
+		var profiles: Array = result["plan"]["workflow"]["goal_contract"]["profiles"]
+		for forbidden_profile in case_value["forbidden"]:
+			assert_false(String(forbidden_profile) in profiles,
+				"Generic wording must not activate %s for: %s" % [forbidden_profile, case_value["goal"]])

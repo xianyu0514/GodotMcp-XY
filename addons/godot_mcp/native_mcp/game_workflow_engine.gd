@@ -44,8 +44,8 @@ const PROFILE_KEYWORDS: Dictionary = {
 	"localization": ["localization", "translation", "language", "locale", "本地化", "翻译", "多语言", "语言"],
 	"performance": ["performance", "optimize", "fps", "frame time", "memory", "性能", "优化", "帧率", "内存"],
 	"quality_assurance": ["project test", "run tests", "test suite", "quality assurance", "regression", "项目测试", "运行测试", "测试套件", "质量回归", "回归测试"],
-	"project_health": ["audit", "migration", "dependency", "deprecated", "project health", "审计", "迁移", "依赖", "废弃", "项目健康"],
-	"release_export": ["export", "release", "ship", "build", "android", "linux", "windows", "导出", "发布", "出货", "构建", "打包"]
+	"project_health": ["audit", "migration", "dependency audit", "cyclic dependency", "deprecated", "project health", "审计", "迁移", "依赖审计", "循环依赖", "废弃", "项目健康"],
+	"release_export": ["export", "release", "ship", "release build", "export build", "android", "linux", "windows", "导出", "发布", "出货", "发布构建", "导出构建", "打包"]
 }
 
 const STAGE_RANK: Dictionary = {
