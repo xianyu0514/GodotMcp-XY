@@ -65,7 +65,7 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | --- | --- | --- |
 | 事件溯源会话日志（唯一事实源） | `TaskPlanStore`（默认 `res://.mcp/task_plan.json`） | 目标合同、蓝图、状态和证据收据存一处 |
 | goal 域（持久快照 + CAS revision） | `plan_game_workflow` | plan/status/replan/cancel，共用 `expected_workflow_id` CAS |
-| 回合驱动器（agent 空闲自动续作） | `run_game_workflow` | 每轮最多 4 个蓝图授权调用，pending 轮询、修复有界、blocked 明确 |
+| 回合驱动器（agent 空闲自动续作） | `run_game_workflow` | 默认 4/8/16/32 自适应检查点切片；pending/暂时失败可续作，重复失败转重规划 |
 | subagent 缝（独立上下文委派） | 不适用（MCP 服务器不做委派） | 文档说明：由客户端 agent 承担 |
 | skill/todo/plan 消费端 | 12 个可组合制作 profile | 目标编译为确定性 DAG，不依赖额外模型/网络路由 |
 | 会话续作（session 持久化） | 状态动作 + 持久任务文件 | 重连后通过 `plan_game_workflow(action="status")` 恢复 |
@@ -92,5 +92,6 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已完成 | P3.3 工作流路由质量门禁 | ✅ 48 个中英真实制作任务 / 12 领域 / 174 个原子期望；Recall@8 与完整任务成功率 100%，验证阶段召回 97.30%，已知跨域误选 0，平均 Schema 节省 97.34%；默认预算仍为 8，未新增工具/Schema/模型调用 |
 | 已完成 | P3.4 缓存可观测性与真实命中基线 | 无新增工具/Schema；统一量化 tools/list、结果 LRU、单飞、扫描快照、工作流路线与 spill。确定性“检查→编辑→运行→调试→验证”会话门禁记录结果复用 50%、路线 50%、tools/list 80%、快照 80%、spill 50%，并证明相关脚本精确失效、无关场景/项目信息保持命中；结果缓存新增 32 MiB 总预算 |
 | 已完成 | P3.5 外部文件变更的事件驱动精确失效 | 接入 Godot 4.7 `EditorFileSystem` reload/reimport/source/class/filesystem、`EditorPlugin` resource/scene save 和 `ProjectSettings.settings_changed` 信号；同帧事件只合并、扫描一次，已知路径精确失效，新增/删除/重命名由路径集差分更新目录，无路径事件安全退化到文件域；保留 60 秒 TTL，不增加工具/Schema |
-| 已完成 | P4 持久完整游戏闭环执行器 | 新增 2 个元工具；12 个可组合 profile；完整 DAG 可超过 10 步、每轮最多 4 次调用；隐藏原子工具不切换显隐；pending、CAS、蓝图完整性、保护路径、有界修复和客观收据均有回归门禁 |
-| 下轮 | P4.1 真实空项目端到端基准 | 在固定 Godot fixture 中实际完成可运行 2D 切片，记录任务成功率、调用/重试/MCP 往返、Schema/结果 token、重复扫描与自动修复成功率；作为以后所有优化的总门禁 |
+| 已完成 | P4 持久完整游戏闭环执行器 | 新增 2 个元工具；12 个可组合 profile；完整 DAG 可超过 10 步；隐藏原子工具不切换显隐；pending、CAS、蓝图完整性、保护路径和客观收据均有回归门禁 |
+| 已完成 | P4.1 自适应目标完成与恢复 | 4/8/16/32 检查点只让步不截断；100 个显式原子能力可跨轮完成；陌生复合目标按语义子目标合并且未覆盖要求会明确澄清；安全读取/幂等调用可在重启后重放，未知写入停止；暂时失败退避、相同失败 3 次转重规划；默认响应不重复 DAG/Schema |
+| 下轮 | P4.2 真实空项目端到端基准 | 在固定 Godot fixture 中实际完成可运行 2D 切片，记录任务成功率、调用/重试/MCP 往返、Schema/结果 token、重复扫描与自动修复成功率；作为以后所有优化的总门禁 |

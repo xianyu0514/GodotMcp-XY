@@ -7,16 +7,19 @@ extends RefCounted
 ## It never executes arbitrary tool names: every executable step is regenerated
 ## from the persisted goal contract and checked against the immutable registry.
 ## The MCP-facing adapter owns persistence and execution; this class owns plan
-## compilation, structural integrity, evidence verdicts and bounded recovery.
+## compilation, structural integrity, evidence verdicts and evidence-aware recovery.
 
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
+const TokenEstimatorScript = preload("res://addons/godot_mcp/utils/token_estimator.gd")
 
 const SCHEMA_VERSION: int = 1
-const MAX_STEPS_PER_RUN: int = 4
-const DEFAULT_REPAIR_ATTEMPTS: int = 2
-const MAX_REPAIR_ATTEMPTS: int = 3
-const MAX_PENDING_POLLS: int = 120
-const MAX_RECEIPTS: int = 256
+const DEFAULT_STEPS_PER_RUN: int = 4
+# Zero is the adaptive default: repairs may continue while their evidence changes.
+# A positive value is an explicit caller policy, not a server-wide ceiling.
+const DEFAULT_REPAIR_ATTEMPTS: int = 0
+const PENDING_POLL_WINDOW: int = 120
+const SAME_FAILURE_REPLAN_THRESHOLD: int = 3
+const READY_PREVIEW_LIMIT: int = 4
 
 const PROFILE_IDS: Array[String] = [
 	"gameplay_feature",
@@ -100,6 +103,19 @@ const NEGATIVE_STATUSES: Array[String] = [
 	"skipped", "stale", "aborted", "missing"
 ]
 
+const TRANSIENT_FAILURE_TERMS: Array[String] = [
+	"temporarily unavailable", "temporary failure", "try again", "retry",
+	"rate limit", "too many requests", "server busy", "connection reset",
+	"connection refused", "connection closed", "network error", "timed out",
+	"timeout", "http 429", "http 502", "http 503", "http 504", "(429)",
+	"(502)", "(503)", "(504)"
+]
+
+const VOLATILE_FAILURE_KEYS: Array[String] = [
+	"at", "last_at", "timestamp", "elapsed_ms", "duration_ms", "progress",
+	"request_id", "trace_id"
+]
+
 const FORBIDDEN_NESTED_CAPABILITIES: Array[String] = [
 	"plan_game_workflow", "run_game_workflow", "manage_task_plan",
 	"list_tool_catalog", "search_tools", "get_tool_details", "enable_tools"
@@ -110,14 +126,24 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 	if clean_objective.is_empty():
 		return _clarification_error("objective is required")
 
+	var required_capabilities: Array[String] = []
+	if options.get("required_capabilities") is Array:
+		for capability_value in options["required_capabilities"]:
+			var capability: String = String(capability_value).strip_edges()
+			if not capability.is_empty() and not capability in required_capabilities:
+				required_capabilities.append(capability)
+		required_capabilities.sort()
+
 	var profile_result: Dictionary = _select_profiles(clean_objective, options.get("profiles", []))
-	if profile_result.has("error"):
+	if profile_result.has("error") and required_capabilities.is_empty():
 		return profile_result
-	var profiles: Array[String] = profile_result.get("profiles", [])
+	var profiles: Array[String] = []
+	if not profile_result.has("error"):
+		for profile_value in profile_result.get("profiles", []):
+			profiles.append(String(profile_value))
 	var platform: String = _normalize_platform(String(options.get("platform", "")), clean_objective)
-	var repair_attempts: int = clampi(
-		int(options.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS)),
-		0, MAX_REPAIR_ATTEMPTS)
+	var repair_attempts: int = maxi(
+		int(options.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS)), 0)
 	var protected_paths: Array[String] = DEFAULT_PROTECTED_PATHS.duplicate()
 	if options.get("protected_paths") is Array:
 		for path_value in options["protected_paths"]:
@@ -125,14 +151,6 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 			if not protected_path.is_empty() and not protected_path in protected_paths:
 				protected_paths.append(protected_path)
 	protected_paths.sort()
-
-	var required_capabilities: Array[String] = []
-	if options.get("required_capabilities") is Array:
-		for capability_value in options["required_capabilities"]:
-			var capability: String = String(capability_value).strip_edges()
-			if not capability.is_empty() and not capability in required_capabilities:
-				required_capabilities.append(capability)
-	required_capabilities.sort()
 
 	var specs: Array[Dictionary] = []
 	var ordered_profiles: Array[String] = []
@@ -151,8 +169,19 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 				"status": "blocked",
 				"missing_capabilities": [capability]
 			}
-		if not _specs_contain_tool(specs, capability):
-			var required_spec: Dictionary = _spec(capability, capability, _infer_stage(capability))
+		if _specs_contain_tool(specs, capability):
+			# Explicit atomic intent is objective evidence even when profile
+			# classification already contributed the same tool. Otherwise a broad
+			# profile gate could complete while the named capability was skipped.
+			for spec_index in range(specs.size()):
+				if String(specs[spec_index].get("tool_name", "")) == capability:
+					specs[spec_index]["objective_gate"] = true
+		else:
+			# Every explicitly selected atomic result is objective evidence,
+			# including an extra capability appended to a recognized profile; a
+			# broad profile gate can never stand in for the user's named operation.
+			var required_spec: Dictionary = _spec(
+				capability, capability, _infer_stage(capability), true)
 			required_spec["profile"] = "required_capability"
 			specs.append(required_spec)
 	if _specs_need_runtime(specs):
@@ -206,6 +235,9 @@ func _clarification_error(message: String) -> Dictionary:
 		"status": "needs_clarification",
 		"supported_profiles": PROFILE_IDS
 	}
+
+func classify_profiles(objective: String, requested: Array = []) -> Dictionary:
+	return _select_profiles(objective, requested)
 
 func _select_profiles(objective: String, requested) -> Dictionary:
 	var selected: Array[String] = []
@@ -494,7 +526,11 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 		"blocked_reason": "",
 		"goal_contract": contract.duplicate(true),
 		"objective_gate_ids": objective_gate_ids,
-		"receipts": []
+		"receipts": [],
+		"metrics": {
+			"rounds": 0, "atomic_calls": 0, "yield_count": 0,
+			"safe_recoveries": 0, "transient_retries": 0
+		}
 	}
 	return plan
 
@@ -561,9 +597,9 @@ func get_task(plan: Dictionary, step_id: String) -> Dictionary:
 			return task
 	return {}
 
-func ready_steps(plan: Dictionary, limit: int = MAX_STEPS_PER_RUN) -> Array[Dictionary]:
+func ready_steps(plan: Dictionary, limit: int = DEFAULT_STEPS_PER_RUN) -> Array[Dictionary]:
 	var ready: Array[Dictionary] = []
-	var bounded_limit: int = clampi(limit, 1, MAX_STEPS_PER_RUN)
+	var bounded_limit: int = maxi(limit, 1)
 	for value in plan.get("tasks", []):
 		var task: Dictionary = value
 		if String(task.get("status", "pending")) != "pending":
@@ -580,10 +616,57 @@ func ready_steps(plan: Dictionary, limit: int = MAX_STEPS_PER_RUN) -> Array[Dict
 				break
 	return ready
 
+func workflow_metrics(plan: Dictionary) -> Dictionary:
+	# Schema v1 plans created before adaptive execution did not persist metrics.
+	# Attach defaults lazily so an existing durable workflow resumes without a
+	# migration, and all increments are retained by the caller's next save.
+	if not (plan.get("workflow") is Dictionary):
+		plan["workflow"] = {}
+	var workflow: Dictionary = plan["workflow"]
+	if not (workflow.get("metrics") is Dictionary):
+		workflow["metrics"] = {}
+	var metrics: Dictionary = workflow["metrics"]
+	for key in ["rounds", "atomic_calls", "yield_count", "safe_recoveries", "transient_retries"]:
+		if not metrics.has(key):
+			metrics[key] = 0
+	return metrics
+
+func recommended_step_budget(plan: Dictionary, requested: int = 0) -> int:
+	if requested > 0:
+		return requested
+	var remaining: int = 0
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("status", "pending")) != "done":
+			remaining += 1
+	if remaining <= DEFAULT_STEPS_PER_RUN:
+		return maxi(remaining, 1)
+	var rounds: int = int(workflow_metrics(plan).get("rounds", 0))
+	if remaining <= 16 and rounds == 0:
+		return 8
+	if remaining <= 64 or rounds < 3:
+		return mini(16, remaining)
+	# Large goals get a wider execution slice after several checkpoints. This is
+	# still only a yield boundary; it never removes remaining tasks.
+	return mini(32, remaining)
+
 func is_pending_result(result: Variant) -> bool:
 	if not (result is Dictionary):
 		return false
 	return String((result as Dictionary).get("status", "")).strip_edges().to_lower() in PENDING_STATUSES
+
+func is_transient_failure(result: Variant) -> bool:
+	if not (result is Dictionary):
+		return false
+	var data: Dictionary = result
+	var status: String = String(data.get("status", "")).strip_edges().to_lower()
+	if status in ["timeout", "timed_out", "busy", "retry", "retrying", "unavailable"]:
+		return true
+	var message: String = String(data.get("error", data.get("message", ""))).to_lower()
+	for term in TRANSIENT_FAILURE_TERMS:
+		if message.contains(term):
+			return true
+	return false
 
 func result_passed(tool_name: String, result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
@@ -665,13 +748,16 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 			"pending": true,
 			"status": (result as Dictionary).get("status", "pending")
 		})
-		if int(task["pending_polls"]) > MAX_PENDING_POLLS:
-			task["status"] = "blocked"
-			workflow["state"] = "blocked"
-			workflow["blocked_reason"] = "Async step exceeded %d polls" % MAX_PENDING_POLLS
-			return {"status": "blocked", "step_id": step_id, "receipt": pending_receipt, "workflow": summarize(plan)}
 		workflow["state"] = "waiting"
-		return {"status": "waiting", "step_id": step_id, "receipt": pending_receipt, "workflow": summarize(plan)}
+		workflow["blocked_reason"] = ""
+		var pending_result: Dictionary = {
+			"status": "waiting", "step_id": step_id, "receipt": pending_receipt,
+			"workflow": summarize(plan)
+		}
+		if int(task["pending_polls"]) % PENDING_POLL_WINDOW == 0:
+			pending_result["yield_reason"] = "pending_poll_window_complete"
+			pending_result["resume_safe"] = true
+		return pending_result
 
 	task["attempts"] = int(task.get("attempts", 0)) + 1
 	task["pending_polls"] = 0
@@ -686,6 +772,8 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 	if passed:
 		task["status"] = "done"
 		task["receipt_digest"] = receipt.get("digest", "")
+		_clear_failure_tracking(task, "verification")
+		_clear_failure_tracking(task, "transient")
 		if bool(task.get("objective_gate", false)):
 			var dod: Array = task.get("dod", [])
 			if not dod.is_empty():
@@ -698,14 +786,45 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 		workflow["blocked_reason"] = ""
 		return {"status": "completed", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
 
+	if is_transient_failure(result):
+		task["status"] = "pending"
+		var transient_count: int = _track_failure(
+			task, "transient", String(task.get("tool_name", "")), result)
+		var retry_after_ms: int = mini(
+			30000, 1000 * (1 << mini(transient_count - 1, 5)))
+		workflow["state"] = "waiting"
+		workflow["blocked_reason"] = "Transient tool failure; checkpoint retained for retry"
+		var metrics: Dictionary = workflow_metrics(plan)
+		metrics["transient_retries"] = int(metrics.get("transient_retries", 0)) + 1
+		return {
+			"status": "waiting", "step_id": step_id, "retryable": true,
+			"retry_reason": "transient_failure", "retry_after_ms": retry_after_ms,
+			"failure_fingerprint": task.get("transient_failure_fingerprint", ""),
+			"receipt": receipt,
+			"workflow": summarize(plan)
+		}
+
 	var repair_tool: String = String(task.get("repair_tool", ""))
 	var repair_attempts: int = int(task.get("repair_attempts", 0))
 	var repair_limit: int = int(task.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS))
-	if not repair_tool.is_empty() and repair_attempts < repair_limit:
+	var same_failure_count: int = _track_failure(
+		task, "verification", String(task.get("tool_name", "")), result)
+	if same_failure_count >= SAME_FAILURE_REPLAN_THRESHOLD:
+		task["status"] = "blocked"
+		task["repair_pending"] = false
+		workflow["state"] = "replan_required"
+		workflow["blocked_reason"] = "Repeated identical verification failure; replan with different inputs or capabilities"
+		return {
+			"status": "replan_required", "step_id": step_id,
+			"failure_fingerprint": task.get("verification_failure_fingerprint", ""),
+			"receipt": receipt, "workflow": summarize(plan)
+		}
+	var has_repair_budget: bool = repair_limit <= 0 or repair_attempts < repair_limit
+	if not repair_tool.is_empty() and has_repair_budget:
 		task["status"] = "blocked"
 		task["repair_pending"] = true
 		workflow["state"] = "repairing"
-		workflow["blocked_reason"] = "Verification failed; bounded repair is ready"
+		workflow["blocked_reason"] = "Verification failed; evidence-aware repair is ready"
 		return {
 			"status": "repair_required",
 			"step_id": step_id,
@@ -716,9 +835,12 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 		}
 	task["status"] = "blocked"
 	task["repair_pending"] = false
-	workflow["state"] = "blocked"
-	workflow["blocked_reason"] = "Step failed without acceptable evidence or exhausted its repair budget"
-	return {"status": "blocked", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
+	workflow["state"] = "replan_required"
+	workflow["blocked_reason"] = (
+		"Explicit repair budget was exhausted; replan without dropping objective evidence"
+		if not repair_tool.is_empty() else
+		"Step failed without acceptable evidence; different inputs or capabilities are required")
+	return {"status": "replan_required", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
 
 func _non_gate_result_usable(result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
@@ -739,7 +861,9 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 	if task.is_empty() or not bool(task.get("repair_pending", false)):
 		return {"error": "step '%s' has no authorized repair pending" % step_id}
 	var repair_tool: String = String(task.get("repair_tool", ""))
-	task["repair_attempts"] = int(task.get("repair_attempts", 0)) + 1
+	var transient: bool = is_transient_failure(result)
+	if not transient:
+		task["repair_attempts"] = int(task.get("repair_attempts", 0)) + 1
 	var passed: bool = result_passed(repair_tool, result)
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
@@ -752,14 +876,89 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 	if passed:
 		task["status"] = "pending"
 		task["repair_pending"] = false
+		_clear_failure_tracking(task, "repair")
+		_clear_failure_tracking(task, "repair_transient")
 		workflow["state"] = "running"
 		workflow["blocked_reason"] = ""
 		return {"status": "repaired", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
+	if transient:
+		var transient_count: int = _track_failure(task, "repair_transient", repair_tool, result)
+		var retry_after_ms: int = mini(
+			30000, 1000 * (1 << mini(transient_count - 1, 5)))
+		task["status"] = "blocked"
+		task["repair_pending"] = true
+		workflow["state"] = "waiting"
+		workflow["blocked_reason"] = "Transient repair failure; checkpoint retained for retry"
+		var metrics: Dictionary = workflow_metrics(plan)
+		metrics["transient_retries"] = int(metrics.get("transient_retries", 0)) + 1
+		return {
+			"status": "retry_required", "step_id": step_id,
+			"retryable": true, "retry_after_ms": retry_after_ms,
+			"failure_fingerprint": task.get("repair_transient_failure_fingerprint", ""),
+			"receipt": receipt, "workflow": summarize(plan)
+		}
+	var same_failure_count: int = _track_failure(task, "repair", repair_tool, result)
 	task["status"] = "blocked"
+	var repair_limit: int = int(task.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS))
+	if repair_limit > 0 and int(task.get("repair_attempts", 0)) >= repair_limit:
+		task["repair_pending"] = false
+		workflow["state"] = "replan_required"
+		workflow["blocked_reason"] = "Explicit repair budget was exhausted; replan with different inputs or capabilities"
+		return {
+			"status": "replan_required", "step_id": step_id,
+			"receipt": receipt, "workflow": summarize(plan)
+		}
+	if same_failure_count < SAME_FAILURE_REPLAN_THRESHOLD:
+		task["repair_pending"] = true
+		workflow["state"] = "repairing"
+		workflow["blocked_reason"] = "Repair did not succeed; checkpoint retained for another input or retry"
+		return {
+			"status": "retry_required", "step_id": step_id,
+			"retryable": false, "receipt": receipt,
+			"workflow": summarize(plan)
+		}
 	task["repair_pending"] = false
-	workflow["state"] = "blocked"
-	workflow["blocked_reason"] = "Authorized repair failed"
-	return {"status": "blocked", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
+	workflow["state"] = "replan_required"
+	workflow["blocked_reason"] = "Repeated identical repair failure; replan with different inputs or capabilities"
+	return {
+		"status": "replan_required", "step_id": step_id,
+		"failure_fingerprint": task.get("repair_failure_fingerprint", ""),
+		"receipt": receipt, "workflow": summarize(plan)
+	}
+
+func _track_failure(task: Dictionary, prefix: String, tool_name: String, result: Variant) -> int:
+	var fingerprint: String = _sha256(TokenEstimatorScript.canonical_json({
+		"tool_name": tool_name,
+		"evidence": _stable_failure_evidence(result)
+	}))
+	var fingerprint_key: String = prefix + "_failure_fingerprint"
+	var count_key: String = prefix + "_same_failure_count"
+	if String(task.get(fingerprint_key, "")) == fingerprint:
+		task[count_key] = int(task.get(count_key, 0)) + 1
+	else:
+		task[fingerprint_key] = fingerprint
+		task[count_key] = 1
+	return int(task[count_key])
+
+func _stable_failure_evidence(value: Variant) -> Variant:
+	if value is Dictionary:
+		var dict_result: Dictionary = {}
+		for key_value in (value as Dictionary).keys():
+			var key: String = String(key_value)
+			if key in VOLATILE_FAILURE_KEYS:
+				continue
+			dict_result[key] = _stable_failure_evidence((value as Dictionary)[key_value])
+		return dict_result
+	if value is Array:
+		var array_result: Array = []
+		for item in value:
+			array_result.append(_stable_failure_evidence(item))
+		return array_result
+	return value
+
+func _clear_failure_tracking(task: Dictionary, prefix: String) -> void:
+	task.erase(prefix + "_failure_fingerprint")
+	task.erase(prefix + "_same_failure_count")
 
 func _compact_result_summary(result: Variant) -> Dictionary:
 	if not (result is Dictionary):
@@ -777,16 +976,21 @@ func append_receipt(plan: Dictionary, receipt_fields: Dictionary) -> Dictionary:
 	var workflow: Dictionary = plan.get("workflow", {})
 	if not (workflow.get("receipts") is Array):
 		workflow["receipts"] = []
-	var receipt: Dictionary = receipt_fields.duplicate(true)
-	receipt["at"] = TaskPlanStoreScript._now()
-	receipt["digest"] = _sha256(JSON.stringify(receipt))
+	var semantic_receipt: Dictionary = receipt_fields.duplicate(true)
+	var digest: String = _sha256(TokenEstimatorScript.canonical_json(semantic_receipt))
 	var receipts: Array = workflow["receipts"]
 	for existing_value in receipts:
-		if String((existing_value as Dictionary).get("digest", "")) == String(receipt["digest"]):
-			return existing_value
+		var existing: Dictionary = existing_value
+		if String(existing.get("digest", "")) == digest:
+			existing["occurrences"] = int(existing.get("occurrences", 1)) + 1
+			existing["last_at"] = TaskPlanStoreScript._now()
+			return existing
+	var receipt: Dictionary = semantic_receipt
+	receipt["at"] = TaskPlanStoreScript._now()
+	receipt["last_at"] = receipt["at"]
+	receipt["occurrences"] = 1
+	receipt["digest"] = digest
 	receipts.append(receipt)
-	while receipts.size() > MAX_RECEIPTS:
-		receipts.pop_front()
 	return receipt
 
 func workflow_completed(plan: Dictionary) -> bool:
@@ -826,16 +1030,26 @@ func summarize(plan: Dictionary) -> Dictionary:
 			counts[status] = int(counts[status]) + 1
 		if bool(task.get("needs_input", false)):
 			needs_input.append({"step_id": task.get("id", ""), "tool_name": task.get("tool_name", ""), "missing": task.get("missing_inputs", [])})
+	var ready_preview: Array[Dictionary] = []
+	for ready_value in ready_steps(plan, READY_PREVIEW_LIMIT):
+		var ready_task: Dictionary = ready_value
+		ready_preview.append({
+			"step_id": ready_task.get("id", ""),
+			"tool_name": ready_task.get("tool_name", ""),
+			"stage": ready_task.get("stage", "")
+		})
 	return {
 		"workflow_id": workflow.get("workflow_id", ""),
 		"state": workflow.get("state", ""),
 		"objective": plan.get("goal", ""),
 		"profiles": (workflow.get("goal_contract", {}) as Dictionary).get("profiles", []),
 		"progress": counts,
-		"ready": ready_steps(plan),
+		"ready": ready_preview,
 		"needs_input": needs_input,
 		"blocked_reason": workflow.get("blocked_reason", ""),
-		"blueprint_hash": workflow.get("blueprint_hash", "")
+		"blueprint_hash": workflow.get("blueprint_hash", ""),
+		"next_step_budget": recommended_step_budget(plan),
+		"metrics": workflow_metrics(plan).duplicate(true)
 	}
 
 func path_allowed(plan: Dictionary, candidate_path: String) -> bool:

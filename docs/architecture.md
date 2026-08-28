@@ -103,7 +103,7 @@ The direct `enable_tools` path routes and applies the result in one MCP call. It
 
 ## Complete-game workflow execution
 
-`native_mcp/game_workflow_engine.gd` composes 12 reusable production profiles into a durable, goal-dependent DAG. This is deliberately separate from `workflow_router.gd`: the router minimizes the schemas visible for one ad-hoc turn, while the workflow engine preserves every step needed by a multi-phase outcome. A DAG can exceed ten tools, but `run_game_workflow` advances no more than four atomic calls per round.
+`native_mcp/game_workflow_engine.gd` composes 12 reusable production profiles into a durable, goal-dependent DAG. This is deliberately separate from `workflow_router.gd`: the router minimizes the schemas visible for one ad-hoc turn, while the workflow engine preserves every step needed by a multi-phase outcome. A DAG can exceed ten tools; `run_game_workflow` chooses adaptive 4/8/16/32-call checkpoint slices, and an explicit positive `max_steps` affects only one call. A slice yields resumably and never removes pending goal work.
 
 The stored goal contract is the single source of truth. Before every round, the engine recompiles the blueprint and compares its exact tools, arguments, order, dependencies, repair declarations, objective gates and SHA-256 identity. Stale workflow IDs use compare-and-swap protection. A persisted in-progress mutation is not replayed after interruption; the caller receives `recovery_required` and must inspect/replan.
 

@@ -8,7 +8,7 @@ Always-on discovery and orchestration tools. They keep the default tool list sma
 
 ## Recommended workflow
 
-1. For a complete game outcome, call `plan_game_workflow`, then advance it with `run_game_workflow`. The persisted DAG can exceed ten atomic capabilities while each round stays bounded to four calls.
+1. For a complete game outcome, call `plan_game_workflow`, then advance it with `run_game_workflow`. The persisted DAG can use every required atomic capability; adaptive checkpoint slices yield without truncating it.
 2. For a short ad-hoc task, pass the task goal directly to `enable_tools` as `workflow_query`. The server routes and activates a bounded `inspect → execute → verify` set in the same call, with no embedding/model/network request and no copied schema.
 3. Workflow activation keeps core/meta tools and, by default, removes supplementary tools left by the previous task. This bounds every following `tools/list`; use `replace_supplementary=false` only when intentionally extending the same task.
 4. Use `search_tools` only to preview a route or compare candidates. `mode="tools"` ranks at most 12 single capabilities; `mode="workflow"` previews at most 10 names. Exact atomic names and complete official English/Chinese descriptions route to one tool.
@@ -49,4 +49,4 @@ Tool-state changes invalidate only the three discovery cache entries. Cached sce
 | `get_tool_details` | meta | Return the full registration record for one MCP tool — complete description, inputSchema, outputSchema, annotations, category, group and enabled state — so a client can fetch the exact schema before calling a tool without loading every tool. Use list_tool_catalog or search_tools to discover tool names first. Returns found=false with a hint when the name is not registered. |
 | `enable_tools` | meta | Fast path: `workflow_query` locally routes and activates the minimum bounded, cost-aware task set in this one call. Core/meta stay visible and old supplementary tools are replaced by default; set `replace_supplementary=false` to extend the current task. Manual tools, groups and 12 presets remain supported. Returns compact changes/counts and aggregate token-cost metrics; no-op calls do not refresh the client. |
 | `plan_game_workflow` | meta | Compile, inspect, replan or cancel a durable goal contract across 12 composable production profiles. Unknown goals request clarification and missing required capabilities block instead of being omitted. |
-| `run_game_workflow` | meta | Advance at most four blueprint-authorized atomic calls, requesting only current-step inputs. It polls async work, performs bounded repairs and returns completed only after objective receipts pass. |
+| `run_game_workflow` | meta | Advance an adaptive blueprint-authorized slice, requesting only current-step inputs. It checkpoints async/transient work, safely recovers restartable operations, replans repeated failures and returns completed only after objective receipts pass. |
