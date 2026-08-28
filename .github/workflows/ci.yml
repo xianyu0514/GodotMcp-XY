@@ -10,14 +10,6 @@ on:
 # config/features "4.7"); bump GODOT_VERSION here when the project's required
 # engine version changes. GUT (the test runner) is not vendored in this repo,
 # so CI fetches it at the pinned tag.
-#
-# The GUT step runs the full unit suite (test/unit/ + subdirs). The previously
-# tracked pre-existing failures (stale tool counts, missing Meta-group
-# translations, runtime-probe poll resend, terrain peering API gap, hidden-dir
-# owner scan, headless editor-interface guards) have been fixed, so the whole
-# suite is green under the target engine. Headless-only cases use GUT
-# pending_test() and source-introspection cases are risky/no-assert; neither
-# counts as a failure, so CI stays a trustworthy gate.
 env:
   GODOT_VERSION: "4.7"
   GUT_VERSION: "9.4.0"
@@ -31,7 +23,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Godot ${{ env.GODOT_VERSION }} (headless)
+      - name: Download Godot ${{ env.GODOT_VERSION }}
         run: |
           set -euo pipefail
           BASE="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
@@ -50,29 +42,65 @@ jobs:
           cp -r /tmp/gut/addons/gut addons/gut
           test -f addons/gut/gut_cmdln.gd
 
-      - name: Headless import gate (project must import cleanly)
+      - name: Headless import gate
         run: |
           set -euo pipefail
-          # Import assets / build the resource cache, then fail the build if any
-          # production script failed to parse or load. A clean import under the
-          # target engine is the cheapest, most objective "is it buildable" gate.
           godot --headless --path . --import 2>&1 | tee import.log
           if grep -E "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" import.log; then
-            echo "::error::Project failed to import cleanly (script parse/load errors above)."
+            echo "::error::Project failed to import cleanly."
             exit 1
           fi
-          # The plugin lifecycle must not rewrite the versioned project file
-          # (for example, removing the MCPRuntimeProbe autoload on exit).
           if ! git diff --exit-code -- project.godot; then
-            echo "::error::godot --import modified project.godot. The plugin must preserve project configuration on shutdown."
+            echo "::error::godot --import modified project.godot."
             git diff -- project.godot
             exit 1
           fi
 
-      - name: Run GUT unit tests (full suite)
+      - name: Run GUT unit tests
         run: |
           set -euo pipefail
           godot --headless --path . -s addons/gut/gut_cmdln.gd \
             -gdir=res://test/unit/ \
             -ginclude_subdirs \
             -gexit
+
+  p4-2d-gate-lab:
+    name: P4 2D full game E2E gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot ${{ env.GODOT_VERSION }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
+          ZIP="Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fL --retry 3 -o godot.zip "${BASE}/${ZIP}"
+          unzip -o godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          chmod +x /usr/local/bin/godot
+          godot --version
+
+      - name: Install virtual display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0
+
+      - name: Run P4 2D Gate Lab
+        env:
+          GODOT_BIN: /usr/local/bin/godot
+          P4_2D_GATE_REQUIRE_EXPORT: "0"
+        run: |
+          set -euo pipefail
+          xvfb-run -a python3 test/integration/test_p4_2d_full_gate_flow.py 2>&1 | tee p4-2d-gate.log
+          grep '^P4_2D_GATE_REPORT=' p4-2d-gate.log
+
+      - name: Upload gate log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p4-2d-gate-log
+          path: p4-2d-gate.log
+          if-no-files-found: warn
