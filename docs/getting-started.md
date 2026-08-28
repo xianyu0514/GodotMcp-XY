@@ -149,7 +149,7 @@ List the current scene tree and summarize the top-level nodes.
 
 At startup, the client sees the 28 core tools plus 6 meta tools.
 
-For a complete, multi-phase result, ask the client to use `plan_game_workflow`, then repeatedly advance the returned workflow ID with `run_game_workflow`. The durable plan may use more than ten atomic capabilities, but each round executes at most four calls and requests inputs only for the current step. Completion requires objective receipts instead of a model-written success flag.
+For a complete, multi-phase result, ask the client to use `plan_game_workflow`, then repeatedly advance the returned workflow ID with `run_game_workflow`. The durable plan may use every required atomic capability; execution selects a 4/8/16/32-call checkpoint slice from the remaining DAG and prior rounds, while only the current step's missing inputs/schema are requested. A positive `max_steps` is a one-call load preference, not a completion ceiling. Completion requires objective receipts instead of a model-written success flag.
 
 ```text
 Plan and complete a playable 2D controller with a pause menu, project tests, and a smoke-tested Linux export. Stop and report any missing asset, input, SDK or failed evidence gate.

@@ -198,7 +198,7 @@ Typical short-task workflow:
 3. Use `search_tools` only to preview/compare candidates; use manual tools/groups/presets only when deliberately overriding the route.
 4. Set `replace_supplementary=false` only when extending the same task instead of switching task context.
 
-For complete goals, the 8-tool default and 10-tool hard route limits do not cap the whole project. They only bound an ad-hoc visible route. The workflow compiler persists a goal-dependent DAG, and the runner advances at most four authorized atomic calls per round without enabling every hidden schema. See [Complete Game Workflows](game-workflows.md).
+For complete goals, the 8-tool default and 10-tool hard route limits do not cap the whole project. They only bound one ad-hoc visible route. The workflow compiler persists a goal-dependent DAG and may merge multiple schema-free semantic routes beyond ten capabilities. The runner advances adaptive checkpoint slices without enabling every hidden schema; a slice boundary yields but never discards pending work. See [Complete Game Workflows](game-workflows.md).
 
 ## Security checklist
 

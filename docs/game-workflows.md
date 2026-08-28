@@ -6,18 +6,18 @@
 
 ## Why the workflow can exceed eight tools
 
-The existing workflow router keeps one model turn cheap: it returns at most 8 atomic tools by default and never more than 10. That is a discovery/context budget, not a project capability limit.
+The existing workflow router keeps one ad-hoc model turn cheap: it returns at most 8 atomic tools by default and never more than 10. That is a visible discovery/context budget, not a project capability limit. The complete-goal fallback can route semantic clauses separately and merge their names into one durable plan, so the full workflow is not capped at ten.
 
-A complete goal is stored as a DAG that may contain many atomic steps. `run_game_workflow` advances no more than four atomic calls in one round and requests only the schema-required inputs for the current step. Hidden supplementary tools execute internally without changing their enabled state, rebuilding `tools/list`, or invalidating the discovery route cache.
+A complete goal is stored as a DAG that may contain many atomic steps. With `max_steps` omitted or set to zero, `run_game_workflow` chooses a 4/8/16/32-call checkpoint slice based on remaining work and prior rounds. A positive value controls only that call. Reaching either boundary returns a resumable yield and leaves every pending step in the durable DAG. Only schema-required inputs for the current step are requested. Hidden supplementary tools execute internally without changing their enabled state, rebuilding `tools/list`, or invalidating the discovery route cache.
 
 | Boundary | Limit | Purpose |
 | --- | ---: | --- |
 | Ad-hoc routed tool set | 8 default, 10 hard maximum | Keep one model turn small |
-| Atomic calls per workflow round | 4 maximum | Bound editor work, latency and failure scope |
+| Atomic calls per workflow round | Adaptive 4/8/16/32 by default; caller override is one-call only | Bound one turn's load without bounding the goal |
 | Full persisted DAG | Goal-dependent | Preserve all capabilities required for correctness |
-| Automatic repair attempts | 2 default, 3 hard maximum | Prevent unbounded fix loops |
-| Async polls per step | 120 maximum | Prevent a permanently pending job |
-| Compact receipts | 256 maximum | Bound persistent evidence size |
+| Automatic repair attempts | Evidence-adaptive by default; optional positive caller policy | Continue when evidence changes; replan after 3 identical failures |
+| Async polls per step | No completion ceiling; checkpoint marker every 120 polls | A slow valid job can finish without creating a hot loop |
+| Compact receipts | All distinct evidence retained; identical polls/results aggregate | Preserve proof while avoiding repeated-token growth |
 
 ## Production profiles
 
@@ -51,16 +51,17 @@ Plan a complete objective:
 }
 ```
 
-The planner either returns `planned`, requests clarification, or reports the exact missing capabilities. It never silently substitutes a generic gameplay plan for an unknown objective.
+The planner either returns `planned`, requests clarification, or reports the exact missing capabilities. Exact atomic names are always retained as objective evidence. For an unfamiliar composite objective, the local schema-free router may merge more than ten capabilities across semantic clauses. If any clause remains uncovered, planning returns `needs_clarification` with `uncovered_requirements`; it never persists the matched subset as the whole goal.
 
 Advance the plan:
 
 ```json
 {
-  "expected_workflow_id": "<id returned by the planner>",
-  "max_steps": 4
+  "expected_workflow_id": "<id returned by the planner>"
 }
 ```
+
+Omit `max_steps` (or pass `0`) for adaptive execution. A positive value is useful when a client deliberately wants a smaller or larger current slice, but it cannot delete or complete remaining work.
 
 When a current atomic step has required parameters, the runner returns `needs_input` with `step_id`, `tool_name`, and `missing_inputs`. Supply only that step's arguments:
 
@@ -84,10 +85,11 @@ Inputs are ephemeral: credentials, source payloads and paths passed while runnin
 | --- | --- | --- |
 | `planned` / `running` | More authorized steps remain | Call the runner again |
 | `needs_input` | Current tool schema has required fields not supplied | Send arguments under the returned step id |
-| `waiting` | An async atomic tool returned pending/running | Call again with the same inputs; no retry is consumed |
-| `repairing` | A failed verifier has a declared, bounded repair | Supply repair inputs if requested; the runner re-verifies |
-| `blocked` | Evidence failed, a capability disappeared, a protected path was targeted, or repair budget ended | Inspect the reason and replan after correcting it |
-| `recovery_required` | The process stopped after dispatch and the mutation outcome is unknown | Inspect project state and replan; the runner will not duplicate the mutation blindly |
+| `waiting` | Async work is pending or a transient failure retained the checkpoint | Honor `retry_after_ms` when present, then call again; no repair is consumed |
+| `repairing` / `retry_required` | A declared repair is ready or needs another input/attempt | Supply repair inputs if requested; changed evidence may continue |
+| `replan_required` | The same failure repeated three times, a verifier has no repair, or an explicit repair policy ended | Change inputs/capabilities instead of repeating identical work |
+| `blocked` | A capability disappeared, integrity failed, or a protected path was targeted | Correct the hard constraint, then replan |
+| `recovery_required` | A non-idempotent mutation was dispatched before restart and its outcome is unknown | Inspect project state and replan; safe reads/idempotent calls replay automatically |
 | `cancelled` | The workflow was explicitly cancelled | Create/replan a workflow |
 | `completed` | Every step is done and every objective gate references a passing engine receipt | Goal contract is satisfied |
 
@@ -109,6 +111,8 @@ Before every runner round, the engine recompiles the expected blueprint from the
 The default protected roots are `res://addons/godot_mcp` and `res://.mcp`. Candidate paths are resolved and simplified before comparison, so a path such as `res://scenes/../addons/godot_mcp/...` cannot bypass protection. Additional protected paths may be declared while planning. Meta/control tools cannot be nested inside a workflow, and the runner has no arbitrary `tool_name` parameter.
 
 `expected_workflow_id` provides compare-and-swap protection for run, replan and cancel operations. This prevents an agent with a stale response from advancing a newer plan.
+
+Default responses are projections: at most four ready step IDs/names/stages plus progress and counters. They omit the durable DAG, arguments, receipts and atomic schemas unless `include_plan=true` or the current step actually needs inputs. This keeps long workflows cheap to resume. Identical pending receipts aggregate an occurrence counter; distinct completion evidence is never discarded.
 
 ## What “complete” can guarantee
 
