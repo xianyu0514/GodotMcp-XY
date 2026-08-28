@@ -10,14 +10,14 @@
 
 | 维度 | 现状 | 评价 |
 | --- | --- | --- |
-| 工具面 | 221 工具（28 core + 189 supplementary + 4 meta），6 大类 + Meta（S4 已降级 execute_*；已加 search_tools/get_tool_details/verify_scripts/undo/redo/get_undo_history） | 业界最广，远超 Coding-Solo(~14)/MCP4Godot(38)/Unity-MCP(47) |
+| 工具面 | 223 工具（28 core + 189 supplementary + 6 meta），6 大类 + Meta；217 个原子能力保持可达，新增 2 个完整目标编排工具 | 广覆盖与小默认面并存；完整 DAG 不受单轮 8/10 发现预算限制 |
 | 架构 | 纯 GDScript 原生 EditorPlugin，零外部依赖 | 结构性优势：无"进程启动器+抓 stdout"的假成功问题 |
 | 传输 | HTTP/SSE(:9080) + stdio，手写 HTTP 服务器（独立线程 + call_deferred 回主线程） | 可用但未跟上 2025 标准 Streamable HTTP |
 | 协议面 | initialize/tools/resources/prompts 四组方法 + instructions 渐进披露 | prompts 已实现（7 工作流 prompt）；缺 completion/sampling/elicitation/分页 |
 | 安全 | Bearer 认证、路径校验、脚本沙箱（能力黑名单）、速率限制、工具分级 | 分层合理；路径校验用黑名单而非规范化 |
 | 验证闭环 | play_and_verify / assert_performance_budget / assert_no_runtime_errors / assert_visual_baseline / smoke_test_export / manage_task_plan(DoD gates) | 业界领先的"工业化"闭环 |
 | 测试 | ~100 GUT 单测 + 40 集成测试 + CI（headless import + GUT） | 全量 0 失败（Godot 4.7.2 + GUT 9.7.1）；含 schema lint |
-| 文档 | 全套 docs + 中英双语 + 翻译文件 | 优秀；计数一致（221/28/189 已核对） |
+| 文档 | 全套 docs + 中英双语 + 翻译文件 | 完整工作流、计数与架构同步（223/28/189/6） |
 
 ---
 
@@ -111,7 +111,7 @@
 
 ### 4.2 核心工具再收敛 + 目录语义化（对齐官方渐进发现三层模式）
 
-- 默认 tools/list 目标 ≤ 20（当前 28 core + 4 meta）；
+- 默认 tools/list 继续受 Schema token 总预算约束（当前 28 core + 6 meta）；
 - **补齐三层发现**：`list_tool_catalog`（已有，名称+一行描述）→ `search_tools`（新增，关键词匹配+分组过滤）→ `get_tool_details`（新增，单工具完整 schema）→ `enable_tools`（已有）+ list_changed；
 - `tools/list` **确定性排序**（利于 prompt cache）；描述按"何时用/何时别用/前置条件/示例/返回体积"模板重写（回应 #103、#128 与 Anthropic 工具写作规范）；
 - 命名审计按 **SEP-986**（ASCII 字母数字 `_-.`、1-128 字符、动词开头、分组前缀一致、名字里不放参数）；inputSchema 避免 oneOf/anyOf，能用 enum 用 enum，`additionalProperties: false`；

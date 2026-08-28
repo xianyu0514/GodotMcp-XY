@@ -26,6 +26,8 @@ func test_initialize_includes_instructions():
 	assert_true(instructions.contains("list_tool_catalog"), "Instructions should mention list_tool_catalog")
 	assert_true(instructions.contains("enable_tools"), "Instructions should mention enable_tools")
 	assert_true(instructions.contains("workflow_query"), "Instructions should teach the one-call workflow fast path")
+	assert_true(instructions.contains("plan_game_workflow"), "Instructions should teach complete-game orchestration")
+	assert_true(instructions.contains("run_game_workflow"), "Instructions should teach durable workflow advancement")
 	assert_true(instructions.contains("replace_supplementary=false"),
 		"Instructions should explain when additive task activation is appropriate")
 
@@ -67,6 +69,64 @@ func test_register_tool_default_category_and_group():
 		if t.get("name") == "test_tool":
 			assert_eq(t.get("category"), "core", "Default category should be 'core'")
 			assert_eq(t.get("group"), "", "Default group should be empty")
+
+func _workflow_authorization(tool_name: String, step_id: String = "wf_001") -> Dictionary:
+	return {
+		"kind": "game_workflow",
+		"workflow_id": "workflow-test",
+		"blueprint_hash": "blueprint-test",
+		"step_id": step_id,
+		"authorized_tool": tool_name,
+		"repair": false
+	}
+
+func test_planned_tool_executes_while_hidden_without_visibility_churn() -> void:
+	var calls: Array[int] = [0]
+	_core.register_tool("read_script", "Read", {"type": "object"},
+		func(args):
+			calls[0] += 1
+			return {"source": "ok", "call": calls[0]},
+		{}, {"readOnlyHint": true}, "supplementary", "Script")
+	assert_false(_core.get_tool("read_script").enabled)
+	var first: Dictionary = await _core.invoke_planned_tool(
+		"read_script", {"script_path": "res://player.gd"}, _workflow_authorization("read_script"))
+	var second: Dictionary = await _core.invoke_planned_tool(
+		"read_script", {"script_path": "res://player.gd"}, _workflow_authorization("read_script", "wf_002"))
+	assert_eq(first, second, "Authorized reads reuse the ordinary result cache")
+	assert_eq(calls[0], 1)
+	assert_false(_core.get_tool("read_script").enabled, "Internal execution must not expose the hidden tool")
+	assert_false(_core.get_tool_list_dirty(), "Internal execution must not churn tools/list")
+
+func test_planned_mutation_uses_precise_revision_invalidation() -> void:
+	var read_calls: Array[int] = [0]
+	_core.register_tool("read_script", "Read", {"type": "object"},
+		func(args):
+			read_calls[0] += 1
+			return {"source": "v", "call": read_calls[0]},
+		{}, {"readOnlyHint": true}, "supplementary", "Script")
+	_core.register_tool("modify_script", "Modify", {"type": "object"},
+		func(args):
+			return {"status": "success"},
+		{}, {"readOnlyHint": false}, "core", "Script")
+	var args: Dictionary = {"script_path": "res://player.gd"}
+	await _core.invoke_planned_tool("read_script", args, _workflow_authorization("read_script"))
+	await _core.invoke_planned_tool("read_script", args, _workflow_authorization("read_script", "wf_002"))
+	assert_eq(read_calls[0], 1)
+	await _core.invoke_planned_tool("modify_script", args, _workflow_authorization("modify_script", "wf_003"))
+	await _core.invoke_planned_tool("read_script", args, _workflow_authorization("read_script", "wf_004"))
+	assert_eq(read_calls[0], 2, "A related planned mutation must invalidate the cached read")
+
+func test_planned_tool_rejects_meta_recursion_and_mismatched_authorization() -> void:
+	_core.register_tool("enable_tools", "Meta", {"type": "object"}, func(args): return {},
+		{}, {}, "meta", "Meta")
+	var meta_result: Dictionary = await _core.invoke_planned_tool(
+		"enable_tools", {}, _workflow_authorization("enable_tools"))
+	assert_true(meta_result.has("error"))
+	_core.register_tool("read_script", "Read", {"type": "object"}, func(args): return {"source": "x"},
+		{}, {"readOnlyHint": true}, "supplementary", "Script")
+	var mismatch: Dictionary = await _core.invoke_planned_tool(
+		"read_script", {}, _workflow_authorization("modify_script"))
+	assert_true(mismatch.has("error"))
 
 func test_unregister_tool():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})

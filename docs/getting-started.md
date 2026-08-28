@@ -145,9 +145,17 @@ Then try a read-only prompt:
 List the current scene tree and summarize the top-level nodes.
 ```
 
-## 7. Enable advanced tools only when needed
+## 7. Choose the smallest workflow that can finish the goal
 
-At startup, the client sees the 28 core tools plus 4 meta tools. For specialized workflows:
+At startup, the client sees the 28 core tools plus 6 meta tools.
+
+For a complete, multi-phase result, ask the client to use `plan_game_workflow`, then repeatedly advance the returned workflow ID with `run_game_workflow`. The durable plan may use more than ten atomic capabilities, but each round executes at most four calls and requests inputs only for the current step. Completion requires objective receipts instead of a model-written success flag.
+
+```text
+Plan and complete a playable 2D controller with a pause menu, project tests, and a smoke-tested Linux export. Stop and report any missing asset, input, SDK or failed evidence gate.
+```
+
+For a short ad-hoc task:
 
 - In the editor, open the tool manager in the MCP panel and toggle a group.
 - From the client, pass the task directly to `enable_tools` as `workflow_query`; it locally routes and activates the minimum bounded set in one call. Manual names, groups and presets remain available.
@@ -172,5 +180,6 @@ Use enable_tools with workflow_query="debug the running game and verify the fix"
 ## Next steps
 
 - Review [Configuration](configuration.md) for auth, presets and CLI flags.
+- Read [Complete Game Workflows](game-workflows.md) for the 12 production profiles, runner states and evidence rules.
 - Browse [Tools Reference](tools/README.md) before granting broad advanced tool access.
 - Read [Testing](testing.md) if you plan to contribute code or tools.

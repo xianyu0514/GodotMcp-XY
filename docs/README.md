@@ -7,6 +7,7 @@ This folder is the documentation hub for Godot MCP Native, a Godot 4.7 editor pl
 | Goal | Read |
 | --- | --- |
 | Install the plugin and connect an AI client | [Getting Started](getting-started.md) |
+| Complete a multi-phase game goal with objective evidence | [Complete Game Workflows](game-workflows.md) |
 | Tune ports, transports, auth, CLI flags and tool presets | [Configuration](configuration.md) |
 | Expose the local MCP server to remote/cloud clients | [Remote & Cloud Access](remote-access.md) |
 | Understand internals before changing code | [Architecture](architecture.md) |
@@ -21,7 +22,7 @@ This folder is the documentation hub for Godot MCP Native, a Godot 4.7 editor pl
 - **Engine:** Godot 4.7, GL Compatibility renderer.
 - **Entry point:** `addons/godot_mcp/mcp_server_native.gd`.
 - **Default endpoint:** `http://localhost:9080/mcp`.
-- **Tool count:** 221 total = 28 core + 189 advanced + 4 always-on meta tools.
+- **Tool count:** 223 total = 28 core + 189 advanced + 6 always-on meta tools.
 - **Runtime dependency:** none for the plugin itself; testing may require Godot/GUT and Python.
 - **Primary config file:** `user://mcp_settings.cfg`.
 
@@ -30,6 +31,7 @@ This folder is the documentation hub for Godot MCP Native, a Godot 4.7 editor pl
 When code behavior changes, update the matching page in the same PR:
 
 - New/changed tool → category page under `docs/tools/`, [Tools Reference](tools/README.md), translations and tests.
+- Workflow compiler, runner or evidence behavior → [Complete Game Workflows](game-workflows.md), [Architecture](architecture.md) and workflow quality tests.
 - New setting or CLI flag → [Configuration](configuration.md) and any client snippets.
 - Runtime probe behavior → [Architecture](architecture.md), [Debug & Runtime Tools](tools/debug-tools.md) and [Testing](testing.md).
 - Remote/tunnel behavior → [Remote & Cloud Access](remote-access.md) and configuration examples.

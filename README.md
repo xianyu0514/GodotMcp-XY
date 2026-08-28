@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-221-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-223-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 
@@ -15,7 +15,7 @@ No Node.js bridge, no Python daemon and no separate server process are required.
 
 - **Native server:** the MCP server lives in the editor process and ships with the plugin.
 - **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
-- **221 tools with a small default surface:** 28 core tools are enabled immediately, 189 advanced tools can be enabled on demand, and 4 meta tools are always available for tool discovery.
+- **223 tools with a small default surface:** 28 core tools are enabled immediately, 189 advanced tools remain on demand, and 6 meta tools cover discovery plus durable complete-game workflows.
 - **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
 
@@ -65,10 +65,12 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Editor](docs/tools/editor-tools.md) | 27 | 3 | 24 | Run/stop, screenshots, selection, inspector state, export templates, script buffers and undo/redo |
 | [Debug & Runtime](docs/tools/debug-tools.md) | 73 | 3 | 70 | Logs, debugger control, profilers, runtime probe, deterministic play checks and regression gates |
 | [Project](docs/tools/project-tools.md) | 61 | 3 | 58 | Settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
-| [Meta](docs/tools/meta-tools.md) | 4 | — | — | Always-on tool discovery and on-demand enablement |
-| **Total** | **221** | **28** | **189** | |
+| [Meta](docs/tools/meta-tools.md) | 6 | — | — | Discovery, on-demand enablement and durable complete-game orchestration |
+| **Total** | **223** | **28** | **189** | |
 
-Only core and meta tools are visible to `tools/list` at startup. The fastest path is one `enable_tools({"workflow_query": "..."})` call: an immutable local capability index routes the English/Chinese goal across `inspect → execute → verify` and atomically activates at most 8 of all 217 non-meta atomic tools without copying schemas. Official English/Chinese descriptions and exact names can address every atomic tool directly. Precomputed tool-name signatures and direct action/object evidence improve natural-task precision before the cost-aware fallback; a balanced 48-task bilingual production gate records 100% Recall@8 and complete-task success with 97.34% average supplementary-schema savings. Each definition's schema-token cost is estimated once at registration; among candidates with equal new intent coverage, the router favors the highest semantic value per incremental token while exact atomic requests retain strict priority. Normalized task goals reuse a bounded 64-route LRU; tool visibility changes preserve both the index and route cache, while only definition changes rebuild them. Core/meta stay visible and the previous task's supplementary tools are replaced by default, keeping following prompts small and cache-stable; additive and manual group/preset modes remain available. `search_tools` is retained for route previews and candidate comparison. Catalog revisions keep discovery responses small, while dependency-tagged cache revisions preserve unrelated scene/script/resource reads and invalidate exact script/resource paths lazily. See the [Tools Reference](docs/tools/README.md).
+Only core and meta tools are visible to `tools/list` at startup. For a complete user outcome, `plan_game_workflow` composes 12 production profiles into a persistent goal DAG and `run_game_workflow` advances at most four authorized atomic calls per round. A full DAG may exceed ten tools: the existing 8/10 limit remains a per-turn discovery/context budget, not a cap on what the game can accomplish. Hidden steps reuse normal caches without visibility churn; async work is polled, repairs are bounded, and `completed` requires engine-issued evidence for every objective gate. Unknown goals, missing capabilities, required inputs, protected paths and unverifiable outcomes stop explicitly instead of being silently skipped. See [Complete Game Workflows](docs/game-workflows.md).
+
+For shorter ad-hoc tasks, the fastest path remains one `enable_tools({"workflow_query": "..."})` call: an immutable local capability index routes the English/Chinese goal across `inspect → execute → verify` and atomically activates at most 8 of all 217 non-meta atomic tools without copying schemas. Official English/Chinese descriptions and exact names can address every atomic tool directly. Precomputed tool-name signatures and direct action/object evidence improve natural-task precision before the cost-aware fallback; a balanced 48-task bilingual production gate records 100% Recall@8 and complete-task success with 97.34% average supplementary-schema savings. Each definition's schema-token cost is estimated once at registration; among candidates with equal new intent coverage, the router favors the highest semantic value per incremental token while exact atomic requests retain strict priority. Normalized task goals reuse a bounded 64-route LRU; tool visibility changes preserve both the index and route cache, while only definition changes rebuild them. Core/meta stay visible and the previous task's supplementary tools are replaced by default, keeping following prompts small and cache-stable; additive and manual group/preset modes remain available. `search_tools` is retained for route previews and candidate comparison. Catalog revisions keep discovery responses small, while dependency-tagged cache revisions preserve unrelated scene/script/resource reads and invalidate exact script/resource paths lazily. See the [Tools Reference](docs/tools/README.md).
 
 Oversized successful results remain fully recoverable without paying their full context cost up front. The response keeps the compatible head/tail preview and adds a standard MCP `resource_link`; `resources/read` then serves deterministic, UTF-8-safe 16 KiB pages addressed by the complete payload's SHA-256. Following `_meta.nextUri` reconstructs the exact JSON, while dynamic result links never enter `resources/list`. Critical errors and source/log readers stay complete inline, and any spill failure falls back to the complete inline result. The 204 KiB Unicode regression fixture avoids 95.62% of initial response bytes while verifying exact reconstruction.
 
@@ -86,6 +88,7 @@ Create a main menu scene with Play, Options and Quit buttons.
 Read my movement script and refactor it into a state machine.
 Run the project, then report live FPS, node count and recent runtime errors.
 Enable the debugging preset, play a deterministic jump test and verify coyote time.
+Plan and complete a playable 2D vertical slice with a pause menu, tests and a Linux smoke-tested export.
 ```
 
 ## Configuration at a glance
@@ -123,6 +126,7 @@ See [Configuration](docs/configuration.md) for transports, auth, CLI overrides, 
 | Document | Use it for |
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install, enable and connect the plugin |
+| [Complete Game Workflows](docs/game-workflows.md) | Durable multi-phase planning, execution states, evidence and limits |
 | [Configuration](docs/configuration.md) | Ports, transports, auth, CLI flags, client snippets and presets |
 | [Remote & Cloud Access](docs/remote-access.md) | Cloudflare Quick Tunnel, Tailscale Funnel, ngrok and public client URLs |
 | [Architecture](docs/architecture.md) | Plugin lifecycle, server core, transports, tools, runtime probe and security model |

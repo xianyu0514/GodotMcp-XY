@@ -42,7 +42,7 @@ const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estim
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP starts with ~30 core tools plus four always-on meta tools so tools/list stays small. Most editing tasks work with the default set. For a multi-step goal or any missing capability, call enable_tools once with workflow_query='<English or Chinese goal>', then use the refreshed tools/list schemas. This fastest path routes locally across inspect/execute/verify, activates at most 8 schema-free names, and atomically replaces supplementary tools left by the previous task; set replace_supplementary=false only to extend the current task. Exact atomic tool names route to that tool alone. Every non-meta atomic tool is routable, so do not give up and do not load the full 221-tool catalog. Use search_tools only to preview/compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only to browse group counts and workflow coverage. Prefer focused presets (game_2d, game_3d, ui_localization, gameplay_scripting, animation_audio, release_export, level_design, debugging, automation_qa, art_resources, minimal_core); 'all' has the highest context cost. Reuse catalog_revision with known_revision to avoid downloading an unchanged catalog."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use more than ten atomic capabilities while each round stays bounded to four calls and completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; set replace_supplementary=false only to extend the same task. Exact atomic tool names remain routable. Do not load the full 223-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, blocked or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -1266,6 +1266,86 @@ func unregister_tool(name: String) -> void:
 
 func get_tool(name: String) -> MCPTypes.MCPTool:
 	return _tools.get(name, null)
+
+## Return a defensive copy of one registered input schema. The complete-game
+## workflow runner uses this internal API to request only the arguments needed
+## by its current authorized step; it does not expose or rebuild tools/list.
+func get_tool_input_schema(name: String) -> Dictionary:
+	var tool: MCPTypes.MCPTool = _tools.get(name, null)
+	if tool == null or not tool.is_valid():
+		return {}
+	return tool.input_schema.duplicate(true)
+
+## Execute one atomic capability authorized by a structurally validated game
+## workflow. Visibility is deliberately ignored: hidden supplementary tools
+## remain callable without mutating tools/list, catalog revisions or saved tool
+## states. Meta recursion is forbidden. Reads reuse the same revision-aware LRU;
+## writes advance the same precise mutation revisions as ordinary tools/call.
+func invoke_planned_tool(tool_name: String, arguments: Dictionary,
+		authorization: Dictionary) -> Variant:
+	if String(authorization.get("kind", "")) != "game_workflow":
+		return {"error": "Invalid internal workflow authorization"}
+	for field in ["workflow_id", "blueprint_hash", "step_id", "authorized_tool"]:
+		if String(authorization.get(field, "")).strip_edges().is_empty():
+			return {"error": "Workflow authorization is missing '%s'" % field}
+	if String(authorization.get("authorized_tool", "")) != tool_name:
+		return {"error": "Workflow authorization does not match '%s'" % tool_name}
+	if not _tools.has(tool_name):
+		return {"error": "Workflow capability is not registered: " + tool_name}
+	var tool: MCPTypes.MCPTool = _tools[tool_name]
+	if tool.category == "meta" or tool_name in [
+		"manage_task_plan", "plan_game_workflow", "run_game_workflow",
+		"list_tool_catalog", "search_tools", "get_tool_details", "enable_tools"]:
+		return {"error": "Meta/control tools cannot be nested in a game workflow"}
+	if not tool.callable.is_valid():
+		return {"error": "Workflow capability has no valid handler: " + tool_name}
+
+	var is_cacheable_read: bool = tool_name in CACHEABLE_READ_TOOLS
+	var cache_key: String = ""
+	var revision_snapshot: Dictionary = {}
+	if is_cacheable_read:
+		cache_key = tool_name + ":" + _canonical_json(arguments)
+		var dependency_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.read_tags(tool_name, arguments)
+		revision_snapshot = _cache_revision_index.snapshot(dependency_tags)
+		var cached: Variant = _result_cache_get(cache_key)
+		if cached != null:
+			_result_cache_hits += 1
+			_log_info("Serving cached workflow result for: " + tool_name)
+			return cached
+		_result_cache_misses += 1
+		_cache_inflight[cache_key] = revision_snapshot
+
+	var previous_context: Dictionary = _execution_context.duplicate(true)
+	_execution_context = {
+		"tool_name": tool_name,
+		"request_id": "workflow:%s:%s" % [authorization.get("workflow_id", ""), authorization.get("step_id", "")],
+		"progress_token": null,
+		"workflow": true
+	}
+	tool_execution_started.emit(tool_name, arguments)
+	var result: Variant = await tool.callable.call(arguments)
+	_execution_context = previous_context
+
+	var has_error: bool = result is Dictionary and (result as Dictionary).has("error")
+	if is_cacheable_read:
+		if not has_error and result is Dictionary and _cache_revision_index.is_current(revision_snapshot):
+			var formatted: Dictionary = _format_tool_result(result, tool)
+			_result_cache_put(cache_key, result, formatted, revision_snapshot,
+				_formatted_result_source_size_bytes(formatted))
+		else:
+			_cache_inflight.erase(cache_key)
+	elif not bool(tool.annotations.get("readOnlyHint", false)) and tool_name not in CACHE_PRESERVING_MUTATION_TOOLS:
+		var mutation_tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.mutation_tags(
+			tool_name, tool.group, arguments)
+		_advance_result_cache_revisions(mutation_tags, tool_name)
+
+	_append_tool_log(tool_name, result, String(result.get("error", "")) if result is Dictionary else "")
+	if has_error:
+		tool_execution_failed.emit(tool_name, String((result as Dictionary).get("error", "")))
+	else:
+		tool_execution_completed.emit(tool_name, result)
+	_log_info("Authorized workflow step completed: " + tool_name)
+	return result
 
 func get_all_tools() -> Dictionary:
 	return _tools.duplicate()

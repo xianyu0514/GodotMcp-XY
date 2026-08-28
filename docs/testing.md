@@ -18,6 +18,16 @@ Notes:
 - Test files should extend `res://addons/gut/test.gd` and should not declare `class_name`.
 - Cover happy paths, invalid arguments, edge cases and changed error behavior.
 
+### Complete-game workflow gates
+
+The durable workflow path has three complementary suites:
+
+- `test_game_workflow_engine.gd` checks composition beyond ten steps, distinct same-tool writes, production ordering, blueprint integrity, protected paths, bounded receipts, pending behavior and strict objective evidence.
+- `tools/test_game_workflow_tools.gd` checks persistence/CAS, hidden atomic dispatch, on-demand input schemas, async polling, recovery safety and an end-to-end simulated gameplay + UI + QA loop that reaches `completed` across multiple four-call rounds.
+- `test_game_workflow_quality_gate.gd` covers 25 English/Chinese goals across all 12 profiles, requires 100% declared profile/capability recall, includes cross-domain negative cases and gates uncached compilation P95 below 5 ms.
+
+When changing a profile, runner state or evidence rule, update the relevant expectation instead of loosening completion. A false `completed` result is a release blocker.
+
 ## Integration tests (Python)
 
 Integration tests live under `test/integration/` and exercise the HTTP MCP server against a running/editor Godot instance.
@@ -70,6 +80,7 @@ curl -s \
 | --- | --- |
 | Documentation only | Markdown/link checks and JSON example validation. |
 | Tool schema or handler | Targeted unit tests plus tool registration/classification checks. |
+| Workflow compiler/runner | All three complete-game workflow suites, Schema/token budget checks and full GUT. |
 | Runtime probe | Relevant runtime integration test plus unit tests for payload parsing. |
 | UI/panel behavior | Targeted unit tests plus manual editor smoke test. |
 | Transport/auth | HTTP/stdio/auth tests and direct curl smoke test. |

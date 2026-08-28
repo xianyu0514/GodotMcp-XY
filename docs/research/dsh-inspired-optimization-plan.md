@@ -1,6 +1,6 @@
 # Godot MCP Native — 深度优化计划（借鉴 DeepSeek Harness）
 
-> 目标：在不新增功能的前提下，把插件的**缓存命中率、算力（token）消耗、架构精简**优化到参考 DeepSeek Harness（DSH）的最佳实践水平，并为"内置 agent"给出设计蓝图。
+> 目标：优先保持功能正确与完整，再把插件的**缓存命中率、算力（token）消耗、架构精简**优化到参考 DeepSeek Harness（DSH）的最佳实践水平。原蓝图现已用 2 个紧凑元工具实现，而非增加一组常驻 goal 工具。
 > 依据：`docs/research/dsh-cache-compute-study.md`（缓存与算力）、`docs/research/dsh-tool-token-economy-study.md`（工具与 token 经济）、`docs/research/dsh-agent-architecture-study.md`（agent 架构）。
 
 ---
@@ -27,7 +27,7 @@
 
 ### M2. token 预算门禁（lint 增强）
 - 新建 `utils/token_estimator.gd`：`estimate(text)` = `text.length() / 4`（与 DSH token-meter 口径一致）；`estimate_schema(schema)` = `JSON.stringify(schema).length / 4`。
-- `test_tool_schema_lint.gd` 增强：断言 per-tool 定义（name+description+inputSchema）≤ 400 tokens、默认启用集（28 core + 4 meta）≤ 15k tokens、全量 221 工具 ≤ 60k tokens。超限即失败，倒逼描述精简。
+- `test_tool_schema_lint.gd` 增强：断言 per-tool 定义（name+description+inputSchema）受预算控制、默认启用集（当前 28 core + 6 meta）≤ 15k tokens、全量 223 工具 ≤ 60k tokens。超限即失败，倒逼描述精简。
 
 ### M3. 工具结果缓存（确定性 key + 事件失效）
 - `mcp_server_core.gd` 现有 scene-structure 缓存（5min TTL）扩展为**通用结果缓存**：
@@ -57,18 +57,18 @@
 
 ---
 
-## 2. 内置 agent 蓝图（设计，暂不实现）
+## 2. 持久目标闭环（已实现）
 
 DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 
 | DSH 机制 | Godot MCP 对应 | 落地形态 |
 | --- | --- | --- |
-| 事件溯源会话日志（唯一事实源） | task_plan_store（res://.mcp/task_plan.json）+ 新增 agent_goal_store | `res://.mcp/agent_goal.json` 持久化目标快照 |
-| goal 域（持久快照 + CAS revision） | manage_task_plan（已有任务图+DoD） | 新增 `agent_goal_get/create/update` 三工具（P1） |
-| 回合驱动器（agent 空闲自动续作） | 客户端侧行为 | `autonomous_loop` 状态机（plan→execute→verify→fix→blocked）+ round-limit 门禁（P2/P3） |
+| 事件溯源会话日志（唯一事实源） | `TaskPlanStore`（默认 `res://.mcp/task_plan.json`） | 目标合同、蓝图、状态和证据收据存一处 |
+| goal 域（持久快照 + CAS revision） | `plan_game_workflow` | plan/status/replan/cancel，共用 `expected_workflow_id` CAS |
+| 回合驱动器（agent 空闲自动续作） | `run_game_workflow` | 每轮最多 4 个蓝图授权调用，pending 轮询、修复有界、blocked 明确 |
 | subagent 缝（独立上下文委派） | 不适用（MCP 服务器不做委派） | 文档说明：由客户端 agent 承担 |
-| skill/todo/plan 消费端 | prompt_workflows（7 模板） | 模板升级为"状态机翻译层"（P2） |
-| 会话续作（session 持久化） | 无会话概念（stateless） | MCP 资源 `mcp://agent/goal/current` 暴露目标状态（P1） |
+| skill/todo/plan 消费端 | 12 个可组合制作 profile | 目标编译为确定性 DAG，不依赖额外模型/网络路由 |
+| 会话续作（session 持久化） | 状态动作 + 持久任务文件 | 重连后通过 `plan_game_workflow(action="status")` 恢复 |
 
 **关键设计原则**（来自 DSH）：
 1. 续作自动但武装/解除武装永远是人类决定（armed/disarmed 分离）；
@@ -77,7 +77,7 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 4. fatal 与可重试失败分开；blocked 需连续 3 轮 + 具体原因；
 5. 目标工具变更走 CAS revision 防陈旧覆盖。
 
-> 用户当前指示"不新增功能"，故本节仅作蓝图；实施时机另定。
+实现没有加入三个独立 goal CRUD 工具，也没有把完整计划塞进一次 `tools/list`。仅增加两个紧凑常驻 Schema；全部原子工作仍由现有 217 个工具执行。
 
 ---
 
@@ -92,5 +92,5 @@ DSH 的"强 agent"= 六层正交机制。映射到 Godot MCP：
 | 已完成 | P3.3 工作流路由质量门禁 | ✅ 48 个中英真实制作任务 / 12 领域 / 174 个原子期望；Recall@8 与完整任务成功率 100%，验证阶段召回 97.30%，已知跨域误选 0，平均 Schema 节省 97.34%；默认预算仍为 8，未新增工具/Schema/模型调用 |
 | 已完成 | P3.4 缓存可观测性与真实命中基线 | 无新增工具/Schema；统一量化 tools/list、结果 LRU、单飞、扫描快照、工作流路线与 spill。确定性“检查→编辑→运行→调试→验证”会话门禁记录结果复用 50%、路线 50%、tools/list 80%、快照 80%、spill 50%，并证明相关脚本精确失效、无关场景/项目信息保持命中；结果缓存新增 32 MiB 总预算 |
 | 已完成 | P3.5 外部文件变更的事件驱动精确失效 | 接入 Godot 4.7 `EditorFileSystem` reload/reimport/source/class/filesystem、`EditorPlugin` resource/scene save 和 `ProjectSettings.settings_changed` 信号；同帧事件只合并、扫描一次，已知路径精确失效，新增/删除/重命名由路径集差分更新目录，无路径事件安全退化到文件域；保留 60 秒 TTL，不增加工具/Schema |
-| 下轮 | P4 端到端 AI 游戏制作基准 | 从空项目到可运行 2D 切片，固定记录任务成功率、工具调用/重试/MCP 往返、Schema/结果 token、重复扫描与自动修复成功率；作为以后所有性能优化不降低功能收益的总门禁 |
-| 远期 | 内置 agent 蓝图（P1-P4） | 按 AGENTS.md 新工具流程 |
+| 已完成 | P4 持久完整游戏闭环执行器 | 新增 2 个元工具；12 个可组合 profile；完整 DAG 可超过 10 步、每轮最多 4 次调用；隐藏原子工具不切换显隐；pending、CAS、蓝图完整性、保护路径、有界修复和客观收据均有回归门禁 |
+| 下轮 | P4.1 真实空项目端到端基准 | 在固定 Godot fixture 中实际完成可运行 2D 切片，记录任务成功率、调用/重试/MCP 往返、Schema/结果 token、重复扫描与自动修复成功率；作为以后所有优化的总门禁 |

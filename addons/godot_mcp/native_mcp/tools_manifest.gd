@@ -10,9 +10,8 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 内容来源：与重构前 mcp_tool_classifier.gd 手写列表逐条一致（221 个工具，
-# 28 core + 189 supplementary + 4 meta，分类/分组不变 —— 本次仅“单一真相”
-# 重构，不是行为变更）。
+# 当前表包含 223 个工具：28 core + 189 supplementary + 6 meta。完整游戏
+# 闭环只增加两个薄编排 meta 入口，217 个非 meta 原子能力保持不变。
 #
 # 注意：
 #   - TOOLS 是分类/分组的唯一权威来源；tools/*.gd 的 register_tool 调用仍然
@@ -177,6 +176,7 @@ const TOOLS: Dictionary = {
 	"open_scene": {"category": "core", "group": "Scene"},
 	"open_script_at_line": {"category": "supplementary", "group": "Script-Advanced"},
 	"pack_pck": {"category": "supplementary", "group": "Project-Advanced"},
+	"plan_game_workflow": {"category": "meta", "group": "Meta"},
 	"play_and_verify": {"category": "supplementary", "group": "Debug-Advanced"},
 	"play_runtime_animation": {"category": "supplementary", "group": "Debug-Advanced"},
 	"read_resource_properties": {"category": "supplementary", "group": "Project-Advanced"},
@@ -193,6 +193,7 @@ const TOOLS: Dictionary = {
 	"rename_script_symbol": {"category": "supplementary", "group": "Script-Advanced"},
 	"request_debug_break": {"category": "supplementary", "group": "Debug-Advanced"},
 	"run_export": {"category": "supplementary", "group": "Editor-Advanced"},
+	"run_game_workflow": {"category": "meta", "group": "Meta"},
 	"run_project": {"category": "core", "group": "Editor"},
 	"run_project_test": {"category": "supplementary", "group": "Project-Advanced"},
 	"run_project_tests": {"category": "supplementary", "group": "Project-Advanced"},

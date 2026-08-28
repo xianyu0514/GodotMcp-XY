@@ -180,27 +180,30 @@ Use the same auth header pattern if `auth_enabled` is on.
 
 ## Tool presets
 
-The default surface is intentionally small: 28 core tools and 4 meta tools. Advanced tools are available but hidden until enabled.
+The default surface is intentionally small: 28 core tools and 6 meta tools. Advanced tools are available but hidden until enabled.
 
 | Preset/workflow | Use when |
 | --- | --- |
+| `plan_game_workflow` + `run_game_workflow` | You need a durable, multi-phase game outcome with bounded execution, recovery and objective completion evidence. |
 | `workflow_query` | You want the fastest one-call local route for a natural-language task; old supplementary task tools are replaced by default. |
 | `minimal_core` | You want the smallest context footprint. |
 | `debugging` | You need debugger, runtime probe and performance tools. |
 | Category/group enablement | You need one functional area, such as `Project-Advanced` or `Debug-Advanced`. |
 | Explicit tool enablement | You know the exact tool names needed for a task. |
 
-Typical model workflow:
+Typical short-task workflow:
 
 1. Call `enable_tools` once with `workflow_query` for the task goal.
 2. Let the client refresh after `notifications/tools/list_changed`.
 3. Use `search_tools` only to preview/compare candidates; use manual tools/groups/presets only when deliberately overriding the route.
 4. Set `replace_supplementary=false` only when extending the same task instead of switching task context.
 
+For complete goals, the 8-tool default and 10-tool hard route limits do not cap the whole project. They only bound an ad-hoc visible route. The workflow compiler persists a goal-dependent DAG, and the runner advances at most four authorized atomic calls per round without enabling every hidden schema. See [Complete Game Workflows](game-workflows.md).
+
 ## Security checklist
 
 - Keep the server on localhost unless remote access is required.
 - Enable auth before using Cloudflare, Tailscale, ngrok or any public tunnel.
 - Leave `security_level = 1` unless you are diagnosing a specific local issue. STRICT mode also enables the script sandbox guard that blocks `execute_editor_script` / `evaluate_*` calls referencing OS process execution, out-of-project filesystem paths, networking or other dangerous APIs.
-- Prefer enabling advanced tools by group/task rather than exposing all 221 tools all the time.
+- Prefer workflow execution or enabling advanced tools by group/task rather than exposing all 223 tools all the time.
 - Review tool calls that modify scenes, resources, project settings or exports.
