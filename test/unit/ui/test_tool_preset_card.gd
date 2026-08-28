@@ -60,7 +60,7 @@ func test_selecting_preset_refreshes_explanation_and_count():
 	panel._preset_option.select(index)
 	panel._on_preset_selected(index)
 	assert_false(panel._preset_description_label.text.is_empty(), "Preset explanation is visible before applying")
-	assert_string_contains(panel._preset_count_label.text, "80", "Level design preview reports enabled tool count")
+	assert_string_contains(panel._preset_count_label.text, "82", "Level design preview reports enabled tool count")
 
 func test_profile_dropdown_keeps_common_tasks_immediately_discoverable():
 	var panel: Node = _make_panel()
@@ -136,4 +136,4 @@ func test_profile_toolbar_applies_a_task_without_unrelated_tools():
 	panel._on_apply_preset_pressed()
 	assert_true(panel._server_core.states.get("create_node", false), "A task profile enables its required core tools")
 	assert_false(panel._server_core.states.get("generate_3d_asset", true), "The 2D task leaves unrelated 3D tooling disabled")
-	assert_string_contains(panel._preset_count_label.text, "47", "The compact toolbar reports the selected tool count")
+	assert_string_contains(panel._preset_count_label.text, "49", "The compact toolbar reports the selected tool count")

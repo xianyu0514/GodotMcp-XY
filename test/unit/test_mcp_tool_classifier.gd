@@ -5,7 +5,7 @@ extends "res://addons/gut/test.gd"
 #   - test_manifest_matches_registered_tools：运行时注册校验 —— 每个注册工具的
 #     category/group 必须与 manifest 一致（防“新增工具忘改 manifest / register 与
 #     manifest 不一致”漂移）
-#   - test_manifest_counts：manifest 计数（221/28/189/4）
+#   - test_manifest_counts：manifest 计数（223/28/189/6）
 
 const ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
 
@@ -24,6 +24,7 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"res://addons/godot_mcp/tools/project_verification_tools.gd",
 	"res://addons/godot_mcp/tools/project_workflow_tools.gd",
+	"res://addons/godot_mcp/tools/game_workflow_tools.gd",
 	"res://addons/godot_mcp/tools/meta_tools_native.gd",
 ]
 
@@ -47,17 +48,19 @@ func after_each():
 func test_classifier_initializes():
 	assert_ne(_classifier, null, "Classifier should initialize")
 
-func test_all_221_tools_registered():
+func test_all_223_tools_registered():
 	var all_tools: Array = _classifier.get_all_tools()
-	assert_eq(all_tools.size(), 221, "Should have exactly 221 tools registered")
+	assert_eq(all_tools.size(), 223, "Should have exactly 223 tools registered")
 
 func test_meta_tools_registered():
 	var meta_tools: Array = _classifier.get_meta_tools()
-	assert_eq(meta_tools.size(), 4, "Should have exactly 4 meta tools")
+	assert_eq(meta_tools.size(), 6, "Should have exactly 6 meta tools")
 	assert_true("list_tool_catalog" in meta_tools, "list_tool_catalog should be a meta tool")
 	assert_true("enable_tools" in meta_tools, "enable_tools should be a meta tool")
 	assert_true("search_tools" in meta_tools, "search_tools should be a meta tool")
 	assert_true("get_tool_details" in meta_tools, "get_tool_details should be a meta tool")
+	assert_true("plan_game_workflow" in meta_tools, "plan_game_workflow should be a meta tool")
+	assert_true("run_game_workflow" in meta_tools, "run_game_workflow should be a meta tool")
 
 func test_meta_tools_are_not_core_or_supplementary():
 	assert_true(_classifier.is_meta_tool("list_tool_catalog"), "list_tool_catalog should be meta")
@@ -68,6 +71,10 @@ func test_meta_tools_are_not_core_or_supplementary():
 	assert_false(_classifier.is_supplementary_tool("search_tools"), "search_tools should not be supplementary")
 	assert_true(_classifier.is_meta_tool("get_tool_details"), "get_tool_details should be meta")
 	assert_eq(_classifier.get_tool_group("get_tool_details"), "Meta", "get_tool_details should be in Meta group")
+	for workflow_tool in ["plan_game_workflow", "run_game_workflow"]:
+		assert_true(_classifier.is_meta_tool(workflow_tool), workflow_tool + " should be meta")
+		assert_false(_classifier.is_core_tool(workflow_tool), workflow_tool + " should not be core")
+		assert_false(_classifier.is_supplementary_tool(workflow_tool), workflow_tool + " should not be supplementary")
 
 func test_verify_scripts_is_supplementary_script_advanced():
 	assert_true(_classifier.is_supplementary_tool("verify_scripts"), "verify_scripts should be supplementary")
@@ -502,15 +509,17 @@ func test_manifest_matches_registered_tools():
 	assert_eq(invalid_cache_reads.size(), 0,
 		"结果缓存只允许已注册且 readOnlyHint=true 的工具: " + str(invalid_cache_reads))
 
-## manifest 计数基线：221 总 / 28 core / 189 supplementary / 4 meta。
+## manifest 计数基线：223 总 / 28 core / 189 supplementary / 6 meta。
 func test_manifest_counts():
-	assert_eq(ManifestScript.TOOLS.size(), 221, "manifest 应包含 221 个工具")
+	assert_eq(ManifestScript.TOOLS.size(), 223, "manifest 应包含 223 个工具")
 	assert_eq(ManifestScript.count_by_category("core"), 28, "manifest 应有 28 个 core 工具")
 	assert_eq(ManifestScript.count_by_category("supplementary"), 189, "manifest 应有 189 个 supplementary 工具")
-	assert_eq(ManifestScript.count_by_category("meta"), 4, "manifest 应有 4 个 meta 工具")
+	assert_eq(ManifestScript.count_by_category("meta"), 6, "manifest 应有 6 个 meta 工具")
 	# meta 工具必须包含（classifier 依赖 manifest 提供 meta 特殊处理数据）。
 	var meta_names: Array[String] = ManifestScript.tool_names()
 	assert_true("list_tool_catalog" in meta_names, "manifest 应包含 list_tool_catalog")
 	assert_true("search_tools" in meta_names, "manifest 应包含 search_tools")
 	assert_true("get_tool_details" in meta_names, "manifest 应包含 get_tool_details")
 	assert_true("enable_tools" in meta_names, "manifest 应包含 enable_tools")
+	assert_true("plan_game_workflow" in meta_names, "manifest 应包含 plan_game_workflow")
+	assert_true("run_game_workflow" in meta_names, "manifest 应包含 run_game_workflow")

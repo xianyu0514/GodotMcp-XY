@@ -54,7 +54,7 @@ func test_has_preset():
 
 func test_minimal_core_enables_core_plus_meta_tools():
 	var states: Dictionary = _manager.resolve_preset_states("minimal_core", _all_names)
-	assert_eq(_count_enabled(states), 32, "minimal_core should enable 28 core + 4 always-on meta tools")
+	assert_eq(_count_enabled(states), 34, "minimal_core should enable 28 core + 6 always-on meta tools")
 	assert_true(states["create_node"], "Core tool create_node should be enabled")
 	assert_false(states["reload_project"], "Supplementary tool should be disabled in minimal_core")
 
@@ -69,18 +69,18 @@ func test_meta_tools_survive_every_preset():
 func test_all_enables_everything():
 	var states: Dictionary = _manager.resolve_preset_states("all", _all_names)
 	assert_eq(_count_enabled(states), _all_names.size(), "all preset should enable every registered tool")
-	assert_eq(_count_enabled(states), 221, "all preset should enable 221 tools")
+	assert_eq(_count_enabled(states), 223, "all preset should enable 223 tools")
 
 func test_debugging_includes_core_plus_debug_advanced():
 	var states: Dictionary = _manager.resolve_preset_states("debugging", _all_names)
-	assert_eq(_count_enabled(states), 102, "debugging = 28 core + 4 meta + 70 Debug-Advanced")
+	assert_eq(_count_enabled(states), 104, "debugging = 28 core + 6 meta + 70 Debug-Advanced")
 	assert_true(states["create_node"], "Core tool should remain enabled")
 	assert_true(states["get_runtime_info"], "Debug-Advanced tool should be enabled")
 	assert_false(states["run_export"], "Unrelated Project-Advanced tool should stay disabled")
 
 func test_level_design_enables_authoring_groups():
 	var states: Dictionary = _manager.resolve_preset_states("level_design", _all_names)
-	assert_eq(_count_enabled(states), 80, "level_design = 28 core + 4 meta + 8 + 9 + 8 + 23 advanced authoring tools")
+	assert_eq(_count_enabled(states), 82, "level_design = 28 core + 6 meta + 8 + 9 + 8 + 23 advanced authoring tools")
 	assert_true(states["connect_signal"], "Node-Write-Advanced tool should be enabled")
 	assert_false(states["get_runtime_info"], "Debug-Advanced tool should be disabled for level design")
 
