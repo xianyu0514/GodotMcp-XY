@@ -109,6 +109,46 @@ func test_runner_executes_hidden_atomic_tools_without_changing_visibility() -> v
 	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
 	assert_eq(_core.calls.size(), 4, "Polling reuses the same authorized step and arguments")
 
+func test_composite_game_loop_runs_beyond_ten_tools_to_evidence_completion() -> void:
+	_core.responses["verify_scripts"] = {
+		"status": "passed", "total_checked": 3, "verified": 3, "failed": 0
+	}
+	_core.responses["play_and_verify"] = {
+		"passed": true, "runtime_info": {"running": true}
+	}
+	_core.responses["assert_no_runtime_errors"] = {
+		"passed": true, "error_count": 0, "errors": []
+	}
+	_core.responses["assert_visual_baseline"] = {
+		"passed": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}
+	_core.responses["run_project_tests"] = {
+		"status": "passed", "total_count": 2, "passed_count": 2, "failed_count": 0
+	}
+	var planned: Dictionary = _plan(
+		["gameplay_feature", "ui_screen", "quality_assurance"],
+		"Create player gameplay, a pause UI, and run project tests")
+	assert_eq(planned.get("status", ""), "planned", str(planned.get("error", "")))
+	var result: Dictionary = {}
+	for round_index in range(20):
+		result = await _tools._tool_run_game_workflow({
+			"plan_path": _plan_path,
+			"expected_workflow_id": planned["workflow_id"],
+			"max_steps": 4
+		})
+		if String(result.get("status", "")) == "completed":
+			break
+	assert_eq(result.get("status", ""), "completed", str(result.get("error", "")))
+	assert_gt(_core.calls.size(), 10, "The persisted workflow must cross the ad-hoc route budget")
+	var create_scene_calls: int = 0
+	for call_value in _core.calls:
+		if String((call_value as Dictionary).get("tool_name", "")) == "create_scene":
+			create_scene_calls += 1
+	assert_eq(create_scene_calls, 2,
+		"Distinct gameplay and UI scene writes both execute in the completed loop")
+	assert_eq(int((result.get("progress", {}) as Dictionary).get("pending", -1)), 0)
+	assert_eq(int((result.get("progress", {}) as Dictionary).get("blocked", -1)), 0)
+
 func test_missing_current_step_inputs_waits_without_invoking_or_losing_plan() -> void:
 	_core.schemas["create_scene"] = {
 		"type": "object", "properties": {"scene_name": {"type": "string"}}, "required": ["scene_name"]
