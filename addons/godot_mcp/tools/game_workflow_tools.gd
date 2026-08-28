@@ -11,12 +11,14 @@ extends RefCounted
 
 const EngineScript = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
+const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
 
 var _server_core: RefCounted = null
 var _engine: RefCounted = EngineScript.new()
+var _workflow_router: RefCounted = WorkflowRouterScript.new()
 
 func initialize(_editor_interface: EditorInterface) -> void:
 	pass
@@ -38,7 +40,10 @@ func _register_plan_tool(server_core: RefCounted) -> void:
 				"profiles": {"type": "array", "items": {"type": "string", "enum": EngineScript.PROFILE_IDS}},
 				"required_capabilities": {"type": "array", "items": {"type": "string"}},
 				"platform": {"type": "string"},
-				"max_repair_attempts": {"type": "integer", "default": EngineScript.DEFAULT_REPAIR_ATTEMPTS},
+				"max_repair_attempts": {
+					"type": "integer", "default": EngineScript.DEFAULT_REPAIR_ATTEMPTS,
+					"description": "0 adapts while failure evidence changes; a positive value is an explicit repair policy and requests replan when exhausted."
+				},
 				"protected_paths": {"type": "array", "items": {"type": "string"}},
 				"plan_path": {"type": "string", "default": DEFAULT_PLAN_PATH},
 				"replace": {"type": "boolean", "default": false},
@@ -70,13 +75,13 @@ func _register_plan_tool(server_core: RefCounted) -> void:
 func _register_run_tool(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"run_game_workflow",
-		"Advance at most four authorized DAG steps. Polls async work, preserves caches, enforces protected paths and integrity, bounds repairs, and requires objective evidence for completion.",
+		"Advance an adaptive authorized DAG slice. Budgets yield but never drop work; async waits, safe restart recovery, caches, protected paths, integrity and objective evidence remain enforced.",
 		{
 			"type": "object",
 			"properties": {
 				"plan_path": {"type": "string", "default": DEFAULT_PLAN_PATH},
 				"expected_workflow_id": {"type": "string"},
-				"max_steps": {"type": "integer", "default": EngineScript.MAX_STEPS_PER_RUN},
+				"max_steps": {"type": "integer", "default": 0, "description": "0 chooses an adaptive slice; a positive value controls only this call and never truncates the persisted goal."},
 				"step_inputs": {"type": "object", "description": "Ephemeral arguments keyed by step id, '<id>:repair', or exact tool name."}
 			}
 		},
@@ -167,17 +172,49 @@ func _tool_plan_game_workflow(params: Dictionary) -> Dictionary:
 			return replan_cas
 
 	var objective: String = String(params.get("objective", "")).strip_edges()
+	var objective_supplied: bool = not objective.is_empty()
+	var caller_mapped_capabilities: bool = (
+		(params.get("profiles") is Array and not (params["profiles"] as Array).is_empty())
+		or (params.get("required_capabilities") is Array
+			and not (params["required_capabilities"] as Array).is_empty()))
 	var compile_options: Dictionary = {}
 	for key in ["profiles", "required_capabilities", "platform", "max_repair_attempts", "protected_paths"]:
 		if params.has(key):
 			compile_options[key] = params[key]
+	var reuse_existing_mapping: bool = false
 	if action == "replan":
 		var old_contract: Dictionary = (existing_plan.get("workflow", {}) as Dictionary).get("goal_contract", {})
+		var old_objective: String = String(old_contract.get("objective", existing_plan.get("goal", "")))
 		if objective.is_empty():
-			objective = String(old_contract.get("objective", existing_plan.get("goal", "")))
+			objective = old_objective
+		var objective_changed: bool = objective_supplied and objective != old_objective
+		reuse_existing_mapping = not objective_changed
 		for key in ["profiles", "required_capabilities", "platform", "max_repair_attempts", "protected_paths"]:
+			if objective_changed and key in ["profiles", "required_capabilities"]:
+				continue
 			if not compile_options.has(key) and old_contract.has(key):
 				compile_options[key] = old_contract[key]
+	var exact_mentions: Array[String] = _exact_atomic_mentions(objective, available_tools)
+	_merge_required_capabilities(compile_options, exact_mentions)
+	# Audit each semantic clause that is not already owned by one of the twelve
+	# profiles. This catches mixed goals such as “create player movement; do an
+	# unknown operation” instead of allowing the known first clause to hide the
+	# uncovered second clause. Explicit caller mappings and unchanged replans are
+	# trusted; otherwise schema-free clause routes may add more than ten names.
+	if not caller_mapped_capabilities and not reuse_existing_mapping:
+		var route_audit: Dictionary = _route_unprofiled_clauses(objective, available_tools)
+		var uncovered: Array[String] = route_audit.get("uncovered_requirements", [])
+		if not uncovered.is_empty():
+			return {
+				"error": "Objective contains requirements not covered by registered atomic capabilities: %s" % ", ".join(uncovered),
+				"status": "needs_clarification",
+				"uncovered_requirements": uncovered,
+				"matched_capabilities": route_audit.get("capabilities", []),
+				"supported_profiles": EngineScript.PROFILE_IDS,
+				"plan_path": plan_path
+			}
+		_merge_required_capabilities(
+			compile_options, route_audit.get("capabilities", []))
 	var compiled: Dictionary = _engine.compile(objective, compile_options, available_tools)
 	if compiled.has("error"):
 		compiled["plan_path"] = plan_path
@@ -214,20 +251,42 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		return cas
 	var workflow: Dictionary = plan["workflow"]
 	var state: String = String(workflow.get("state", ""))
-	if state in ["cancelled", "completed"]:
+	if state in ["cancelled", "completed", "replan_required", "recovery_required"]:
 		var terminal: Dictionary = _engine.summarize(plan)
 		terminal["status"] = state
 		terminal["plan_path"] = plan_path
 		return terminal
 
-	# A persisted in-progress step means the process stopped after dispatch but
-	# before recording evidence. Re-running a mutation could duplicate effects,
-	# so fail closed and require status inspection/replan instead of guessing.
+	# A persisted read-only or idempotent step is safe to replay after restart.
+	# Unknown mutations still fail closed because repeating them could duplicate
+	# effects; this distinction improves recovery without weakening correctness.
+	var recovered_safe_step: bool = false
 	for task_value in plan.get("tasks", []):
 		var uncertain_task: Dictionary = task_value
 		if String(uncertain_task.get("status", "")) == "in_progress" or bool(uncertain_task.get("repair_in_progress", false)):
-			workflow["state"] = "blocked"
-			workflow["blocked_reason"] = "A previously dispatched step has an unknown outcome; inspect the project and replan"
+			var uncertain_is_repair: bool = bool(uncertain_task.get("repair_in_progress", false))
+			var uncertain_tool: String = String(uncertain_task.get(
+				"repair_tool" if uncertain_is_repair else "tool_name", ""))
+			var traits: Dictionary = _tool_execution_traits(uncertain_tool)
+			if bool(traits.get("read_only", false)) or bool(traits.get("idempotent", false)):
+				if uncertain_is_repair:
+					uncertain_task.erase("repair_in_progress")
+					uncertain_task["repair_pending"] = true
+					uncertain_task["status"] = "blocked"
+				else:
+					uncertain_task["status"] = "pending"
+				_engine.append_receipt(plan, {
+					"step_id": uncertain_task.get("id", ""),
+					"tool_name": uncertain_tool,
+					"recovered": true,
+					"replay_safe": true
+				})
+				var recovery_metrics: Dictionary = _engine.workflow_metrics(plan)
+				recovery_metrics["safe_recoveries"] = int(recovery_metrics.get("safe_recoveries", 0)) + 1
+				recovered_safe_step = true
+				continue
+			workflow["state"] = "recovery_required"
+			workflow["blocked_reason"] = "A previously dispatched non-idempotent step has an unknown outcome; inspect the project and replan"
 			var uncertain_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 			if uncertain_save.has("error"):
 				return uncertain_save
@@ -237,11 +296,20 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			uncertain["tool_name"] = uncertain_task.get("tool_name", "")
 			uncertain["plan_path"] = plan_path
 			return uncertain
+	if recovered_safe_step:
+		workflow["state"] = "running"
+		workflow["blocked_reason"] = ""
+		var recovery_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+		if recovery_save.has("error"):
+			return recovery_save
 
-	var max_steps: int = clampi(int(params.get("max_steps", EngineScript.MAX_STEPS_PER_RUN)), 1, EngineScript.MAX_STEPS_PER_RUN)
+	var requested_steps: int = int(params.get("max_steps", 0))
+	var max_steps: int = _engine.recommended_step_budget(plan, requested_steps)
 	var step_inputs: Dictionary = params.get("step_inputs", {}) if params.get("step_inputs", {}) is Dictionary else {}
 	var executed: Array[Dictionary] = []
 	var atomic_calls: int = 0
+	var metrics: Dictionary = _engine.workflow_metrics(plan)
+	metrics["rounds"] = int(metrics.get("rounds", 0)) + 1
 
 	while atomic_calls < max_steps:
 		var repair_task: Dictionary = _find_repair_pending(plan)
@@ -250,6 +318,7 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			if repair_outcome.has("executed"):
 				executed.append(repair_outcome["executed"])
 				atomic_calls += 1
+				metrics["atomic_calls"] = int(metrics.get("atomic_calls", 0)) + 1
 			if repair_outcome.get("stop", false):
 				return _runner_response(plan, plan_path, String(repair_outcome.get("status", "blocked")), executed, repair_outcome)
 			continue
@@ -296,6 +365,7 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		var authorization: Dictionary = _authorization(plan, task, false)
 		var raw_result: Variant = await _server_core.invoke_planned_tool(tool_name, arguments, authorization)
 		atomic_calls += 1
+		metrics["atomic_calls"] = int(metrics.get("atomic_calls", 0)) + 1
 		var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), raw_result)
 		executed.append({
 			"step_id": task.get("id", ""),
@@ -308,10 +378,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			return after_save
 		if verdict.has("error"):
 			return _runner_response(plan, plan_path, "blocked", executed, verdict)
-		if String(verdict.get("status", "")) == "waiting":
-			return _runner_response(plan, plan_path, "waiting", executed, verdict)
-		if String(verdict.get("status", "")) == "blocked":
-			return _runner_response(plan, plan_path, "blocked", executed, verdict)
+		if String(verdict.get("status", "")) in ["waiting", "blocked", "recovery_required", "replan_required"]:
+			return _runner_response(plan, plan_path, String(verdict.get("status", "")), executed, verdict)
 		# repair_required is handled at the start of the next loop iteration if
 		# this round still has atomic-call budget; otherwise it remains durable.
 
@@ -319,7 +387,15 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 	var final_status: String = "completed" if final_state == "completed" else final_state
 	if final_status in ["planned", ""]:
 		final_status = "running"
-	return _runner_response(plan, plan_path, final_status, executed)
+	var final_extra: Dictionary = {}
+	if final_status != "completed" and atomic_calls >= max_steps:
+		metrics["yield_count"] = int(metrics.get("yield_count", 0)) + 1
+		final_extra["yield_reason"] = "execution_slice_complete"
+		final_extra["resume_safe"] = true
+		var yield_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+		if yield_save.has("error"):
+			return yield_save
+	return _runner_response(plan, plan_path, final_status, executed, final_extra)
 
 func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, plan_path: String) -> Dictionary:
 	var repair_tool: String = String(task.get("repair_tool", ""))
@@ -366,7 +442,7 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 	if save_result.has("error"):
 		return {"stop": true, "status": "blocked", "error": save_result["error"]}
 	return {
-		"stop": String(verdict.get("status", "")) == "blocked",
+		"stop": String(verdict.get("status", "")) in ["blocked", "retry_required", "replan_required", "recovery_required"],
 		"status": verdict.get("status", ""),
 		"executed": {
 			"step_id": task.get("id", ""), "tool_name": repair_tool,
@@ -409,6 +485,11 @@ func _tool_input_schema(tool_name: String) -> Dictionary:
 		if tool != null:
 			schema = tool.input_schema
 	return schema.duplicate(true)
+
+func _tool_execution_traits(tool_name: String) -> Dictionary:
+	if _server_core != null and _server_core.has_method("get_tool_execution_traits"):
+		return _server_core.get_tool_execution_traits(tool_name)
+	return {"read_only": false, "idempotent": false, "destructive": false}
 
 func _find_repair_pending(plan: Dictionary) -> Dictionary:
 	for task_value in plan.get("tasks", []):
@@ -484,3 +565,124 @@ func _available_tool_names() -> Array[String]:
 			names.append(name)
 	names.sort()
 	return names
+
+func _registered_tool_infos() -> Array:
+	if _server_core == null or not _server_core.has_method("get_registered_tools"):
+		return []
+	return _server_core.get_registered_tools()
+
+func _merge_required_capabilities(options: Dictionary, additions: Array) -> void:
+	if additions.is_empty():
+		return
+	var merged: Array = []
+	if options.get("required_capabilities") is Array:
+		merged = (options["required_capabilities"] as Array).duplicate()
+	for tool_value in additions:
+		var tool_name: String = String(tool_value)
+		if not tool_name.is_empty() and tool_name not in merged:
+			merged.append(tool_name)
+	options["required_capabilities"] = merged
+
+func _route_unprofiled_clauses(objective: String,
+		available_tools: Array[String]) -> Dictionary:
+	var capabilities: Array[String] = []
+	var uncovered: Array[String] = []
+	for clause in _semantic_clauses(objective):
+		if not _engine.classify_profiles(clause).has("error"):
+			continue
+		if not _exact_atomic_mentions(clause, available_tools).is_empty():
+			continue
+		var route: Dictionary = _route_complete_goal(clause)
+		for tool_name in route.get("capabilities", []):
+			if String(tool_name) not in capabilities:
+				capabilities.append(String(tool_name))
+		var clause_uncovered: Array = route.get("uncovered_requirements", [])
+		if clause_uncovered.is_empty() and (route.get("capabilities", []) as Array).is_empty():
+			clause_uncovered = [clause]
+		for term_value in clause_uncovered:
+			var term: String = String(term_value)
+			if not term.is_empty() and term not in uncovered:
+				uncovered.append(term)
+	capabilities.sort()
+	uncovered.sort()
+	return {"capabilities": capabilities, "uncovered_requirements": uncovered}
+
+func _route_complete_goal(objective: String) -> Dictionary:
+	var registered: Array = _registered_tool_infos()
+	var revision: int = -1
+	if _server_core != null and _server_core.has_method("get_tool_registry_revision"):
+		revision = int(_server_core.get_tool_registry_revision())
+	var whole: Dictionary = _workflow_router.route(objective, registered, 10, revision)
+	if whole.has("error"):
+		return {"capabilities": [], "uncovered_requirements": [objective]}
+	var routes: Array[Dictionary] = [whole]
+	var clauses: Array[String] = _semantic_clauses(objective)
+	var failed_clauses: Array[String] = []
+	if (clauses.size() > 1 and (
+			int(whole.get("tool_count", 0)) >= 10
+			or not (whole.get("uncovered_terms", []) as Array).is_empty())):
+		routes.clear()
+		for clause in clauses:
+			var clause_route: Dictionary = _workflow_router.route(clause, registered, 10, revision)
+			if not clause_route.has("error"):
+				routes.append(clause_route)
+			else:
+				failed_clauses.append(clause)
+	var capabilities: Array[String] = []
+	var uncovered: Array[String] = []
+	for failed_clause in failed_clauses:
+		if String(failed_clause) not in uncovered:
+			uncovered.append(String(failed_clause))
+	for route in routes:
+		for tool_name in _route_tool_names(route):
+			if tool_name not in capabilities:
+				capabilities.append(tool_name)
+		for term_value in route.get("uncovered_terms", []):
+			var term: String = String(term_value).strip_edges()
+			if not term.is_empty() and term not in uncovered:
+				uncovered.append(term)
+	capabilities.sort()
+	uncovered.sort()
+	return {
+		"capabilities": capabilities,
+		"uncovered_requirements": uncovered,
+		"route_count": routes.size()
+	}
+
+func _semantic_clauses(objective: String) -> Array[String]:
+	var normalized: String = objective.replace("\r\n", "\n").replace("\r", "\n")
+	for separator in [";", "；", "。", "!", "！", "?", "？", "\n", " and then ", " then ", " and ", "然后", "并且", "以及", "并", "和"]:
+		normalized = normalized.replace(separator, "\n")
+	var clauses: Array[String] = []
+	for value in normalized.split("\n", false):
+		var clause: String = String(value).strip_edges()
+		if not clause.is_empty() and clause not in clauses:
+			clauses.append(clause)
+	if clauses.is_empty():
+		clauses.append(objective.strip_edges())
+	return clauses
+
+func _route_tool_names(route: Dictionary) -> Array[String]:
+	var names: Array[String] = []
+	for stage_value in route.get("stages", []):
+		for tool_value in (stage_value as Dictionary).get("tools", []):
+			var tool_name: String = String(tool_value)
+			if (not tool_name.is_empty() and tool_name not in names
+					and tool_name not in EngineScript.FORBIDDEN_NESTED_CAPABILITIES):
+				names.append(tool_name)
+	return names
+
+func _exact_atomic_mentions(objective: String, available_tools: Array[String]) -> Array[String]:
+	var normalized: String = objective.strip_edges().to_lower()
+	for separator in ["`", "\"", "'", ",", ";", ":", ".", "!", "?", "(", ")", "[", "]", "{", "}", "/", "\\", "\n", "\r", "\t", "，", "；", "：", "。", "！", "？", "、"]:
+		normalized = normalized.replace(separator, " ")
+	normalized = " " + normalized + " "
+	while normalized.contains("  "):
+		normalized = normalized.replace("  ", " ")
+	var matches: Array[String] = []
+	for tool_name in available_tools:
+		if (tool_name not in EngineScript.FORBIDDEN_NESTED_CAPABILITIES
+				and normalized.contains(" " + tool_name.to_lower() + " ")):
+			matches.append(tool_name)
+	matches.sort()
+	return matches

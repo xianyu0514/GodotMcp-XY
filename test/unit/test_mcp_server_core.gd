@@ -128,6 +128,16 @@ func test_planned_tool_rejects_meta_recursion_and_mismatched_authorization() -> 
 		"read_script", {}, _workflow_authorization("modify_script"))
 	assert_true(mismatch.has("error"))
 
+func test_execution_traits_recover_audited_reads_without_trusting_unknown_writes() -> void:
+	_core.register_tool("read_script", "Read", {"type": "object"},
+		func(args): return {"source": "x"}, {}, {}, "supplementary", "Script")
+	_core.register_tool("unknown_write", "Write", {"type": "object"},
+		func(args): return {"status": "ok"}, {}, {}, "supplementary", "Script")
+	assert_true(bool(_core.get_tool_execution_traits("read_script").get("read_only", false)),
+		"The audited cacheable-read index is sufficient for safe restart replay")
+	assert_false(bool(_core.get_tool_execution_traits("unknown_write").get("read_only", true)))
+	assert_false(bool(_core.get_tool_execution_traits("unknown_write").get("idempotent", true)))
+
 func test_unregister_tool():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
 	_core.unregister_tool("test_tool")

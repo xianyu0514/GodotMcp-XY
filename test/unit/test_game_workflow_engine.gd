@@ -29,6 +29,16 @@ func _tool_names(plan: Dictionary) -> Array[String]:
 		names.append(String((task_value as Dictionary).get("tool_name", "")))
 	return names
 
+func _first_capabilities(count: int) -> Array[String]:
+	var capabilities: Array[String] = []
+	for tool_name in _available:
+		if tool_name in EngineScript.FORBIDDEN_NESTED_CAPABILITIES:
+			continue
+		capabilities.append(tool_name)
+		if capabilities.size() >= count:
+			break
+	return capabilities
+
 func test_composable_profiles_build_a_persistent_dag_beyond_discovery_budget() -> void:
 	var result: Dictionary = _compile(
 		"Create a playable controller and polished pause menu, then test it",
@@ -54,6 +64,37 @@ func test_composable_profiles_build_a_persistent_dag_beyond_discovery_budget() -
 	assert_lt(tool_sequence.find("attach_script"), tool_sequence.rfind("create_scene"),
 		"Gameplay scene mutations stay together before the UI scene changes editor context")
 
+func test_large_supported_goals_are_not_capped_by_tool_or_task_count() -> void:
+	for requested_size in [20, 50, 100]:
+		var result: Dictionary = _compile(
+			"Run project tests with every explicitly required capability",
+			["quality_assurance"],
+			{"required_capabilities": _first_capabilities(requested_size)})
+		assert_false(result.has("error"), str(result.get("error", "")))
+		assert_gte((result["plan"].get("tasks", []) as Array).size(), requested_size,
+			"A supported goal must retain every required capability")
+		assert_eq(_engine.validate_integrity(result["plan"], _available).get("status", ""), "ok")
+
+func test_ready_step_limit_is_a_caller_slice_not_a_four_step_ceiling() -> void:
+	var plan: Dictionary = {"tasks": []}
+	for index in range(100):
+		plan["tasks"].append({
+			"id": "scale_%03d" % index,
+			"status": "pending",
+			"depends_on": []
+		})
+	assert_eq(_engine.ready_steps(plan, 100).size(), 100,
+		"The engine must not silently clamp a requested execution slice to four")
+
+func test_adaptive_metrics_upgrade_an_existing_schema_v1_plan_in_place() -> void:
+	var plan: Dictionary = _compile("Run all project tests", ["quality_assurance"])["plan"]
+	(plan["workflow"] as Dictionary).erase("metrics")
+	var metrics: Dictionary = _engine.workflow_metrics(plan)
+	metrics["rounds"] = 2
+	assert_eq(int((plan["workflow"]["metrics"] as Dictionary).get("rounds", 0)), 2,
+		"Lazy metrics must remain attached so the next checkpoint persists them")
+	assert_gt(_engine.recommended_step_budget(plan), 0)
+
 func test_unknown_objective_requests_clarification_instead_of_guessing() -> void:
 	var result: Dictionary = _compile("Make the mysterious thing exactly right")
 	assert_true(result.has("error"), "An unclassified objective must not silently become gameplay")
@@ -69,6 +110,29 @@ func test_missing_requested_capability_blocks_planning() -> void:
 	}, available)
 	assert_true(result.has("error"))
 	assert_true("create_script" in result.get("missing_capabilities", []))
+
+func test_every_atomic_capability_can_be_a_complete_capability_only_goal() -> void:
+	for tool_name in _available:
+		if tool_name in EngineScript.FORBIDDEN_NESTED_CAPABILITIES:
+			continue
+		var result: Dictionary = _engine.compile(tool_name, {
+			"required_capabilities": [tool_name]
+		}, _available)
+		assert_false(result.has("error"), "Atomic goal must compile: %s" % tool_name)
+		if result.has("error"):
+			continue
+		var plan: Dictionary = result["plan"]
+		assert_true(tool_name in _tool_names(plan), "Atomic goal must retain: %s" % tool_name)
+		assert_gt(((plan["workflow"] as Dictionary).get("objective_gate_ids", []) as Array).size(), 0,
+			"Capability-only goals need direct objective evidence: %s" % tool_name)
+
+func test_explicit_capability_is_a_gate_even_when_a_profile_already_contains_it() -> void:
+	var plan: Dictionary = _engine.compile("find_deprecated_api_usage", {
+		"required_capabilities": ["find_deprecated_api_usage"]
+	}, _available)["plan"]
+	var scan: Dictionary = _task_for_tool(plan, "find_deprecated_api_usage")
+	assert_true(bool(scan.get("objective_gate", false)),
+		"A broad project-health gate must not replace explicitly requested evidence")
 
 func test_runtime_tools_depend_on_probe_and_running_project() -> void:
 	var result: Dictionary = _compile("Debug the running player and prove there are no errors", ["runtime_debug"])
@@ -102,6 +166,22 @@ func test_pending_result_waits_without_consuming_retry_or_creating_repair() -> v
 	})
 	assert_eq(passed.get("status", ""), "completed")
 	assert_eq(_engine.get_task(plan, step_id).get("status", ""), "done")
+
+func test_long_async_wait_yields_without_blocking_or_wasting_receipts() -> void:
+	var result: Dictionary = _compile("Run all project tests", ["quality_assurance"])
+	var plan: Dictionary = result["plan"]
+	var task: Dictionary = _task_for_tool(plan, "run_project_tests")
+	var step_id: String = String(task.get("id", ""))
+	var verdict: Dictionary = {}
+	for poll_index in range(EngineScript.PENDING_POLL_WINDOW + 5):
+		verdict = _engine.record_step_result(plan, step_id, {"status": "pending", "job_id": "same-job"})
+	assert_eq(verdict.get("status", ""), "waiting")
+	assert_ne((plan.get("workflow", {}) as Dictionary).get("state", ""), "blocked")
+	assert_eq((_engine.get_task(plan, step_id)).get("status", ""), "pending")
+	assert_eq(((plan.get("workflow", {}) as Dictionary).get("receipts", []) as Array).size(), 1,
+		"Identical pending polls should aggregate instead of growing plan tokens")
+	assert_eq(int((((plan["workflow"]["receipts"] as Array)[0]) as Dictionary).get("occurrences", 0)),
+		EngineScript.PENDING_POLL_WINDOW + 5)
 
 func test_empty_or_failed_verification_evidence_never_passes() -> void:
 	assert_false(_engine.result_passed("assert_no_runtime_errors", {}))
@@ -157,10 +237,84 @@ func test_fake_done_flags_without_passing_receipts_cannot_complete_objective() -
 	assert_false(_engine.workflow_completed(plan),
 		"Objective gates need engine-issued passing receipt digests")
 
-func test_blueprint_is_deterministic_and_receipts_are_bounded() -> void:
+func test_adaptive_repairs_use_progress_not_a_low_global_attempt_ceiling() -> void:
+	var plan: Dictionary = _compile("Run all project tests", ["quality_assurance"])["plan"]
+	assert_eq(int(plan["workflow"]["goal_contract"].get("max_repair_attempts", -1)), 0,
+		"Zero means adaptive repair rather than zero repairs")
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	var step_id: String = String(gate.get("id", ""))
+	var verdict: Dictionary = {}
+	for attempt in range(EngineScript.SAME_FAILURE_REPLAN_THRESHOLD):
+		verdict = _engine.record_step_result(plan, step_id, {
+			"status": "failed", "total_checked": 2, "failed": 1,
+			"errors": [{"line": 10, "message": "same parse error"}]
+		})
+		if verdict.get("status", "") == "replan_required":
+			break
+		assert_eq(verdict.get("status", ""), "repair_required")
+		var repaired: Dictionary = _engine.record_repair_result(plan, step_id, {"status": "ok"})
+		assert_eq(repaired.get("status", ""), "repaired")
+	assert_eq(verdict.get("status", ""), "replan_required",
+		"Repeated identical evidence should request a different plan, not burn infinite compute")
+	assert_ne((plan.get("workflow", {}) as Dictionary).get("state", ""), "completed")
+
+func test_adaptive_repairs_may_continue_when_diagnostic_evidence_changes() -> void:
+	var plan: Dictionary = _compile("Run all project tests", ["quality_assurance"])["plan"]
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	var step_id: String = String(gate.get("id", ""))
+	for attempt in range(EngineScript.SAME_FAILURE_REPLAN_THRESHOLD + 2):
+		var verdict: Dictionary = _engine.record_step_result(plan, step_id, {
+			"status": "failed", "total_checked": 2, "failed": 1,
+			"elapsed_ms": attempt * 10,
+			"errors": [{"line": 10 + attempt, "message": "new diagnostic evidence"}]
+		})
+		assert_eq(verdict.get("status", ""), "repair_required",
+			"Changed diagnostic evidence is progress and must not hit the identical-failure guard")
+		assert_eq(_engine.record_repair_result(plan, step_id, {"status": "ok"}).get("status", ""), "repaired")
+
+func test_transient_repair_failures_back_off_without_consuming_explicit_budget() -> void:
+	var plan: Dictionary = _compile("Run all project tests", ["quality_assurance"], {
+		"max_repair_attempts": 1
+	})["plan"]
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	var step_id: String = String(gate.get("id", ""))
+	assert_eq(_engine.record_step_result(plan, step_id, {
+		"status": "failed", "total_checked": 1, "failed": 1
+	}).get("status", ""), "repair_required")
+	var first: Dictionary = _engine.record_repair_result(plan, step_id, {
+		"error": "Service temporarily unavailable (503)"
+	})
+	var second: Dictionary = _engine.record_repair_result(plan, step_id, {
+		"error": "Service temporarily unavailable (503)"
+	})
+	assert_eq(first.get("status", ""), "retry_required")
+	assert_eq(int(first.get("retry_after_ms", 0)), 1000)
+	assert_eq(int(second.get("retry_after_ms", 0)), 2000)
+	assert_eq(int(gate.get("repair_attempts", -1)), 0,
+		"Infrastructure outages are not failed repair logic attempts")
+	assert_eq((plan["workflow"] as Dictionary).get("state", ""), "waiting")
+
+func test_explicit_repair_policy_requests_replan_when_real_attempt_is_exhausted() -> void:
+	var plan: Dictionary = _compile("Run all project tests", ["quality_assurance"], {
+		"max_repair_attempts": 1
+	})["plan"]
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	var step_id: String = String(gate.get("id", ""))
+	assert_eq(_engine.record_step_result(plan, step_id, {
+		"status": "failed", "total_checked": 1, "failed": 1
+	}).get("status", ""), "repair_required")
+	var verdict: Dictionary = _engine.record_repair_result(plan, step_id, {
+		"status": "failed", "error": "Patch did not resolve the diagnostic"
+	})
+	assert_eq(verdict.get("status", ""), "replan_required")
+	assert_eq((plan["workflow"] as Dictionary).get("state", ""), "replan_required")
+	assert_false(bool(gate.get("repair_pending", true)))
+
+func test_blueprint_is_deterministic_and_receipts_preserve_all_semantic_evidence() -> void:
 	var first: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
 	var second: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
 	assert_eq(first["workflow"]["blueprint_hash"], second["workflow"]["blueprint_hash"])
 	for i in range(300):
 		_engine.append_receipt(first, {"step_id": "probe", "passed": true, "n": i})
-	assert_lte((first["workflow"]["receipts"] as Array).size(), EngineScript.MAX_RECEIPTS)
+	assert_eq((first["workflow"]["receipts"] as Array).size(), 300,
+		"Distinct completion evidence must never be discarded to meet a storage budget")

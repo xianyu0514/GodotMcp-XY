@@ -42,7 +42,7 @@ const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estim
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use more than ten atomic capabilities while each round stays bounded to four calls and completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; set replace_supplementary=false only to extend the same task. Exact atomic tool names remain routable. Do not load the full 223-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, blocked or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 223-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -1275,6 +1275,21 @@ func get_tool_input_schema(name: String) -> Dictionary:
 	if tool == null or not tool.is_valid():
 		return {}
 	return tool.input_schema.duplicate(true)
+
+## Minimal execution traits let the durable workflow recover a dispatched read
+## or idempotent operation after process restart without exposing another MCP
+## schema. Unknown mutations remain fail-closed to prevent duplicate effects.
+func get_tool_execution_traits(name: String) -> Dictionary:
+	var tool: MCPTypes.MCPTool = _tools.get(name, null)
+	if tool == null or not tool.is_valid():
+		return {"read_only": false, "idempotent": false, "destructive": false}
+	return {
+		# The cacheable-read index is an audited internal guarantee even if an
+		# older registration omitted the optional MCP annotation.
+		"read_only": bool(tool.annotations.get("readOnlyHint", false)) or name in CACHEABLE_READ_TOOLS,
+		"idempotent": bool(tool.annotations.get("idempotentHint", false)),
+		"destructive": bool(tool.annotations.get("destructiveHint", false))
+	}
 
 ## Execute one atomic capability authorized by a structurally validated game
 ## workflow. Visibility is deliberately ignored: hidden supplementary tools

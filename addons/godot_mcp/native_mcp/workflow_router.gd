@@ -164,7 +164,9 @@ const DIRECT_TERM_MARKERS: Dictionary = {
 
 const WORKFLOW_STOP_WORDS: Array[String] = [
 	"a", "an", "and", "as", "at", "by", "for", "from", "in", "into",
-	"of", "on", "please", "the", "then", "to", "use", "with"
+	"goal", "it", "its", "of", "on", "please", "sample", "task", "that",
+	"the", "their", "them", "then", "this", "to", "use", "with",
+	"workflow", "任务", "工作流", "目标", "示例"
 ]
 
 ## Only tool names are stored here. Schemas and descriptions remain in the
@@ -294,7 +296,8 @@ func build_query_terms(query_raw: String, drop_stop_words: bool = false) -> Arra
 	var alias_keys: Array = _get_sorted_alias_keys()
 	for token_value in normalize_search_text(query_raw).split(" ", false):
 		var token: String = String(token_value).strip_edges()
-		if token.is_empty() or (drop_stop_words and token in WORKFLOW_STOP_WORDS):
+		if (token.is_empty() or token.is_valid_int()
+				or (drop_stop_words and token in WORKFLOW_STOP_WORDS)):
 			continue
 		var matched_alias: bool = false
 		for alias_key_value in alias_keys:
@@ -832,7 +835,6 @@ func _compute_route(
 		var matches: Array[int] = []
 		var term_scores: Dictionary = {}
 		var score: int = 0
-		var signature_score: int = _signature_score(info, concepts, direct_terms)
 		for term_index in range(terms.size()):
 			var term_score: int = _score_term(info, terms[term_index])
 			if term_score > 0:
@@ -842,6 +844,11 @@ func _compute_route(
 		if name in curated_names:
 			score += 80
 		if score > 0:
+			# Signature scoring is deliberately the second-stage ranker. A signature
+			# can only match concepts produced by the same term variants that made
+			# this tool a candidate, so evaluating it for every registry entry wastes
+			# uncached-route CPU without changing recall or ordering.
+			var signature_score: int = _signature_score(info, concepts, direct_terms)
 			candidates.append({
 				"name": name,
 				"matches": matches,
