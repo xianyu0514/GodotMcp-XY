@@ -1,6 +1,6 @@
 # Tools Reference
 
-Godot MCP Native registers **221 MCP tools**: 28 core tools, 189 advanced tools and 4 always-on meta tools. The classifier in `addons/godot_mcp/native_mcp/mcp_tool_classifier.gd` is the source of truth for tier and group membership.
+Godot MCP Native registers **223 MCP tools**: 28 core tools, 189 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
 
 ## Category summary
 
@@ -12,8 +12,8 @@ Godot MCP Native registers **221 MCP tools**: 28 core tools, 189 advanced tools 
 | Editor | 27 | 3 | 24 | [editor-tools.md](editor-tools.md) |
 | Debug & Runtime | 73 | 3 | 70 | [debug-tools.md](debug-tools.md) |
 | Project | 61 | 3 | 58 | [project-tools.md](project-tools.md) |
-| Meta | 4 | — | — | [meta-tools.md](meta-tools.md) |
-| **Total** | **221** | **28** | **189** | |
+| Meta | 6 | — | — | [meta-tools.md](meta-tools.md) |
+| **Total** | **223** | **28** | **189** | |
 
 Meta tools are counted separately because they are always enabled and exist to manage the visible tool surface.
 
@@ -21,7 +21,7 @@ Meta tools are counted separately because they are always enabled and exist to m
 
 - **Core** tools are enabled on startup and returned by `tools/list` immediately.
 - **Advanced** tools are registered but disabled by default, then enabled from the MCP panel or with `enable_tools`.
-- **Meta** tools (`list_tool_catalog`, `search_tools`, `get_tool_details`, `enable_tools`) are always available, including in minimal presets.
+- **Meta** tools (four discovery tools plus `plan_game_workflow` and `run_game_workflow`) are always available, including in minimal presets.
 
 This keeps the initial tool list small enough for AI clients while preserving access to specialized editor/runtime capabilities.
 
@@ -30,10 +30,11 @@ This keeps the initial tool list small enough for AI clients while preserving ac
 Progressive discovery uses a one-call fast path while retaining preview and manual controls.
 
 1. Start with core tools and meta tools.
-2. For a goal that needs more capability, call `enable_tools` once with `workflow_query`. Local routing and activation happen together; the result contains at most 8 inspect/execute/verify names and no schemas.
-3. By default the call preserves core/meta and replaces the previous task's supplementary set, keeping later prompts small and stable. Set `replace_supplementary=false` only to extend the same task.
-4. Wait for `notifications/tools/list_changed` and let the client refresh the enabled schemas.
-5. Use `search_tools` only to preview/compare, `get_tool_details` only when the client cannot refresh, and `list_tool_catalog(summary_only=true)` only to browse groups and the 217/217 coverage summary.
+2. For a complete multi-phase outcome, use the persistent [Complete Game Workflow](../game-workflows.md). Its full DAG is not constrained by the one-turn discovery budget.
+3. For a short goal that needs more capability, call `enable_tools` once with `workflow_query`. Local routing and activation happen together; the result contains at most 8 inspect/execute/verify names and no schemas.
+4. By default the call preserves core/meta and replaces the previous task's supplementary set, keeping later prompts small and stable. Set `replace_supplementary=false` only to extend the same task.
+5. Wait for `notifications/tools/list_changed` and let the client refresh the enabled schemas.
+6. Use `search_tools` only to preview/compare, `get_tool_details` only when the client cannot refresh, and `list_tool_catalog(summary_only=true)` only to browse groups and the 217/217 coverage summary.
 
 Example:
 

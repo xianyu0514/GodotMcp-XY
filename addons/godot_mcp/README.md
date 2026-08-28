@@ -6,7 +6,7 @@ This directory is the distributable Godot addon. Copy `addons/godot_mcp` into an
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.
 - `native_mcp/` — JSON-RPC/MCP core, HTTP/SSE and stdio transports, auth, settings, tunnel support and tool-state management.
-- `tools/` — the 221 registered MCP tools.
+- `tools/` — the 223 registered MCP tools.
 - `runtime/mcp_runtime_probe.gd` — optional autoload used to inspect and drive a running game.
 - `ui/` — the MCP dock panel, tool manager and detail views.
 - `translations/` — panel text and tool descriptions.
@@ -32,11 +32,13 @@ The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and
 
 ## Tool model
 
-The addon registers 221 tools:
+The addon registers 223 tools:
 
 - 28 core tools enabled by default.
 - 189 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
-- 4 always-on meta tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
+- 6 always-on meta tools: four discovery tools plus `plan_game_workflow` and `run_game_workflow`.
+
+Complete goals use the two workflow tools to compile 12 reusable production profiles into a durable DAG. The DAG can exceed ten atomic capabilities while each runner round stays capped at four calls; hidden tools execute without visibility churn, and completion requires objective receipts. Short tasks continue to use `enable_tools` with the unchanged 8-tool default/10-tool hard discovery budget.
 
 Discovery is progressive and cache-friendly: one `enable_tools` call with `workflow_query` locally routes an English/Chinese goal and atomically activates a bounded inspect/execute/verify set. An immutable normalized index covers all 217 non-meta atomic tools by exact name and official English/Chinese description, returns names without schemas and defaults to an 8-tool budget. Precomputed name signatures plus direct action/object evidence improve natural-task precision before the token-cost fallback; the 48-task bilingual production gate records 100% Recall@8 and complete-task success with 97.34% average supplementary-schema savings. Schema-token costs are estimated once per definition; equal-coverage candidates are chosen by semantic value per incremental token, while exact atomic requests retain strict priority. A 64-entry LRU reuses normalized goals; visibility changes preserve its definition revision, index and routes. The activation path preserves core/meta and replaces old supplementary task tools by default, while `replace_supplementary=false` adds tools incrementally. Catalog revisions and dependency-tagged result revisions avoid flushing unrelated scene/script/resource reads; exact script and resource paths expire lazily.
 

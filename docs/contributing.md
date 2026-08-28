@@ -60,6 +60,7 @@ If the change affects project files, resources, editor state or runtime behavior
 | New setting | `docs/configuration.md`, root README table if user-facing. |
 | New CLI flag | `docs/configuration.md`, `docs/getting-started.md` if needed. |
 | Runtime probe capability | `docs/architecture.md`, `docs/tools/debug-tools.md`, `docs/testing.md`. |
+| Complete-game profile/state/evidence | `docs/game-workflows.md`, Chinese counterpart, architecture, changelog and all workflow gates. |
 | Remote/tunnel behavior | `docs/remote-access.md`, config examples. |
 | Test workflow | `docs/testing.md`, relevant agent/skill docs. |
 

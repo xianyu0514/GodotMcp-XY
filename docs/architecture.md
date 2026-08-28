@@ -40,6 +40,7 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 | `native_mcp/mcp_server_core.gd` | JSON-RPC/MCP method handling, tool registry, notifications, result caching and lossless large-result resources. |
 | `native_mcp/cache_revision_index.gd` | Dependency-tagged result-cache revisions and mutation impact routing; enables O(1) lazy invalidation instead of whole-cache flushes. |
 | `native_mcp/cache_change_tracker.gd` | Per-frame editor event coalescing and filesystem path-set diffs for precise external-change invalidation. |
+| `native_mcp/game_workflow_engine.gd` | Pure deterministic compiler, blueprint integrity checker, evidence evaluator and bounded-repair state machine for complete goals. |
 | `native_mcp/mcp_http_server.gd` | HTTP endpoint and SSE transport. |
 | `native_mcp/mcp_stdio_server.gd` | stdio transport for clients that spawn the server process. |
 | `native_mcp/mcp_types.gd` | Protocol constants and shared data structures. |
@@ -78,6 +79,7 @@ runtime-probe and verify domains moved into three dedicated modules:
 | `project_verification_tools.gd` | Project (verification: visual baseline/screenshot diff) | 2 |
 | `project_workflow_tools.gd` | Project (workflow: bump_version/theme/animation/task plan/localization) | 8 |
 | `meta_tools_native.gd` | Meta | 4 |
+| `game_workflow_tools.gd` | Meta (durable plan/run orchestration) | 2 |
 
 Tool registration uses `server_core.register_tool(...)` with name, description, input schema, callable, output schema, annotations, category and group. The category/group come from the single manifest (`native_mcp/tools_manifest.gd`), which the classifier reads to answer whether a tool is core, advanced or meta. `test_mcp_tool_classifier.gd` enforces that the manifest, the classifier and the runtime registry never drift (tool-name sets and per-tool category/group must match).
 
@@ -85,7 +87,7 @@ Tool registration uses `server_core.register_tool(...)` with name, description, 
 
 - **Core:** 28 high-value tools enabled by default.
 - **Advanced:** 189 tools registered but hidden from `tools/list` until enabled.
-- **Meta:** 4 always-on discovery tools: `list_tool_catalog`, `search_tools`, `get_tool_details` and `enable_tools`.
+- **Meta:** 6 always-on tools: four discovery tools plus `plan_game_workflow` and `run_game_workflow`.
 
 This design keeps the default client context small without making specialized capabilities unavailable.
 
@@ -98,6 +100,16 @@ Exact names and complete official English/Chinese descriptions keep strict prior
 Normalized `(goal, budget)` keys feed a separate 64-entry LRU of deep-copied route results. MCPServerCore advances the definition revision only when a tool is registered or unregistered; enabling and disabling tools advances the client-facing catalog revision but intentionally preserves the semantic index and route cache. This split keeps task switching deterministic, makes equivalent whitespace/case variants share a route, and avoids repeated catalog normalization or routing work during long editor sessions. Filtered workflow previews use a short-lived local index so they cannot contaminate the complete-catalog cache.
 
 The direct `enable_tools` path routes and applies the result in one MCP call. Its default task-switch behavior preserves core/meta, disables only currently enabled supplementary tools outside the new route, and enables the selected route through one `apply_tool_states` batch. This produces at most one catalog revision and one `tools/list_changed` notification, avoids rebuilding state once per tool, and keeps the visible schema set stable for subsequent prompt-cache hits. `replace_supplementary=false` provides an explicit additive mode.
+
+## Complete-game workflow execution
+
+`native_mcp/game_workflow_engine.gd` composes 12 reusable production profiles into a durable, goal-dependent DAG. This is deliberately separate from `workflow_router.gd`: the router minimizes the schemas visible for one ad-hoc turn, while the workflow engine preserves every step needed by a multi-phase outcome. A DAG can exceed ten tools, but `run_game_workflow` advances no more than four atomic calls per round.
+
+The stored goal contract is the single source of truth. Before every round, the engine recompiles the blueprint and compares its exact tools, arguments, order, dependencies, repair declarations, objective gates and SHA-256 identity. Stale workflow IDs use compare-and-swap protection. A persisted in-progress mutation is not replayed after interruption; the caller receives `recovery_required` and must inspect/replan.
+
+`MCPServerCore.invoke_planned_tool()` is an internal-only dispatch path. It authorizes exactly one blueprint tool, rejects discovery/control recursion, validates the normal input schema, and executes hidden atomic tools without changing tool visibility. Read steps reuse the same revision-aware cache; write steps advance the same precise dependency revisions as ordinary calls. This prevents a long workflow from rebuilding `tools/list` or exposing all 217 atomic schemas.
+
+Completion is fail-closed. Pending jobs remain pending without consuming a repair attempt; failed verification may invoke only the blueprint's declared repair tool and is bounded to two attempts by default (three maximum). A goal reaches `completed` only when every task is done and every objective gate references a compact engine-issued passing receipt. Protected roots, path normalization, receipt limits and polling limits keep the durable state bounded. See [Complete Game Workflows](game-workflows.md).
 
 ## Result cache and revisions
 
