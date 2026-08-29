@@ -1,6 +1,11 @@
 @tool
 extends VBoxContainer
 
+const CLOUDFLARED_DOWNLOAD_STALL_SECONDS: int = 12
+const CLOUDFLARED_SLOW_SOURCE_GRACE_SECONDS: int = 12
+const CLOUDFLARED_MIN_SOURCE_BYTES_PER_SECOND: int = 512 * 1024
+const TUNNEL_CONNECT_TIMEOUT_SECONDS: int = 30
+
 var _plugin: EditorPlugin = null
 var _server_core: RefCounted = null
 
@@ -72,6 +77,14 @@ var _tunnel_poll_timer: Timer = null
 var _tunnel_platform_key: String = ""
 var _tunnel_download_urls: PackedStringArray = []
 var _tunnel_download_index: int = 0
+var _tunnel_download_active: bool = false
+var _tunnel_download_watchdog: Timer = null
+var _tunnel_download_started_ticks_msec: int = 0
+var _tunnel_download_progress_ticks_msec: int = 0
+var _tunnel_downloaded_bytes: int = 0
+var _tunnel_start_ticks_msec: int = 0
+var _tunnel_status_key: String = "ui.tunnel_idle"
+var _tunnel_status_args: Array = []
 var _status_dot: Panel = null
 var _section_titles: Array = []
 
@@ -150,6 +163,11 @@ func _exit_tree() -> void:
 		_debounce_timer.stop()
 	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer.stop()
+	if _tunnel_http and is_instance_valid(_tunnel_http) and _tunnel_download_active:
+		_tunnel_http.cancel_request()
+		_tunnel_download_active = false
+	if _tunnel_download_watchdog and is_instance_valid(_tunnel_download_watchdog):
+		_tunnel_download_watchdog.stop()
 	# The user owns the tunnel lifecycle. Plugin reload/editor shutdown only
 	# releases this panel's handle; the detached cloudflared process is restored
 	# by the next Godot instance and stops naturally at OS shutdown.
@@ -526,7 +544,7 @@ func _build_remote_card(content: VBoxContainer) -> void:
 	tunnel_buttons.add_child(_tunnel_stop_button)
 
 	_tunnel_status_label = Label.new()
-	_tunnel_status_label.text = _tr("ui.tunnel_idle")
+	_render_tunnel_status()
 	_tunnel_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	_tunnel_status_label.add_theme_color_override("font_color", Color(0.72, 0.72, 0.76))
 	body.add_child(_tunnel_status_label)
@@ -698,9 +716,24 @@ func _on_remote_copy_tunnel_pressed() -> void:
 	DisplayServer.clipboard_set(MCPClientConfig.cloudflared_command(_current_port()))
 	_flash_button(_remote_copy_tunnel_button, "ui.remote_copy_tunnel")
 
-func _set_tunnel_status(key: String) -> void:
-	if _tunnel_status_label:
-		_tunnel_status_label.text = _tr(key)
+func _set_tunnel_status(key: String, args: Array = []) -> void:
+	_tunnel_status_key = key
+	_tunnel_status_args = args.duplicate()
+	_render_tunnel_status()
+
+func _render_tunnel_status() -> void:
+	if _tunnel_status_label == null:
+		return
+	if _tunnel_status_args.is_empty():
+		_tunnel_status_label.text = _tr(_tunnel_status_key)
+	else:
+		_tunnel_status_label.text = _trf(_tunnel_status_key, _tunnel_status_args)
+
+func _record_tunnel_event(level: String, message: String) -> void:
+	update_log("[%s] Tunnel: %s" % [level, message])
+	# Tunnel failures need to be visible immediately in the log file supplied by
+	# users for support; do not wait for the normal ten-line flush batch.
+	_flush_log_to_file()
 
 func _override_binary_path() -> String:
 	if _tunnel_binary_edit:
@@ -714,8 +747,17 @@ func _on_tunnel_start_pressed() -> void:
 	if _tunnel_manager == null:
 		_tunnel_manager = MCPTunnelManager.new()
 	if _tunnel_manager.is_running():
-		_set_tunnel_status("ui.tunnel_already")
+		# Repair any stale button/URL state instead of only showing a message.
+		# start() returns ERR_ALREADY_IN_USE before it validates the blank path.
+		_launch_tunnel("")
 		return
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = true
+	_set_tunnel_status("ui.tunnel_resolving")
+	_record_tunnel_event("INFO", "Checking configured path, PATH and verified local caches")
+	# Let Godot paint the resolving state before checksum verification touches a
+	# potentially large executable on a slow disk or antivirus-scanned system.
+	await get_tree().process_frame
 
 	var override: String = _override_binary_path()
 	_tunnel_platform_key = MCPCloudflaredProvider.detect_platform_key()
@@ -724,39 +766,136 @@ func _on_tunnel_start_pressed() -> void:
 		override
 	)
 	if not local_binary.is_empty():
+		_record_tunnel_event(
+			"INFO",
+			"Reusing %s cloudflared: %s" % [
+				String(local_binary.get("source", "local")),
+				String(local_binary.get("path", "")),
+			]
+		)
 		_launch_tunnel(String(local_binary.get("path", "")))
 		return
 
 	if _tunnel_platform_key.is_empty():
+		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_unsupported")
+		_record_tunnel_event("ERROR", "No supported cloudflared build for this platform")
 		return
 
+	_record_tunnel_event("INFO", "No reusable local cloudflared found; starting verified download")
 	_download_cloudflared(_tunnel_platform_key)
 
 func _download_cloudflared(key: String) -> void:
 	_tunnel_download_urls = MCPCloudflaredProvider.download_urls(key)
 	if _tunnel_download_urls.is_empty():
+		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_unsupported")
 		return
 	_tunnel_download_index = 0
 	if DirAccess.make_dir_recursive_absolute(MCPCloudflaredProvider.install_dir(key)) != OK:
+		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_start_failed")
+		_record_tunnel_event("ERROR", "Could not create the shared cloudflared cache directory")
 		return
 	if _tunnel_http == null or not is_instance_valid(_tunnel_http):
 		_tunnel_http = HTTPRequest.new()
 		add_child(_tunnel_http)
 		_tunnel_http.request_completed.connect(_on_tunnel_download_completed)
+	if _tunnel_download_watchdog == null or not is_instance_valid(_tunnel_download_watchdog):
+		_tunnel_download_watchdog = Timer.new()
+		_tunnel_download_watchdog.wait_time = 1.0
+		_tunnel_download_watchdog.timeout.connect(_on_tunnel_download_watchdog)
+		add_child(_tunnel_download_watchdog)
+	# Godot recommends disabling the single total timeout for large downloads.
+	# The progress watchdog below bounds dead/slow sources without rejecting a
+	# healthy transfer merely because the cloudflared executable is large.
+	_tunnel_http.timeout = 0.0
 	_tunnel_http.download_file = MCPCloudflaredProvider.download_target(key)
+	_tunnel_download_active = true
 	if _tunnel_start_button:
 		_tunnel_start_button.disabled = true
+	if _tunnel_stop_button:
+		_tunnel_stop_button.disabled = false
 	_request_tunnel_download()
 
 ## Requests the current candidate URL (official first, then mirrors).
 func _request_tunnel_download() -> void:
-	_set_tunnel_status("ui.tunnel_downloading")
-	var err: int = _tunnel_http.request(_tunnel_download_urls[_tunnel_download_index])
+	var target: String = MCPCloudflaredProvider.download_target(_tunnel_platform_key)
+	if FileAccess.file_exists(target):
+		DirAccess.remove_absolute(target)
+	_tunnel_download_started_ticks_msec = Time.get_ticks_msec()
+	_tunnel_download_progress_ticks_msec = _tunnel_download_started_ticks_msec
+	_tunnel_downloaded_bytes = 0
+	_update_tunnel_download_status()
+	var url: String = _tunnel_download_urls[_tunnel_download_index]
+	_record_tunnel_event(
+		"INFO",
+		"Downloading source %d/%d (stall watchdog %ds): %s" % [
+			_tunnel_download_index + 1,
+			_tunnel_download_urls.size(),
+			CLOUDFLARED_DOWNLOAD_STALL_SECONDS,
+			url,
+		]
+	)
+	var err: int = _tunnel_http.request(url)
 	if err != OK:
+		_record_tunnel_event("WARN", "Download request could not start: %s" % error_string(err))
 		_advance_or_fail_download("ui.tunnel_download_failed")
+	elif _tunnel_download_watchdog:
+		_tunnel_download_watchdog.start()
+
+func _update_tunnel_download_status() -> void:
+	var downloaded_mib: float = float(_tunnel_downloaded_bytes) / 1048576.0
+	var progress: String = "%.1f MiB" % downloaded_mib
+	if _tunnel_http and _tunnel_downloaded_bytes > 0:
+		var total_bytes: int = _tunnel_http.get_body_size()
+		if total_bytes > 0:
+			progress = "%.1f/%.1f MiB" % [downloaded_mib, float(total_bytes) / 1048576.0]
+	_set_tunnel_status("ui.tunnel_downloading", [
+		_tunnel_download_index + 1,
+		_tunnel_download_urls.size(),
+		progress,
+		CLOUDFLARED_DOWNLOAD_STALL_SECONDS,
+	])
+
+static func should_switch_cloudflared_download(downloaded_bytes: int,
+		source_elapsed_msec: int, no_progress_msec: int, has_fallback: bool) -> bool:
+	if no_progress_msec >= CLOUDFLARED_DOWNLOAD_STALL_SECONDS * 1000:
+		return true
+	if not has_fallback or source_elapsed_msec < CLOUDFLARED_SLOW_SOURCE_GRACE_SECONDS * 1000:
+		return false
+	var safe_elapsed: int = maxi(source_elapsed_msec, 1)
+	var bytes_per_second: float = float(downloaded_bytes) * 1000.0 / float(safe_elapsed)
+	return bytes_per_second < CLOUDFLARED_MIN_SOURCE_BYTES_PER_SECOND
+
+func _on_tunnel_download_watchdog() -> void:
+	if not _tunnel_download_active or _tunnel_http == null:
+		return
+	var now: int = Time.get_ticks_msec()
+	var downloaded: int = _tunnel_http.get_downloaded_bytes()
+	if downloaded > _tunnel_downloaded_bytes:
+		_tunnel_downloaded_bytes = downloaded
+		_tunnel_download_progress_ticks_msec = now
+		_update_tunnel_download_status()
+	var stalled_msec: int = now - _tunnel_download_progress_ticks_msec
+	var source_msec: int = maxi(now - _tunnel_download_started_ticks_msec, 1)
+	var bytes_per_second: float = float(downloaded) * 1000.0 / float(source_msec)
+	var has_fallback: bool = _tunnel_download_index + 1 < _tunnel_download_urls.size()
+	var stalled: bool = stalled_msec >= CLOUDFLARED_DOWNLOAD_STALL_SECONDS * 1000
+	if not should_switch_cloudflared_download(
+		downloaded, source_msec, stalled_msec, has_fallback
+	):
+		return
+	_tunnel_http.cancel_request()
+	_record_tunnel_event(
+		"WARN",
+		"Download source %d switched after %s (%.1f KiB/s)" % [
+			_tunnel_download_index + 1,
+			"no progress" if stalled else "low throughput",
+			bytes_per_second / 1024.0,
+		]
+	)
+	_advance_or_fail_download("ui.tunnel_download_failed")
 
 ## Tries the next mirror; once candidates are exhausted, surfaces the last
 ## failure reason and re-enables the start button.
@@ -765,26 +904,42 @@ func _advance_or_fail_download(fail_status_key: String) -> void:
 	if _tunnel_download_index < _tunnel_download_urls.size():
 		_request_tunnel_download()
 		return
-	if _tunnel_start_button:
-		_tunnel_start_button.disabled = false
+	_tunnel_download_active = false
+	if _tunnel_download_watchdog:
+		_tunnel_download_watchdog.stop()
+	_reset_tunnel_buttons()
 	_set_tunnel_status(fail_status_key)
+	_record_tunnel_event("ERROR", "Every cloudflared download source failed or timed out")
 
 func _on_tunnel_download_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	if not _tunnel_download_active:
+		return
+	if _tunnel_download_watchdog:
+		_tunnel_download_watchdog.stop()
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		_record_tunnel_event(
+			"WARN",
+			"Download source %d failed (result=%d, HTTP=%d)" % [
+				_tunnel_download_index + 1, result, response_code,
+			]
+		)
 		_advance_or_fail_download("ui.tunnel_download_failed")
 		return
 	var key: String = _tunnel_platform_key
 	var target: String = MCPCloudflaredProvider.download_target(key)
 	if not MCPCloudflaredProvider.verify_checksum(target, key):
 		DirAccess.remove_absolute(target)
+		_record_tunnel_event("WARN", "Downloaded cloudflared failed SHA-256 verification")
 		_advance_or_fail_download("ui.tunnel_verify_failed")
 		return
-	if _tunnel_start_button:
-		_tunnel_start_button.disabled = false
+	_tunnel_download_active = false
 	var bin: String = _install_binary(key, target)
 	if bin.is_empty():
+		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_start_failed")
+		_record_tunnel_event("ERROR", "Verified cloudflared could not be installed")
 		return
+	_record_tunnel_event("INFO", "Verified cloudflared installed: %s" % bin)
 	_launch_tunnel(bin)
 
 ## Moves/extracts the verified download into the runnable binary path and makes it
@@ -813,12 +968,38 @@ func _launch_tunnel(binary_abs: String) -> void:
 		_tunnel_manager = MCPTunnelManager.new()
 	var err: int = _tunnel_manager.start(binary_abs, _current_port())
 	if err == ERR_ALREADY_IN_USE:
-		_set_tunnel_status("ui.tunnel_already")
+		if _tunnel_stop_button:
+			_tunnel_stop_button.disabled = false
+		if _tunnel_start_button:
+			_tunnel_start_button.disabled = true
+		var existing_url: String = _tunnel_manager.get_public_url()
+		if not existing_url.is_empty():
+			_tunnel_start_ticks_msec = 0
+			if _remote_url_edit:
+				_remote_url_edit.text = existing_url
+			_update_public_endpoint()
+			_set_tunnel_status("ui.tunnel_restored", [existing_url])
+		else:
+			_tunnel_start_ticks_msec = Time.get_ticks_msec()
+			_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
+		_record_tunnel_event("INFO", "Reattached to an already running cloudflared process")
+		_ensure_tunnel_poll_timer()
 		return
 	if err != OK:
-		_set_tunnel_status("ui.tunnel_start_failed")
+		_reset_tunnel_buttons()
+		_set_tunnel_status("ui.tunnel_start_failed_detail", [error_string(err)])
+		_record_tunnel_event("ERROR", "Could not create cloudflared process: %s" % error_string(err))
 		return
-	_set_tunnel_status("ui.tunnel_starting")
+	_tunnel_start_ticks_msec = Time.get_ticks_msec()
+	_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
+	_record_tunnel_event(
+		"INFO",
+		"cloudflared started (PID %d); waiting up to %ds for a Quick Tunnel URL; log: %s" % [
+			_tunnel_manager.get_pid(),
+			TUNNEL_CONNECT_TIMEOUT_SECONDS,
+			_tunnel_manager.get_log_path(),
+		]
+	)
 	if _tunnel_stop_button:
 		_tunnel_stop_button.disabled = false
 	if _tunnel_start_button:
@@ -833,7 +1014,9 @@ func _restore_tunnel_session() -> void:
 		_tunnel_manager = MCPTunnelManager.new()
 	if not _tunnel_manager.restore():
 		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
+		_tunnel_start_ticks_msec = 0
 		_reset_tunnel_buttons()
+		_set_tunnel_status("ui.tunnel_idle")
 		return
 	if _tunnel_stop_button:
 		_tunnel_stop_button.disabled = false
@@ -845,9 +1028,12 @@ func _restore_tunnel_session() -> void:
 			_remote_url_edit.text = url
 		_update_public_endpoint()
 		if _tunnel_status_label:
-			_tunnel_status_label.text = _trf("ui.tunnel_restored", [url])
+			_set_tunnel_status("ui.tunnel_restored", [url])
+		_tunnel_start_ticks_msec = 0
 	else:
-		_set_tunnel_status("ui.tunnel_starting")
+		_tunnel_start_ticks_msec = Time.get_ticks_msec()
+		_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
+	_record_tunnel_event("INFO", "Restored persistent cloudflared process PID %d" % _tunnel_manager.get_pid())
 	_ensure_tunnel_poll_timer()
 
 func _ensure_tunnel_poll_timer() -> void:
@@ -864,21 +1050,46 @@ func _on_tunnel_poll_timeout() -> void:
 	if not _tunnel_manager.is_running():
 		_tunnel_poll_timer.stop()
 		var tunnel_url: String = _tunnel_manager.get_public_url()
+		var tunnel_log: String = _tunnel_manager.get_log_path()
 		_tunnel_manager.discard_stale_session()
+		_tunnel_start_ticks_msec = 0
 		_reset_tunnel_buttons()
 		_clear_tunnel_url_if_owned(tunnel_url)
-		_set_tunnel_status("ui.tunnel_exited")
+		_set_tunnel_status("ui.tunnel_exited_detail", [tunnel_log])
+		_record_tunnel_event("ERROR", "cloudflared exited before use; inspect log: %s" % tunnel_log)
 		return
 	var url: String = _tunnel_manager.poll()
 	if not url.is_empty():
+		_tunnel_start_ticks_msec = 0
 		if _remote_url_edit:
 			_remote_url_edit.text = url
 		_update_public_endpoint()
 		_set_tunnel_status_live(url)
+		_record_tunnel_event("INFO", "Quick Tunnel ready: %s" % url)
+		return
+	if _tunnel_start_ticks_msec > 0:
+		var elapsed: int = int((Time.get_ticks_msec() - _tunnel_start_ticks_msec) / 1000)
+		if elapsed >= TUNNEL_CONNECT_TIMEOUT_SECONDS:
+			var tunnel_log: String = _tunnel_manager.get_log_path()
+			_tunnel_manager.stop()
+			_tunnel_poll_timer.stop()
+			_tunnel_start_ticks_msec = 0
+			_reset_tunnel_buttons()
+			_set_tunnel_status("ui.tunnel_start_timeout", [
+				TUNNEL_CONNECT_TIMEOUT_SECONDS,
+				tunnel_log,
+			])
+			_record_tunnel_event(
+				"ERROR",
+				"No Quick Tunnel URL after %ds; process stopped; inspect log: %s" % [
+					TUNNEL_CONNECT_TIMEOUT_SECONDS, tunnel_log,
+				]
+			)
+			return
+		_set_tunnel_status("ui.tunnel_starting", [elapsed, TUNNEL_CONNECT_TIMEOUT_SECONDS])
 
 func _set_tunnel_status_live(url: String) -> void:
-	if _tunnel_status_label:
-		_tunnel_status_label.text = _trf("ui.tunnel_live", [url])
+	_set_tunnel_status("ui.tunnel_live", [url])
 
 func _reset_tunnel_buttons() -> void:
 	if _tunnel_start_button:
@@ -889,13 +1100,23 @@ func _reset_tunnel_buttons() -> void:
 func _on_tunnel_stop_pressed() -> void:
 	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer.stop()
+	if _tunnel_http and is_instance_valid(_tunnel_http) and _tunnel_download_active:
+		_tunnel_http.cancel_request()
+		_tunnel_download_active = false
+		if _tunnel_download_watchdog and is_instance_valid(_tunnel_download_watchdog):
+			_tunnel_download_watchdog.stop()
+		var partial: String = MCPCloudflaredProvider.download_target(_tunnel_platform_key)
+		if FileAccess.file_exists(partial):
+			DirAccess.remove_absolute(partial)
 	var tunnel_url: String = ""
 	if _tunnel_manager:
 		tunnel_url = _tunnel_manager.get_public_url()
 		_tunnel_manager.stop()
+	_tunnel_start_ticks_msec = 0
 	_clear_tunnel_url_if_owned(tunnel_url)
 	_reset_tunnel_buttons()
 	_set_tunnel_status("ui.tunnel_stopped")
+	_record_tunnel_event("INFO", "Stopped or cancelled by the user")
 
 ## Clears the remote URL field (and hides the public endpoint card) only when it
 ## still holds the now-dead tunnel-provided URL; manual entries are left intact.
@@ -2274,6 +2495,7 @@ func _refresh_translations() -> void:
 		_tunnel_binary_label.text = _tr("ui.tunnel_binary")
 	if _tunnel_binary_edit:
 		_tunnel_binary_edit.placeholder_text = _tr("ui.tunnel_binary_placeholder")
+	_render_tunnel_status()
 	if _asset_provider_hint_label:
 		_asset_provider_hint_label.text = _tr("ui.asset_provider_hint")
 	if _asset_provider_label:
