@@ -588,3 +588,44 @@ func test_plan_tool_documents_expect_fail_option() -> void:
 		.get("input_schema", {}) as Dictionary).get("properties", {})
 	assert_true((properties as Dictionary).has("expect_fail"),
 		"Negative-gate configuration is discoverable in the plan schema")
+
+func test_scene_scoped_steps_derive_profile_scene_and_visual_paths() -> void:
+	_core.schemas["create_node"] = {
+		"type": "object", "properties": {"node_path": {"type": "string"}},
+		"required": ["node_path"]
+	}
+	_core.responses["create_scene"] = {
+		"success": true, "scene_path": "res://ui_main.tscn"
+	}
+	_core.responses["get_runtime_screenshot"] = {
+		"status": "ok", "save_path": "user://mcp_runtime_capture.jpg"
+	}
+	_core.responses["assert_visual_baseline"] = {
+		"passed": true, "baseline_created": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}
+	var planned: Dictionary = _plan(["ui_screen"], "Polished pause menu")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 12,
+		"step_inputs": {"create_node": {"node_path": "/root/UI/Panel"}}
+	})
+	assert_ne(String(result.get("status", "")), "needs_input",
+		"Scene-scoped and visual steps derive their inputs from artifacts")
+	var create_node_call: Dictionary = {}
+	var visual_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "create_node":
+			create_node_call = call
+		if String(call["tool_name"]) == "assert_visual_baseline":
+			visual_call = call
+	assert_eq(String((create_node_call.get("arguments", {}) as Dictionary).get("scene_path", "")),
+		"res://ui_main.tscn",
+		"Node writes pin the profile's created scene so they cannot land in another scene")
+	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("candidate_path", "")),
+		"user://mcp_runtime_capture.jpg",
+		"Visual gate candidate derives from the runtime screenshot artifact")
+	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("baseline_path", "")),
+		"user://visual_baselines/mcp_runtime_capture.jpg",
+		"Visual gate baseline derives a deterministic golden-image location")

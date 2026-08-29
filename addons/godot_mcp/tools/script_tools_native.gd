@@ -6,6 +6,7 @@ class_name ScriptToolsNative
 extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 var _editor_interface: EditorInterface = null
 
@@ -2022,6 +2023,7 @@ func _register_attach_script(server_core: RefCounted) -> void:
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
+			"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 			"node_path": {
 				"type": "string",
 				"description": "Path to the node to attach the script to (e.g. '/root/MainScene/Player')"
@@ -2068,6 +2070,11 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+
+	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
 	if not validation["valid"]:

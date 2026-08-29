@@ -20,6 +20,19 @@ const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
 # verification, so the interactive window-policy prompt must not stall the run.
 const RUNTIME_WINDOW_TOOLS: Array[String] = ["run_project", "stop_project"]
 
+# Scene activation changes editor focus; plan-authorized opens must not stall
+# on the interactive focus policy either. Key = tool, value = policy parameter.
+const FOCUS_POLICY_TOOLS: Dictionary = {"open_scene": "allow_ui_focus"}
+
+# Tools whose node writes target the currently edited scene. When the workflow
+# knows which scene a profile created, the runner passes scene_path so the
+# shared context guard activates exactly that scene (no silent cross-scene
+# writes when multiple profiles create scenes in one goal).
+const SCENE_SCOPED_TOOLS: Array[String] = [
+	"create_node", "update_node_property", "delete_node", "set_anchor_preset",
+	"attach_script", "save_scene", "set_tilemap_layer_cells"
+]
+
 # Schema-required input -> workflow artifact kind. Lets create -> configure
 # chains (create_script -> attach_script, create_scene -> save_scene, ...)
 # proceed autonomously instead of stopping on needs_input.
@@ -32,7 +45,8 @@ const DERIVED_INPUT_ARTIFACTS: Dictionary = {
 	"animation_name": "animation_name",
 	"test_path": "smoke_test",
 	"search_path": "test_dir",
-	"test_dir": "test_dir"
+	"test_dir": "test_dir",
+	"candidate_path": "screenshot"
 }
 
 var _server_core: RefCounted = null
@@ -504,18 +518,59 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			arguments = resolved
 		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
 		var derived: Dictionary = {}
+		var profile: String = String(task.get("profile", ""))
 		for param in missing:
 			var artifact_key: String = String(DERIVED_INPUT_ARTIFACTS.get(param, ""))
 			if not artifact_key.is_empty() and artifacts.has(artifact_key):
 				derived[param] = artifacts[artifact_key]
 				arguments[param] = artifacts[artifact_key]
+		_derive_visual_baseline_path(tool_name, arguments, artifacts, derived)
+		_derive_scene_context(tool_name, profile, arguments, artifacts, derived)
 		if not derived.is_empty():
 			task["derived_inputs"] = derived
 		else:
 			task.erase("derived_inputs")
 	if tool_name in RUNTIME_WINDOW_TOOLS and not arguments.has("allow_window"):
 		arguments["allow_window"] = true
+	var focus_param: String = String(FOCUS_POLICY_TOOLS.get(tool_name, ""))
+	if not focus_param.is_empty() and not arguments.has(focus_param):
+		arguments[focus_param] = true
 	return arguments
+
+## Visual gates derive candidate_path from the latest runtime screenshot and a
+## deterministic baseline location; assert_visual_baseline captures the golden
+## image itself on first run, so the gate never stalls on missing paths.
+func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
+		artifacts: Dictionary, derived: Dictionary) -> void:
+	if tool_name != "assert_visual_baseline":
+		return
+	var screenshot: String = String(artifacts.get("screenshot", ""))
+	if screenshot.is_empty():
+		return
+	if not arguments.has("candidate_path"):
+		arguments["candidate_path"] = screenshot
+		derived["candidate_path"] = screenshot
+	if not arguments.has("baseline_path"):
+		var baseline: String = "user://visual_baselines/" + screenshot.get_file()
+		arguments["baseline_path"] = baseline
+		derived["baseline_path"] = baseline
+
+## Scene-scoped tools get the creating profile's scene as an optional
+## scene_path so the shared context guard pins the right edited scene even
+## when several profiles created scenes in the same goal.
+func _derive_scene_context(tool_name: String, profile: String, arguments: Dictionary,
+		artifacts: Dictionary, derived: Dictionary) -> void:
+	if tool_name not in SCENE_SCOPED_TOOLS or arguments.has("scene_path"):
+		return
+	var profile_scene: String = String(artifacts.get("scene:" + profile, ""))
+	if not profile_scene.is_empty():
+		arguments["scene_path"] = profile_scene
+		derived["scene_path"] = profile_scene
+		return
+	var last_scene: String = String(artifacts.get("scene", ""))
+	if not last_scene.is_empty():
+		arguments["scene_path"] = last_scene
+		derived["scene_path"] = last_scene
 
 func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array[String]:
 	var schema: Dictionary = _tool_input_schema(tool_name)

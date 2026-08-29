@@ -133,13 +133,14 @@ const ARTIFACT_KIND_BY_TOOL: Dictionary = {
 	"create_theme": "theme",
 	"create_tileset": "tileset",
 	"create_animation": "animation",
+	"get_runtime_screenshot": "screenshot",
 	"ensure_project_directory": "test_dir",
 	"create_project_smoke_test": "smoke_test"
 }
 
 const ARTIFACT_PATH_KEYS: Array[String] = [
 	"scene_path", "script_path", "theme_path", "tileset_path",
-	"animation_path", "test_path", "path"
+	"animation_path", "test_path", "save_path", "path"
 ]
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
@@ -865,7 +866,8 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 		task["status"] = "done"
 		task["receipt_digest"] = receipt.get("digest", "")
 		if not expect_failure and evidence_passed:
-			_record_artifacts(plan, String(task.get("tool_name", "")), result)
+			_record_artifacts(plan, String(task.get("tool_name", "")), result,
+				String(task.get("profile", "")))
 		_clear_failure_tracking(task, "verification")
 		_clear_failure_tracking(task, "transient")
 		if bool(task.get("objective_gate", false)):
@@ -978,7 +980,7 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 		_clear_failure_tracking(task, "repair_transient")
 		# Repairs can create resources too (for example the QA smoke test), so
 		# their outputs must feed the artifact registry like normal steps.
-		_record_artifacts(plan, repair_tool, result)
+		_record_artifacts(plan, repair_tool, result, String(task.get("profile", "")))
 		workflow["state"] = "running"
 		workflow["blocked_reason"] = ""
 		return {"status": "repaired", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
@@ -1074,8 +1076,11 @@ func _compact_result_summary(result: Variant) -> Dictionary:
 	return summary
 
 ## Register paths a successful creation step produced into the workflow's
-## artifact registry (scene/script/theme/tileset/animation + last_path).
-func _record_artifacts(plan: Dictionary, tool_name: String, result: Variant) -> void:
+## artifact registry (scene/script/theme/tileset/animation/screenshot +
+## last_path). Scene-scoped kinds also register a per-profile alias
+## ("scene:<profile>") so multi-scene workflows address the right scene.
+func _record_artifacts(plan: Dictionary, tool_name: String, result: Variant,
+		profile: String = "") -> void:
 	if not (result is Dictionary):
 		return
 	var data: Dictionary = result
@@ -1091,6 +1096,8 @@ func _record_artifacts(plan: Dictionary, tool_name: String, result: Variant) -> 
 			continue
 		if not kind.is_empty() and not artifacts.has(kind):
 			artifacts[kind] = value
+			if not profile.is_empty():
+				artifacts[kind + ":" + profile] = value
 		artifacts["last_path"] = value
 	if data.has("animation_name"):
 		var animation_name: String = String(data["animation_name"]).strip_edges()

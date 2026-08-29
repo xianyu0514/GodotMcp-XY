@@ -438,3 +438,23 @@ func test_run_project_session_reuse_result_is_usable_evidence() -> void:
 		"success": true, "already_running": true, "scene": "res://main.tscn"})
 	assert_eq(String(verdict.get("status", "")), "completed",
 		"Reusing a live runtime session is successful workflow evidence")
+
+func test_scene_artifacts_register_per_profile_alias() -> void:
+	var plan: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
+	var scene_task: Dictionary = _task_for_tool(plan, "create_scene")
+	assert_eq(String(scene_task.get("profile", "")), "gameplay_feature")
+	_engine.record_step_result(plan, String(scene_task.get("id", "")), {
+		"success": true, "scene_path": "res://levels/gameplay.tscn"})
+	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
+	assert_eq(String(artifacts.get("scene:gameplay_feature", "")), "res://levels/gameplay.tscn",
+		"Multi-scene workflows address each profile's scene explicitly")
+
+func test_runtime_screenshot_registers_screenshot_artifact() -> void:
+	var plan: Dictionary = _compile("Polished pause menu", ["ui_screen"])["plan"]
+	var shot_task: Dictionary = _task_for_tool(plan, "get_runtime_screenshot")
+	assert_false(shot_task.is_empty(), "ui_screen profile captures a runtime screenshot")
+	_engine.record_step_result(plan, String(shot_task.get("id", "")), {
+		"status": "ok", "save_path": "user://mcp_runtime_capture.jpg"})
+	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
+	assert_eq(String(artifacts.get("screenshot", "")), "user://mcp_runtime_capture.jpg",
+		"Visual gates derive their candidate from the captured screenshot")

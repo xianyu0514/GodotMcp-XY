@@ -6,6 +6,8 @@ extends RefCounted
 
 var _editor_interface: EditorInterface = null
 
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
+
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
 
@@ -44,6 +46,7 @@ func _register_create_node(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified). Guards against cross-scene writes."},
 				"parent_path": {
 					"type": "string",
 					"description": "Path to the parent node where the new node will be created (e.g. '/root', '/root/MainScene')"
@@ -122,6 +125,10 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var parent: Node = _resolve_node_path(parent_path)
 	if not parent:
@@ -209,6 +216,7 @@ func _register_delete_node(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the node to delete (e.g. '/root/MainScene/Player')"
@@ -237,7 +245,11 @@ func _tool_delete_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	
+	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
 	var node_to_delete: Node = _resolve_node_path(node_path)
 	
 	if not node_to_delete:
@@ -263,6 +275,7 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the target node (e.g. '/root/MainScene/Player')"
@@ -307,12 +320,16 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	
+	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
 	var target_node: Node = _resolve_node_path(node_path)
-	
+
 	if not target_node:
 		return {"error": "Node not found: " + node_path}
-	
+
 	if not property_name in target_node:
 		return {"error": "Property '" + property_name + "' not found on node " + node_path}
 	
@@ -1881,6 +1898,7 @@ func _register_set_anchor_preset(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the Control node (e.g. '/root/MainScene/UI/Panel')"
@@ -1920,6 +1938,10 @@ func _tool_set_anchor_preset(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var target_node: Node = _resolve_node_path(node_path)
 	if not target_node:
