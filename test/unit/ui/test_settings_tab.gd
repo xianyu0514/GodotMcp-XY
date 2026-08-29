@@ -41,6 +41,16 @@ func test_tunnel_start_uses_local_binary_resolution_before_download() -> void:
 	var source: String = panel.get_script().source_code
 	assert_true(source.contains("resolve_local_binary"), "Tunnel start should probe configured, PATH, shared and legacy installs")
 
+func test_panel_restores_tunnel_but_never_stops_it_during_exit() -> void:
+	var panel: Node = _make_panel()
+	var source: String = panel.get_script().source_code
+	var exit_start: int = source.find("func _exit_tree()")
+	var next_method: int = source.find("\nfunc ", exit_start + 1)
+	var exit_body: String = source.substr(exit_start, next_method - exit_start)
+	assert_true(source.contains("_restore_tunnel_session()"), "Panel should reattach after project or plugin reload")
+	assert_true(exit_body.contains("_tunnel_manager.detach()"), "Panel exit should release local ownership only")
+	assert_false(exit_body.contains("_tunnel_manager.stop()"), "Closing Godot must never stop a user-started tunnel")
+
 func test_settings_exposes_asset_provider_card() -> void:
 	var panel: Node = _make_panel()
 	autofree(panel._create_settings_tab())

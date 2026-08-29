@@ -49,7 +49,7 @@ Tool modules ── Godot EditorInterface / ProjectSettings / ResourceLoader
 | `native_mcp/mcp_auth_manager.gd` | Bearer-token validation. |
 | `native_mcp/settings_manager.gd` | Persistent user settings. |
 | `native_mcp/tool_state_manager.gd` | Per-tool enable/disable state. |
-| `native_mcp/mcp_tunnel_manager.gd` | Cloudflare Quick Tunnel process supervision. |
+| `native_mcp/mcp_tunnel_manager.gd` | Detached Cloudflare Quick Tunnel supervision, project-scoped session persistence, PID identity validation and automatic restore across plugin/editor restarts. |
 | `native_mcp/mcp_cloudflared_provider.gd` | Download/verification helper for `cloudflared`. |
 
 ## Tool modules
