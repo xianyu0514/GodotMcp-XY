@@ -387,3 +387,12 @@ func test_supervisor_and_child_command_identity_are_session_scoped() -> void:
 	assert_false(MCPTunnelManagerScript.cloudflared_command_matches(
 		child_command, "C:\\Tools\\cloudflared.exe", 9081, "Windows"
 	))
+
+func test_cloudflared_command_matches_accepts_both_origin_forms() -> void:
+	var legacy: String = '"C:\\Tools\\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:9080'
+	assert_true(MCPTunnelManagerScript.cloudflared_command_matches(
+		legacy, "C:\\Tools\\cloudflared.exe", 9080, "Windows"),
+		"Persisted sessions from before the 127.0.0.1 switch must stay adoptable")
+	var modern: String = '"C:\\Tools\\cloudflared.exe" tunnel --no-autoupdate --url http://127.0.0.1:9080'
+	assert_true(MCPTunnelManagerScript.cloudflared_command_matches(
+		modern, "C:\\Tools\\cloudflared.exe", 9080, "Windows"))

@@ -29,7 +29,8 @@ func test_cloudflared_args_restore_known_working_pipe_launch() -> void:
 	var args: PackedStringArray = SupervisorScript.build_cloudflared_args(9080)
 	assert_eq(args[0], "tunnel")
 	assert_true(args.has("--no-autoupdate"), "A persisted child must not replace its own PID")
-	assert_eq(args[args.find("--url") + 1], "http://localhost:9080")
+	assert_eq(args[args.find("--url") + 1], "http://127.0.0.1:9080",
+		"Explicit IPv4 loopback avoids ::1 resolution failures behind tunnels")
 	assert_eq(args[args.find("--protocol") + 1], "http2", "TCP fallback should work on networks that block QUIC/UDP")
 	assert_false(args.has("--logfile"), "The supervisor owns the combined durable output file")
 

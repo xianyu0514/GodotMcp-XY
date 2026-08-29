@@ -297,11 +297,17 @@ static func cloudflared_command_matches(command_line: String, binary_path: Strin
 		command.begins_with(expected_binary + " ")
 		or command.begins_with('"%s" ' % expected_binary)
 	)
+	# 兼容两种源站写法：新会话使用显式 127.0.0.1，历史持久化会话记录仍为
+	# localhost（旧 cloudflared 进程仍按旧命令行运行，必须继续被识别/收养）。
+	var origin_matches: bool = (
+		command.contains("http://127.0.0.1:%d" % port)
+		or command.contains("http://localhost:%d" % port)
+	)
 	return (
 		executable_matches
 		and command.contains("tunnel")
 		and command.contains("--url")
-		and command.contains("http://localhost:%d" % port)
+		and origin_matches
 	)
 
 func is_running() -> bool:

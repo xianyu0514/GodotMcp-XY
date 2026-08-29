@@ -59,7 +59,9 @@ static func build_cloudflared_args(port: int) -> PackedStringArray:
 		"--protocol",
 		"http2",
 		"--url",
-		"http://localhost:%d" % port,
+		# 显式 IPv4 回环：Windows 上 "localhost" 可能先解析为 ::1，而 MCP
+		# 服务器只监听 IPv4，首次拨号失败会放大为隧道侧 502。
+		"http://127.0.0.1:%d" % port,
 	])
 
 ## Maps a normalized proxy URL to the environment variables the cloudflared child

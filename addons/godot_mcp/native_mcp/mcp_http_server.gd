@@ -820,13 +820,21 @@ func send_response(response: Dictionary, context: Variant) -> void:
 ## 构建并发送 HTTP 响应
 ## @param peer: StreamPeerTCP - 客户端连接
 ## @param data: Dictionary - 要发送的 JSON 数据
+## 构建成功响应头。每次响应后服务器都会断开连接，因此必须显式声明
+## Connection: close：否则 keep-alive 代理（如 cloudflared）会复用一条
+## 即将关闭的连接，把在途请求撞上 EOF/连接重置，表现为间歇性 502。
+static func json_response_header(body_size: int) -> String:
+	var header: String = "HTTP/1.1 200 OK\r\n"
+	header += "Content-Type: application/json; charset=utf-8\r\n"
+	header += "Content-Length: " + str(body_size) + "\r\n"
+	header += "Connection: close\r\n"
+	return header
+
 func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 	var json_string: String = JSON.stringify(data)
 	var json_bytes: PackedByteArray = json_string.to_utf8_buffer()
-	
-	var http_response: String = "HTTP/1.1 200 OK\r\n"
-	http_response += "Content-Type: application/json; charset=utf-8\r\n"
-	http_response += "Content-Length: " + str(json_bytes.size()) + "\r\n"
+
+	var http_response: String = json_response_header(json_bytes.size())
 	http_response += _cors_header()
 	http_response += _session_id_header()
 	http_response += "\r\n"
@@ -895,6 +903,15 @@ func _send_http_accepted(peer: StreamPeerTCP) -> void:
 	peer.put_data(response.to_utf8_buffer())
 	peer.disconnect_from_host()
 
+## 构建错误响应头。与成功响应同理：显式 Connection: close 与随后的
+## 主动断开保持一致，避免代理在复用连接上的在途请求收到连接重置。
+static func error_response_header(status_code: int, status_text: String, body_size: int) -> String:
+	var header: String = "HTTP/1.1 " + str(status_code) + " " + status_text + "\r\n"
+	header += "Content-Type: text/plain; charset=utf-8\r\n"
+	header += "Content-Length: " + str(body_size) + "\r\n"
+	header += "Connection: close\r\n"
+	return header
+
 func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) -> void:
 	var status_text: String = ""
 	match status_code:
@@ -908,14 +925,13 @@ func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) ->
 		500: status_text = "Internal Server Error"
 		501: status_text = "Not Implemented"
 		_: status_text = "Error"
-	
-	var response_header: String = "HTTP/1.1 " + str(status_code) + " " + status_text + "\r\n"
-	response_header += "Content-Type: text/plain; charset=utf-8\r\n"
-	response_header += "Content-Length: " + str(message.to_utf8_buffer().size()) + "\r\n"
+
+	var response_header: String = error_response_header(
+		status_code, status_text, message.to_utf8_buffer().size())
 	response_header += _cors_header()
 	response_header += _session_id_header()
 	response_header += "\r\n"
-	
+
 	peer.put_data(response_header.to_utf8_buffer() + message.to_utf8_buffer())
 	peer.disconnect_from_host()
 	

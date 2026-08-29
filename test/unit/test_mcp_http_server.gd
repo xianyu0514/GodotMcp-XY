@@ -426,3 +426,20 @@ func _read_client_data(client: StreamPeerTCP) -> String:
 				received += data[1].get_string_from_utf8()
 		attempts += 1
 	return received
+
+func test_json_response_header_declares_connection_close() -> void:
+	var header: String = _http_server.json_response_header(42)
+	assert_true(header.begins_with("HTTP/1.1 200 OK"), "Success responses are 200")
+	assert_true(header.contains("Content-Length: 42"), "Body size is declared")
+	# The server closes the socket after each response; without an explicit
+	# Connection: close, keep-alive proxies (cloudflared) reuse the doomed
+	# socket and surface intermittent 502s on in-flight requests.
+	assert_true(header.contains("Connection: close"),
+		"Responses must not advertise reuse before an intentional disconnect")
+
+func test_error_response_header_declares_connection_close() -> void:
+	var header: String = _http_server.error_response_header(502, "Bad Gateway", 11)
+	assert_true(header.begins_with("HTTP/1.1 502 Bad Gateway"))
+	assert_true(header.contains("Content-Length: 11"))
+	assert_true(header.contains("Connection: close"),
+		"Error responses share the same close-before-reuse contract")
