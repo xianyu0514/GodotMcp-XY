@@ -40,3 +40,8 @@ __pycache__/
 
 # Test runner (fetched by CI, not vendored)
 addons/gut/
+
+# Integration-test scratch dirs and AI tool temp files (never commit)
+.tmp_*
+.test_tmp_*
+.codeartsdoer/
