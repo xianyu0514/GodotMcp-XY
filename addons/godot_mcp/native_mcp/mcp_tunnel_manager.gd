@@ -328,6 +328,12 @@ func start(binary_path: String, port: int) -> Error:
 func poll() -> String:
 	if not _public_url.is_empty():
 		return ""
+	var runtime_url: String = _read_runtime_public_url()
+	if not runtime_url.is_empty():
+		_public_url = runtime_url
+		_line_buffer = ""
+		_save_state()
+		return runtime_url
 	var chunk: String = _read_log_chunk()
 	if chunk.is_empty():
 		return ""
@@ -503,6 +509,18 @@ func _load_runtime_state() -> Dictionary:
 	):
 		return {}
 	return runtime
+
+## Reads the public URL the supervisor persisted into runtime.json as soon as its
+## pipe captured it. This is a lock-free sidecar: the supervisor closes the file
+## after every write, so the editor can read it while cloudflared.log stays open.
+func _read_runtime_public_url() -> String:
+	var runtime: Dictionary = _load_runtime_state()
+	if runtime.is_empty():
+		return ""
+	var candidate: String = String(runtime.get("public_url", "")).strip_edges()
+	if candidate.is_empty():
+		return ""
+	return candidate if extract_tunnel_url(candidate) == candidate else ""
 
 func _write_stop_request() -> Error:
 	var file: FileAccess = FileAccess.open(_stop_path, FileAccess.WRITE)

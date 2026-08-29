@@ -23,15 +23,84 @@ func test_cloudflared_args_restore_known_working_pipe_launch() -> void:
 	assert_false(args.has("--logfile"), "The supervisor owns the combined durable output file")
 
 func test_url_detection_rejects_cloudflare_service_hostnames_in_errors() -> void:
-	assert_true(SupervisorScript.contains_quick_tunnel_url(
-		"Your quick Tunnel has been created! Visit https://happy-tree.trycloudflare.com"
-	))
-	assert_false(SupervisorScript.contains_quick_tunnel_url(
-		"lookup api.trycloudflare.com: no such host"
-	), "A DNS error hostname must not disable pre-URL recovery")
-	assert_false(SupervisorScript.contains_quick_tunnel_url(
-		"failed to request quick Tunnel from https://api.trycloudflare.com"
-	), "Only an allocated public hostname proves that startup succeeded")
+	assert_eq(
+		SupervisorScript.extract_tunnel_url(
+			"Your quick Tunnel has been created! Visit https://happy-tree.trycloudflare.com"
+		),
+		"https://happy-tree.trycloudflare.com",
+		"An allocated public hostname must be detected"
+	)
+	assert_eq(
+		SupervisorScript.extract_tunnel_url("lookup api.trycloudflare.com: no such host"),
+		"",
+		"A DNS error hostname must not disable pre-URL recovery"
+	)
+	assert_eq(
+		SupervisorScript.extract_tunnel_url(
+			"failed to request quick Tunnel from https://api.trycloudflare.com"
+		),
+		"",
+		"Only an allocated public hostname proves that startup succeeded"
+	)
+
+func test_extract_tunnel_url_returns_the_allocated_hostname() -> void:
+	assert_eq(
+		SupervisorScript.extract_tunnel_url(
+			"INF |  https://toolbox-several-ceiling-earlier.trycloudflare.com  |"
+		),
+		"https://toolbox-several-ceiling-earlier.trycloudflare.com",
+		"The exact public URL must be extractable from the cloudflared banner"
+	)
+	assert_eq(
+		SupervisorScript.extract_tunnel_url("lookup api.trycloudflare.com: no such host"),
+		"",
+		"Cloudflare's allocation API must not be mistaken for the public URL"
+	)
+
+func test_write_runtime_state_persists_public_url_sidecar() -> void:
+	var tmp_root: String = ProjectSettings.globalize_path(
+		"user://.tmp_supervisor_sidecar_%d_%d" % [Time.get_ticks_usec(), randi() % 100000]
+	)
+	DirAccess.make_dir_recursive_absolute(tmp_root)
+	var runtime_path: String = tmp_root.path_join("runtime.json")
+	var config: Dictionary = {
+		"runtime": runtime_path,
+		"session": "sidecar-session",
+	}
+	assert_eq(
+		SupervisorScript.write_runtime_state(config, 43210, "https://sidecar-url.trycloudflare.com"),
+		OK,
+		"The URL sidecar must be written successfully"
+	)
+	var runtime: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(runtime_path))
+	assert_eq(int(runtime.get("schema_version", 0)), 1)
+	assert_eq(runtime.get("session", ""), "sidecar-session")
+	assert_eq(int(runtime.get("cloudflared_pid", -1)), 43210)
+	assert_eq(runtime.get("public_url", ""), "https://sidecar-url.trycloudflare.com")
+	assert_eq(
+		SupervisorScript.write_runtime_state({}, 1, ""),
+		ERR_INVALID_PARAMETER,
+		"Missing runtime/session paths must be rejected"
+	)
+	_remove_recursive(tmp_root)
+
+func _remove_recursive(path: String) -> void:
+	if path.is_empty() or not DirAccess.dir_exists_absolute(path):
+		return
+	var dir: DirAccess = DirAccess.open(path)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	var entry: String = dir.get_next()
+	while not entry.is_empty():
+		var full_path: String = path.path_join(entry)
+		if dir.current_is_dir():
+			_remove_recursive(full_path)
+		else:
+			DirAccess.remove_absolute(full_path)
+		entry = dir.get_next()
+	dir.list_dir_end()
+	DirAccess.remove_absolute(path)
 
 func test_only_pre_url_failures_are_retried_with_a_bound() -> void:
 	assert_true(SupervisorScript.should_retry_quick_tunnel(false, 1, 3))

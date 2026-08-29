@@ -170,6 +170,27 @@ func test_start_persists_url_and_detach_keeps_process_alive() -> void:
 	assert_eq(mgr.killed_pid, -1)
 	assert_true(FileAccess.file_exists(mgr.get_state_path()), "Detach must preserve the resumable session")
 
+func test_poll_reads_url_from_runtime_sidecar_without_log() -> void:
+	var mgr := FakeTunnelManager.new(_tmp_root)
+	assert_eq(mgr.start("/opt/cloudflared", 9080), OK)
+	var session_id: String = mgr.get_state_path().sha256_text().substr(0, 32)
+	var runtime_path: String = mgr.get_state_path().get_base_dir().path_join("runtime.json")
+	var sidecar_url: String = "https://sidecar-only.trycloudflare.com"
+	_write_file(runtime_path, JSON.stringify({
+		"schema_version": 1,
+		"session": session_id,
+		"supervisor_pid": mgr.get_pid(),
+		"cloudflared_pid": 777777,
+		"public_url": sidecar_url,
+	}, "\t"))
+	assert_eq(
+		mgr.poll(),
+		sidecar_url,
+		"Manager must discover the URL from the supervisor's lock-free sidecar"
+	)
+	var state: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(mgr.get_state_path()))
+	assert_eq(state.get("public_url", ""), sidecar_url, "Sidecar URL must be persisted to resumable state")
+
 func test_live_supervisor_captures_pipe_url_and_survives_detach() -> void:
 	if OS.get_name() != "Linux":
 		pending("Live supervisor fixture uses a POSIX executable and is covered by Linux CI")
