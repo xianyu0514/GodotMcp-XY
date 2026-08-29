@@ -7,12 +7,23 @@ func test_parse_user_args_preserves_paths_with_spaces_and_equals() -> void:
 		"--mcp-tunnel-binary=C:/Program Files/cloudflared/cloudflared.exe",
 		"--mcp-tunnel-log=C:/Users/Test/AppData/GodotMcp-XY/a=b/cloudflared.log",
 		"--mcp-tunnel-port=9080",
+		"--mcp-tunnel-proxy=http://127.0.0.1:7890",
 		"--unrelated=value",
 	]))
 	assert_eq(parsed.get("binary", ""), "C:/Program Files/cloudflared/cloudflared.exe")
 	assert_eq(parsed.get("log", ""), "C:/Users/Test/AppData/GodotMcp-XY/a=b/cloudflared.log")
 	assert_eq(parsed.get("port", ""), "9080")
+	assert_eq(parsed.get("proxy", ""), "http://127.0.0.1:7890")
 	assert_false(parsed.has("unrelated"), "Supervisor must ignore unrelated project arguments")
+
+func test_proxy_environment_exports_proxy_and_loopback_bypass() -> void:
+	assert_eq(SupervisorScript.proxy_environment(""), {})
+	var env: Dictionary = SupervisorScript.proxy_environment("http://127.0.0.1:7890")
+	assert_eq(env.get("HTTPS_PROXY", ""), "http://127.0.0.1:7890")
+	assert_eq(env.get("HTTP_PROXY", ""), "http://127.0.0.1:7890")
+	assert_eq(env.get("ALL_PROXY", ""), "http://127.0.0.1:7890")
+	assert_true(String(env.get("NO_PROXY", "")).contains("127.0.0.1"))
+	assert_true(String(env.get("NO_PROXY", "")).contains("localhost"))
 
 func test_cloudflared_args_restore_known_working_pipe_launch() -> void:
 	var args: PackedStringArray = SupervisorScript.build_cloudflared_args(9080)
@@ -143,3 +154,6 @@ func test_validate_config_requires_every_ownership_path() -> void:
 	var invalid_port: Dictionary = valid.duplicate()
 	invalid_port["port"] = "0"
 	assert_eq(SupervisorScript.validate_config(invalid_port), ERR_INVALID_PARAMETER)
+	var with_proxy: Dictionary = valid.duplicate()
+	with_proxy["proxy"] = "http://127.0.0.1:7890"
+	assert_eq(SupervisorScript.validate_config(with_proxy), OK, "An optional proxy must not break validation")

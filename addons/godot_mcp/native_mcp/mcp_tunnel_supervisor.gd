@@ -62,6 +62,20 @@ static func build_cloudflared_args(port: int) -> PackedStringArray:
 		"http://localhost:%d" % port,
 	])
 
+## Maps a normalized proxy URL to the environment variables the cloudflared child
+## should inherit. `NO_PROXY` always includes the loopback origin so cloudflared
+## never tries to reach `http://localhost:<port>` through the proxy.
+static func proxy_environment(proxy: String) -> Dictionary:
+	var clean: String = proxy.strip_edges()
+	if clean.is_empty():
+		return {}
+	return {
+		"HTTPS_PROXY": clean,
+		"HTTP_PROXY": clean,
+		"ALL_PROXY": clean,
+		"NO_PROXY": "localhost,127.0.0.1,::1",
+	}
+
 ## Extracts the first allocated trycloudflare.com URL, ignoring Cloudflare's own
 ## api.trycloudflare.com hostname that may appear in error messages. This lets the
 ## supervisor persist the exact public URL instead of only signaling its presence.
@@ -104,8 +118,15 @@ func _initialize() -> void:
 		return
 	_append_text("[GodotMcp-XY] Tunnel supervisor %d starting cloudflared.\n" % OS.get_process_id())
 	_initialized_ok = true
+	_apply_proxy_environment()
 	if not _start_child():
 		_schedule_retry()
+
+func _apply_proxy_environment() -> void:
+	var proxy: String = String(_config.get("proxy", "")).strip_edges()
+	var environment: Dictionary = proxy_environment(proxy)
+	for key in environment:
+		OS.set_environment(String(key), String(environment[key]))
 
 func _start_child() -> bool:
 	_close_pipes()

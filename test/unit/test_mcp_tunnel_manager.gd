@@ -119,6 +119,41 @@ func test_startup_failure_classification_is_actionable_without_leaking_english_u
 	assert_eq(MCPTunnelManagerScript.classify_startup_failure("failed to request quick Tunnel: status 503"), "service")
 	assert_eq(MCPTunnelManagerScript.classify_startup_failure("unrecognized fatal line"), "unknown")
 
+func test_normalize_proxy_url_adds_scheme_and_trims_slash() -> void:
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("127.0.0.1:7890"), "http://127.0.0.1:7890")
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("http://127.0.0.1:7890/"), "http://127.0.0.1:7890")
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("  "), "")
+
+func test_proxy_from_environment_prefers_https() -> void:
+	assert_eq(
+		MCPTunnelManagerScript.proxy_from_environment({
+			"HTTPS_PROXY": "http://127.0.0.1:7890",
+			"HTTP_PROXY": "http://127.0.0.1:8080",
+		}),
+		"http://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.proxy_from_environment({"http_proxy": "127.0.0.1:8080"}),
+		"http://127.0.0.1:8080"
+	)
+	assert_eq(MCPTunnelManagerScript.proxy_from_environment({}), "")
+
+func test_parse_windows_proxy_server_prefers_https() -> void:
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server(
+			"http=127.0.0.1:8080;https=127.0.0.1:7890;socks=127.0.0.1:1080"
+		),
+		"https://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server("127.0.0.1:7890"),
+		"http://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server("socks=127.0.0.1:1080"),
+		"socks5://127.0.0.1:1080"
+	)
+
 func test_new_manager_is_not_running():
 	var mgr = MCPTunnelManagerScript.new()
 	assert_false(mgr.is_running(), "A freshly created manager should not be running")
@@ -135,7 +170,7 @@ func test_supervisor_launch_args_preserve_all_paths_without_shell_quoting() -> v
 	var stop_path: String = _tmp_root.path_join("stop.request")
 	var args: PackedStringArray = MCPTunnelManagerScript.build_supervisor_launch_args(
 		"C:/My Game", "C:/My Game/addons/supervisor.gd", "C:/Program Files/cloudflared.exe",
-		9080, log_path, runtime_path, stop_path, "session-123"
+		9080, log_path, runtime_path, stop_path, "session-123", "http://127.0.0.1:7890"
 	)
 	assert_eq(args[0], "--headless")
 	assert_true(args.has("--script"))
@@ -145,6 +180,7 @@ func test_supervisor_launch_args_preserve_all_paths_without_shell_quoting() -> v
 	assert_true(args.has("--mcp-tunnel-runtime=%s" % runtime_path))
 	assert_true(args.has("--mcp-tunnel-stop=%s" % stop_path))
 	assert_true(args.has("--mcp-tunnel-session=session-123"))
+	assert_true(args.has("--mcp-tunnel-proxy=http://127.0.0.1:7890"))
 
 func test_project_session_directory_is_stable_and_project_scoped() -> void:
 	var first: String = MCPTunnelManagerScript.default_session_dir("/work/game-a")
