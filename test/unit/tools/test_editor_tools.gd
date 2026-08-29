@@ -474,3 +474,75 @@ func test_undo_redo_tools_registered_and_use_editor_undo_redo():
 class CounterBox:
 	extends RefCounted
 	var value: int = 0
+
+# --- Trusted export-template download (pure validation paths; no network in CI) ---
+
+func test_templates_mirror_urls_are_official_and_version_pinned():
+	var github: String = _editor_tools.templates_mirror_url(
+		"github", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(github.begins_with("https://github.com/godotengine/godot/releases/download/4.7-stable/"))
+	var tuxfamily: String = _editor_tools.templates_mirror_url(
+		"tuxfamily", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(tuxfamily.begins_with("https://downloads.tuxfamily.org/godotengine/4.7/"))
+	var legacy: String = _editor_tools.templates_mirror_url(
+		"godotengine", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(legacy.begins_with("https://downloads.godotengine.org/export_templates/4.7/"))
+
+func test_templates_url_allowlist_blocks_untrusted_hosts():
+	assert_true(_editor_tools.is_trusted_templates_url(
+		"https://github.com/godotengine/godot/releases/download/4.7-stable/x.tpz"))
+	assert_true(_editor_tools.is_trusted_templates_url(
+		"https://downloads.tuxfamily.org/godotengine/4.7/x.tpz"))
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"http://github.com/godotengine/x.tpz"), "Plain HTTP is never trusted")
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"https://evil.com/godotengine/x.tpz"), "Foreign hosts are rejected")
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"https://github.com.evil.com/x.tpz"), "Host-suffix spoofs are rejected")
+
+func test_checksum_sums_parsing_finds_target_file():
+	var sums: String = "abc123  Godot_v4.7-stable_export_templates.tpz\ndef456  Godot_v4.7-stable_linux.x86_64.zip\n"
+	assert_eq(_editor_tools.parse_checksum_sums(sums, "Godot_v4.7-stable_export_templates.tpz"), "abc123")
+	assert_eq(_editor_tools.parse_checksum_sums(sums, "missing.tpz"), "",
+		"Missing entries return empty so the caller can treat it as unavailable")
+
+func test_templates_proxy_accepts_only_loopback():
+	assert_eq(_editor_tools._templates_proxy_allowed("http://127.0.0.1:7890"), "http://127.0.0.1:7890")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://LocalHost:8080/"), "http://localhost:8080")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://proxy.example.com:8080"), "",
+		"Non-loopback proxies are rejected (SSRF guard)")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://127.0.0.1:notaport"), "")
+	assert_eq(_editor_tools._templates_proxy_allowed("socks5://127.0.0.1:7890"), "",
+		"Only HTTP proxies are supported")
+
+func test_download_actions_validate_before_touching_the_network():
+	var bad_mirror: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download", "mirror": "evil-mirror"})
+	assert_true(bad_mirror.has("error"), "Unknown mirrors are rejected before any request starts")
+	assert_true(String(bad_mirror.get("error", "")).contains("github"),
+		"The error names the supported mirrors")
+	var idle_status: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download_status"})
+	assert_eq(String(idle_status.get("status", "")), "idle")
+	var idle_cancel: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download_cancel"})
+	assert_eq(String(idle_cancel.get("status", "")), "idle")
+
+func test_release_json_size_extraction_finds_target_asset():
+	var sample: String = """{"assets":[
+		{"name":"Godot_v4.6.3-stable_linux.x86_64.zip","size":63000000},
+		{"name":"Godot_v4.6.3-stable_export_templates.tpz","size":1073741824}
+	]}"""
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		sample, "Godot_v4.6.3-stable_export_templates.tpz"), 1073741824,
+		"The official asset byte size is extracted for the integrity cross-check")
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		sample, "missing.tpz"), -1, "Missing assets report unavailable (-1)")
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		"{\"assets\": \"not-a-list\"}", "x.tpz"), -1,
+		"Non-list assets report unavailable")
+
+func test_integrity_source_url_is_trusted_and_tag_pinned():
+	var url: String = _editor_tools.templates_integrity_source_url("4.6.3-stable")
+	assert_true(_editor_tools.is_trusted_templates_url(url))
+	assert_true(url.contains("godotengine/godot/releases/tags/4.6.3-stable"))
