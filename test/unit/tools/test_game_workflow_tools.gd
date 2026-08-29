@@ -526,3 +526,65 @@ func test_changed_replan_reclassifies_instead_of_reusing_stale_capabilities() ->
 	assert_true("get_project_info" in names)
 	assert_false("read_script" in names,
 		"A changed objective must not inherit the old adaptive route")
+
+# --- Workflow reliability: artifact-derived inputs and runtime window authorization ---
+
+func test_created_script_artifact_derives_attach_script_input() -> void:
+	_core.schemas["create_script"] = {
+		"type": "object", "properties": {"script_path": {"type": "string"}},
+		"required": ["script_path"]
+	}
+	_core.schemas["attach_script"] = {
+		"type": "object", "properties": {"script_path": {"type": "string"}},
+		"required": ["script_path"]
+	}
+	_core.responses["create_script"] = {
+		"success": true, "script_path": "res://scripts/player.gd"
+	}
+	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 5,
+		"step_inputs": {"create_script": {"script_path": "res://scripts/player.gd"}}
+	})
+	assert_ne(String(result.get("status", "")), "needs_input",
+		"attach_script must not stall when the artifact registry knows the script")
+	var attach_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "attach_script":
+			attach_call = call
+	assert_false(attach_call.is_empty(), "attach_script executed after derivation")
+	assert_eq(String((attach_call.get("arguments", {}) as Dictionary).get("script_path", "")),
+		"res://scripts/player.gd",
+		"script_path derives from the create_script artifact instead of asking the caller")
+
+func test_runner_auto_authorizes_runtime_window_for_planned_run() -> void:
+	var planned: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "plan",
+		"objective": "Run the game and verify runtime state",
+		"required_capabilities": ["run_project"],
+		"plan_path": _plan_path
+	})
+	assert_false(planned.has("error"), str(planned.get("error", "")))
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 10
+	})
+	assert_ne(String(result.get("status", "")), "needs_input")
+	var run_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "run_project":
+			run_call = call
+	assert_false(run_call.is_empty(), "run_project executed inside the plan")
+	assert_eq(bool((run_call.get("arguments", {}) as Dictionary).get("allow_window", false)), true,
+		"Plan-authorized runtime steps auto-pass the interactive window policy")
+
+func test_plan_tool_documents_expect_fail_option() -> void:
+	var properties: Dictionary = ((_core.registrations["plan_game_workflow"] as Dictionary)\
+		.get("input_schema", {}) as Dictionary).get("properties", {})
+	assert_true((properties as Dictionary).has("expect_fail"),
+		"Negative-gate configuration is discoverable in the plan schema")

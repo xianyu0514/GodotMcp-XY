@@ -16,6 +16,25 @@ const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
 
+# Workflow-authorized runtime tools: the objective already authorizes runtime
+# verification, so the interactive window-policy prompt must not stall the run.
+const RUNTIME_WINDOW_TOOLS: Array[String] = ["run_project", "stop_project"]
+
+# Schema-required input -> workflow artifact kind. Lets create -> configure
+# chains (create_script -> attach_script, create_scene -> save_scene, ...)
+# proceed autonomously instead of stopping on needs_input.
+const DERIVED_INPUT_ARTIFACTS: Dictionary = {
+	"script_path": "script",
+	"scene_path": "scene",
+	"theme_path": "theme",
+	"tileset_path": "tileset",
+	"animation_path": "animation",
+	"animation_name": "animation_name",
+	"test_path": "smoke_test",
+	"search_path": "test_dir",
+	"test_dir": "test_dir"
+}
+
 var _server_core: RefCounted = null
 var _engine: RefCounted = EngineScript.new()
 var _workflow_router: RefCounted = WorkflowRouterScript.new()
@@ -40,6 +59,11 @@ func _register_plan_tool(server_core: RefCounted) -> void:
 				"profiles": {"type": "array", "items": {"type": "string", "enum": EngineScript.PROFILE_IDS}},
 				"required_capabilities": {"type": "array", "items": {"type": "string"}},
 				"platform": {"type": "string"},
+				"expect_fail": {
+					"type": "object",
+					"description": "Map of objective-gate step key to true (for example {\"verify_scripts\": true}) to invert that gate's verdict. Use for fault-injection loops that must prove a detector fails.",
+					"additionalProperties": {"type": "boolean"}
+				},
 				"max_repair_attempts": {
 					"type": "integer", "default": EngineScript.DEFAULT_REPAIR_ATTEMPTS,
 					"description": "0 adapts while failure evidence changes; a positive value is an explicit repair policy and requests replan when exhausted."
@@ -328,7 +352,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			break
 		var task: Dictionary = ready[0]
 		var tool_name: String = String(task.get("tool_name", ""))
-		var arguments: Dictionary = _resolve_inputs(task, step_inputs, false)
+		var arguments: Dictionary = _derive_step_arguments(
+			plan, task, tool_name, _resolve_inputs(task, step_inputs, false))
 		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
 		if not missing.is_empty():
 			task["needs_input"] = true
@@ -399,7 +424,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 
 func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, plan_path: String) -> Dictionary:
 	var repair_tool: String = String(task.get("repair_tool", ""))
-	var arguments: Dictionary = _resolve_inputs(task, step_inputs, true)
+	var arguments: Dictionary = _derive_step_arguments(
+		plan, task, repair_tool, _resolve_inputs(task, step_inputs, true))
 	var missing: Array[String] = _missing_required_inputs(repair_tool, arguments)
 	if not missing.is_empty():
 		task["needs_input"] = true
@@ -463,6 +489,32 @@ func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) ->
 		# Plan-owned arguments (for example manage_localization.action) override
 		# ephemeral input so a caller cannot change the authorized operation.
 		arguments.merge((task.get("arguments", {}) as Dictionary).duplicate(true), true)
+	return arguments
+
+## Resolve "$artifact" references and fill schema-required inputs from the
+## workflow artifact registry, then apply plan-authorized runtime defaults.
+func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: String,
+		arguments: Dictionary) -> Dictionary:
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts_value: Variant = workflow.get("artifacts", {})
+	var artifacts: Dictionary = artifacts_value if artifacts_value is Dictionary else {}
+	if not artifacts.is_empty():
+		var resolved: Variant = _engine.resolve_argument_references(arguments, artifacts)
+		if resolved is Dictionary:
+			arguments = resolved
+		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
+		var derived: Dictionary = {}
+		for param in missing:
+			var artifact_key: String = String(DERIVED_INPUT_ARTIFACTS.get(param, ""))
+			if not artifact_key.is_empty() and artifacts.has(artifact_key):
+				derived[param] = artifacts[artifact_key]
+				arguments[param] = artifacts[artifact_key]
+		if not derived.is_empty():
+			task["derived_inputs"] = derived
+		else:
+			task.erase("derived_inputs")
+	if tool_name in RUNTIME_WINDOW_TOOLS and not arguments.has("allow_window"):
+		arguments["allow_window"] = true
 	return arguments
 
 func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array[String]:
