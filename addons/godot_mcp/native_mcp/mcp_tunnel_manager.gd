@@ -7,28 +7,40 @@ extends RefCounted
 ## The tunnel is deliberately independent from the Godot/editor lifecycle.
 ## Session metadata and cloudflared's log live in a machine-local, project-scoped
 ## directory. A reloaded plugin or a new Godot process can therefore validate and
-## adopt the existing PID/URL. Only stop() terminates it; detach() never does.
+## adopt the existing supervisor PID/URL. Only stop() terminates it; detach()
+## never does.
 
-const TRYCLOUDFLARE_PATTERN: String = "https://[A-Za-z0-9._-]+\\.trycloudflare\\.com"
+const TRYCLOUDFLARE_PATTERN: String = "https://([A-Za-z0-9._-]+)\\.trycloudflare\\.com"
 const DEFAULT_PORT: int = 9080
 const MAX_BUFFER: int = 16384
 const MAX_LOG_READ_BYTES: int = 65536
-const STATE_SCHEMA_VERSION: int = 1
+const STATE_SCHEMA_VERSION: int = 2
+const LEGACY_STATE_SCHEMA_VERSION: int = 1
 const SHARED_APP_DIR: String = "GodotMcp-XY"
 const SESSION_COMPONENT_DIR: String = "tunnels"
 const STATE_FILE_NAME: String = "session.json"
 const LOG_FILE_NAME: String = "cloudflared.log"
+const RUNTIME_FILE_NAME: String = "runtime.json"
+const STOP_FILE_NAME: String = "stop.request"
+const SUPERVISOR_SCRIPT_PATH: String = "res://addons/godot_mcp/native_mcp/mcp_tunnel_supervisor.gd"
+const STOP_GRACE_MSEC: int = 750
 
 var _session_dir: String = ""
 var _state_path: String = ""
 var _log_path: String = ""
+var _runtime_path: String = ""
+var _stop_path: String = ""
+var _session_id: String = ""
 var _pid: int = -1
 var _public_url: String = ""
 var _binary_path: String = ""
+var _supervisor_executable: String = ""
+var _supervisor_script: String = ""
 var _port: int = 0
 var _line_buffer: String = ""
 var _log_offset: int = 0
 var _spawned_by_this_instance: bool = false
+var _legacy_direct_process: bool = false
 
 func _init(session_dir: String = "") -> void:
 	_session_dir = session_dir.strip_edges()
@@ -37,6 +49,9 @@ func _init(session_dir: String = "") -> void:
 	_session_dir = _session_dir.simplify_path()
 	_state_path = _session_dir.path_join(STATE_FILE_NAME)
 	_log_path = _session_dir.path_join(LOG_FILE_NAME)
+	_runtime_path = _session_dir.path_join(RUNTIME_FILE_NAME)
+	_stop_path = _session_dir.path_join(STOP_FILE_NAME)
+	_session_id = _state_path.sha256_text().substr(0, 32)
 
 ## Stable machine-local directory for the currently open project. Hashing the
 ## absolute project root avoids leaking paths in filenames and prevents two
@@ -53,19 +68,26 @@ static func default_session_dir(project_root: String = "") -> String:
 		SESSION_COMPONENT_DIR
 	).path_join(project_key).simplify_path()
 
-## cloudflared writes to a durable log so it never depends on pipes owned by
-## Godot. OS.create_process() then keeps the process alive after Godot exits.
-static func build_launch_args(port: int, log_path: String) -> PackedStringArray:
+## Starts a separate headless Godot main loop that owns cloudflared's pipes.
+## Every value is passed as one user argument so paths with spaces are preserved
+## without shell quoting or platform-specific wrappers.
+static func build_supervisor_launch_args(project_root: String, supervisor_script: String,
+		binary_path: String, port: int, log_path: String, runtime_path: String,
+		stop_path: String, session_id: String) -> PackedStringArray:
 	var effective_port: int = port if port > 0 else DEFAULT_PORT
 	return PackedStringArray([
-		"tunnel",
-		"--no-autoupdate",
-		"--loglevel",
-		"info",
-		"--logfile",
-		log_path,
-		"--url",
-		"http://localhost:%d" % effective_port,
+		"--headless",
+		"--path",
+		project_root,
+		"--script",
+		supervisor_script,
+		"--",
+		"--mcp-tunnel-binary=%s" % binary_path,
+		"--mcp-tunnel-port=%d" % effective_port,
+		"--mcp-tunnel-log=%s" % log_path,
+		"--mcp-tunnel-runtime=%s" % runtime_path,
+		"--mcp-tunnel-stop=%s" % stop_path,
+		"--mcp-tunnel-session=%s" % session_id,
 	])
 
 ## Extracts the first trycloudflare.com URL from a cloudflared log chunk.
@@ -73,10 +95,36 @@ static func extract_tunnel_url(text: String) -> String:
 	var regex: RegEx = RegEx.new()
 	if regex.compile(TRYCLOUDFLARE_PATTERN) != OK:
 		return ""
-	var result: RegExMatch = regex.search(text)
-	if result == null:
-		return ""
-	return result.get_string()
+	var search_offset: int = 0
+	while search_offset < text.length():
+		var result: RegExMatch = regex.search(text, search_offset)
+		if result == null:
+			return ""
+		if result.get_string(1).to_lower() != "api":
+			return result.get_string()
+		search_offset = result.get_end()
+	return ""
+
+static func classify_startup_failure(log_text: String) -> String:
+	var normalized: String = log_text.to_lower()
+	if normalized.contains("no such host") or normalized.contains("temporary failure in name resolution"):
+		return "dns"
+	if normalized.contains("proxyconnect") or normalized.contains("proxy connection"):
+		return "proxy"
+	if normalized.contains("x509") or normalized.contains("tls handshake") or normalized.contains("certificate"):
+		return "tls"
+	if normalized.contains("429") or normalized.contains("too many requests") or normalized.contains("rate limit"):
+		return "rate_limited"
+	if normalized.contains("i/o timeout") or normalized.contains("context deadline exceeded") or normalized.contains("timed out"):
+		return "timeout"
+	if (
+		normalized.contains("failed to request quick tunnel")
+		or normalized.contains("status 502")
+		or normalized.contains("status 503")
+		or normalized.contains("service unavailable")
+	):
+		return "service"
+	return "unknown"
 
 ## Verifies that a live PID still belongs to this exact managed session. The
 ## unique logfile argument protects against stale PID reuse after a reboot.
@@ -107,6 +155,52 @@ static func command_line_matches_session(command_line: String, binary_path: Stri
 		and command.contains(expected_log)
 	)
 
+static func supervisor_command_matches_session(command_line: String, executable_path: String,
+		supervisor_script: String, session_id: String, os_name: String = "") -> bool:
+	var command: String = command_line.strip_edges()
+	var expected_executable: String = executable_path.strip_edges()
+	var expected_script: String = supervisor_script.strip_edges()
+	var expected_session: String = session_id.strip_edges()
+	if command.is_empty() or expected_executable.is_empty() or expected_script.is_empty() or expected_session.is_empty():
+		return false
+	var platform: String = os_name if not os_name.is_empty() else OS.get_name()
+	if platform == "Windows":
+		command = command.replace("\\", "/").to_lower()
+		expected_executable = expected_executable.replace("\\", "/").to_lower()
+		expected_script = expected_script.replace("\\", "/").to_lower()
+		expected_session = expected_session.to_lower()
+	var executable_matches: bool = (
+		command.begins_with(expected_executable + " ")
+		or command.begins_with('"%s" ' % expected_executable)
+	)
+	return (
+		executable_matches
+		and command.contains("--script")
+		and command.contains(expected_script)
+		and command.contains("--mcp-tunnel-session=%s" % expected_session)
+	)
+
+static func cloudflared_command_matches(command_line: String, binary_path: String,
+		port: int, os_name: String = "") -> bool:
+	var command: String = command_line.strip_edges()
+	var expected_binary: String = binary_path.strip_edges()
+	if command.is_empty() or expected_binary.is_empty() or port <= 0:
+		return false
+	var platform: String = os_name if not os_name.is_empty() else OS.get_name()
+	if platform == "Windows":
+		command = command.replace("\\", "/").to_lower()
+		expected_binary = expected_binary.replace("\\", "/").to_lower()
+	var executable_matches: bool = (
+		command.begins_with(expected_binary + " ")
+		or command.begins_with('"%s" ' % expected_binary)
+	)
+	return (
+		executable_matches
+		and command.contains("tunnel")
+		and command.contains("--url")
+		and command.contains("http://localhost:%d" % port)
+	)
+
 func is_running() -> bool:
 	if _pid <= 0:
 		return false
@@ -129,6 +223,11 @@ func get_state_path() -> String:
 func get_log_path() -> String:
 	return _log_path
 
+func get_startup_failure_code() -> String:
+	if not FileAccess.file_exists(_log_path):
+		return "unknown"
+	return classify_startup_failure(FileAccess.get_file_as_string(_log_path))
+
 ## Adopts a tunnel started by an earlier plugin/editor instance. Returns false
 ## for missing, corrupt, stopped, or PID-reused sessions and removes stale state.
 ## The last URL is retained in memory on failure so the panel can clear a stale
@@ -147,21 +246,35 @@ func restore() -> bool:
 	_pid = int(state.get("pid", -1))
 	_binary_path = String(state.get("binary_path", "")).strip_edges()
 	_port = int(state.get("port", 0))
+	_legacy_direct_process = int(state.get("schema_version", 0)) == LEGACY_STATE_SCHEMA_VERSION
+	_supervisor_executable = String(state.get("supervisor_executable", "")).strip_edges()
+	_supervisor_script = String(state.get("supervisor_script", "")).strip_edges()
 	_spawned_by_this_instance = false
 	_log_offset = 0
 	_line_buffer = ""
 	if not _is_external_process_running(_pid):
+		_terminate_owned_cloudflared_child()
 		_remove_state_file()
+		_remove_file_if_present(_runtime_path)
+		_remove_file_if_present(_stop_path)
 		_reset_runtime(true)
 		return false
 	var command_line: String = _read_process_command_line(_pid)
-	if not command_line_matches_session(command_line, _binary_path, _log_path):
+	var owns_process: bool = command_line_matches_session(
+		command_line, _binary_path, _log_path
+	) if _legacy_direct_process else supervisor_command_matches_session(
+		command_line, _supervisor_executable, _supervisor_script, _session_id
+	)
+	if not owns_process:
+		_terminate_owned_cloudflared_child()
 		_remove_state_file()
+		_remove_file_if_present(_runtime_path)
+		_remove_file_if_present(_stop_path)
 		_reset_runtime(true)
 		return false
 	return true
 
-## Starts a detached `<binary> tunnel --url http://localhost:<port>` process.
+## Starts a detached headless supervisor which owns cloudflared's live pipes.
 ## Existing persisted sessions are adopted first, preventing duplicate tunnels.
 func start(binary_path: String, port: int) -> Error:
 	if is_running() or restore():
@@ -173,17 +286,36 @@ func start(binary_path: String, port: int) -> Error:
 	if DirAccess.make_dir_recursive_absolute(_session_dir) != OK:
 		return ERR_CANT_CREATE
 	_remove_file_if_present(_log_path)
+	_remove_file_if_present(_runtime_path)
+	_remove_file_if_present(_stop_path)
 	_remove_state_file()
 	_reset_runtime()
 
-	var args: PackedStringArray = build_launch_args(effective_port, _log_path)
-	var process_id: int = _spawn_process(exe, args)
+	var project_root: String = ProjectSettings.globalize_path("res://").trim_suffix("/").trim_suffix("\\")
+	var supervisor_script: String = ProjectSettings.globalize_path(SUPERVISOR_SCRIPT_PATH).simplify_path()
+	var supervisor_executable: String = OS.get_executable_path().simplify_path()
+	if not FileAccess.file_exists(supervisor_script) or supervisor_executable.is_empty():
+		return ERR_CANT_CREATE
+	var args: PackedStringArray = build_supervisor_launch_args(
+		project_root,
+		supervisor_script,
+		exe,
+		effective_port,
+		_log_path,
+		_runtime_path,
+		_stop_path,
+		_session_id
+	)
+	var process_id: int = _spawn_process(supervisor_executable, args)
 	if process_id <= 0:
 		return ERR_CANT_CREATE
 	_pid = process_id
 	_binary_path = exe
+	_supervisor_executable = supervisor_executable
+	_supervisor_script = supervisor_script
 	_port = effective_port
 	_spawned_by_this_instance = true
+	_legacy_direct_process = false
 	var state_error: Error = _save_state()
 	if state_error != OK:
 		_terminate_process(_pid)
@@ -210,14 +342,30 @@ func poll() -> String:
 		_line_buffer = _line_buffer.substr(_line_buffer.length() - 4096)
 	return ""
 
-## Explicit user action: validate ownership once more, terminate cloudflared,
-## and remove the resumable session. No lifecycle callback calls this method.
+## Explicit user action: validate ownership once more, ask the supervisor to
+## terminate cloudflared, and remove the resumable session. No lifecycle
+## callback calls this method.
 func stop() -> void:
 	if is_running():
 		var command_line: String = _read_process_command_line(_pid)
-		if command_line_matches_session(command_line, _binary_path, _log_path):
-			_terminate_process(_pid)
+		if _legacy_direct_process:
+			if command_line_matches_session(command_line, _binary_path, _log_path):
+				_terminate_process(_pid)
+		elif supervisor_command_matches_session(
+				command_line, _supervisor_executable, _supervisor_script, _session_id
+		):
+			_write_stop_request()
+			var deadline: int = Time.get_ticks_msec() + STOP_GRACE_MSEC
+			while is_running() and Time.get_ticks_msec() < deadline:
+				OS.delay_msec(25)
+			if is_running():
+				_terminate_owned_cloudflared_child()
+				_terminate_process(_pid)
+	else:
+		_terminate_owned_cloudflared_child()
 	_remove_state_file()
+	_remove_file_if_present(_runtime_path)
+	_remove_file_if_present(_stop_path)
 	_reset_runtime()
 
 ## Releases only this Godot instance's in-memory handle. The external process,
@@ -229,7 +377,10 @@ func detach() -> void:
 func discard_stale_session() -> void:
 	if is_running():
 		return
+	_terminate_owned_cloudflared_child()
 	_remove_state_file()
+	_remove_file_if_present(_runtime_path)
+	_remove_file_if_present(_stop_path)
 	_reset_runtime()
 
 func _state_dictionary() -> Dictionary:
@@ -238,8 +389,13 @@ func _state_dictionary() -> Dictionary:
 		"pid": _pid,
 		"public_url": _public_url,
 		"binary_path": _binary_path,
+		"supervisor_executable": _supervisor_executable,
+		"supervisor_script": _supervisor_script,
+		"session_id": _session_id,
 		"port": _port,
 		"log_path": _log_path,
+		"runtime_path": _runtime_path,
+		"stop_path": _stop_path,
 		"started_at_unix": int(Time.get_unix_time_from_system()),
 	}
 
@@ -273,12 +429,24 @@ func _load_state() -> Dictionary:
 	return parsed as Dictionary
 
 func _is_valid_state(state: Dictionary) -> bool:
-	return (
-		int(state.get("schema_version", 0)) == STATE_SCHEMA_VERSION
+	var schema_version: int = int(state.get("schema_version", 0))
+	var common_valid: bool = (
+		schema_version in [LEGACY_STATE_SCHEMA_VERSION, STATE_SCHEMA_VERSION]
 		and int(state.get("pid", -1)) > 0
 		and int(state.get("port", 0)) > 0
 		and not String(state.get("binary_path", "")).strip_edges().is_empty()
 		and String(state.get("log_path", "")).simplify_path() == _log_path
+	)
+	if not common_valid or schema_version == LEGACY_STATE_SCHEMA_VERSION:
+		return common_valid
+	return (
+		not String(state.get("supervisor_executable", "")).strip_edges().is_empty()
+		and String(state.get("supervisor_script", "")).simplify_path() == ProjectSettings.globalize_path(
+			SUPERVISOR_SCRIPT_PATH
+		).simplify_path()
+		and String(state.get("session_id", "")) == _session_id
+		and String(state.get("runtime_path", "")).simplify_path() == _runtime_path
+		and String(state.get("stop_path", "")).simplify_path() == _stop_path
 	)
 
 func _read_log_chunk() -> String:
@@ -303,8 +471,11 @@ func _read_log_chunk() -> String:
 func _reset_runtime(preserve_url: bool = false) -> void:
 	_pid = -1
 	_binary_path = ""
+	_supervisor_executable = ""
+	_supervisor_script = ""
 	_port = 0
 	_spawned_by_this_instance = false
+	_legacy_direct_process = false
 	_line_buffer = ""
 	_log_offset = 0
 	if not preserve_url:
@@ -314,8 +485,46 @@ func _remove_state_file() -> void:
 	_remove_file_if_present(_state_path)
 
 func _remove_file_if_present(path: String) -> void:
-	if FileAccess.file_exists(path):
+	if not path.is_empty() and FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
+
+func _load_runtime_state() -> Dictionary:
+	if not FileAccess.file_exists(_runtime_path):
+		return {}
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(_runtime_path))
+	if typeof(parsed) != TYPE_DICTIONARY:
+		return {}
+	var runtime: Dictionary = parsed as Dictionary
+	if (
+		int(runtime.get("schema_version", 0)) != 1
+		or String(runtime.get("session", "")) != _session_id
+		or int(runtime.get("supervisor_pid", -1)) != _pid
+		or int(runtime.get("cloudflared_pid", -1)) <= 0
+	):
+		return {}
+	return runtime
+
+func _write_stop_request() -> Error:
+	var file: FileAccess = FileAccess.open(_stop_path, FileAccess.WRITE)
+	if file == null:
+		return ERR_FILE_CANT_WRITE
+	file.store_string(_session_id)
+	file.flush()
+	file.close()
+	return OK
+
+func _terminate_owned_cloudflared_child() -> void:
+	if _legacy_direct_process:
+		return
+	var runtime: Dictionary = _load_runtime_state()
+	if runtime.is_empty():
+		return
+	var child_pid: int = int(runtime.get("cloudflared_pid", -1))
+	if not _is_external_process_running(child_pid):
+		return
+	var command_line: String = _read_process_command_line(child_pid)
+	if cloudflared_command_matches(command_line, _binary_path, _port):
+		_terminate_process(child_pid)
 
 ## Process operations are wrappers so lifecycle behavior can be unit-tested
 ## without starting or killing a real executable.

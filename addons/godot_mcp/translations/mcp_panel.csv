@@ -193,14 +193,20 @@ ui.tunnel_resolving,Checking configured path and local cloudflared caches...,Che
 ui.tunnel_downloading,Downloading cloudflared (source %d/%d; %s; switch after %ds stalled)...,Downloading cloudflared (source %d/%d; %s; switch after %ds stalled)...,正在下载 cloudflared（来源 %d/%d；%s；停滞 %d 秒自动切源）...
 ui.tunnel_download_failed,All download sources failed or timed out. Check the network/proxy or set a local cloudflared path.,All download sources failed or timed out. Check the network/proxy or set a local cloudflared path.,所有下载来源均失败或超时。请检查网络/代理，或填写本地 cloudflared 路径。
 ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
-ui.tunnel_starting,Connecting to Cloudflare... %ds/%ds,Connecting to Cloudflare... %ds/%ds,正在连接 Cloudflare... %d/%d 秒
+ui.tunnel_starting,Connecting to Cloudflare... %ds elapsed,Connecting to Cloudflare... %ds elapsed,正在连接 Cloudflare... 已等待 %d 秒
 ui.tunnel_start_failed,Could not start cloudflared.,Could not start cloudflared.,无法启动 cloudflared。
 ui.tunnel_start_failed_detail,Could not start cloudflared: %s,Could not start cloudflared: %s,无法启动 cloudflared：%s
-ui.tunnel_start_timeout,Tunnel startup timed out after %ds. Check network/proxy. Log: %s,Tunnel startup timed out after %ds. Check network/proxy. Log: %s,隧道启动等待 %d 秒后超时。请检查网络/代理。日志：%s
+ui.tunnel_start_slow,Tunnel is taking longer than usual (%ds). The supervisor is still recovering; this warning did not stop it. Check network/proxy or click Stop. Log: %s,Tunnel is taking longer than usual (%ds). The supervisor is still recovering; this warning did not stop it. Check network/proxy or click Stop. Log: %s,隧道连接时间较长（%d 秒）。监督进程仍在自动恢复，本提示不会将其停止。请检查网络/代理，或点击“停止隧道”。日志：%s
 ui.tunnel_live,"Tunnel live (kept after Godot closes): %s","Tunnel live (kept after Godot closes): %s","隧道已就绪（关闭 Godot 后仍保留）：%s"
 ui.tunnel_restored,Existing tunnel restored: %s,Existing tunnel restored: %s,已恢复之前的隧道：%s
 ui.tunnel_exited,Tunnel process exited.,Tunnel process exited.,隧道进程已退出。
 ui.tunnel_exited_detail,Tunnel process exited. Log: %s,Tunnel process exited. Log: %s,隧道进程已退出。日志：%s
+ui.tunnel_exited_dns,Could not resolve Cloudflare's tunnel service. Check DNS or VPN. Log: %s,Could not resolve Cloudflare's tunnel service. Check DNS or VPN. Log: %s,无法解析 Cloudflare 隧道服务。请检查 DNS 或 VPN。日志：%s
+ui.tunnel_exited_proxy,Proxy connection failed. Check the system proxy or start Godot without the invalid proxy. Log: %s,Proxy connection failed. Check the system proxy or start Godot without the invalid proxy. Log: %s,代理连接失败。请检查系统代理，或在停用无效代理后重启 Godot。日志：%s
+ui.tunnel_exited_tls,TLS certificate verification failed. Check the system clock and HTTPS inspection software. Log: %s,TLS certificate verification failed. Check the system clock and HTTPS inspection software. Log: %s,TLS 证书校验失败。请检查系统时间和 HTTPS 检查软件。日志：%s
+ui.tunnel_exited_rate_limited,Cloudflare temporarily rate-limited Quick Tunnel creation. Wait briefly and try again. Log: %s,Cloudflare temporarily rate-limited Quick Tunnel creation. Wait briefly and try again. Log: %s,Cloudflare 暂时限制了免费隧道创建频率。请稍后重试。日志：%s
+ui.tunnel_exited_timeout,Cloudflare's Quick Tunnel service did not respond after automatic retries. Check the network/VPN. Log: %s,Cloudflare's Quick Tunnel service did not respond after automatic retries. Check the network/VPN. Log: %s,自动重试后 Cloudflare 免费隧道服务仍未响应。请检查网络或 VPN。日志：%s
+ui.tunnel_exited_service,Cloudflare's Quick Tunnel service rejected or could not complete the request. Try again later. Log: %s,Cloudflare's Quick Tunnel service rejected or could not complete the request. Try again later. Log: %s,Cloudflare 免费隧道服务拒绝或未能完成请求。请稍后重试。日志：%s
 ui.tunnel_stopped,Tunnel stopped.,Tunnel stopped.,隧道已停止。
 ui.tunnel_already,Tunnel already running.,Tunnel already running.,隧道已在运行。
 ui.section_asset_provider,Asset Generation,Asset Generation,资产生成

@@ -186,8 +186,17 @@ static func _unquote_path(path: String) -> String:
 			clean = clean.substr(1, clean.length() - 2).strip_edges()
 	return clean
 
-static func _absolute_candidate(path: String) -> String:
+static func _normalize_platform_path(path: String, os_name: String) -> String:
 	var clean: String = _unquote_path(path)
+	if os_name == "Windows":
+		clean = clean.replace("\\", "/")
+		var minimum_length: int = 3 if clean.length() >= 3 and clean.substr(1, 2) == ":/" else 1
+		while clean.ends_with("/") and clean.length() > minimum_length:
+			clean = clean.trim_suffix("/")
+	return clean
+
+static func _absolute_candidate(path: String, os_name: String = "") -> String:
+	var clean: String = _normalize_platform_path(path, os_name)
 	if clean.begins_with("user://") or clean.begins_with("res://"):
 		return ProjectSettings.globalize_path(clean).simplify_path()
 	return clean.simplify_path()
@@ -200,19 +209,20 @@ static func path_binary_candidates(path_env: String, os_name: String) -> PackedS
 	var separator: String = ";" if os_name == "Windows" else ":"
 	var filename: String = _binary_filename(os_name)
 	for raw_entry in path_env.split(separator, false):
-		var directory: String = _unquote_path(String(raw_entry))
+		var directory: String = _normalize_platform_path(String(raw_entry), os_name)
 		if directory.is_empty():
 			continue
 		var candidate: String = directory.path_join(filename)
-		if not seen.has(candidate):
+		var identity: String = candidate.to_lower() if os_name == "Windows" else candidate
+		if not seen.has(identity):
 			result.append(candidate)
-			seen[candidate] = true
+			seen[identity] = true
 	return result
 
 ## Finds user-managed installations before consulting the managed download
 ## cache. Explicit configuration wins, then the editor process PATH.
 static func find_existing_user_binary(configured_path: String, path_env: String, os_name: String) -> Dictionary:
-	var configured: String = _absolute_candidate(configured_path)
+	var configured: String = _absolute_candidate(configured_path, os_name)
 	if not configured.is_empty():
 		if DirAccess.dir_exists_absolute(configured):
 			configured = configured.path_join(_binary_filename(os_name))

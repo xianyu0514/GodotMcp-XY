@@ -35,27 +35,37 @@ process. After **Start free tunnel** succeeds:
 
 - reloading the project, disabling/re-enabling the plugin, or closing Godot does
   not terminate `cloudflared`;
-- reopening the same project validates the saved PID, executable and unique log
-  path, then restores the same `trycloudflare.com` URL instead of creating a new
-  Quick Tunnel;
+- reopening the same project validates the saved supervisor PID, executable,
+  project-session marker and child runtime record, then restores the same
+  `trycloudflare.com` URL instead of creating a new Quick Tunnel;
 - only **Stop tunnel** terminates the managed process and removes its session;
 - shutting down the computer naturally ends the process. On the next boot, stale
   metadata is rejected and no replacement tunnel is started automatically.
 
-The process is launched independently with a durable `cloudflared.log`. The log
-and small `session.json` ownership record are stored under the OS user's
-`GodotMcp-XY/tunnels/<project-hash>/` data directory. The command line is checked
-before a restored PID can be stopped, so a PID reused after reboot cannot cause
-an unrelated process to be terminated.
+An independent low-overhead headless Godot supervisor owns cloudflared's
+non-blocking stdout/stderr pipes and continuously mirrors them to a durable
+`cloudflared.log`. This restores the URL-capture path used before tunnel
+persistence without tying the pipes to the editor lifetime. The log,
+`session.json` ownership record and transient `runtime.json` child record are
+stored under the OS user's `GodotMcp-XY/tunnels/<project-hash>/` data directory.
+Both supervisor and child command lines are session-scoped before any PID can be
+stopped, so PID reuse after reboot cannot terminate an unrelated process.
 
 The panel shows each startup stage instead of waiting silently. Reusable local
 installations are checked first. If a download is required, live MiB progress is
 shown; a source that makes no progress for 12 seconds or remains unusually slow
 while fallbacks are available is replaced automatically. **Stop tunnel** cancels
-the current download. After `cloudflared` starts, the panel
-waits up to 30 seconds for the Quick Tunnel URL; a timeout stops the incomplete
-process and shows the durable log path. Tunnel source, launch, restore, timeout
-and exit events are also flushed immediately to `mcp_server.log` for diagnosis.
+the current download. The supervisor captures the Quick Tunnel URL from the same
+stdout/stderr stream as the previously working implementation, uses HTTP/2 so
+networks that block QUIC/UDP can still connect, and retries up to three times
+when cloudflared exits or remains stuck for 20 seconds before publishing any
+URL. Only that not-yet-public child is replaced; after a URL is published there
+is no startup deadline. After 30 seconds the panel shows a slow-connection
+warning and the durable log path, but it no longer kills the persistent
+supervisor merely because a fixed deadline elapsed. DNS, proxy, TLS,
+rate-limit, timeout and service failures are classified into localized UI
+messages. Tunnel source, launch, restore, retry, slow-start and exit events are
+also flushed immediately to `mcp_server.log` for diagnosis.
 
 While Godot is closed, the public hostname remains allocated to the live tunnel
 process, but its `localhost:<port>` origin is unavailable. Requests may therefore
@@ -152,8 +162,8 @@ If the client only supports stdio but can run a local command, bridge with `mcp-
 | --- | --- |
 | Public URL opens but MCP calls fail | Ensure the client URL ends with `/mcp`. |
 | 401/403 responses | Confirm the Bearer token exactly matches `auth_token`. |
-| Tunnel starts but no URL appears | Check the MCP panel logs or run the tunnel command manually. |
-| Tunnel startup remains on one stage | Download progress is shown and stalled sources switch after 12 seconds; URL discovery ends after 30 seconds. Use **Stop tunnel** to cancel immediately, then inspect the log path shown in the status line. |
+| Tunnel starts but no URL appears | The supervisor replaces a failed or 20-second-stalled pre-URL child and retries up to three times. The panel translates common DNS/proxy/TLS/rate-limit/timeout failures. Inspect the shown durable log if all attempts fail. |
+| Tunnel startup remains on one stage | Download progress is shown and stalled sources switch after 12 seconds. URL discovery warns after 30 seconds but keeps the live process instead of force-stopping it. Use **Stop tunnel** to cancel immediately. |
 | Godot reopened but the old URL was not restored | The computer was restarted, `cloudflared` exited, or its saved PID no longer matches the managed command. Start a new tunnel. |
 | The restored URL responds with an origin error | Start the local MCP server on the saved HTTP port; the tunnel can outlive Godot, but the origin cannot. |
 | The panel wants to download again | Check that the local override points to a file, or place `cloudflared` on the editor process `PATH`. Current-version managed and legacy files must pass the pinned SHA-256 check before reuse. |

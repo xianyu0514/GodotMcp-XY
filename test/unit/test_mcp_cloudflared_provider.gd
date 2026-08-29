@@ -157,8 +157,17 @@ func test_path_binary_candidates_support_quoted_windows_entries():
 		'"C:\\Program Files\\Cloudflare";C:\\Tools', "Windows"
 	)
 	assert_eq(candidates.size(), 2)
-	assert_eq(candidates[0], "C:\\Program Files\\Cloudflare".path_join("cloudflared.exe"))
-	assert_eq(candidates[1], "C:\\Tools".path_join("cloudflared.exe"))
+	assert_eq(candidates[0], "C:/Program Files/Cloudflare/cloudflared.exe")
+	assert_eq(candidates[1], "C:/Tools/cloudflared.exe")
+
+func test_path_binary_candidates_remove_trailing_windows_separators():
+	var candidates: PackedStringArray = ProviderScript.path_binary_candidates(
+		"C:\\Program Files (x86)\\cloudflared\\;C:/Tools/cloudflared/", "Windows"
+	)
+	assert_eq(candidates.size(), 2)
+	assert_eq(candidates[0], "C:/Program Files (x86)/cloudflared/cloudflared.exe")
+	assert_eq(candidates[1], "C:/Tools/cloudflared/cloudflared.exe")
+	assert_false(candidates[0].contains("\\/"), "Windows PATH reuse must never emit the observed mixed separator")
 
 func test_find_existing_user_binary_prefers_explicit_path_over_path_env():
 	var manual: String = _tmp_root.path_join("manual/cloudflared")

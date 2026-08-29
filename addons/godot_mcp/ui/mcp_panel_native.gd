@@ -4,7 +4,7 @@ extends VBoxContainer
 const CLOUDFLARED_DOWNLOAD_STALL_SECONDS: int = 12
 const CLOUDFLARED_SLOW_SOURCE_GRACE_SECONDS: int = 12
 const CLOUDFLARED_MIN_SOURCE_BYTES_PER_SECOND: int = 512 * 1024
-const TUNNEL_CONNECT_TIMEOUT_SECONDS: int = 30
+const TUNNEL_CONNECT_SLOW_WARNING_SECONDS: int = 30
 
 var _plugin: EditorPlugin = null
 var _server_core: RefCounted = null
@@ -83,6 +83,7 @@ var _tunnel_download_started_ticks_msec: int = 0
 var _tunnel_download_progress_ticks_msec: int = 0
 var _tunnel_downloaded_bytes: int = 0
 var _tunnel_start_ticks_msec: int = 0
+var _tunnel_slow_warning_logged: bool = false
 var _tunnel_status_key: String = "ui.tunnel_idle"
 var _tunnel_status_args: Array = []
 var _status_dot: Panel = null
@@ -975,28 +976,30 @@ func _launch_tunnel(binary_abs: String) -> void:
 		var existing_url: String = _tunnel_manager.get_public_url()
 		if not existing_url.is_empty():
 			_tunnel_start_ticks_msec = 0
+			_tunnel_slow_warning_logged = false
 			if _remote_url_edit:
 				_remote_url_edit.text = existing_url
 			_update_public_endpoint()
 			_set_tunnel_status("ui.tunnel_restored", [existing_url])
 		else:
 			_tunnel_start_ticks_msec = Time.get_ticks_msec()
-			_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
-		_record_tunnel_event("INFO", "Reattached to an already running cloudflared process")
+			_tunnel_slow_warning_logged = false
+			_set_tunnel_status("ui.tunnel_starting", [0])
+		_record_tunnel_event("INFO", "Reattached to an already running tunnel supervisor")
 		_ensure_tunnel_poll_timer()
 		return
 	if err != OK:
 		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_start_failed_detail", [error_string(err)])
-		_record_tunnel_event("ERROR", "Could not create cloudflared process: %s" % error_string(err))
+		_record_tunnel_event("ERROR", "Could not create tunnel supervisor: %s" % error_string(err))
 		return
 	_tunnel_start_ticks_msec = Time.get_ticks_msec()
-	_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
+	_tunnel_slow_warning_logged = false
+	_set_tunnel_status("ui.tunnel_starting", [0])
 	_record_tunnel_event(
 		"INFO",
-		"cloudflared started (PID %d); waiting up to %ds for a Quick Tunnel URL; log: %s" % [
+		"Tunnel supervisor started (PID %d) with live cloudflared stdout/stderr capture; URL discovery will keep waiting until the process exits or the user stops it; log: %s" % [
 			_tunnel_manager.get_pid(),
-			TUNNEL_CONNECT_TIMEOUT_SECONDS,
 			_tunnel_manager.get_log_path(),
 		]
 	)
@@ -1015,6 +1018,7 @@ func _restore_tunnel_session() -> void:
 	if not _tunnel_manager.restore():
 		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
 		_tunnel_start_ticks_msec = 0
+		_tunnel_slow_warning_logged = false
 		_reset_tunnel_buttons()
 		_set_tunnel_status("ui.tunnel_idle")
 		return
@@ -1030,10 +1034,12 @@ func _restore_tunnel_session() -> void:
 		if _tunnel_status_label:
 			_set_tunnel_status("ui.tunnel_restored", [url])
 		_tunnel_start_ticks_msec = 0
+		_tunnel_slow_warning_logged = false
 	else:
 		_tunnel_start_ticks_msec = Time.get_ticks_msec()
-		_set_tunnel_status("ui.tunnel_starting", [0, TUNNEL_CONNECT_TIMEOUT_SECONDS])
-	_record_tunnel_event("INFO", "Restored persistent cloudflared process PID %d" % _tunnel_manager.get_pid())
+		_tunnel_slow_warning_logged = false
+		_set_tunnel_status("ui.tunnel_starting", [0])
+	_record_tunnel_event("INFO", "Restored persistent tunnel supervisor PID %d" % _tunnel_manager.get_pid())
 	_ensure_tunnel_poll_timer()
 
 func _ensure_tunnel_poll_timer() -> void:
@@ -1051,16 +1057,22 @@ func _on_tunnel_poll_timeout() -> void:
 		_tunnel_poll_timer.stop()
 		var tunnel_url: String = _tunnel_manager.get_public_url()
 		var tunnel_log: String = _tunnel_manager.get_log_path()
+		var failure_code: String = _tunnel_manager.get_startup_failure_code()
 		_tunnel_manager.discard_stale_session()
 		_tunnel_start_ticks_msec = 0
+		_tunnel_slow_warning_logged = false
 		_reset_tunnel_buttons()
 		_clear_tunnel_url_if_owned(tunnel_url)
-		_set_tunnel_status("ui.tunnel_exited_detail", [tunnel_log])
+		var failure_status_key: String = "ui.tunnel_exited_detail"
+		if failure_code in ["dns", "proxy", "tls", "rate_limited", "timeout", "service"]:
+			failure_status_key = "ui.tunnel_exited_%s" % failure_code
+		_set_tunnel_status(failure_status_key, [tunnel_log])
 		_record_tunnel_event("ERROR", "cloudflared exited before use; inspect log: %s" % tunnel_log)
 		return
 	var url: String = _tunnel_manager.poll()
 	if not url.is_empty():
 		_tunnel_start_ticks_msec = 0
+		_tunnel_slow_warning_logged = false
 		if _remote_url_edit:
 			_remote_url_edit.text = url
 		_update_public_endpoint()
@@ -1069,24 +1081,19 @@ func _on_tunnel_poll_timeout() -> void:
 		return
 	if _tunnel_start_ticks_msec > 0:
 		var elapsed: int = int((Time.get_ticks_msec() - _tunnel_start_ticks_msec) / 1000)
-		if elapsed >= TUNNEL_CONNECT_TIMEOUT_SECONDS:
+		if elapsed >= TUNNEL_CONNECT_SLOW_WARNING_SECONDS:
 			var tunnel_log: String = _tunnel_manager.get_log_path()
-			_tunnel_manager.stop()
-			_tunnel_poll_timer.stop()
-			_tunnel_start_ticks_msec = 0
-			_reset_tunnel_buttons()
-			_set_tunnel_status("ui.tunnel_start_timeout", [
-				TUNNEL_CONNECT_TIMEOUT_SECONDS,
-				tunnel_log,
-			])
-			_record_tunnel_event(
-				"ERROR",
-				"No Quick Tunnel URL after %ds; process stopped; inspect log: %s" % [
-					TUNNEL_CONNECT_TIMEOUT_SECONDS, tunnel_log,
-				]
-			)
+			_set_tunnel_status("ui.tunnel_start_slow", [elapsed, tunnel_log])
+			if not _tunnel_slow_warning_logged:
+				_tunnel_slow_warning_logged = true
+				_record_tunnel_event(
+					"WARN",
+					"Quick Tunnel URL is not ready after %ds; the supervisor remains active while bounded recovery attempts continue; inspect log: %s" % [
+						elapsed, tunnel_log,
+					]
+				)
 			return
-		_set_tunnel_status("ui.tunnel_starting", [elapsed, TUNNEL_CONNECT_TIMEOUT_SECONDS])
+		_set_tunnel_status("ui.tunnel_starting", [elapsed])
 
 func _set_tunnel_status_live(url: String) -> void:
 	_set_tunnel_status("ui.tunnel_live", [url])
@@ -1113,6 +1120,7 @@ func _on_tunnel_stop_pressed() -> void:
 		tunnel_url = _tunnel_manager.get_public_url()
 		_tunnel_manager.stop()
 	_tunnel_start_ticks_msec = 0
+	_tunnel_slow_warning_logged = false
 	_clear_tunnel_url_if_owned(tunnel_url)
 	_reset_tunnel_buttons()
 	_set_tunnel_status("ui.tunnel_stopped")
