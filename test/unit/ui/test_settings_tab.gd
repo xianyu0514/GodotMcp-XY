@@ -3,6 +3,7 @@ extends "res://addons/gut/test.gd"
 # Tests for the card-based Settings tab layout (mcp_panel_native.gd).
 
 const PanelScript = preload("res://addons/godot_mcp/ui/mcp_panel_native.gd")
+const TranslationManagerScript = preload("res://addons/godot_mcp/native_mcp/translation_manager.gd")
 
 func _make_panel() -> Node:
 	var panel: Node = PanelScript.new()
@@ -50,6 +51,56 @@ func test_panel_restores_tunnel_but_never_stops_it_during_exit() -> void:
 	assert_true(source.contains("_restore_tunnel_session()"), "Panel should reattach after project or plugin reload")
 	assert_true(exit_body.contains("_tunnel_manager.detach()"), "Panel exit should release local ownership only")
 	assert_false(exit_body.contains("_tunnel_manager.stop()"), "Closing Godot must never stop a user-started tunnel")
+
+func test_tunnel_status_retranslates_with_the_rest_of_the_chinese_ui() -> void:
+	var panel: Node = _make_panel()
+	panel._translation_manager = TranslationManagerScript.new()
+	panel._translation_manager.load_all()
+	panel._translation_manager.set_locale("en")
+	autofree(panel._create_settings_tab())
+	assert_true(panel._tunnel_status_label.text.begins_with("Tunnel"), "Fixture starts in English")
+
+	panel._translation_manager.set_locale("zh")
+	panel._refresh_translations()
+	assert_eq(
+		panel._tunnel_status_label.text,
+		panel._tr("ui.tunnel_idle"),
+		"Persistent tunnel status must switch language together with the panel"
+	)
+	assert_true(panel._tunnel_status_label.text.contains("隧道未运行"))
+	panel._set_tunnel_status("ui.tunnel_starting", [3, 30])
+	assert_eq(panel._tunnel_status_label.text, "正在连接 Cloudflare... 3/30 秒")
+	panel._set_tunnel_status("ui.tunnel_downloading", [1, 3, "2.5/51.6 MiB", 12])
+	assert_eq(
+		panel._tunnel_status_label.text,
+		"正在下载 cloudflared（来源 1/3；2.5/51.6 MiB；停滞 12 秒自动切源）..."
+	)
+
+func test_tunnel_start_has_bounded_waits_and_visible_diagnostics() -> void:
+	var panel: Node = _make_panel()
+	var source: String = panel.get_script().source_code
+	assert_true(source.contains("CLOUDFLARED_DOWNLOAD_STALL_SECONDS"), "Stalled sources should switch quickly without rejecting a progressing slow download")
+	assert_true(source.contains("TUNNEL_CONNECT_TIMEOUT_SECONDS"), "Quick Tunnel URL discovery must not wait forever")
+	assert_true(source.contains("_tunnel_http.timeout = 0.0"), "Large downloads use the progress watchdog instead of a fragile total timeout")
+	assert_true(source.contains("_on_tunnel_download_watchdog"), "Download progress and source switching must be monitored")
+	assert_true(source.contains("ui.tunnel_start_timeout"), "A bounded connection failure must be visible in the UI")
+	assert_true(source.contains("_record_tunnel_event"), "Tunnel stages and failures must be written to the MCP log")
+	assert_true(
+		PanelScript.should_switch_cloudflared_download(0, 5000, 12000, false),
+		"A source with no progress must stop even when it is the final fallback"
+	)
+	assert_true(
+		PanelScript.should_switch_cloudflared_download(1024, 12000, 1000, true),
+		"A very slow source should give a remaining mirror a chance"
+	)
+	assert_false(
+		PanelScript.should_switch_cloudflared_download(1024, 12000, 1000, false),
+		"The final source may continue while bytes are still arriving"
+	)
+	assert_false(
+		PanelScript.should_switch_cloudflared_download(8 * 1024 * 1024, 12000, 1000, true),
+		"A healthy download must not be replaced"
+	)
 
 func test_settings_exposes_asset_provider_card() -> void:
 	var panel: Node = _make_panel()

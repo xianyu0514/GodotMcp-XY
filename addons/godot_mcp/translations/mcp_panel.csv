@@ -189,14 +189,18 @@ ui.tunnel_binary,Local cloudflared,Local cloudflared,本地 cloudflared
 ui.tunnel_binary_placeholder,Optional override; PATH and shared cache are detected automatically,Optional override; PATH and shared cache are detected automatically,可选覆盖路径；自动检测 PATH 和共享缓存
 ui.tunnel_idle,"Tunnel not running. Once started, it remains active until you stop it or shut down.","Tunnel not running. Once started, it remains active until you stop it or shut down.","隧道未运行。启动后会持续保留，直到你主动停止或电脑关机。"
 ui.tunnel_unsupported,No prebuilt cloudflared for this platform; set a path below.,No prebuilt cloudflared for this platform; set a path below.,该平台暂无预编译 cloudflared，请在下方指定路径。
-ui.tunnel_downloading,Downloading cloudflared to the shared cache (once per version/platform)...,Downloading cloudflared to the shared cache (once per version/platform)...,正在将 cloudflared 下载到本机共享缓存（每个版本/平台一次）...
-ui.tunnel_download_failed,Download failed; check your connection.,Download failed; check your connection.,下载失败，请检查网络连接。
+ui.tunnel_resolving,Checking configured path and local cloudflared caches...,Checking configured path and local cloudflared caches...,正在检查配置路径和本地 cloudflared 缓存...
+ui.tunnel_downloading,Downloading cloudflared (source %d/%d; %s; switch after %ds stalled)...,Downloading cloudflared (source %d/%d; %s; switch after %ds stalled)...,正在下载 cloudflared（来源 %d/%d；%s；停滞 %d 秒自动切源）...
+ui.tunnel_download_failed,All download sources failed or timed out. Check the network/proxy or set a local cloudflared path.,All download sources failed or timed out. Check the network/proxy or set a local cloudflared path.,所有下载来源均失败或超时。请检查网络/代理，或填写本地 cloudflared 路径。
 ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
-ui.tunnel_starting,Starting persistent tunnel...,Starting persistent tunnel...,正在启动持久隧道...
+ui.tunnel_starting,Connecting to Cloudflare... %ds/%ds,Connecting to Cloudflare... %ds/%ds,正在连接 Cloudflare... %d/%d 秒
 ui.tunnel_start_failed,Could not start cloudflared.,Could not start cloudflared.,无法启动 cloudflared。
+ui.tunnel_start_failed_detail,Could not start cloudflared: %s,Could not start cloudflared: %s,无法启动 cloudflared：%s
+ui.tunnel_start_timeout,Tunnel startup timed out after %ds. Check network/proxy. Log: %s,Tunnel startup timed out after %ds. Check network/proxy. Log: %s,隧道启动等待 %d 秒后超时。请检查网络/代理。日志：%s
 ui.tunnel_live,"Tunnel live (kept after Godot closes): %s","Tunnel live (kept after Godot closes): %s","隧道已就绪（关闭 Godot 后仍保留）：%s"
 ui.tunnel_restored,Existing tunnel restored: %s,Existing tunnel restored: %s,已恢复之前的隧道：%s
 ui.tunnel_exited,Tunnel process exited.,Tunnel process exited.,隧道进程已退出。
+ui.tunnel_exited_detail,Tunnel process exited. Log: %s,Tunnel process exited. Log: %s,隧道进程已退出。日志：%s
 ui.tunnel_stopped,Tunnel stopped.,Tunnel stopped.,隧道已停止。
 ui.tunnel_already,Tunnel already running.,Tunnel already running.,隧道已在运行。
 ui.section_asset_provider,Asset Generation,Asset Generation,资产生成

@@ -48,6 +48,15 @@ and small `session.json` ownership record are stored under the OS user's
 before a restored PID can be stopped, so a PID reused after reboot cannot cause
 an unrelated process to be terminated.
 
+The panel shows each startup stage instead of waiting silently. Reusable local
+installations are checked first. If a download is required, live MiB progress is
+shown; a source that makes no progress for 12 seconds or remains unusually slow
+while fallbacks are available is replaced automatically. **Stop tunnel** cancels
+the current download. After `cloudflared` starts, the panel
+waits up to 30 seconds for the Quick Tunnel URL; a timeout stops the incomplete
+process and shows the durable log path. Tunnel source, launch, restore, timeout
+and exit events are also flushed immediately to `mcp_server.log` for diagnosis.
+
 While Godot is closed, the public hostname remains allocated to the live tunnel
 process, but its `localhost:<port>` origin is unavailable. Requests may therefore
 fail until Godot and the local MCP server are running again.
@@ -144,6 +153,7 @@ If the client only supports stdio but can run a local command, bridge with `mcp-
 | Public URL opens but MCP calls fail | Ensure the client URL ends with `/mcp`. |
 | 401/403 responses | Confirm the Bearer token exactly matches `auth_token`. |
 | Tunnel starts but no URL appears | Check the MCP panel logs or run the tunnel command manually. |
+| Tunnel startup remains on one stage | Download progress is shown and stalled sources switch after 12 seconds; URL discovery ends after 30 seconds. Use **Stop tunnel** to cancel immediately, then inspect the log path shown in the status line. |
 | Godot reopened but the old URL was not restored | The computer was restarted, `cloudflared` exited, or its saved PID no longer matches the managed command. Start a new tunnel. |
 | The restored URL responds with an origin error | Start the local MCP server on the saved HTTP port; the tunnel can outlive Godot, but the origin cannot. |
 | The panel wants to download again | Check that the local override points to a file, or place `cloudflared` on the editor process `PATH`. Current-version managed and legacy files must pass the pinned SHA-256 check before reuse. |
