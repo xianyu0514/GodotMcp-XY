@@ -1460,7 +1460,11 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 	var result: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
-		"line_count": line_count
+		"line_count": line_count,
+		# 落盘后立即同步编辑器（文件系统 + 打开的缓冲区），使写入成为编辑器
+		# 内部操作而不是待确认的“外部修改”。
+		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
+			_get_editor_interface(), script_path).get("status", "")
 	}
 
 	if not attach_to_node.is_empty():
@@ -1709,11 +1713,14 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	
 	# 计算行数
 	var line_count: int = final_content.split("\n").size()
-	
+
 	return {
 		"status": "success",
 		"script_path": script_path,
-		"line_count": line_count
+		"line_count": line_count,
+		# 落盘后立即同步编辑器，避免“文件已在磁盘上修改”的重载弹窗。
+		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
+			_get_editor_interface(), script_path).get("status", "")
 	}
 
 # ============================================================================

@@ -1,5 +1,7 @@
 extends "res://addons/gut/test.gd"
 
+const ScriptToolsScript = preload("res://addons/godot_mcp/tools/script_tools_native.gd")
+
 func test_script_path_validation():
 	var valid_paths: Array = ["res://test.gd", "res://scripts/player.gd", "res://addons/my_addon/main.gd"]
 	for path in valid_paths:
@@ -408,3 +410,19 @@ func test_autoload_declarations_cached_returns_string():
 	assert_true(first is String, "Cached autoload declarations are a string")
 	assert_eq(first, second, "Cached declarations are stable across calls")
 	assert_eq(first, tool._build_autoload_declarations(), "Cache matches a fresh build")
+
+func test_script_writes_report_editor_buffer_sync():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = "res://test/unit/.tmp_buffer_sync.gd"
+	var created: Dictionary = tools._tool_create_script({
+		"script_path": temp_path, "content": "extends Node
+"})
+	assert_false(created.has("error"), str(created.get("error", "")))
+	assert_eq(String(created.get("buffers_synced", "")), "skipped",
+		"Headless has no editor interface; buffer sync degrades to skipped, never errors")
+	var modified: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path, "content": "extends Node2D
+"})
+	assert_false(modified.has("error"), str(modified.get("error", "")))
+	assert_eq(String(modified.get("buffers_synced", "")), "skipped")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))

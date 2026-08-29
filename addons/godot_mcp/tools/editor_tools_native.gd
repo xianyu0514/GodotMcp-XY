@@ -1685,6 +1685,38 @@ func _tool_reload_project(params: Dictionary) -> Dictionary:
 # Editor buffer sync (Godot 4.7 APIs with graceful 4.6 degradation)
 # ============================================================================
 
+## 在 MCP 直接写盘之后把变更同步进编辑器：更新 EditorFileSystem，并在
+## 该脚本已打开时重载其缓冲区。没有这一步，编辑器会把 MCP 的写入识别为
+## “外部程序修改了文件”并弹窗要求确认重载；有了它，MCP 的写入就是编辑
+## 器内部操作。供 script_tools 的写工具在落盘成功后调用。
+static func sync_script_buffer_after_write(editor_interface: EditorInterface,
+		script_path: String) -> Dictionary:
+	if editor_interface == null:
+		return {"status": "skipped", "reason": "no_editor_interface"}
+	var file_system: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if file_system != null:
+		file_system.update_file(script_path)
+	var script_editor: ScriptEditor = editor_interface.get_script_editor()
+	if script_editor == null:
+		return {"status": "ok", "reloaded": false}
+	var is_open: bool = false
+	for open_script_value in script_editor.get_open_scripts():
+		var open_script: Script = open_script_value
+		if open_script != null and String(open_script.resource_path) == script_path:
+			is_open = true
+			break
+	if not is_open:
+		return {"status": "ok", "reloaded": false}
+	var reload_method: String = ""
+	for candidate in ["reload_scripts", "reload_open_files"]:
+		if script_editor.has_method(candidate):
+			reload_method = candidate
+			break
+	if reload_method.is_empty():
+		return {"status": "skipped", "reason": "reload_api_unavailable"}
+	script_editor.call(reload_method)
+	return {"status": "ok", "reloaded": true}
+
 func _first_supported_method(obj: Object, candidates: Array) -> String:
 	if obj == null:
 		return ""
