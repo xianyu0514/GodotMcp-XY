@@ -337,3 +337,104 @@ func test_blueprint_is_deterministic_and_receipts_preserve_all_semantic_evidence
 		_engine.append_receipt(first, {"step_id": "probe", "passed": true, "n": i})
 	assert_eq((first["workflow"]["receipts"] as Array).size(), 300,
 		"Distinct completion evidence must never be discarded to meet a storage budget")
+
+# --- Workflow reliability: evidence contract, negated intent, artifacts, negative gates ---
+
+func test_localization_success_without_status_is_accepted_evidence() -> void:
+	assert_true(_engine.result_passed("manage_localization", {"success": true}),
+		"Explicit boolean success without a status vocabulary word is real success")
+	assert_true(_engine.result_passed("manage_localization", {"status": "ok", "written": 2}),
+		"Status-vocabulary successes keep passing")
+	assert_false(_engine.result_passed("manage_localization", {"success": false}),
+		"Explicit false still fails")
+
+func test_mutation_completion_statuses_are_accepted_evidence() -> void:
+	assert_true(_engine.result_passed("create_project_smoke_test", {
+		"status": "created", "path": "res://test/test_project_smoke.gd"}),
+		"'created' is a successful mutation completion, not a verification failure")
+	assert_true(_engine.result_passed("ensure_project_directory", {
+		"status": "unchanged", "path": "res://test"}),
+		"Idempotent no-op completions ('unchanged') are successes")
+	assert_false(_engine.result_passed("prepare_project_test_environment", {
+		"status": "unconfigured", "recoverable": false}),
+		"Negative statuses still fail")
+
+func test_negated_platform_mentions_do_not_select_platform() -> void:
+	var negated: Dictionary = _compile("2D stress game with flow fields; Android 不适用", ["gameplay_feature"])
+	assert_false(negated.has("error"), str(negated.get("error", "")))
+	var negated_contract: Dictionary = ((negated.get("plan", {}) as Dictionary).get("workflow", {}) as Dictionary).get("goal_contract", {})
+	assert_eq(String((negated_contract as Dictionary).get("platform", "")), "",
+		"'Android 不适用' must not select the android platform")
+	var affirmative: Dictionary = _compile("Ship the release to Android", ["release_export"])
+	var affirmative_contract: Dictionary = ((affirmative.get("plan", {}) as Dictionary).get("workflow", {}) as Dictionary).get("goal_contract", {})
+	assert_eq(String((affirmative_contract as Dictionary).get("platform", "")), "android",
+		"Affirmative Android intent still selects android")
+
+func test_negated_3d_intent_does_not_add_gltf_gate() -> void:
+	var negated: Dictionary = _compile("2D asset pipeline pass; 3D 不适用", ["asset_pipeline"])
+	assert_false(negated.has("error"), str(negated.get("error", "")))
+	assert_false("inspect_gltf_asset" in _tool_names(negated.get("plan", {})),
+		"'3D 不适用' must not require the glTF inspector gate")
+	var affirmative: Dictionary = _compile("Import gltf 模型 and validate imports", ["asset_pipeline"])
+	assert_true("inspect_gltf_asset" in _tool_names(affirmative.get("plan", {})),
+		"Affirmative glTF intent keeps the gate")
+
+func test_successful_creation_steps_register_artifacts() -> void:
+	var plan: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
+	var scene_task: Dictionary = _task_for_tool(plan, "create_scene")
+	_engine.record_step_result(plan, String(scene_task.get("id", "")), {
+		"success": true, "scene_path": "res://levels/main.tscn"})
+	var script_task: Dictionary = _task_for_tool(plan, "create_script")
+	_engine.record_step_result(plan, String(script_task.get("id", "")), {
+		"success": true, "script_path": "res://scripts/player.gd"})
+	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
+	assert_eq(String(artifacts.get("scene", "")), "res://levels/main.tscn",
+		"Created scenes register as workflow artifacts")
+	assert_eq(String(artifacts.get("script", "")), "res://scripts/player.gd",
+		"Created scripts register as workflow artifacts")
+
+func test_argument_references_resolve_from_artifacts() -> void:
+	var artifacts: Dictionary = {"scene": "res://main.tscn", "script": "res://player.gd"}
+	var resolved: Variant = _engine.resolve_argument_references(
+		{"scene_path": "$scene", "nested": ["$script", "keep"], "n": 1}, artifacts)
+	var resolved_dictionary: Dictionary = resolved
+	assert_eq(String(resolved_dictionary["scene_path"]), "res://main.tscn")
+	var nested: Array = resolved_dictionary["nested"]
+	assert_eq(String(nested[0]), "res://player.gd")
+	assert_eq(String(nested[1]), "keep",
+		"Non-reference strings pass through unchanged")
+	assert_eq(int(resolved_dictionary["n"]), 1,
+		"Non-string values pass through unchanged")
+
+func test_expect_fail_gate_passes_when_detector_fails() -> void:
+	var plan: Dictionary = _compile("Fault-inject and verify detection", ["script_repair"], {
+		"expect_fail": {"verify_scripts": true}})["plan"]
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	assert_eq(String(gate.get("expect", "")), "fail",
+		"expect_fail marks the gate as a negative test")
+	var step_id: String = String(gate.get("id", ""))
+	var injected: Dictionary = _engine.record_step_result(plan, step_id, {
+		"status": "failed", "total_checked": 1, "failed": 1})
+	assert_eq(String(injected.get("status", "")), "completed",
+		"A failing detector satisfies a negative gate")
+	assert_eq(String(gate.get("status", "")), "done")
+	var receipts: Array = ((plan.get("workflow", {}) as Dictionary).get("receipts", []) as Array)
+	assert_true(bool((receipts.back() as Dictionary).get("expected_failure", false)),
+		"Negative-gate receipts record the inverted expectation")
+
+func test_expect_fail_gate_fails_when_detector_still_passes() -> void:
+	var plan: Dictionary = _compile("Fault-inject and verify detection", ["script_repair"], {
+		"expect_fail": {"verify_scripts": true}})["plan"]
+	var gate: Dictionary = _task_for_tool(plan, "verify_scripts")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(gate.get("id", "")), {
+		"status": "passed", "total_checked": 1, "failed": 0})
+	assert_eq(String(verdict.get("status", "")), "repair_required",
+		"A detector that ignores the injected fault fails the negative gate")
+
+func test_run_project_session_reuse_result_is_usable_evidence() -> void:
+	var plan: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
+	var run_task: Dictionary = _task_for_tool(plan, "run_project")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(run_task.get("id", "")), {
+		"success": true, "already_running": true, "scene": "res://main.tscn"})
+	assert_eq(String(verdict.get("status", "")), "completed",
+		"Reusing a live runtime session is successful workflow evidence")

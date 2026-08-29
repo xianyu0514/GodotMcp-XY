@@ -104,12 +104,42 @@ const NEGATIVE_STATUSES: Array[String] = [
 	"skipped", "stale", "aborted", "missing"
 ]
 
+# Mutation tools legitimately report these completion statuses; without them a
+# real success such as create_project_smoke_test's "created" falls through the
+# generic whitelist and is misjudged as a verification failure.
+const SUCCESS_STATUSES: Array[String] = [
+	"ok", "passed", "success", "completed", "healthy", "warning", "ready",
+	"created", "saved", "written", "extracted", "imported", "exported",
+	"recovered", "prepared", "updated", "removed", "deleted", "unchanged",
+	"no_changes", "reused", "repaired"
+]
+
 const TRANSIENT_FAILURE_TERMS: Array[String] = [
 	"temporarily unavailable", "temporary failure", "try again", "retry",
 	"rate limit", "too many requests", "server busy", "connection reset",
 	"connection refused", "connection closed", "network error", "timed out",
 	"timeout", "http 429", "http 502", "http 503", "http 504", "(429)",
 	"(502)", "(503)", "(504)"
+]
+
+# Creation tools register their produced resources as workflow artifacts so
+# later steps can derive required inputs (script_path/scene_path/...) instead
+# of stalling on needs_input or making the caller repeat every path.
+const ARTIFACT_KIND_BY_TOOL: Dictionary = {
+	"create_scene": "scene",
+	"open_scene": "scene",
+	"save_scene": "scene",
+	"create_script": "script",
+	"create_theme": "theme",
+	"create_tileset": "tileset",
+	"create_animation": "animation",
+	"ensure_project_directory": "test_dir",
+	"create_project_smoke_test": "smoke_test"
+}
+
+const ARTIFACT_PATH_KEYS: Array[String] = [
+	"scene_path", "script_path", "theme_path", "tileset_path",
+	"animation_path", "test_path", "path"
 ]
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
@@ -121,6 +151,41 @@ const FORBIDDEN_NESTED_CAPABILITIES: Array[String] = [
 	"plan_game_workflow", "run_game_workflow", "manage_task_plan",
 	"list_tool_catalog", "search_tools", "get_tool_details", "enable_tools"
 ]
+
+# Goals frequently name a capability only to exclude it ("Android 不适用" /
+# "3D not applicable"). Treating every literal mention as affirmative intent
+# selected wrong platforms and wrong gates, so intent detection must skip
+# occurrences that carry a nearby negation marker.
+const NEGATION_MARKERS: Array[String] = [
+	"不适用", "无需", "不要", "不需要", "不支持", "禁止", "排除", "不含",
+	"not ", "without", "unsupported", "unneeded", "no need", "exclude",
+	"except", "avoid", "don't", "doesn't", "n/a"
+]
+
+## True when `term` is mentioned in `text` at least once WITHOUT a nearby
+## negation marker. All-negated mentions mean the goal excludes the term.
+func has_affirmative_mention(text: String, term: String) -> bool:
+	var lower: String = text.to_lower()
+	var needle: String = term.to_lower()
+	if needle.is_empty():
+		return false
+	var search_from: int = 0
+	while true:
+		var hit: int = lower.find(needle, search_from)
+		if hit < 0:
+			return false
+		var window_start: int = maxi(0, hit - 16)
+		var window_end: int = mini(lower.length(), hit + needle.length() + 16)
+		var window: String = lower.substr(window_start, window_end - window_start)
+		var negated: bool = false
+		for marker in NEGATION_MARKERS:
+			if window.contains(marker):
+				negated = true
+				break
+		if not negated:
+			return true
+		search_from = hit + needle.length()
+	return false
 
 func compile(objective: String, options: Dictionary, available_tools: Array[String]) -> Dictionary:
 	var clean_objective: String = objective.strip_edges()
@@ -145,6 +210,10 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 	var platform: String = _normalize_platform(String(options.get("platform", "")), clean_objective)
 	var repair_attempts: int = maxi(
 		int(options.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS)), 0)
+	# expect_fail maps gate step keys (for example {"verify_scripts": true}) to
+	# inverted verdicts so fault-injection loops can prove detectors actually fail.
+	var expect_fail: Dictionary = options.get("expect_fail", {}) \
+		if options.get("expect_fail", {}) is Dictionary else {}
 	var protected_paths: Array[String] = DEFAULT_PROTECTED_PATHS.duplicate()
 	if options.get("protected_paths") is Array:
 		for path_value in options["protected_paths"]:
@@ -221,7 +290,8 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 		"required_capabilities": required_capabilities,
 		"platform": platform,
 		"max_repair_attempts": repair_attempts,
-		"protected_paths": protected_paths
+		"protected_paths": protected_paths,
+		"expect_fail": expect_fail.duplicate(true)
 	}
 	var plan: Dictionary = _build_plan(contract, specs)
 	return {
@@ -268,7 +338,7 @@ func _normalize_platform(platform: String, objective: String) -> String:
 		return normalized
 	var goal: String = objective.to_lower()
 	for candidate in ["android", "linux", "windows", "macos", "web", "ios"]:
-		if goal.contains(candidate):
+		if has_affirmative_mention(goal, candidate):
 			return candidate
 	return ""
 
@@ -326,7 +396,8 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("reimport", "reimport_resources", "build_configure"),
 				_spec("missing_dependencies", "scan_missing_resource_dependencies", "static_verify", true)
 			]
-			if goal.contains("gltf") or goal.contains("3d") or goal.contains("模型"):
+			if has_affirmative_mention(goal, "gltf") or has_affirmative_mention(goal, "3d") \
+					or has_affirmative_mention(goal, "模型"):
 				asset_specs.append(_spec("inspect_gltf", "inspect_gltf_asset", "static_verify", true))
 			return asset_specs
 		"animation_audio":
@@ -479,6 +550,8 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 	var prior_ids: Array[String] = []
 	var blueprint_tasks: Array[Dictionary] = []
 	var max_attempts: int = int(contract.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS))
+	var expect_fail: Dictionary = contract.get("expect_fail", {}) \
+		if contract.get("expect_fail", {}) is Dictionary else {}
 	for index in range(specs.size()):
 		var spec: Dictionary = specs[index]
 		var step_id: String = "wf_%03d" % (index + 1)
@@ -508,6 +581,8 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 			"pending_polls": 0,
 			"receipt_digest": ""
 		}
+		if is_gate and bool(expect_fail.get(String(spec.get("key", "")), false)):
+			task["expect"] = "fail"
 		tasks.append(task)
 		if is_gate:
 			objective_gate_ids.append(step_id)
@@ -529,6 +604,7 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 		"blocked_reason": "",
 		"goal_contract": contract.duplicate(true),
 		"objective_gate_ids": objective_gate_ids,
+		"artifacts": {},
 		"receipts": [],
 		"metrics": {
 			"rounds": 0, "atomic_calls": 0, "yield_count": 0,
@@ -724,6 +800,10 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 		"detect_broken_scripts":
 			return data.has("broken_count") and int(data.get("broken_count", -1)) == 0
 		"manage_localization":
+			# Tools may report success with only an explicit boolean and no status
+			# field; requiring the status vocabulary here misjudged real successes.
+			if bool(data.get("success", false)) and not data.has("error"):
+				return true
 			return status in ["ok", "success", "completed"] and (
 				data.has("written") or data.has("translations") or data.has("key_count"))
 	if data.has("passed"):
@@ -733,7 +813,7 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 	if data.has("valid"):
 		return bool(data["valid"])
 	if not status.is_empty():
-		return status in ["ok", "passed", "success", "completed", "healthy", "warning", "ready"]
+		return status in SUCCESS_STATUSES
 	# Inspection tools frequently return structured data without a status field.
 	# Non-empty, error-free evidence is sufficient for non-objective steps.
 	return data.size() > 0
@@ -766,17 +846,26 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 
 	task["attempts"] = int(task.get("attempts", 0)) + 1
 	task["pending_polls"] = 0
-	var passed: bool = result_passed(String(task.get("tool_name", "")), result) if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
+	var expect_failure: bool = bool(task.get("objective_gate", false)) \
+		and String(task.get("expect", "pass")) == "fail"
+	var evidence_passed: bool = result_passed(String(task.get("tool_name", "")), result) \
+		if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
+	# A negative gate passes when the detector FAILS: fault-injection loops are
+	# proving the guardrail fires, so the observed verdict is inverted.
+	var passed: bool = (not evidence_passed) if expect_failure else evidence_passed
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
 		"tool_name": task.get("tool_name", ""),
 		"passed": passed,
 		"pending": false,
+		"expected_failure": expect_failure,
 		"summary": _compact_result_summary(result)
 	})
 	if passed:
 		task["status"] = "done"
 		task["receipt_digest"] = receipt.get("digest", "")
+		if not expect_failure and evidence_passed:
+			_record_artifacts(plan, String(task.get("tool_name", "")), result)
 		_clear_failure_tracking(task, "verification")
 		_clear_failure_tracking(task, "transient")
 		if bool(task.get("objective_gate", false)):
@@ -887,6 +976,9 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 		task["repair_pending"] = false
 		_clear_failure_tracking(task, "repair")
 		_clear_failure_tracking(task, "repair_transient")
+		# Repairs can create resources too (for example the QA smoke test), so
+		# their outputs must feed the artifact registry like normal steps.
+		_record_artifacts(plan, repair_tool, result)
 		workflow["state"] = "running"
 		workflow["blocked_reason"] = ""
 		return {"status": "repaired", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
@@ -980,6 +1072,53 @@ func _compact_result_summary(result: Variant) -> Dictionary:
 	if data.has("error"):
 		summary["error"] = String(data["error"]).substr(0, 512)
 	return summary
+
+## Register paths a successful creation step produced into the workflow's
+## artifact registry (scene/script/theme/tileset/animation + last_path).
+func _record_artifacts(plan: Dictionary, tool_name: String, result: Variant) -> void:
+	if not (result is Dictionary):
+		return
+	var data: Dictionary = result
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts_value: Variant = workflow.get("artifacts", {})
+	var artifacts: Dictionary = artifacts_value if artifacts_value is Dictionary else {}
+	var kind: String = String(ARTIFACT_KIND_BY_TOOL.get(tool_name, ""))
+	for key in ARTIFACT_PATH_KEYS:
+		if not data.has(key):
+			continue
+		var value: String = String(data[key]).strip_edges()
+		if not (value.begins_with("res://") or value.begins_with("user://")):
+			continue
+		if not kind.is_empty() and not artifacts.has(kind):
+			artifacts[kind] = value
+		artifacts["last_path"] = value
+	if data.has("animation_name"):
+		var animation_name: String = String(data["animation_name"]).strip_edges()
+		if not animation_name.is_empty():
+			artifacts["animation_name"] = animation_name
+	workflow["artifacts"] = artifacts
+
+## Resolve "$artifact_key" string references inside step arguments against the
+## workflow's recorded artifacts (for example "$scene" -> last created scene).
+func resolve_argument_references(value: Variant, artifacts: Dictionary) -> Variant:
+	if value is String:
+		var text: String = value
+		if text.length() > 1 and text.begins_with("$"):
+			var reference: String = text.substr(1)
+			if artifacts.has(reference):
+				return artifacts[reference]
+		return value
+	if value is Dictionary:
+		var resolved_dictionary: Dictionary = {}
+		for key in value:
+			resolved_dictionary[key] = resolve_argument_references(value[key], artifacts)
+		return resolved_dictionary
+	if value is Array:
+		var resolved_array: Array = []
+		for item in value:
+			resolved_array.append(resolve_argument_references(item, artifacts))
+		return resolved_array
+	return value
 
 func append_receipt(plan: Dictionary, receipt_fields: Dictionary) -> Dictionary:
 	var workflow: Dictionary = plan.get("workflow", {})
