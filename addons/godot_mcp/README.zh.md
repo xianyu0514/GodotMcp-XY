@@ -6,7 +6,7 @@
 
 - `plugin.cfg` 与 `mcp_server_native.gd` — 编辑器插件入口。
 - `native_mcp/` — JSON-RPC/MCP 核心、HTTP/SSE 与 stdio 传输、鉴权、设置、隧道和工具状态管理。
-- `tools/` — 223 个 MCP 工具的实现。
+- `tools/` — 226 个 MCP 工具的实现。
 - `runtime/mcp_runtime_probe.gd` — 可选 Autoload，用于检查和驱动运行中的游戏。
 - `ui/` — MCP 停靠面板、工具管理器和详情视图。
 - `translations/` — 面板文本和工具描述。
@@ -32,10 +32,10 @@
 
 ## 工具模型
 
-插件注册 223 个工具：
+插件注册 226 个工具：
 
 - 28 个核心工具默认启用。
-- 189 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
+- 192 个高级工具默认注册但不启用，可在面板或通过 `enable_tools` 开启。
 - 6 个常驻元工具：四个发现工具，加上 `plan_game_workflow` 与 `run_game_workflow`。
 
 完整目标由两个工作流工具把 12 类可复用制作能力编译为持久 DAG。DAG 可以超过 10 个原子能力，但每轮执行最多 4 次调用；隐藏工具不会引发显隐切换，只有客观证据齐全才会完成。短任务继续使用 `enable_tools`，其默认 8 个/硬上限 10 个的发现预算保持不变。

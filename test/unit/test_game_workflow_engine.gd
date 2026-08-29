@@ -199,6 +199,25 @@ func test_empty_or_failed_verification_evidence_never_passes() -> void:
 		"status": "passed", "total_checked": 5, "failed": 0
 	}))
 
+func test_list_project_tests_requires_discovered_tests() -> void:
+	assert_false(_engine.result_passed("list_project_tests", {
+		"status": "ready", "count": 0, "tests": []
+	}))
+	assert_false(_engine.result_passed("list_project_tests", {
+		"status": "unconfigured", "count": 0, "recoverable": true
+	}))
+	assert_true(_engine.result_passed("list_project_tests", {
+		"status": "ready", "count": 2, "tests": [{"name": "a"}, {"name": "b"}]
+	}))
+
+func test_recoverable_environment_gap_is_usable_non_gate_evidence() -> void:
+	assert_true(_engine._non_gate_result_usable({
+		"status": "unconfigured", "recoverable": true, "reason": "test_directory_missing"
+	}))
+	assert_false(_engine._non_gate_result_usable({
+		"status": "unconfigured", "recoverable": false
+	}))
+
 func test_repairs_respect_goal_scope_and_export_platform() -> void:
 	var audit: Dictionary = _compile("Audit project health only", ["project_health"])["plan"]
 	assert_false("apply_migration_fixes" in _tool_names(audit),

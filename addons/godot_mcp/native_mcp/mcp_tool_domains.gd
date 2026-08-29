@@ -48,7 +48,8 @@ const DOMAIN_EXTRAS: Dictionary = {
 		"get_runtime_scene_tree", "inspect_runtime_node", "play_and_verify",
 		"assert_runtime_condition", "await_runtime_condition", "assert_no_runtime_errors",
 		"assert_performance_budget", "get_performance_metrics", "get_runtime_performance_snapshot",
-		"run_project_test", "run_project_tests", "list_project_tests"
+		"run_project_test", "run_project_tests", "list_project_tests",
+		"prepare_project_test_environment", "ensure_project_directory", "create_project_smoke_test"
 	],
 	"shipping": [
 		"list_export_presets", "validate_export_preset", "run_export", "smoke_test_export",

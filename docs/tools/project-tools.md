@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**61 tools** — 3 core, 58 advanced.
+**64 tools** — 3 core, 61 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
@@ -10,7 +10,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 
 1. Read project facts with `get_project_info`, `get_project_settings` and `list_project_resources`.
 2. Use advanced resource tools for imports, dependency analysis and usage audits.
-3. Run project tests through `list_project_tests`, `run_project_test` and `run_project_tests`.
+3. Bootstrap the test environment with `prepare_project_test_environment`, `ensure_project_directory` and `create_project_smoke_test`, then run tests through `list_project_tests`, `run_project_test` and `run_project_tests`.
 4. Enable production helpers such as `generate_asset`, `slice_sprite_sheet`, `inspect_gltf_asset`, `assert_visual_baseline` and `manage_task_plan` only for the workflows that need them.
 
 ## Tool list
@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (58 advanced)
+### Project-Advanced (61 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -33,6 +33,9 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `update_resource_properties` | advanced | Load an existing resource file, set/merge exported properties, and re-save it. Use to tweak data such as card cost or enemy HP. |
 | `read_resource_properties` | advanced | Read a resource file and return its exported properties as JSON-friendly values, optionally including built-in base Resource properties. |
 | `get_project_structure` | advanced | Get project structure and file organization. |
+| `prepare_project_test_environment` | advanced | Inspect and prepare the project's test environment without requiring GUT or Python. Checks res://test/, res://tests/ and res://.mcp_runtime_tests/ and returns ready/empty/unconfigured/blocked plus a recoverable flag and recommended action. |
+| `ensure_project_directory` | advanced | Ensure a directory exists under res://. Idempotent and safe: refuses the project root and rejects path escape. Returns 'created' or 'unchanged'. |
+| `create_project_smoke_test` | advanced | Generate a minimal framework-independent smoke test under res://test/. The native test checks main-scene load, project file presence and a clean headless run, so an empty project can pass QA without GUT or Python installed. |
 | `list_project_tests` | advanced | Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable. |
 | `run_project_test` | advanced | Run a single project test script without blocking the editor. The first call starts the run on a background thread and returns status 'pending'; call again with the same test_path to poll for the finished result. Python integration tests are executed with python. GUT unit tests are executed through Godot headless when addons/gut is available. |
 | `run_project_tests` | advanced | Discover and run multiple project tests from a directory without blocking the editor. The first call starts the batch on a background thread and returns status 'pending'; call again with the same arguments to poll for the aggregated result. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts. |

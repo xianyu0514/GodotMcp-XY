@@ -76,6 +76,16 @@ func _plan(profiles: Array, objective: String = "Run project tests") -> Dictiona
 	})
 
 func _successful_gate_responses() -> void:
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.responses["ensure_project_directory"] = {
+		"status": "unchanged", "path": "res://test", "created": false, "already_exists": true
+	}
+	_core.responses["list_project_tests"] = {
+		"status": "ready", "count": 1, "tests": [{"name": "smoke"}]
+	}
 	_core.responses["verify_scripts"] = {
 		"status": "passed", "total_checked": 3, "verified": 3, "failed": 0
 	}
@@ -86,7 +96,7 @@ func _successful_gate_responses() -> void:
 func _universal_evidence() -> Dictionary:
 	return {
 		"status": "passed", "passed": true, "success": true, "valid": true,
-		"total_count": 1, "passed_count": 1, "failed_count": 0,
+		"count": 1, "total_count": 1, "passed_count": 1, "failed_count": 0,
 		"total_checked": 1, "verified": 1, "failed": 0,
 		"error_count": 0, "issue_count": 0, "must_fix_count": 0,
 		"broken_count": 0, "total_nodes": 1, "artifact_exists": true,
@@ -115,7 +125,16 @@ func test_plan_persists_contract_and_status_resumes_it() -> void:
 	assert_eq(status.get("state", ""), "planned")
 
 func test_runner_executes_hidden_atomic_tools_without_changing_visibility() -> void:
-	_core.responses["list_project_tests"] = {"tests": [{"name": "smoke"}]}
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.responses["ensure_project_directory"] = {
+		"status": "unchanged", "path": "res://test", "created": false, "already_exists": true
+	}
+	_core.responses["list_project_tests"] = {
+		"status": "ready", "count": 2, "tests": [{"name": "smoke", "framework": "native"}]
+	}
 	_core.responses["verify_scripts"] = {"total_checked": 2, "verified": 2, "failed": 0, "results": []}
 	_core.responses["run_project_tests"] = [
 		{"status": "pending", "job_id": "tests"},
@@ -123,17 +142,17 @@ func test_runner_executes_hidden_atomic_tools_without_changing_visibility() -> v
 	]
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var first: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 6
 	})
 	assert_eq(first.get("status", ""), "waiting", str(first.get("error", "")))
-	assert_eq(_core.calls.size(), 3)
+	assert_eq(_core.calls.size(), 5)
 	assert_true(_core.calls.all(func(call: Dictionary) -> bool:
 		return (call.get("authorization", {}) as Dictionary).get("kind", "") == "game_workflow"))
 	var second: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 6
 	})
 	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
-	assert_eq(_core.calls.size(), 4, "Polling reuses the same authorized step and arguments")
+	assert_eq(_core.calls.size(), 6, "Polling reuses the same authorized step and arguments")
 
 func test_default_runner_adapts_above_four_without_expanding_tools_list() -> void:
 	_successful_gate_responses()
@@ -357,11 +376,11 @@ func test_exact_atomic_name_augments_a_recognized_composite_goal() -> void:
 		"Explicit atomic intent must be proven, not merely executed as optional inspection")
 
 func test_transient_failure_yields_then_resumes_without_consuming_repair_budget() -> void:
+	_successful_gate_responses()
 	_core.responses["list_project_tests"] = [
 		{"error": "Service temporarily unavailable (503)"},
-		{"tests": [{"name": "smoke"}]}
+		{"status": "ready", "count": 1, "tests": [{"name": "smoke"}]}
 	]
-	_successful_gate_responses()
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var first: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"]
@@ -369,15 +388,18 @@ func test_transient_failure_yields_then_resumes_without_consuming_repair_budget(
 	assert_eq(first.get("status", ""), "waiting")
 	assert_gte(int(first.get("retry_after_ms", 0)), 1000,
 		"Transient retries expose backoff guidance instead of encouraging a hot loop")
-	assert_eq(_core.calls.size(), 1)
+	assert_eq(_core.calls.size(), 3)
 	var second: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"]
 	})
 	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
 
 func test_restart_replays_safe_read_but_never_guesses_unknown_mutation() -> void:
-	_successful_gate_responses()
-	_core.traits["list_project_tests"] = {"read_only": true, "idempotent": true, "destructive": false}
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.traits["prepare_project_test_environment"] = {"read_only": true, "idempotent": true, "destructive": false}
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var status: Dictionary = _tools._tool_plan_game_workflow({
 		"action": "status", "plan_path": _plan_path, "include_plan": true

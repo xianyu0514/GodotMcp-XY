@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.7--pre1-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-223-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-226-blue.svg)](docs/tools/README.md)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 
@@ -15,7 +15,7 @@ No Node.js bridge, no Python daemon and no separate server process are required.
 
 - **Native server:** the MCP server lives in the editor process and ships with the plugin.
 - **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
-- **223 tools with a small default surface:** 28 core tools are enabled immediately, 189 advanced tools remain on demand, and 6 meta tools cover discovery plus durable complete-game workflows.
+- **226 tools with a small default surface:** 28 core tools are enabled immediately, 192 advanced tools remain on demand, and 6 meta tools cover discovery plus durable complete-game workflows.
 - **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
 
@@ -64,9 +64,9 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | Create/open/save scenes, structure inspection, prefab-style instancing and TileMapLayer cells |
 | [Editor](docs/tools/editor-tools.md) | 27 | 3 | 24 | Run/stop, screenshots, selection, inspector state, export templates, script buffers and undo/redo |
 | [Debug & Runtime](docs/tools/debug-tools.md) | 73 | 3 | 70 | Logs, debugger control, profilers, runtime probe, deterministic play checks and regression gates |
-| [Project](docs/tools/project-tools.md) | 61 | 3 | 58 | Settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
+| [Project](docs/tools/project-tools.md) | 64 | 3 | 61 | Settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
 | [Meta](docs/tools/meta-tools.md) | 6 | — | — | Discovery, on-demand enablement and durable complete-game orchestration |
-| **Total** | **223** | **28** | **189** | |
+| **Total** | **226** | **28** | **192** | |
 
 Only core and meta tools are visible to `tools/list` at startup. For a complete user outcome, `plan_game_workflow` composes 12 production profiles into a persistent goal DAG and `run_game_workflow` advances it through adaptive 4/8/16/32-call checkpoint slices. A positive `max_steps` controls only the current call; neither it nor the existing 8/10 ad-hoc discovery budget can truncate the full goal. Unknown composite goals can be routed clause-by-clause and merged beyond ten capabilities without exposing their schemas. Hidden steps reuse normal caches without visibility churn; async work yields resumably, transient failures include backoff guidance, safe reads/idempotent operations replay after restart, and repeated identical failures request a different plan. `completed` still requires engine-issued evidence for every objective gate. Missing inputs, capabilities, protected paths and uncovered or unverifiable requirements stop explicitly instead of being silently skipped. See [Complete Game Workflows](docs/game-workflows.md).
 

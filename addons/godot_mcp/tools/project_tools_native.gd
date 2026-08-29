@@ -45,6 +45,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_list_project_global_classes(server_core)
 	_register_get_class_api_metadata(server_core)
 	_register_list_project_tests(server_core)
+	_register_prepare_project_test_environment(server_core)
+	_register_ensure_project_directory(server_core)
+	_register_create_project_smoke_test(server_core)
 	_register_run_project_test(server_core)
 	_register_run_project_tests(server_core)
 	_register_inspect_csharp_project_support(server_core)
@@ -758,7 +761,15 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 	var absolute_root: String = ProjectSettings.globalize_path(search_path)
 	var dir: DirAccess = DirAccess.open(absolute_root)
 	if dir == null:
-		return {"error": "Test directory not found: " + search_path}
+		return {
+			"status": "unconfigured",
+			"count": 0,
+			"search_path": search_path,
+			"reason": "test_directory_missing",
+			"recoverable": true,
+			"recommended_action": "ensure_project_directory",
+			"tests": []
+		}
 
 	var gut_available: bool = FileAccess.file_exists("res://addons/gut/gut_cmdln.gd")
 	var tests: Array = []
@@ -767,10 +778,225 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 		return String(a.get("test_path", "")) < String(b.get("test_path", ""))
 	)
 
+	if tests.is_empty():
+		return {
+			"status": "empty",
+			"count": 0,
+			"search_path": search_path,
+			"reason": "no_tests_discovered",
+			"recoverable": true,
+			"recommended_action": "create_project_smoke_test",
+			"tests": []
+		}
+
 	return {
+		"status": "ready",
 		"count": tests.size(),
 		"search_path": search_path,
 		"tests": tests
+	}
+
+
+# ============================================================================
+# prepare_project_test_environment - 测试环境预检
+# ============================================================================
+
+func _register_prepare_project_test_environment(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"prepare_project_test_environment",
+		"Inspect and prepare the project's test environment without requiring GUT or Python. Checks res://test/, res://tests/ and res://.mcp_runtime_tests/ and returns ready/empty/unconfigured/blocked plus a recoverable flag and recommended action.",
+		{
+			"type": "object",
+			"properties": {
+				"search_path": {"type": "string", "description": "Preferred test directory. Default is res://test."}
+			}
+		},
+		Callable(self, "_tool_prepare_project_test_environment"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"recoverable": {"type": "boolean"},
+				"reason": {"type": "string"},
+				"recommended_action": {"type": "string"},
+				"search_path": {"type": "string"},
+				"count": {"type": "integer"},
+				"environment": {"type": "array"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_prepare_project_test_environment(params: Dictionary) -> Dictionary:
+	var preferred: String = String(params.get("search_path", "res://test")).strip_edges()
+	if preferred.is_empty():
+		preferred = "res://test"
+	var candidates: Array[String] = [preferred]
+	for candidate in ["res://test", "res://tests", "res://.mcp_runtime_tests"]:
+		if candidate not in candidates:
+			candidates.append(candidate)
+
+	var environment: Array = []
+	var overall: String = "unconfigured"
+	var total_count: int = 0
+	var first_existing: String = ""
+	for candidate in candidates:
+		var absolute: String = ProjectSettings.globalize_path(candidate)
+		var exists: bool = DirAccess.dir_exists_absolute(absolute)
+		var count: int = 0
+		if exists:
+			var discovered: Array = []
+			_collect_project_tests_recursive(candidate, absolute, "", true, discovered)
+			count = discovered.size()
+			total_count += count
+			if first_existing.is_empty():
+				first_existing = candidate
+		var state: String = "unconfigured"
+		if exists and count > 0:
+			state = "ready"
+		elif exists:
+			state = "empty"
+		environment.append({"path": candidate, "exists": exists, "count": count, "state": state})
+		if state == "ready":
+			overall = "ready"
+		elif state == "empty" and overall != "ready":
+			overall = "empty"
+
+	var reason: String = ""
+	var recommended: String = "none"
+	if overall == "unconfigured":
+		reason = "test_directory_missing"
+		recommended = "ensure_project_directory"
+	elif overall == "empty":
+		reason = "no_tests_discovered"
+		recommended = "create_project_smoke_test"
+
+	return {
+		"status": overall,
+		"recoverable": overall in ["unconfigured", "empty"],
+		"reason": reason,
+		"recommended_action": recommended,
+		"search_path": preferred,
+		"count": total_count,
+		"environment": environment
+	}
+
+
+# ============================================================================
+# ensure_project_directory - 安全创建 res:// 目录
+# ============================================================================
+
+func _register_ensure_project_directory(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"ensure_project_directory",
+		"Ensure a directory exists under res://. Idempotent and safe: refuses the project root and rejects path escape. Returns 'created' or 'unchanged'.",
+		{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string", "description": "res:// directory path to create."}
+			},
+			"required": ["path"]
+		},
+		Callable(self, "_tool_ensure_project_directory"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"path": {"type": "string"},
+				"created": {"type": "boolean"},
+				"already_exists": {"type": "boolean"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_ensure_project_directory(params: Dictionary) -> Dictionary:
+	var raw_path: String = String(params.get("path", "")).strip_edges()
+	if raw_path.is_empty():
+		return {"error": "Missing required parameter: path"}
+	var validation: Dictionary = PathValidator.validate_directory_path(raw_path)
+	if not bool(validation.get("valid", false)):
+		return {"error": "Invalid path: " + String(validation.get("error", "unknown"))}
+	var dir_path: String = String(validation.get("sanitized", raw_path)).trim_suffix("/")
+	if not dir_path.begins_with("res://"):
+		return {"error": "Only res:// directories can be created"}
+	if dir_path == "res://":
+		return {"error": "path must be a directory under res://, not the project root"}
+
+	var absolute: String = ProjectSettings.globalize_path(dir_path)
+	if DirAccess.dir_exists_absolute(absolute):
+		return {"status": "unchanged", "path": dir_path, "created": false, "already_exists": true}
+	var error: Error = DirAccess.make_dir_recursive_absolute(absolute)
+	if error != OK:
+		return {
+			"status": "blocked", "path": dir_path, "created": false,
+			"already_exists": false, "error": "Failed to create directory: " + error_string(error)
+		}
+	return {"status": "created", "path": dir_path, "created": true, "already_exists": false}
+
+
+# ============================================================================
+# create_project_smoke_test - 生成最小 Native Smoke Test
+# ============================================================================
+
+func _register_create_project_smoke_test(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_project_smoke_test",
+		"Generate a minimal framework-independent smoke test under res://test/. The native test checks main-scene load, project file presence and a clean headless run, so an empty project can pass QA without GUT or Python installed.",
+		{
+			"type": "object",
+			"properties": {
+				"search_path": {"type": "string", "description": "Directory that will contain the smoke test. Default is res://test."}
+			}
+		},
+		Callable(self, "_tool_create_project_smoke_test"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"test_path": {"type": "string"},
+				"framework": {"type": "string"},
+				"created": {"type": "boolean"},
+				"already_exists": {"type": "boolean"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_create_project_smoke_test(params: Dictionary) -> Dictionary:
+	var search_path: String = String(params.get("search_path", "res://test")).strip_edges()
+	if search_path.is_empty():
+		search_path = "res://test"
+	var validation: Dictionary = PathValidator.validate_directory_path(search_path)
+	if not bool(validation.get("valid", false)):
+		return {"error": "Invalid path: " + String(validation.get("error", "unknown"))}
+	var dir_path: String = String(validation.get("sanitized", search_path)).trim_suffix("/")
+	if not dir_path.begins_with("res://"):
+		return {"error": "Only res:// test directories are supported"}
+
+	var absolute_dir: String = ProjectSettings.globalize_path(dir_path)
+	var mk_error: Error = DirAccess.make_dir_recursive_absolute(absolute_dir)
+	if mk_error != OK and not DirAccess.dir_exists_absolute(absolute_dir):
+		return {"status": "blocked", "error": "Failed to create test directory: " + error_string(mk_error)}
+
+	var test_path: String = dir_path.path_join("test_project_smoke.gd")
+	var existed: bool = FileAccess.file_exists(test_path)
+	var file: FileAccess = FileAccess.open(test_path, FileAccess.WRITE)
+	if file == null:
+		return {"error": "Failed to write smoke test: " + test_path}
+	file.store_string(_native_smoke_test_source())
+	file.flush()
+	file.close()
+	return {
+		"status": "unchanged" if existed else "created",
+		"test_path": test_path,
+		"framework": "native",
+		"kind": "smoke",
+		"created": not existed,
+		"already_exists": existed
 	}
 
 
@@ -893,6 +1119,8 @@ func _execute_project_test_blocking(test_path: String) -> Dictionary:
 		"py":
 			return _run_python_project_test(sanitized_path, absolute_test_path)
 		"gd":
+			if _is_native_smoke_test(sanitized_path):
+				return _run_native_project_test(sanitized_path)
 			return _run_gut_project_test(sanitized_path)
 		_:
 			return {"error": "Unsupported project test type: " + extension}
@@ -1001,9 +1229,25 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 	})
 	if list_result.has("error"):
 		return list_result
+	if String(list_result.get("status", "")) in ["unconfigured", "blocked"]:
+		return list_result
 
 	var only_runnable: bool = bool(params.get("only_runnable", true))
 	var discovered_tests: Array = list_result.get("tests", [])
+	if discovered_tests.is_empty():
+		return {
+			"status": "skipped",
+			"search_path": list_result.get("search_path", ""),
+			"framework": str(params.get("framework", "")).strip_edges().to_lower(),
+			"reason": "no_tests_discovered",
+			"recoverable": true,
+			"recommended_action": "create_project_smoke_test",
+			"total_count": 0,
+			"passed_count": 0,
+			"failed_count": 0,
+			"skipped_count": 0,
+			"results": []
+		}
 	var results: Array = []
 	var passed_count: int = 0
 	var failed_count: int = 0
@@ -1104,9 +1348,14 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 				kind = "integration"
 				runnable = true
 			"gd":
-				framework = "gut"
-				kind = "unit"
-				runnable = gut_available
+				if _is_native_smoke_test(child_res_path):
+					framework = "native"
+					kind = "smoke"
+					runnable = true
+				else:
+					framework = "gut"
+					kind = "unit"
+					runnable = gut_available
 			_:
 				continue
 		if not framework_filter.is_empty() and framework != framework_filter:
@@ -1230,6 +1479,79 @@ func _find_python_executable() -> String:
 	if OS.execute("python", ["--version"], test_output, true) == OK:
 		return "python"
 	return "python3"
+
+func _is_native_smoke_test(test_path: String) -> bool:
+	var file: FileAccess = FileAccess.open(test_path, FileAccess.READ)
+	if file == null:
+		return false
+	var length: int = file.get_length()
+	var head: String = file.get_buffer(mini(length, 256)).get_string_from_utf8()
+	file.close()
+	return head.contains("# mcp-native-smoke-test")
+
+static func _native_smoke_test_source() -> String:
+	return """# mcp-native-smoke-test
+extends SceneTree
+
+var _failures: Array[String] = []
+
+func _initialize() -> void:
+	_check_main_scene()
+	_check_project_file()
+	if _failures.is_empty():
+		print("MCP_SMOKE_PASS")
+		quit(0)
+	else:
+		for failure in _failures:
+			push_error(failure)
+		print("MCP_SMOKE_FAIL")
+		quit(1)
+
+func _check_main_scene() -> void:
+	var main_scene: String = str(ProjectSettings.get_setting("application/run/main_scene", ""))
+	if main_scene.is_empty():
+		print("MCP_SMOKE_SKIP main_scene_not_configured")
+		return
+	var packed: PackedScene = load(main_scene) as PackedScene
+	if packed == null:
+		_failures.append("main scene failed to load: " + main_scene)
+		return
+	var instance: Node = packed.instantiate()
+	if instance == null:
+		_failures.append("main scene has no instantiable root: " + main_scene)
+	else:
+		instance.free()
+
+func _check_project_file() -> void:
+	if not FileAccess.file_exists("res://project.godot"):
+		_failures.append("project.godot is missing")
+"""
+
+func _run_native_project_test(test_path: String) -> Dictionary:
+	var executable_path: String = OS.get_executable_path()
+	var project_path: String = ProjectSettings.globalize_path("res://")
+	var args: Array[String] = [
+		"--headless",
+		"--path", project_path,
+		"--script", ProjectSettings.globalize_path(test_path)
+	]
+	var logs: Array = []
+	var started_at_ms: int = Time.get_ticks_msec()
+	var exit_code: int = OS.execute(executable_path, args, logs, true)
+	var duration_ms: int = Time.get_ticks_msec() - started_at_ms
+	var output: Array = []
+	for line in logs:
+		output.append(_sanitize_cli_output(str(line)))
+	return {
+		"status": "passed" if exit_code == OK else "failed",
+		"framework": "native",
+		"kind": "smoke",
+		"test_path": test_path,
+		"exit_code": exit_code,
+		"duration_ms": duration_ms,
+		"command": [executable_path] + args,
+		"output": output
+	}
 
 func _run_gut_project_test(test_path: String) -> Dictionary:
 	var gut_cmdln_path: String = "res://addons/gut/gut_cmdln.gd"

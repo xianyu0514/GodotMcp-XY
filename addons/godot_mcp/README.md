@@ -6,7 +6,7 @@ This directory is the distributable Godot addon. Copy `addons/godot_mcp` into an
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.
 - `native_mcp/` — JSON-RPC/MCP core, HTTP/SSE and stdio transports, auth, settings, tunnel support and tool-state management.
-- `tools/` — the 223 registered MCP tools.
+- `tools/` — the 226 registered MCP tools.
 - `runtime/mcp_runtime_probe.gd` — optional autoload used to inspect and drive a running game.
 - `ui/` — the MCP dock panel, tool manager and detail views.
 - `translations/` — panel text and tool descriptions.
@@ -32,10 +32,10 @@ The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and
 
 ## Tool model
 
-The addon registers 223 tools:
+The addon registers 226 tools:
 
 - 28 core tools enabled by default.
-- 189 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
+- 192 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 6 always-on meta tools: four discovery tools plus `plan_game_workflow` and `run_game_workflow`.
 
 Complete goals use the two workflow tools to compile 12 reusable production profiles into a durable DAG. The DAG can exceed ten atomic capabilities while each runner round stays capped at four calls; hidden tools execute without visibility churn, and completion requires objective receipts. Short tasks continue to use `enable_tools` with the unchanged 8-tool default/10-tool hard discovery budget.

@@ -75,6 +75,7 @@ const STAGE_RANK: Dictionary = {
 	"build_create": 20,
 	"build_configure": 20,
 	"build_save": 20,
+	"qa_inspect": 25,
 	"static_verify": 30,
 	"runtime_probe": 40,
 	"runtime_run": 45,
@@ -385,7 +386,9 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 			return perf_specs
 		"quality_assurance":
 			return [
-				_spec("list_tests", "list_project_tests", "offline_inspect"),
+				_spec("test_env", "prepare_project_test_environment", "offline_inspect"),
+				_spec("test_dir", "ensure_project_directory", "build_configure", false, {"path": "res://test"}),
+				_spec("test_discovery", "list_project_tests", "qa_inspect", true, {}, "create_project_smoke_test"),
 				_spec("qa_1_verify_scripts", "verify_scripts", "static_verify", true, {}, "modify_script"),
 				_spec("qa_2_tests", "run_project_tests", "static_verify", true, {}, "modify_script")
 			]
@@ -700,6 +703,8 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 			return status in ["healthy", "warning"] and data.get("summary") is Dictionary and not (data["summary"] as Dictionary).is_empty()
 		"play_and_verify":
 			return bool(data.get("passed", false)) and data.get("runtime_info") is Dictionary and not (data["runtime_info"] as Dictionary).is_empty()
+		"list_project_tests":
+			return int(data.get("count", 0)) > 0 and not data.has("error") and status not in ["unconfigured", "missing", "blocked"]
 		"run_project_test", "run_project_tests":
 			return status == "passed" and int(data.get("total_count", 0)) > 0 and int(data.get("failed_count", 0)) == 0
 		"smoke_test_export":
@@ -854,7 +859,11 @@ func _non_gate_result_usable(result: Variant) -> bool:
 	var status: String = String(data.get("status", "")).strip_edges().to_lower()
 	if status in PENDING_STATUSES:
 		return false
-	return not status in ["error", "invalid", "blocked", "cancelled", "canceled", "timeout", "timed_out", "unconfigured", "stale", "aborted", "missing"]
+	if status in ["unconfigured", "missing"]:
+		# An inspection that reports a recoverable environment gap is usable
+		# evidence: the dedicated gate/repair steps then perform the recovery.
+		return bool(data.get("recoverable", false))
+	return not status in ["error", "invalid", "blocked", "cancelled", "canceled", "timeout", "timed_out", "stale", "aborted"]
 
 func record_repair_result(plan: Dictionary, step_id: String, result: Variant) -> Dictionary:
 	var task: Dictionary = get_task(plan, step_id)
