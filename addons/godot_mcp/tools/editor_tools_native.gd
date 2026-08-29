@@ -9,6 +9,9 @@ const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_pol
 
 var _editor_interface: EditorInterface = null
 var _editor_operation_in_progress: bool = false
+# Tracks the scene of the last successful play so run_project can reuse a
+# matching live session instead of erroring on "already running".
+var _last_played_scene: String = ""
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -264,7 +267,25 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 		return {"error": "Editor interface not available"}
 
 	if editor_interface.is_playing_scene():
-		return {"error": "Project is already running. Stop it first with stop_project."}
+		# Idempotent session reuse: re-running the live scene (or leaving the
+		# scene unspecified) succeeds instead of stalling callers that already
+		# started the game; a different scene switches sessions deterministically.
+		var requested_scene: String = String(params.get("scene_path", "")).strip_edges()
+		if requested_scene.is_empty() or requested_scene == _last_played_scene:
+			return {
+				"success": true,
+				"already_running": true,
+				"scene": _last_played_scene
+			}
+		editor_interface.stop_playing_scene()
+		_last_played_scene = ""
+		var settle_tree: SceneTree = Engine.get_main_loop() as SceneTree
+		var settle_deadline: int = Time.get_ticks_msec() + 2000
+		while editor_interface.is_playing_scene() and Time.get_ticks_msec() < settle_deadline:
+			if settle_tree:
+				await settle_tree.process_frame
+			else:
+				break
 
 	var scene_path: String = params.get("scene_path", "")
 	var played_scene: String = ""
@@ -303,6 +324,7 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 			"error": "Play was requested but no debugger session became active within the timeout. The scene likely failed to load — check ProjectSettings application/run/main_scene.",
 			"scene": played_scene
 		}
+	_last_played_scene = played_scene
 
 	# Give the runtime probe a brief window to signal ready so callers can use
 	# runtime tools (scene tree, screenshot, expression eval) right away.
@@ -377,6 +399,7 @@ func _tool_stop_project(params: Dictionary) -> Dictionary:
 		return {"error": "Project is not currently running."}
 
 	editor_interface.stop_playing_scene()
+	_last_played_scene = ""
 
 	# Wait for the process to fully exit (up to 5s)
 	var max_wait_ms: int = 5000

@@ -1181,7 +1181,16 @@ func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 
 	var node: Node = _resolve_node_path(node_path)
 	if not node:
-		return {"error": "Node not found: " + node_path}
+		# Name the active scene so the caller can recover from editor-context
+		# drift (created scene exists but a different one is being edited).
+		var active_root: Node = _get_user_scene_root()
+		var active_hint: String = ""
+		if active_root:
+			var active_scene: String = String(active_root.scene_file_path)
+			if active_scene.is_empty():
+				active_scene = String(active_root.name)
+			active_hint = " (active scene: " + active_scene + "; open the target scene first)"
+		return {"error": "Node not found: " + node_path + active_hint}
 	if not (node is TileMapLayer):
 		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
 	var layer: TileMapLayer = node
@@ -1290,7 +1299,16 @@ func _tool_get_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 
 	var node: Node = _resolve_node_path(node_path)
 	if not node:
-		return {"error": "Node not found: " + node_path}
+		# Name the active scene so the caller can recover from editor-context
+		# drift (created scene exists but a different one is being edited).
+		var active_root: Node = _get_user_scene_root()
+		var active_hint: String = ""
+		if active_root:
+			var active_scene: String = String(active_root.scene_file_path)
+			if active_scene.is_empty():
+				active_scene = String(active_root.name)
+			active_hint = " (active scene: " + active_scene + "; open the target scene first)"
+		return {"error": "Node not found: " + node_path + active_hint}
 	if not (node is TileMapLayer):
 		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
 	var layer: TileMapLayer = node
