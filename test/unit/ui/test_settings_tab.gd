@@ -68,8 +68,11 @@ func test_tunnel_status_retranslates_with_the_rest_of_the_chinese_ui() -> void:
 		"Persistent tunnel status must switch language together with the panel"
 	)
 	assert_true(panel._tunnel_status_label.text.contains("隧道未运行"))
-	panel._set_tunnel_status("ui.tunnel_starting", [3, 30])
-	assert_eq(panel._tunnel_status_label.text, "正在连接 Cloudflare... 3/30 秒")
+	panel._set_tunnel_status("ui.tunnel_starting", [3])
+	assert_eq(panel._tunnel_status_label.text, "正在连接 Cloudflare... 已等待 3 秒")
+	panel._set_tunnel_status("ui.tunnel_start_slow", [30, "C:/tunnel.log"])
+	assert_true(panel._tunnel_status_label.text.contains("监督进程仍在自动恢复"))
+	assert_false(panel._tunnel_status_label.text.contains("Tunnel is taking longer"))
 	panel._set_tunnel_status("ui.tunnel_downloading", [1, 3, "2.5/51.6 MiB", 12])
 	assert_eq(
 		panel._tunnel_status_label.text,
@@ -80,11 +83,18 @@ func test_tunnel_start_has_bounded_waits_and_visible_diagnostics() -> void:
 	var panel: Node = _make_panel()
 	var source: String = panel.get_script().source_code
 	assert_true(source.contains("CLOUDFLARED_DOWNLOAD_STALL_SECONDS"), "Stalled sources should switch quickly without rejecting a progressing slow download")
-	assert_true(source.contains("TUNNEL_CONNECT_TIMEOUT_SECONDS"), "Quick Tunnel URL discovery must not wait forever")
+	assert_true(source.contains("TUNNEL_CONNECT_SLOW_WARNING_SECONDS"), "Slow Quick Tunnel provisioning should become visible")
 	assert_true(source.contains("_tunnel_http.timeout = 0.0"), "Large downloads use the progress watchdog instead of a fragile total timeout")
 	assert_true(source.contains("_on_tunnel_download_watchdog"), "Download progress and source switching must be monitored")
-	assert_true(source.contains("ui.tunnel_start_timeout"), "A bounded connection failure must be visible in the UI")
+	assert_true(source.contains("ui.tunnel_start_slow"), "A slow connection must remain visible without being killed")
 	assert_true(source.contains("_record_tunnel_event"), "Tunnel stages and failures must be written to the MCP log")
+	var poll_start: int = source.find("func _on_tunnel_poll_timeout()")
+	var poll_end: int = source.find("func _set_tunnel_status_live", poll_start)
+	var poll_body: String = source.substr(poll_start, poll_end - poll_start)
+	assert_false(
+		poll_body.contains("_tunnel_manager.stop()"),
+		"A live cloudflared process must never be force-stopped only because URL discovery exceeded 30 seconds"
+	)
 	assert_true(
 		PanelScript.should_switch_cloudflared_download(0, 5000, 12000, false),
 		"A source with no progress must stop even when it is the final fallback"
