@@ -104,6 +104,16 @@ The following never count as completion:
 - a health audit in a failing state;
 - task fields manually changed to `done` without a matching passing receipt.
 
+## Autonomous reliability
+
+Several behaviors reduce avoidable stalls without weakening the evidence gates:
+
+- **Artifact registry.** Successful creation steps register what they produced (scene, script, theme, tileset, animation, test directory, smoke test). The runner resolves `$scene`-style argument references against this registry and auto-fills schema-required `script_path` / `scene_path` / `tileset_path` / `theme_path` / `animation_name` inputs, so chains such as `create_script → attach_script` no longer stop at `needs_input` asking for a path the workflow just created. Derived values are recorded on the step as `derived_inputs`; explicit `step_inputs` always win.
+- **Evidence tolerance.** A tool result carrying an explicit `success`/`passed`/`valid: true` is accepted even without a status vocabulary word, and mutation completions (`created`, `saved`, `written`, `unchanged`, `recovered`, …) count as success. Negative statuses (`failed`, `unconfigured`, `missing`, …) still fail, and verifier gates still require measured evidence.
+- **Negative gates.** The plan option `expect_fail` (for example `{"verify_scripts": true}`) inverts an objective gate's verdict: the step passes only when the detector *fails*. This enables fault-injection loops — inject a fault, prove the verifier catches it, repair, prove recovery — using existing tools, and receipts record `expected_failure: true`.
+- **Negated intent.** Platform selection and the glTF gate ignore mentions that carry a nearby negation (“Android 不适用”, “3D not applicable”, “without 3D”), so an exclusion requirement cannot add the excluded platform or gate.
+- **Runtime sessions.** `run_project` reuses a live session when the requested scene is already playing (or no scene is specified) and switches deterministically when a different scene is requested; plan-authorized `run_project`/`stop_project` pass `allow_window=true` automatically because the objective already authorized runtime verification.
+
 ## Integrity and safety
 
 Before every runner round, the engine recompiles the expected blueprint from the persisted goal contract and compares the exact step order, tools, arguments, dependencies, repair declarations and objective gate set. A changed blueprint stops before any atomic handler runs.
