@@ -187,14 +187,15 @@ ui.tunnel_start,Start free tunnel,Start free tunnel,启动免费隧道
 ui.tunnel_stop,Stop tunnel,Stop tunnel,停止隧道
 ui.tunnel_binary,Local cloudflared,Local cloudflared,本地 cloudflared
 ui.tunnel_binary_placeholder,Optional override; PATH and shared cache are detected automatically,Optional override; PATH and shared cache are detected automatically,可选覆盖路径；自动检测 PATH 和共享缓存
-ui.tunnel_idle,Tunnel not running.,Tunnel not running.,隧道未运行。
+ui.tunnel_idle,"Tunnel not running. Once started, it remains active until you stop it or shut down.","Tunnel not running. Once started, it remains active until you stop it or shut down.","隧道未运行。启动后会持续保留，直到你主动停止或电脑关机。"
 ui.tunnel_unsupported,No prebuilt cloudflared for this platform; set a path below.,No prebuilt cloudflared for this platform; set a path below.,该平台暂无预编译 cloudflared，请在下方指定路径。
 ui.tunnel_downloading,Downloading cloudflared to the shared cache (once per version/platform)...,Downloading cloudflared to the shared cache (once per version/platform)...,正在将 cloudflared 下载到本机共享缓存（每个版本/平台一次）...
 ui.tunnel_download_failed,Download failed; check your connection.,Download failed; check your connection.,下载失败，请检查网络连接。
 ui.tunnel_verify_failed,Checksum verification failed; download discarded.,Checksum verification failed; download discarded.,校验和验证失败，已丢弃下载文件。
-ui.tunnel_starting,Starting tunnel...,Starting tunnel...,正在启动隧道...
+ui.tunnel_starting,Starting persistent tunnel...,Starting persistent tunnel...,正在启动持久隧道...
 ui.tunnel_start_failed,Could not start cloudflared.,Could not start cloudflared.,无法启动 cloudflared。
-ui.tunnel_live,Tunnel live: %s,Tunnel live: %s,隧道已就绪：%s
+ui.tunnel_live,"Tunnel live (kept after Godot closes): %s","Tunnel live (kept after Godot closes): %s","隧道已就绪（关闭 Godot 后仍保留）：%s"
+ui.tunnel_restored,Existing tunnel restored: %s,Existing tunnel restored: %s,已恢复之前的隧道：%s
 ui.tunnel_exited,Tunnel process exited.,Tunnel process exited.,隧道进程已退出。
 ui.tunnel_stopped,Tunnel stopped.,Tunnel stopped.,隧道已停止。
 ui.tunnel_already,Tunnel already running.,Tunnel already running.,隧道已在运行。

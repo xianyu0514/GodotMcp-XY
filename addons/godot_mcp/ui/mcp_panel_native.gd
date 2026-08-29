@@ -150,8 +150,11 @@ func _exit_tree() -> void:
 		_debounce_timer.stop()
 	if _tunnel_poll_timer and is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer.stop()
-	if _tunnel_manager and _tunnel_manager.is_running():
-		_tunnel_manager.stop()
+	# The user owns the tunnel lifecycle. Plugin reload/editor shutdown only
+	# releases this panel's handle; the detached cloudflared process is restored
+	# by the next Godot instance and stops naturally at OS shutdown.
+	if _tunnel_manager:
+		_tunnel_manager.detach()
 
 func _capture_editor_metrics() -> void:
 	# The editor theme is the visual source of truth. The small floor prevents
@@ -181,6 +184,7 @@ func set_plugin(plugin: EditorPlugin) -> void:
 	if _plugin and _plugin.has_method("get_native_server"):
 		_server_core = _plugin.get_native_server()
 	_load_settings()
+	_restore_tunnel_session()
 	_refresh_translations()
 
 func set_server_core(server_core: RefCounted) -> void:
@@ -819,6 +823,34 @@ func _launch_tunnel(binary_abs: String) -> void:
 		_tunnel_stop_button.disabled = false
 	if _tunnel_start_button:
 		_tunnel_start_button.disabled = true
+	_ensure_tunnel_poll_timer()
+
+## Reattaches to a user-started cloudflared process after plugin/project reload
+## or a full Godot restart. A stale URL is cleared only when it belonged to the
+## stopped managed session; manually entered public URLs remain untouched.
+func _restore_tunnel_session() -> void:
+	if _tunnel_manager == null:
+		_tunnel_manager = MCPTunnelManager.new()
+	if not _tunnel_manager.restore():
+		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
+		_reset_tunnel_buttons()
+		return
+	if _tunnel_stop_button:
+		_tunnel_stop_button.disabled = false
+	if _tunnel_start_button:
+		_tunnel_start_button.disabled = true
+	var url: String = _tunnel_manager.get_public_url()
+	if not url.is_empty():
+		if _remote_url_edit:
+			_remote_url_edit.text = url
+		_update_public_endpoint()
+		if _tunnel_status_label:
+			_tunnel_status_label.text = _trf("ui.tunnel_restored", [url])
+	else:
+		_set_tunnel_status("ui.tunnel_starting")
+	_ensure_tunnel_poll_timer()
+
+func _ensure_tunnel_poll_timer() -> void:
 	if _tunnel_poll_timer == null or not is_instance_valid(_tunnel_poll_timer):
 		_tunnel_poll_timer = Timer.new()
 		_tunnel_poll_timer.wait_time = 1.0
@@ -831,8 +863,10 @@ func _on_tunnel_poll_timeout() -> void:
 		return
 	if not _tunnel_manager.is_running():
 		_tunnel_poll_timer.stop()
+		var tunnel_url: String = _tunnel_manager.get_public_url()
+		_tunnel_manager.discard_stale_session()
 		_reset_tunnel_buttons()
-		_clear_tunnel_url_if_owned(_tunnel_manager.get_public_url())
+		_clear_tunnel_url_if_owned(tunnel_url)
 		_set_tunnel_status("ui.tunnel_exited")
 		return
 	var url: String = _tunnel_manager.poll()
