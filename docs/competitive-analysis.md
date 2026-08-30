@@ -1,6 +1,6 @@
 # Godot MCP 竞品分析与"编辑器型 MCP 服务器"最佳形态研究报告
 
-> 用于指导 **Godot-MCP-Native**（纯 GDScript、Godot 4.7 编辑器内原生 MCP 服务器，221 工具）的优化。
+> 用于指导 **Godot-MCP-Native**（纯 GDScript、Godot 4.7 编辑器内原生 MCP 服务器，231 工具）的优化。
 > 数据采集日期：2026-08（GitHub API 实时抓取 star / push / issue）。
 > 本项目公开仓库：github.com/yurineko73/Godot-MCP-Native（716⭐，66 forks，MIT，最后推送 2026-08-03）。
 
@@ -22,7 +22,7 @@
 | 实现 | 架构 | 工具数 | 传输 | 资源/提示支持 | 安全 | 活跃度（⭐ / 最后推送） |
 |---|---|---|---|---|---|---|
 | **Coding-Solo/godot-mcp**（最流行 Godot MCP） | Node/TS bridge：`npx @coding-solo/godot-mcp` 启动 Godot CLI + 内置 `godot_operations.gd` JSON 驱动脚本 | **~14**（launch_editor / run_project / get_debug_output / stop_project / create_scene / add_node / load_sprite / save_scene / get_uid 等） | stdio | 无 resources / 无 prompts | ⚠️ 曾报 RCE（#64 未消毒 projectPath）、autoload 注入（#112）；无 auth | **5301⭐ / 460F**，2026-04 仍在推 |
-| **yurineko73/Godot-MCP-Native（本项目）** | 纯 GDScript `EditorPlugin` 原生实现，无任何外部依赖 | **221**（28 核心 + 189 补充 + 4 meta，6 大类 + meta） | HTTP/SSE `:9080` + stdio | resources ✓；prompts **capability 已声明但 0 个已注册**；`instructions` ✓（渐进披露引导，业界罕见） | Bearer Token（HTTP）；path_validator 路径校验；原生插件不引入额外攻击面 | **716⭐ / 66F**，16 open issues，2026-08 活跃 |
+| **yurineko73/Godot-MCP-Native（本项目）** | 纯 GDScript `EditorPlugin` 原生实现，无任何外部依赖 | **231**（28 核心 + 197 补充 + 6 meta，6 大类 + meta） | HTTP/SSE `:9080` + stdio | resources ✓；prompts **capability 已声明但 0 个已注册**；`instructions` ✓（渐进披露引导，业界罕见） | Bearer Token（HTTP）；path_validator 路径校验；原生插件不引入额外攻击面 | **716⭐ / 66F**，16 open issues，2026-08 活跃 |
 | **IvanMurzak/Godot-MCP** | C# 编辑器 addon（NuGet 反射栈与 Unity-MCP 共享）+ 云端 ai-game.dev 或自托管 MCP server | **42**（12 families） | stdio / 云端 HTTP（OAuth 2.1 设备登录） | 无独立 prompts；有"自然对话" | 云端账号体系；自托管可选 | 220⭐，2026-08 活跃 |
 | **smalldy/MCP4Godot** | GDScript 原生 EditorPlugin（与本项目同构，最接近的"同路线"竞品） | **38**（6 类：Node 8 / Property 5 / Editor 12 / File 8 / Script 2 / Settings 3） | **Streamable HTTP** `:9876/mcp`（单端点 POST） | 无 | README 未提及认证（本地监听风险） | 0⭐（2026-06 新建），更新中 |
 | **yanhuifair/Godot-MCP** | TypeScript | 未披露 | stdio | 无 | — | 16⭐，AGPL-3.0，2026-08 |
@@ -157,7 +157,7 @@
 2. **实现真正的 prompts（现在是空壳）**
    `prompts/list` 已声明 capability 却返回空——这是协议层面的"未完成承诺"。注册 6~8 个高价值 prompt：`plan_game_feature`、`debug_runtime_error`、`review_scene`、`run_test_suite`、`visual_playtest`、`onboard_new_project`。把本项目的编排工具（manage_task_plan → play_and_verify → assert_*）串成即调即用的工作流模板，**零常驻 token**。
 3. **schema 严格化 + 自动化回归**
-   加一条 GUT 用例：遍历 221 个工具的 input/output schema，断言只含 MCP JSON Schema 允许的关键字（拒绝 `default`/`minimum` 等，Copilot 会直接弃用工具——#55 实证）；发布"已在 Claude Code / Cursor / Cline / Copilot / Codex 测试"的兼容矩阵徽章。
+   加一条 GUT 用例：遍历 231 个工具的 input/output schema，断言只含 MCP JSON Schema 允许的关键字（拒绝 `default`/`minimum` 等，Copilot 会直接弃用工具——#55 实证）；发布"已在 Claude Code / Cursor / Cline / Copilot / Codex 测试"的兼容矩阵徽章。
 4. **修复 Codex 兼容并补全客户端 onboarding**
    用 Codex CLI 实测 stdio 与 Streamable HTTP 两种接法，修掉 #1/#24；UI 增加"一键生成 Claude Desktop / Claude Code / Cursor / Cline / Codex / Copilot 配置"（参考 Unity MCP 的 Configure All Detected Clients 与 Coding-Solo 的配置片段）。
 5. **发布到 Godot Asset Library + 一键安装脚本**
@@ -181,7 +181,7 @@
 14. **结构化测试输出与计划联动**
     GUT/测试运行结果返回结构化 JSON（用例级 pass/fail/time/error line），并写回 manage_task_plan 的任务状态（DoD 勾选），让"计划→执行→验证"在数据层面闭环。
 15. **多实例与文档站**
-    参考 Unity MCP：支持多 Godot 编辑器实例路由（不同端口/会话标签）；把 docs/tools/* 渲染成可搜索的工具目录站（含 schema 示例、token 估算、客户端配置），让"221 个工具"从负担变成卖点。
+    参考 Unity MCP：支持多 Godot 编辑器实例路由（不同端口/会话标签）；把 docs/tools/* 渲染成可搜索的工具目录站（含 schema 示例、token 估算、客户端配置），让"231 个工具"从负担变成卖点。
 
 ---
 

@@ -2,7 +2,7 @@
 
 [English](game-workflows.md)
 
-`plan_game_workflow` 与 `run_game_workflow` 面向无法靠一次小工具集可靠完成的完整目标。它们不会替代 217 个原子能力，而是把这些能力编译为持久计划，并依据客观证据推进到完成。
+`plan_game_workflow` 与 `run_game_workflow` 面向无法靠一次小工具集可靠完成的完整目标。它们不会替代 225 个原子能力，而是把这些能力编译为持久计划，并依据客观证据推进到完成。
 
 ## 为什么完整工作流可以超过 8 个工具
 

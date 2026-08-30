@@ -80,7 +80,7 @@ func _normalize_search_text(value: String) -> String:
 func _build_query_terms(query_raw: String) -> Array:
 	return _workflow_router.build_query_terms(query_raw)
 
-## BM25 would be unnecessary overhead for a 221-item in-memory catalog. This
+## BM25 would be unnecessary overhead for a 231-item in-memory catalog. This
 ## weighted lexical scorer captures the useful ordering properties with one
 ## cheap scan and deterministic tie-breaking.
 func _score_tool_match(info: Dictionary, query_raw: String, terms: Array) -> int:
