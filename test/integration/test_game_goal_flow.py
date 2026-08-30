@@ -60,10 +60,10 @@ enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")
 """
 
 
-def rpc_call(method: str, params: dict | None = None, request_id: int = 1, timeout: float = 240.0) -> dict:
+def rpc_call(method: str, params: dict | None = None, request_id: int = 1, timeout: float = 240.0, mcp_url: str | None = None) -> dict:
     payload = {"jsonrpc": "2.0", "method": method, "params": params or {}, "id": request_id}
     request = urllib.request.Request(
-        MCP_URL,
+        mcp_url or MCP_URL,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -82,8 +82,8 @@ def rpc_call(method: str, params: dict | None = None, request_id: int = 1, timeo
     raise AssertionError(f"Empty response from MCP server after retries: {method}")
 
 
-def tool_call(name: str, arguments: dict | None = None, request_id: int = 100, timeout: float = 240.0) -> dict:
-    response = rpc_call("tools/call", {"name": name, "arguments": arguments or {}}, request_id=request_id, timeout=timeout)
+def tool_call(name: str, arguments: dict | None = None, request_id: int = 100, timeout: float = 240.0, mcp_url: str | None = None) -> dict:
+    response = rpc_call("tools/call", {"name": name, "arguments": arguments or {}}, request_id=request_id, timeout=timeout, mcp_url=mcp_url)
     result = response.get("result", {})
     if result.get("isError"):
         raise AssertionError(f"Tool {name} failed: {result['content'][0]['text']}")
@@ -96,11 +96,11 @@ def tool_call(name: str, arguments: dict | None = None, request_id: int = 100, t
         return {"raw": text[:400]}
 
 
-def wait_for_server(timeout_seconds: float = 90.0) -> None:
+def wait_for_server(timeout_seconds: float = 90.0, mcp_url: str | None = None) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
-            rpc_call("tools/list", timeout=5.0)
+            rpc_call("tools/list", timeout=5.0, mcp_url=mcp_url)
             return
         except Exception:
             time.sleep(1.0)
