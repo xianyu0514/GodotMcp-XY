@@ -69,7 +69,7 @@ func test_meta_tools_survive_every_preset():
 func test_all_enables_everything():
 	var states: Dictionary = _manager.resolve_preset_states("all", _all_names)
 	assert_eq(_count_enabled(states), _all_names.size(), "all preset should enable every registered tool")
-	assert_eq(_count_enabled(states), 226, "all preset should enable 226 tools")
+	assert_eq(_count_enabled(states), 231, "all preset should enable 231 tools")
 
 func test_debugging_includes_core_plus_debug_advanced():
 	var states: Dictionary = _manager.resolve_preset_states("debugging", _all_names)

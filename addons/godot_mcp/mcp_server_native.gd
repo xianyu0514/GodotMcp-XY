@@ -127,6 +127,7 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"ProjectTilesetTools": "res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"ProjectVerificationTools": "res://addons/godot_mcp/tools/project_verification_tools.gd",
 	"ProjectWorkflowTools": "res://addons/godot_mcp/tools/project_workflow_tools.gd",
+	"ExportPresetTools": "res://addons/godot_mcp/tools/export_preset_tools.gd",
 	"GameWorkflowTools": "res://addons/godot_mcp/tools/game_workflow_tools.gd",
 	"MetaToolsNative": "res://addons/godot_mcp/tools/meta_tools_native.gd"
 }

@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**64 tools** — 3 core, 61 advanced.
+**69 tools** — 3 core, 66 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
@@ -88,3 +88,13 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `generate_3d_asset` | advanced | Generate a 3D model (glTF/GLB) from a text prompt via an external provider into res://. Async: submit job, poll status, download, validate. API key from an OS env var (never logged). Returns 'unconfigured' when unset; reimports when possible. |
 | `bump_version` | advanced | Automate version + changelog for the ship loop: read the current version from `application/config/version`, compute the next one (semantic `bump` major/minor/patch or an explicit `version`), and unless `dry_run` write it back to project.godot. When `update_changelog` is on, prepend a dated entry to `changelog_path` (default res://CHANGELOG.md). Returns previous/new version and whether files were written. |
 | `manage_localization` | advanced | Localization workflow: 'extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title/hint_tooltip) and .gd tr()/atr() calls, merging new keys into a standard CSV (first column keys, one per locale) while preserving existing translations; 'import' builds one .translation per locale from the CSV and registers it in ProjectSettings; 'export' writes registered .translations back to CSV; 'list' shows registered locales. Write actions support dry_run. |
+
+## Export preset management
+
+| Tool | Tier | Description |
+| --- | --- | --- |
+| `inspect_export_presets` | advanced | Read all presets from export_presets.cfg: platform, export path, filters, per-preset options, plus editor platform availability (unvalidated when the export API is unavailable). |
+| `create_export_preset` | advanced | Create an export preset (platform, name, export_path, filters, platform options). Re-reads the file afterwards and reports `verified`. |
+| `update_export_preset` | advanced | Update fields/options of an existing preset; only provided keys change. |
+| `duplicate_export_preset` | advanced | Duplicate a preset under a new name (options copied, export path suffixed). |
+| `remove_export_preset` | advanced | Remove a preset section (and its options) from export_presets.cfg. |

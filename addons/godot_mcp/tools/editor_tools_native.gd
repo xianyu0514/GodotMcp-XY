@@ -349,6 +349,21 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 		await tree.process_frame
 		probe_ready = bridge.is_probe_ready() if bridge else false
 
+	# Grace check: a parse error or early crash kills the debugger session within
+	# the first moments. Reporting success there is a false positive — the engine
+	# verdict must see "started_but_exited" so gates fail honestly.
+	var grace_deadline: int = Time.get_ticks_msec() + 1200
+	while tree and Time.get_ticks_msec() < grace_deadline:
+		await tree.process_frame
+		if not _has_active_debugger_session():
+			_last_played_scene = ""
+			return {
+				"status": "started_but_exited",
+				"error": "The game process exited shortly after launch (parse error or early crash). Check get_editor_logs / assert_no_runtime_errors evidence.",
+				"scene": played_scene,
+				"probe_ready": probe_ready
+			}
+
 	return {
 		"status": "success",
 		"mode": "playing",

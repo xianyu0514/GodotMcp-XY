@@ -10,8 +10,8 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 当前表包含 223 个工具：28 core + 189 supplementary + 6 meta。完整游戏
-# 闭环只增加两个薄编排 meta 入口，217 个非 meta 原子能力保持不变。
+# 当前表包含 231 个工具：28 core + 197 supplementary + 6 meta。完整游戏
+# 闭环只增加两个薄编排 meta 入口，225 个非 meta 原子能力保持不变。
 #
 # 注意：
 #   - TOOLS 是分类/分组的唯一权威来源；tools/*.gd 的 register_tool 调用仍然
@@ -60,6 +60,8 @@ const TOOLS: Dictionary = {
 	"create_drawable_texture": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_gradient_texture": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_node": {"category": "core", "group": "Node-Write"},
+	"create_export_preset": {"category": "supplementary", "group": "Project-Advanced"},
+	"duplicate_export_preset": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_project_smoke_test": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_resource": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_runtime_node": {"category": "supplementary", "group": "Debug-Advanced"},
@@ -78,12 +80,14 @@ const TOOLS: Dictionary = {
 	"debug_step_over_and_wait": {"category": "supplementary", "group": "Debug-Advanced"},
 	"delete_node": {"category": "core", "group": "Node-Write"},
 	"delete_runtime_node": {"category": "supplementary", "group": "Debug-Advanced"},
+	"inspect_export_presets": {"category": "supplementary", "group": "Project-Advanced"},
 	"detect_broken_scripts": {"category": "supplementary", "group": "Project-Advanced"},
 	"detect_gdextension_addons": {"category": "supplementary", "group": "Project-Advanced"},
 	"disconnect_signal": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"draw_on_texture": {"category": "supplementary", "group": "Project-Advanced"},
 	"duplicate_node": {"category": "core", "group": "Node-Write"},
 	"enable_tools": {"category": "meta", "group": "Meta"},
+	"update_export_preset": {"category": "supplementary", "group": "Project-Advanced"},
 	"ensure_project_directory": {"category": "supplementary", "group": "Project-Advanced"},
 	"evaluate_debug_expression": {"category": "supplementary", "group": "Debug-Advanced"},
 	"evaluate_runtime_expression": {"category": "supplementary", "group": "Debug-Advanced"},
@@ -181,6 +185,7 @@ const TOOLS: Dictionary = {
 	"plan_game_workflow": {"category": "meta", "group": "Meta"},
 	"play_and_verify": {"category": "supplementary", "group": "Debug-Advanced"},
 	"play_runtime_animation": {"category": "supplementary", "group": "Debug-Advanced"},
+	"remove_export_preset": {"category": "supplementary", "group": "Project-Advanced"},
 	"prepare_project_test_environment": {"category": "supplementary", "group": "Project-Advanced"},
 	"read_resource_properties": {"category": "supplementary", "group": "Project-Advanced"},
 	"read_script": {"category": "core", "group": "Script"},

@@ -2231,7 +2231,7 @@ func _register_connect_signal(server_core: RefCounted) -> void:
 				},
 				"flags": {
 					"type": "integer",
-					"description": "Connection flags: 0=DEFAULT, 1=DEFERRED, 2=ONE_SHOT, 4=PERSIST. Default is 0."
+					"description": "ConnectFlags bitmask: 1=DEFERRED, 2=PERSIST, 4=ONE_SHOT, 8=REFERENCE_COUNTED. 0/default = none."
 				}
 			},
 			"required": ["emitter_path", "signal_name", "receiver_path", "receiver_method"]

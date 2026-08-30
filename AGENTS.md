@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **226 个工具**（28 核心 + 192 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **231 个工具**（28 核心 + 197 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.0.7-pre1
@@ -53,8 +53,8 @@ addons/godot_mcp/
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── mcp_tool_domains.gd     # 面向用户任务的工具域分类（2D/3D/UI 等，与 category/group 正交）
 │   ├── mcp_tool_preset_manager.gd # 工具预设（分组一键启用/切换）管理
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：226 个工具 name → {category, group}
-│   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：217 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：231 个工具 name → {category, group}
+│   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
 │   ├── prompt_workflows.gd     # 7 个可执行工作流 MCP prompts（plan_game_feature/debug_runtime_error 等）
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
@@ -87,6 +87,7 @@ addons/godot_mcp/
 │   ├── asset_provider_presets.gd # 支持文件（非工具）— generate_asset/generate_3d_asset 的外部 API 预设与 endpoint/密钥白名单
 │   ├── task_plan_store.gd      # 支持文件（非工具）— manage_task_plan 的持久任务图存储
 │   ├── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
+│   ├── export_preset_tools.gd  # 5 个工具 — inspect/create/update/remove/duplicate_export_preset（export_presets.cfg 的原子 CRUD）
 │   └── game_workflow_tools.gd  # 2 个工具（category=meta，始终在线）— plan_game_workflow（12 生产 profile 组装持久目标 DAG）、run_game_workflow（自适应检查点切片推进，证据门禁判 completed）
 ├── ui/
 │   ├── mcp_panel_native.gd     # 主停靠面板（VBoxContainer）— 启动/停止、传输配置、日志查看、工具管理
@@ -106,7 +107,7 @@ addons/godot_mcp/
     └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 226 = 28 core + 192 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
+> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 231 = 28 core + 197 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
 
 ## 规范
 

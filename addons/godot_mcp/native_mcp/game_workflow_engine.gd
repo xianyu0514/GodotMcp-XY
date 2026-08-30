@@ -860,7 +860,7 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 		"passed": passed,
 		"pending": false,
 		"expected_failure": expect_failure,
-		"summary": _compact_result_summary(result)
+		"summary": _compact_result_summary(result, String(task.get("tool_name", "")))
 	})
 	if passed:
 		task["status"] = "done"
@@ -970,7 +970,7 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 		"tool_name": repair_tool,
 		"repair": true,
 		"passed": passed,
-		"summary": _compact_result_summary(result)
+		"summary": _compact_result_summary(result, repair_tool)
 	})
 	var workflow: Dictionary = plan.get("workflow", {})
 	if passed:
@@ -1063,7 +1063,20 @@ func _clear_failure_tracking(task: Dictionary, prefix: String) -> void:
 	task.erase(prefix + "_failure_fingerprint")
 	task.erase(prefix + "_same_failure_count")
 
-func _compact_result_summary(result: Variant) -> Dictionary:
+# 门禁工具的定量证据字段：收据除状态外保留这些数值，重规划/审计时才能看出
+# "具体哪条指标过了/没过"，而不是只有一个 completed。
+const GATE_EVIDENCE_KEYS: Dictionary = {
+	"assert_performance_budget": ["fps", "avg_fps", "p1_fps", "p95_frame_time_ms", "frame_time_ms"],
+	"assert_visual_baseline": ["diff_pixel_count", "diff_ratio", "width", "height"],
+	"verify_scripts": ["verified", "broken_count"],
+	"run_project_tests": ["passed_count", "total_count"],
+	"run_project_test": ["passed", "total_count"],
+	"assert_no_runtime_errors": ["error_count"],
+	"smoke_test_export": ["exit_code"],
+	"play_and_verify": ["error_count"],
+}
+
+func _compact_result_summary(result: Variant, tool_name: String = "") -> Dictionary:
 	if not (result is Dictionary):
 		return {"type": typeof(result)}
 	var data: Dictionary = result
@@ -1073,6 +1086,15 @@ func _compact_result_summary(result: Variant) -> Dictionary:
 			summary[key] = data[key]
 	if data.has("error"):
 		summary["error"] = String(data["error"]).substr(0, 512)
+	var evidence_keys: Array = GATE_EVIDENCE_KEYS.get(tool_name, []) if tool_name != "" else []
+	if not evidence_keys.is_empty():
+		var evidence: Dictionary = {}
+		for evidence_key in evidence_keys:
+			var value: Variant = data.get(evidence_key, null)
+			if value != null and not (value is Dictionary) and not (value is Array):
+				evidence[evidence_key] = value
+		if not evidence.is_empty():
+			summary["evidence"] = evidence
 	return summary
 
 ## Register paths a successful creation step produced into the workflow's
