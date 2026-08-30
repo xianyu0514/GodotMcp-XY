@@ -2109,7 +2109,7 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["status", "install", "remove", "download", "download_status", "download_cancel"],
+				"enum": ["status", "install", "remove", "download", "download_status", "download_cancel", "net_diag"],
 				"description": "Operation.",
 				"default": "status"
 			},
@@ -2285,8 +2285,12 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 	var action: String = str(params.get("action", "status")).strip_edges().to_lower()
 	if action.is_empty():
 		action = "status"
-	if not (action in ["status", "install", "remove", "download", "download_status", "download_cancel"]):
-		return {"error": "Invalid action '%s'. Expected one of: status, install, remove, download, download_status, download_cancel." % action}
+	if not (action in ["status", "install", "remove", "download", "download_status", "download_cancel", "net_diag"]):
+		return {"error": "Invalid action '%s'. Expected one of: status, install, remove, download, download_status, download_cancel, net_diag." % action}
+
+	# net_diag 与下载状态机无关，也不需要 templates_root。
+	if action == "net_diag":
+		return _templates_net_diag(params)
 
 	# download_status / download_cancel 只读写下载状态机，不需要安装目录；
 	# 必须在 templates_root 解析之前分发，调用方才不必为轮询重复传 root。
@@ -2437,6 +2441,120 @@ func _install_templates_from_tpz(tpz_path: String, templates_root: String,
 ## 单次 HTTPS GET 驱动节点：直连，或经回环 HTTP 代理的 CONNECT 隧道 + TLS。
 ## Godot 的 HTTPRequest 不支持代理，而 GitHub 发布资产在部分网络只能经代理
 ## 可达，因此下载使用手写客户端；两条路径共用同一实现。
+# 下载链路诊断：同一 _process 泵并行拨号 域名（DNS+TCP）/ IP 字面量（仅 TCP）/
+# 公共对照 IP，上报 _process tick 数与状态时间线。判读：
+#   ticks==0            —— 节点未被主循环处理（树挂载/线程问题，下载器同病）
+#   ticks>0 全 connecting —— 编辑器进程出站 TCP 被网络层拦截
+#   ip 通而域名卡        —— 进程内 DNS 解析挂起
+class TemplatesNetDiag extends Node:
+	var peers: Array = []
+	var ticks: int = 0
+	var started_ms: int = 0
+	var deadline_ms: int = 12000
+	var _done: bool = false
+
+	static func _status_name(s: int) -> String:
+		match s:
+			StreamPeerTCP.STATUS_NONE: return "none"
+			StreamPeerTCP.STATUS_CONNECTING: return "connecting"
+			StreamPeerTCP.STATUS_CONNECTED: return "connected"
+			StreamPeerTCP.STATUS_ERROR: return "error"
+		return str(s)
+
+	static func _spawn(label: String, host: String, port: int) -> Dictionary:
+		var tcp: StreamPeerTCP = StreamPeerTCP.new()
+		tcp.connect_to_host(host, port)
+		return {"label": label, "tcp": tcp, "last": -1, "log": []}
+
+	func setup(host: String, port: int, ip_control: String) -> void:
+		peers = [
+			_spawn("dns:" + host, host, port),
+			_spawn("ip:" + ip_control, ip_control, port),
+			_spawn("ip:1.1.1.1", "1.1.1.1", 443),
+		]
+		started_ms = Time.get_ticks_msec()
+
+	func is_finished() -> bool:
+		return _done
+
+	func _process(_delta: float) -> void:
+		ticks += 1
+		if _done:
+			return
+		var pending: int = 0
+		for peer in peers:
+			var tcp: StreamPeerTCP = peer["tcp"]
+			tcp.poll()
+			var s: int = tcp.get_status()
+			if s != int(peer["last"]):
+				peer["last"] = s
+				(peer["log"] as Array).append([Time.get_ticks_msec() - started_ms, _status_name(s)])
+			if s == StreamPeerTCP.STATUS_CONNECTING or s == StreamPeerTCP.STATUS_NONE:
+				pending += 1
+		if pending == 0 or Time.get_ticks_msec() - started_ms > deadline_ms:
+			_done = true
+			for peer in peers:
+				(peer["tcp"] as StreamPeerTCP).disconnect_from_host()
+
+	func report() -> Dictionary:
+		var out_peers: Array = []
+		for peer in peers:
+			out_peers.append({
+				"label": peer["label"],
+				"status": _status_name(int(peer["last"])) if int(peer["last"]) >= 0 else "unpolled",
+				"timeline": peer["log"],
+			})
+		return {
+			"action": "net_diag",
+			"status": "finished" if _done else "running",
+			"process_ticks": ticks,
+			"elapsed_ms": (Time.get_ticks_msec() - started_ms) if started_ms > 0 else 0,
+			"node_id": get_instance_id(),
+			"in_tree": is_inside_tree(),
+			"path": str(get_path()) if is_inside_tree() else "",
+			"process_enabled": is_processing(),
+			"peers": out_peers,
+		}
+
+# static 存储：热重载会重置工具实例成员，诊断节点句柄必须跨实例存活。
+static var _net_diag_shared: Node = null
+static var _net_diag_last_frames: int = -1
+
+func _templates_net_diag(params: Dictionary) -> Dictionary:
+	var host: String = str(params.get("host", "downloads.godotengine.org")).strip_edges()
+	if host.is_empty():
+		return {"error": "host must not be empty for net_diag."}
+	var port: int = clampi(int(params.get("port", 443)), 1, 65535)
+	var ip_control: String = str(params.get("ip", "172.67.193.253")).strip_edges()
+	var base: Dictionary = {
+		"handler_on_main_thread": Thread.is_main_thread(),
+		"engine_frames": Engine.get_process_frames(),
+	}
+	if _net_diag_last_frames >= 0:
+		base["frames_delta_since_last_call"] = Engine.get_process_frames() - _net_diag_last_frames
+	_net_diag_last_frames = Engine.get_process_frames()
+	if _net_diag_shared != null and is_instance_valid(_net_diag_shared):
+		var running: TemplatesNetDiag = _net_diag_shared as TemplatesNetDiag
+		if not running.is_finished():
+			var rep: Dictionary = running.report()
+			rep.merge(base, true)
+			return rep
+		running.queue_free()
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root == null:
+		base["error"] = "No scene tree root available for net diagnostics."
+		return base
+	var diag: TemplatesNetDiag = TemplatesNetDiag.new()
+	diag.setup(host, port, ip_control)
+	root.add_child(diag)
+	if not diag.is_inside_tree():
+		base["error"] = "net_diag node failed to enter the scene tree (add_child rejected)."
+		return base
+	_net_diag_shared = diag
+	var rep2: Dictionary = diag.report()
+	rep2.merge(base, true)
+	return rep2
+
 class TemplatesHttpGetter extends Node:
 	signal completed(outcome: Dictionary)
 	## progress_cb(bytes, total)
@@ -3118,6 +3236,7 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 			"require_integrity": bool(params.get("require_integrity", false)),
 			"keep_archive": bool(params.get("keep_archive", false)),
 		}
+		_templates_begin_update_continuously()
 		fetch.start()
 		return {
 			"action": "download", "status": "pending",
@@ -3149,6 +3268,7 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 	}
 	getter.progress_cb = Callable(self, "_on_templates_download_progress")
 	getter.completed.connect(_on_templates_download_completed)
+	_templates_begin_update_continuously()
 	getter.start()
 	return {
 		"action": "download", "status": "pending",
@@ -3168,6 +3288,38 @@ func _on_templates_download_progress(bytes: int, total_bytes: int) -> void:
 	_template_download["bytes"] = bytes
 	_template_download["total_bytes"] = total_bytes
 
+# 编辑器失焦/被遮挡/最小化时主循环可能停迭代：节点 _process 停摆会让
+# 下载器的裸 StreamPeer 永不推进（连 socket 都不建，探测 60s 空转超时）。
+# 下载期间临时开启 update_continuously 强制编辑器持续迭代；终态/取消恢复。
+const TEMPLATES_UPDATE_CONTINUOUSLY: String = "interface/editor/update_continuously"
+
+func _templates_begin_update_continuously() -> void:
+	if _template_download.has("_uc_prev"):
+		return
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return
+	var settings: EditorSettings = editor_interface.get_editor_settings()
+	if settings == null:
+		return
+	var prev: bool = false
+	if settings.has_setting(TEMPLATES_UPDATE_CONTINUOUSLY):
+		prev = bool(settings.get_setting(TEMPLATES_UPDATE_CONTINUOUSLY))
+	if not prev:
+		settings.set_setting(TEMPLATES_UPDATE_CONTINUOUSLY, true)
+		_template_download["_uc_prev"] = false
+
+func _templates_restore_update_continuously() -> void:
+	if not _template_download.has("_uc_prev"):
+		return
+	_template_download.erase("_uc_prev")
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return
+	var settings: EditorSettings = editor_interface.get_editor_settings()
+	if settings != null:
+		settings.set_setting(TEMPLATES_UPDATE_CONTINUOUSLY, false)
+
 func _templates_download_cancel() -> Dictionary:
 	if _template_download.is_empty():
 		return {"action": "download_cancel", "status": "idle",
@@ -3183,6 +3335,7 @@ func _templates_download_cancel() -> Dictionary:
 	var part_abs: String = String(_template_download.get("part_abs", ""))
 	if not part_abs.is_empty():
 		DirAccess.remove_absolute(part_abs)
+	_templates_restore_update_continuously()
 	_template_download = {}
 	return {"action": "download_cancel", "status": "cancelled",
 		"message": "Template download cancelled; partial file removed."}
@@ -3201,6 +3354,7 @@ func _on_templates_download_completed(outcome: Dictionary) -> void:
 
 func _templates_download_finish(status: String, message: String, keep_tpz: bool) -> void:
 	var state: Dictionary = _template_download
+	_templates_restore_update_continuously()
 	_templates_download_cleanup_getter(state.get("getter", null))
 	var tpz_abs: String = String(state.get("tpz_abs", ""))
 	var part_abs: String = String(state.get("part_abs", ""))

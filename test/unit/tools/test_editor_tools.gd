@@ -202,6 +202,22 @@ func test_manage_export_templates_invalid_action():
 	assert_true(result.has("error"), "Invalid action should return an error")
 	assert_true(str(result["error"]).contains("Invalid action"), "Error should mention invalid action")
 
+func test_manage_export_templates_net_diag_requires_host():
+	var result: Dictionary = _editor_tools._tool_manage_export_templates({"action": "net_diag", "host": "  "})
+	assert_true(result.has("error"), "Blank host must fail fast without spawning nodes")
+	assert_true(str(result["error"]).contains("host"), "Error should mention host")
+
+func test_update_continuously_guard_without_editor_interface():
+	_editor_tools._template_download = {"phase": "downloading"}
+	_editor_tools._templates_begin_update_continuously()
+	assert_false(_editor_tools._template_download.has("_uc_prev"),
+		"No flag is stored when EditorInterface is unavailable (headless)")
+	_editor_tools._template_download["_uc_prev"] = false
+	_editor_tools._templates_restore_update_continuously()
+	assert_false(_editor_tools._template_download.has("_uc_prev"),
+		"Restore always clears the private flag")
+	_editor_tools._template_download = {}
+
 func test_manage_export_templates_status():
 	var root: String = _unique_user_path("_templates")
 	DirAccess.make_dir_recursive_absolute(root)
