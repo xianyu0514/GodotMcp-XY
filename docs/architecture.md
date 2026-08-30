@@ -165,9 +165,6 @@ The MCP dock is implemented under `addons/godot_mcp/ui/`.
 | Utility | Purpose |
 | --- | --- |
 | `utils/path_validator.gd` | Validate project/user paths before file operations. |
-| `utils/resource_utils.gd` | Resource load/save and serialization helpers. |
-| `utils/script_utils.gd` | Script parsing and manipulation helpers. |
-| `utils/node_utils.gd` | Node lookup and property helpers. |
 | `utils/payload_utils.gd` | Normalize/validate tool payloads. |
 | `utils/vibe_coding_policy.gd` | Guardrails for editor focus/window behavior. |
 | `utils/async_job_runner.gd` | Background job orchestration for long-running work. |
