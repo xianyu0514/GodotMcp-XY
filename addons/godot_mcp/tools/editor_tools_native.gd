@@ -2102,7 +2102,7 @@ const _ANDROID_ARCHITECTURES: PackedStringArray = ["arm64-v8a", "armeabi-v7a", "
 
 func _register_manage_export_templates(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_export_templates"
-	var description: String = "Manage export templates. status: report installed versions + official URL for the current editor version. download: trusted background download from an allowlisted official mirror, verified and auto-installed; returns pending — poll with download_status, cancel with download_cancel. install: extract a local .tpz. remove: delete a version. Tool-side trusted network path (ScriptSandbox never applies). Godot 4.6+."
+	var description: String = "Manage export templates. status: report installed versions + official URL for the current editor version. download: trusted background download from an allowlisted official mirror, verified and auto-installed; returns pending — poll with download_status, cancel with download_cancel. install: extract a local .tpz. remove: delete a version. net_diag: dial hostname/IP from the editor to separate DNS, outbound-block and processing issues. Tool-side trusted network path (ScriptSandbox never applies). Godot 4.6+."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -3100,10 +3100,16 @@ class TemplatesParallelFetch extends Node:
 		_finish(true, "")
 
 	func _fail_all(reason: String) -> void:
+		# 先置 _failed 再通知 worker：worker._fail 同步发 completed 会重入
+		# _on_worker_completed，晚置位会级联出多轮 _fail_all，把真实失败原因
+		# 淹没成硬编码的 cancelled 文案。
+		if _finished or _failed:
+			return
+		_failed = true
 		for worker_value in _workers:
 			var worker: Node = worker_value
 			if is_instance_valid(worker) and worker.has_method("_fail"):
-				worker.call("_fail", "coordinator cancelled")
+				worker.call("_fail", reason)
 		_finish(false, reason)
 
 	func cancel() -> void:
@@ -3407,7 +3413,10 @@ func _templates_download_finish(status: String, message: String, keep_tpz: bool)
 	var part_abs: String = String(state.get("part_abs", ""))
 	if FileAccess.file_exists(part_abs) and status != "done":
 		DirAccess.remove_absolute(part_abs)
-	if status != "done" and not keep_tpz and FileAccess.file_exists(tpz_abs):
+	# 并行路径（state_json 非空）失败/取消必须保留部分 tpz：删除它会让续传
+	# 状态指向一个不存在的文件，后续 worker 全部 "Cannot open destination"。
+	if status != "done" and not keep_tpz and FileAccess.file_exists(tpz_abs) \
+			and String(state.get("state_json", "")).is_empty():
 		DirAccess.remove_absolute(tpz_abs)
 	if status == "done" and not String(state.get("state_json", "")).is_empty():
 		# 成功后清除断点状态；失败/取消保留以便续传。
