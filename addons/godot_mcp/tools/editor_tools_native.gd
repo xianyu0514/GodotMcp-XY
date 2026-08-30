@@ -8,12 +8,17 @@ extends RefCounted
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
 # 系统代理检测复用隧道管理器的实现（静态方法，避免重复造轮子）。
 const TUNNEL_MANAGER_SCRIPT = preload("res://addons/godot_mcp/native_mcp/mcp_tunnel_manager.gd")
+const RUNTIME_SESSION_SCRIPT = preload("res://addons/godot_mcp/native_mcp/runtime_session_manager.gd")
 
 var _editor_interface: EditorInterface = null
 var _editor_operation_in_progress: bool = false
 # Tracks the scene of the last successful play so run_project can reuse a
 # matching live session instead of erroring on "already running".
 var _last_played_scene: String = ""
+# 运行时会话状态机。"进程被创建"不等于"游戏跑起来了"——很多场景两帧之后就崩，
+# 只有按 process_created → debugger_attached → probe_handshake → scene_ready →
+# alive_after_grace 逐阶段推进，才能区分 started 与 started_but_exited。
+var _runtime_session: RefCounted = null
 # 导出模板下载状态机（工具自身的受信下载路径，不经过 execute_script 沙箱）。
 var _template_download: Dictionary = {}
 
@@ -57,6 +62,23 @@ func _has_active_debugger_session() -> bool:
 		if bool(session.get("active", false)):
 			return true
 	return false
+
+
+## 全插件共享一个运行时会话状态机：run_project / stop_project / 其他工具
+## 必须看到同一份状态，否则"这次启动"和"上次会话"会互相打架。
+static func _shared_runtime_session() -> RefCounted:
+	if Engine.has_meta("GodotMCPRuntimeSession"):
+		var existing: Variant = Engine.get_meta("GodotMCPRuntimeSession")
+		if existing != null and is_instance_valid(existing):
+			return existing
+	var session: RefCounted = RUNTIME_SESSION_SCRIPT.new()
+	Engine.set_meta("GodotMCPRuntimeSession", session)
+	return session
+
+
+## 对外暴露当前运行时会话快照，供其它工具与工作流引擎判定前置条件。
+static func runtime_session_snapshot() -> Dictionary:
+	return _shared_runtime_session().snapshot()
 
 func _get_export_templates_root() -> String:
 	var editor_interface: EditorInterface = _get_editor_interface()
@@ -241,6 +263,11 @@ func _register_run_project(server_core: RefCounted) -> void:
 				"type": "boolean",
 				"description": "Allow this call to open or control the runtime window when Vibe Coding mode is enabled.",
 				"default": false
+			},
+			"grace_period_ms": {
+				"type": "integer",
+				"description": "How long the process must stay alive after the scene is ready before the run is declared runtime_ready. Default 3000. A game that dies during this window reports started_but_exited instead of success.",
+				"default": 3000
 			}
 		}
 	}
@@ -249,11 +276,15 @@ func _register_run_project(server_core: RefCounted) -> void:
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"status": {"type": "string"},
+			"status": {"type": "string", "description": "success only when all five runtime stages completed; 'starting' when the process is alive but has not survived the grace period yet; 'error' when it exited early."},
 			"mode": {"type": "string"},
 			"scene": {"type": "string"},
 			"session_active": {"type": "boolean"},
-			"probe_ready": {"type": "boolean"}
+			"probe_ready": {"type": "boolean"},
+			"runtime_ready": {"type": "boolean"},
+			"session_state": {"type": "string", "description": "absent / starting / ready / started_but_exited / failed"},
+			"stages_reached": {"type": "array", "items": {"type": "string"}},
+			"runtime_session": {"type": "object"}
 		}
 	}
 
@@ -303,6 +334,13 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 
 	var scene_path: String = params.get("scene_path", "")
 	var played_scene: String = ""
+	var grace_ms: int = int(params.get("grace_period_ms", 0))
+
+	var session: RefCounted = _shared_runtime_session()
+	session.set_grace_period_ms(grace_ms if grace_ms > 0 else RUNTIME_SESSION_SCRIPT.DEFAULT_GRACE_PERIOD_MS)
+	# 存活探针：进程还在 + 调试会话还连着，才算"活着"。
+	session.set_liveness_probe(func() -> bool:
+		return _has_active_debugger_session())
 
 	if not scene_path.is_empty():
 		if not FileAccess.file_exists(scene_path):
@@ -332,12 +370,20 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 			await tree.process_frame
 		else:
 			break
+	# 阶段 1：进程已创建。从这里开始，任何提前退出都会被记成
+	# started_but_exited，而不是"启动成功"。
+	session.begin_launch(played_scene)
+
 	if not connected:
+		session.mark_failed("no debugger session became active within the timeout")
 		return {
 			"status": "error",
 			"error": "Play was requested but no debugger session became active within the timeout. The scene likely failed to load — check ProjectSettings application/run/main_scene.",
-			"scene": played_scene
+			"scene": played_scene,
+			"runtime_session": session.snapshot()
 		}
+	# 阶段 2：调试器已连接
+	session.mark_debugger_attached()
 	_last_played_scene = played_scene
 
 	# Give the runtime probe a brief window to signal ready so callers can use
@@ -349,12 +395,46 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 		await tree.process_frame
 		probe_ready = bridge.is_probe_ready() if bridge else false
 
+	# 阶段 3：探针握手（探针未安装也算 ready，只是 runtime_probe 类工具不可用）
+	if probe_ready:
+		session.mark_probe_installed()
+	# 阶段 4：场景已进入
+	session.mark_scene_ready()
+
+	# 阶段 5：宽限期后仍然存活。只有走到这一步才允许声明"跑起来了"。
+	var grace_deadline: int = Time.get_ticks_msec() + session.snapshot().get("grace_period_ms", 3000)
+	var verification: Dictionary = session.verify_ready()
+	while not bool(verification.get("runtime_ready", false)) and tree \
+			and Time.get_ticks_msec() < grace_deadline:
+		await tree.process_frame
+		verification = session.verify_ready()
+		if String(verification.get("state", "")) == RUNTIME_SESSION_SCRIPT.STATE_STARTED_BUT_EXITED:
+			break
+
+	var runtime_ready: bool = bool(verification.get("runtime_ready", false))
+	var session_state: String = String(verification.get("state", ""))
+	if session_state == RUNTIME_SESSION_SCRIPT.STATE_STARTED_BUT_EXITED:
+		_last_played_scene = ""
+		return {
+			"status": "error",
+			"error": "The game process started but exited before the runtime became usable: " + String(verification.get("error", "unknown")),
+			"scene": played_scene,
+			"session_state": session_state,
+			"runtime_ready": false,
+			"stages_reached": verification.get("stages_reached", []),
+			"runtime_session": verification
+		}
+
 	return {
-		"status": "success",
+		"status": "success" if runtime_ready else "starting",
 		"mode": "playing",
 		"scene": played_scene,
 		"session_active": true,
-		"probe_ready": probe_ready
+		"probe_ready": probe_ready,
+		"runtime_ready": runtime_ready,
+		"session_state": session_state,
+		"stages_reached": verification.get("stages_reached", []),
+		"runtime_session": verification
 	}
 
 # ============================================================================
@@ -414,6 +494,8 @@ func _tool_stop_project(params: Dictionary) -> Dictionary:
 
 	editor_interface.stop_playing_scene()
 	_last_played_scene = ""
+	# 会话状态机同步收尾：后续 runtime 工具必须看到 absent，而不是"还活着"。
+	_shared_runtime_session().mark_exited(0, "stopped by stop_project")
 
 	# Wait for the process to fully exit (up to 5s)
 	var max_wait_ms: int = 5000

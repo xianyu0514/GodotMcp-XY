@@ -11,6 +11,11 @@ extends RefCounted
 
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const TokenEstimatorScript = preload("res://addons/godot_mcp/utils/token_estimator.gd")
+const ToolOutcomeScript = preload("res://addons/godot_mcp/utils/tool_outcome.gd")
+const TaxonomyScript = preload("res://addons/godot_mcp/utils/failure_taxonomy.gd")
+const EvidenceStoreScript = preload("res://addons/godot_mcp/native_mcp/evidence_store.gd")
+const ReceiptCacheScript = preload("res://addons/godot_mcp/native_mcp/semantic_receipt_cache.gd")
+const CapabilityDAGScript = preload("res://addons/godot_mcp/native_mcp/capability_dag.gd")
 
 const SCHEMA_VERSION: int = 1
 const DEFAULT_STEPS_PER_RUN: int = 4
@@ -162,6 +167,44 @@ const NEGATION_MARKERS: Array[String] = [
 	"not ", "without", "unsupported", "unneeded", "no need", "exclude",
 	"except", "avoid", "don't", "doesn't", "n/a"
 ]
+
+# ---------------------------------------------------------------------------
+# 实例状态（可靠性核心）
+#
+# 语义收据缓存：让 replan 后已验证过的步骤直接复用收据，而不是重跑。
+# 依赖修订由调用方通过 set_revision_provider 注入，保持引擎对缓存层无硬依赖。
+# ---------------------------------------------------------------------------
+
+var _receipt_cache: RefCounted = null
+var _revision_provider: Callable = Callable()
+var _trait_provider: Callable = Callable()
+var _evidence_enabled: bool = true
+var _reuse_enabled: bool = true
+var _receipt_reuses: int = 0
+var _evidence_spills: int = 0
+var _taxonomy_blocks: int = 0
+var _dag_diagnosis: Dictionary = {}
+
+
+## 注入依赖修订提供者：Callable(tool_name: String, arguments: Dictionary) -> Dictionary
+## 返回该工具依赖的修订快照（tag -> int），用于计算语义收据键。
+func set_revision_provider(provider: Callable) -> void:
+	_revision_provider = provider
+
+
+func set_evidence_enabled(enabled: bool) -> void:
+	_evidence_enabled = enabled
+
+
+func set_reuse_enabled(enabled: bool) -> void:
+	_reuse_enabled = enabled
+
+
+func _get_receipt_cache() -> RefCounted:
+	if _receipt_cache == null:
+		_receipt_cache = ReceiptCacheScript.new()
+	return _receipt_cache
+
 
 ## True when `term` is mentioned in `text` at least once WITHOUT a nearby
 ## negation marker. All-negated mentions mean the goal excludes the term.
@@ -529,9 +572,46 @@ func _specs_need_runtime(specs: Array[Dictionary]) -> bool:
 			return true
 	return false
 
+## 步骤排序。
+##
+## 过去只按 STAGE_RANK 排序 —— 这本质是"用工具名前缀猜顺序"，所以才会出现
+## attach_script 排在 create_scene 之前、call_runtime_node_method 排在
+## install_runtime_probe 之前的真实事故。
+##
+## 现在改为：先按能力 DAG（requires / produces）做拓扑排序，同层内再用
+## STAGE_RANK 与组合顺序做稳定 tie-break。这样前置条件在结构上不可能被排到后面。
+##
+## 求解结果保存在 _last_dag_diagnosis，供 last_dag_diagnosis() 查询缺失前置。
 func _sort_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
+	var tool_names: Array[String] = []
+	var stages: Dictionary = {}
+	for spec_value in specs:
+		var spec: Dictionary = spec_value
+		var tool_name: String = String(spec.get("tool_name", ""))
+		tool_names.append(tool_name)
+		stages[tool_name] = String(spec.get("stage", ""))
+
+	_dag_diagnosis = CapabilityDAGScript.diagnose(tool_names, stages, STAGE_RANK)
+
+	var dag_position: Dictionary = {}
+	var ordered: Array = _dag_diagnosis.get("ordered", [])
+	for index in range(ordered.size()):
+		var name: String = String(ordered[index])
+		if not dag_position.has(name):
+			dag_position[name] = index
+
 	var result: Array[Dictionary] = specs.duplicate(true)
+	var original_index: Dictionary = {}
+	for index in range(result.size()):
+		original_index[index] = index
+	for index in range(result.size()):
+		(result[index] as Dictionary)["_dag_position"] = int(dag_position.get(
+			String((result[index] as Dictionary).get("tool_name", "")), 9999))
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var ap: int = int(a.get("_dag_position", 9999))
+		var bp: int = int(b.get("_dag_position", 9999))
+		if ap != bp:
+			return ap < bp
 		var ar: int = int(STAGE_RANK.get(String(a.get("stage", "")), 999))
 		var br: int = int(STAGE_RANK.get(String(b.get("stage", "")), 999))
 		if ar != br:
@@ -542,7 +622,136 @@ func _sort_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
 			return ao < bo
 		return String(a.get("key", "")) < String(b.get("key", ""))
 	)
+	for entry_value in result:
+		(entry_value as Dictionary).erase("_dag_position")
 	return result
+
+
+## 最近一次能力 DAG 求解结果：
+## {ordered, unsatisfied, facts_before, facts_after, final_facts, reorder_count}
+func last_dag_diagnosis() -> Dictionary:
+	return _dag_diagnosis.duplicate(true)
+
+
+## 某工具在当前计划里缺失的前置事实（空数组表示前置已满足）
+func missing_prerequisites(tool_name: String, executed_tools: Array = []) -> Array[String]:
+	var facts: Array[String] = CapabilityDAGScript.facts_after(_string_array_of(executed_tools))
+	return CapabilityDAGScript.missing_prerequisites(tool_name, facts)
+
+
+# ---------------------------------------------------------------------------
+# 语义收据复用
+#
+# 长工作流 replan 后，已完成步骤不该重跑。语义键 = 工具 + 归一化参数 +
+# 依赖修订 + 输入产物摘要 + 引擎版本 + 项目修订；只要没变就能直接复用收据。
+# ---------------------------------------------------------------------------
+
+## 为一步计算语义键
+func receipt_key_for(tool_name: String, arguments: Dictionary,
+		input_artifact_digest: String = "", project_revision: int = 0) -> String:
+	return ReceiptCacheScript.semantic_key(tool_name, arguments, {
+		"dependency_revisions": _dependency_revisions(tool_name, arguments),
+		"input_artifact_digest": input_artifact_digest,
+		"engine_version": _engine_version_string(),
+		"project_revision": project_revision
+	})
+
+
+## 查询可复用收据。命中返回 {"reusable": true, ...}，否则说明为何不可复用。
+func find_reusable_receipt(tool_name: String, arguments: Dictionary,
+		input_artifact_digest: String = "", project_revision: int = 0) -> Dictionary:
+	if not _reuse_enabled:
+		return {"reusable": false, "status": "reuse_disabled", "tool_name": tool_name}
+	var key: String = receipt_key_for(tool_name, arguments, input_artifact_digest, project_revision)
+	var found: Dictionary = _get_receipt_cache().lookup(key)
+	found["semantic_key"] = key
+	if bool(found.get("reusable", false)):
+		_receipt_reuses += 1
+	return found
+
+
+## 步骤成功后登记可复用收据。只有真正验证通过的结果才会被缓存。
+##
+## evidence 为内联证据体（未落盘时）；落盘场景只传 evidence_ref。
+## 两者都为空而结果又是可复用的，说明该工具没有产出可回查的证据，此时拒绝
+## 缓存——否则复用方拿到的是一条无法验证的"空头证据"。
+func register_receipt(tool_name: String, arguments: Dictionary, outcome: Dictionary,
+		evidence_ref: String = "", input_artifact_digest: String = "",
+		project_revision: int = 0, evidence: Dictionary = {}) -> Dictionary:
+	if not _reuse_enabled:
+		return {"registered": false, "reason": "reuse_disabled"}
+	var traits: Dictionary = _server_core_traits(tool_name)
+	if not bool(traits.get("read_only", false)) and not bool(traits.get("idempotent", false)):
+		return {"registered": false, "reason": "tool is neither read-only nor idempotent"}
+	if evidence_ref.strip_edges().is_empty() and evidence.is_empty():
+		return {"registered": false, "reason": "result has no replayable evidence"}
+	var key: String = receipt_key_for(tool_name, arguments, input_artifact_digest, project_revision)
+	var registered: bool = _get_receipt_cache().record(
+		tool_name, key, outcome, evidence_ref, traits, evidence)
+	return {"registered": registered, "semantic_key": key, "traits": traits}
+
+
+## 某个工具执行后，作废被它影响到的收据（定向失效，不清空整库）
+func invalidate_receipts_for(tool_name: String) -> int:
+	return _get_receipt_cache().invalidate_for_tool(tool_name)
+
+
+## 按事实作废收据
+func invalidate_receipts_for_facts(facts: Array) -> int:
+	return _get_receipt_cache().invalidate_facts(facts)
+
+
+## 可靠性相关计数器，供 summarize / 诊断输出
+func reliability_metrics() -> Dictionary:
+	var cache_stats: Dictionary = _get_receipt_cache().stats()
+	return {
+		"receipt_reuses": _receipt_reuses,
+		"evidence_spills": _evidence_spills,
+		"policy_blocks": _taxonomy_blocks,
+		"reuse_enabled": _reuse_enabled,
+		"evidence_enabled": _evidence_enabled,
+		"receipt_cache": cache_stats,
+		"dag_reorder_count": int(_dag_diagnosis.get("reorder_count", 0)),
+		"dag_unsatisfied": (_dag_diagnosis.get("unsatisfied", {}) as Dictionary).keys()
+	}
+
+
+func _dependency_revisions(tool_name: String, arguments: Dictionary) -> Dictionary:
+	if not _revision_provider.is_valid():
+		return {}
+	var raw: Variant = _revision_provider.call(tool_name, arguments)
+	return raw if raw is Dictionary else {}
+
+
+func _server_core_traits(tool_name: String) -> Dictionary:
+	# traits 由 server_core 提供；引擎不持有它的引用，因此通过可选的
+	# trait_provider 注入，取不到时保守判定为"不可复用"。
+	if _trait_provider.is_valid():
+		var raw: Variant = _trait_provider.call(tool_name)
+		if raw is Dictionary:
+			return raw
+	return {"read_only": false, "idempotent": false, "destructive": false}
+
+
+## 注入工具执行特征提供者：Callable(tool_name) -> {read_only, idempotent, destructive}
+func set_trait_provider(provider: Callable) -> void:
+	_trait_provider = provider
+
+
+static func _string_array_of(values: Array) -> Array[String]:
+	var result: Array[String] = []
+	for value in values:
+		result.append(String(value))
+	return result
+
+
+static func _engine_version_string() -> String:
+	var version: Dictionary = Engine.get_version_info()
+	return "%s.%s.%s" % [
+		String(version.get("major", "?")),
+		String(version.get("minor", "?")),
+		String(version.get("patch", "?"))
+	]
 
 func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 	var plan: Dictionary = TaskPlanStoreScript.new_plan(String(contract.get("objective", "")))
@@ -827,12 +1036,16 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 	if is_pending_result(result):
 		task["status"] = "pending"
 		task["pending_polls"] = int(task.get("pending_polls", 0)) + 1
+		var pending_outcome: Dictionary = ToolOutcomeScript.from_result(
+			String(task.get("tool_name", "")), result)
+		# 异步步骤必须报告进度，否则调用方无法区分"正在下载"和"已经卡死"。
 		var pending_receipt: Dictionary = append_receipt(plan, {
 			"step_id": step_id,
 			"tool_name": task.get("tool_name", ""),
 			"passed": false,
 			"pending": true,
-			"status": (result as Dictionary).get("status", "pending")
+			"status": (result as Dictionary).get("status", "pending"),
+			"progress": pending_outcome.get("pending_progress", {})
 		})
 		workflow["state"] = "waiting"
 		workflow["blocked_reason"] = ""
@@ -849,18 +1062,61 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 	task["pending_polls"] = 0
 	var expect_failure: bool = bool(task.get("objective_gate", false)) \
 		and String(task.get("expect", "pass")) == "fail"
-	var evidence_passed: bool = result_passed(String(task.get("tool_name", "")), result) \
+	var tool_name: String = String(task.get("tool_name", ""))
+	var evidence_passed: bool = result_passed(tool_name, result) \
 		if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
+
+	# 统一结果语义：把任意返回归一化成 ToolOutcome，并据此判定"目标是否真的达成"。
+	# objective_gate 的步骤要求 objective_proven，杜绝 run_project 那种
+	# "进程起来了就算成功" 的 false positive。
+	var outcome: Dictionary = ToolOutcomeScript.from_result(tool_name, result, {
+		"objective_required": bool(task.get("objective_gate", false)),
+		"objective_proven": evidence_passed,
+		"attempt": int(task.get("attempts", 0))
+	})
+	if bool(task.get("objective_gate", false)) and not expect_failure \
+			and not bool(outcome.get("objective_proven", false)):
+		evidence_passed = false
+
+	# 策略拦截（沙箱 / 保护路径 / 预算）不是可重试的故障，也不是需要修复的失败：
+	# 它要求 Agent 换输入或授权，重试只会重复撞墙。
+	if String(outcome.get("policy", "")) == TaxonomyScript.policy_name(TaxonomyScript.Policy.ABORT):
+		_taxonomy_blocks += 1
+		task["status"] = "blocked"
+		task["repair_pending"] = false
+		var policy_workflow: Dictionary = plan.get("workflow", {})
+		policy_workflow["state"] = "blocked"
+		policy_workflow["blocked_reason"] = "Policy blocked this step: " \
+			+ String(outcome.get("message", outcome.get("category", "policy")))
+		var policy_receipt: Dictionary = append_receipt(plan, {
+			"step_id": step_id,
+			"tool_name": tool_name,
+			"passed": false,
+			"pending": false,
+			"policy_blocked": true,
+			"category": String(outcome.get("category", "")),
+			"summary": _build_step_evidence(plan, step_id, tool_name, result, outcome)
+		})
+		return {
+			"status": "blocked", "step_id": step_id, "retryable": false,
+			"failure_kind": "policy_block",
+			"category": String(outcome.get("category", "")),
+			"message": String(outcome.get("message", "")),
+			"receipt": policy_receipt, "workflow": summarize(plan)
+		}
+
 	# A negative gate passes when the detector FAILS: fault-injection loops are
 	# proving the guardrail fires, so the observed verdict is inverted.
 	var passed: bool = (not evidence_passed) if expect_failure else evidence_passed
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
-		"tool_name": task.get("tool_name", ""),
+		"tool_name": tool_name,
 		"passed": passed,
 		"pending": false,
 		"expected_failure": expect_failure,
-		"summary": _compact_result_summary(result)
+		"status_name": String(outcome.get("status_name", "")),
+		"objective_proven": bool(outcome.get("objective_proven", false)),
+		"summary": _build_step_evidence(plan, step_id, tool_name, result, outcome)
 	})
 	if passed:
 		task["status"] = "done"
@@ -956,6 +1212,77 @@ func _non_gate_result_usable(result: Variant) -> bool:
 		return bool(data.get("recoverable", false))
 	return not status in ["error", "invalid", "blocked", "cancelled", "canceled", "timeout", "timed_out", "stale", "aborted"]
 
+## 复用一条仍然有效的语义收据，跳过真实调用。
+##
+## replan 之后已经验证过的只读/幂等步骤不该重跑：依赖修订、输入产物摘要、
+## 引擎版本都没变，那么上次的证据依然成立。这里复用的是"证据"，不是"乐观
+## 猜测"——收据里带 evidence_ref + digest，可随时回查。
+##
+## 只有 receipt_reuse 明确打开且收据生命周期为 VALID 时才调用本函数；
+## 调用方负责在调用前用 find_reusable_receipt 判定。
+func record_reused_step_result(plan: Dictionary, step_id: String,
+		reused: Dictionary) -> Dictionary:
+	var task: Dictionary = get_task(plan, step_id)
+	if task.is_empty():
+		return {"error": "workflow step '%s' not found" % step_id}
+	var tool_name: String = String(task.get("tool_name", ""))
+	var evidence: Dictionary = {}
+	if reused.get("evidence") is Dictionary:
+		evidence = (reused["evidence"] as Dictionary).duplicate(true)
+	var outcome: Dictionary = {
+		"status_name": "success",
+		"objective_proven": true,
+		"transport_success": true,
+		"reused": true,
+		"receipt_key": String(reused.get("key", ""))
+	}
+	task["attempts"] = int(task.get("attempts", 0)) + 1
+	task["status"] = "done"
+	task["receipt_reused"] = true
+	task["receipt_key"] = String(reused.get("key", ""))
+	task["repair_pending"] = false
+	_clear_failure_tracking(task, "verification")
+	_clear_failure_tracking(task, "transient")
+
+	var receipt: Dictionary = append_receipt(plan, {
+		"step_id": step_id,
+		"tool_name": tool_name,
+		"passed": true,
+		"pending": false,
+		"reused": true,
+		"receipt_key": String(reused.get("key", "")),
+		"status_name": "success",
+		"objective_proven": true,
+		"summary": {
+			"summary": _compact_result_summary(evidence),
+			"outcome": outcome,
+			"evidence": evidence,
+			"evidence_ref": String(reused.get("evidence_ref", "")),
+			"evidence_digest": String(reused.get("evidence_digest", "")),
+			"evidence_bytes": int(reused.get("evidence_bytes", 0)),
+			"evidence_spilled": not String(reused.get("evidence_ref", "")).is_empty(),
+			"reused": true
+		}
+	})
+	task["receipt_digest"] = receipt.get("digest", "")
+
+	var workflow: Dictionary = plan.get("workflow", {})
+	if bool(task.get("objective_gate", false)):
+		var dod: Array = task.get("dod", [])
+		if not dod.is_empty():
+			dod[0]["met"] = true
+			dod[0]["evidence"] = "reused-receipt:%s" % receipt.get("digest", "")
+	if workflow_completed(plan):
+		workflow["state"] = "completed"
+	else:
+		workflow["state"] = "running"
+	workflow["blocked_reason"] = ""
+	return {
+		"status": "completed", "step_id": step_id, "reused": true,
+		"receipt_key": String(reused.get("key", "")),
+		"receipt": receipt, "workflow": summarize(plan)
+	}
+
 func record_repair_result(plan: Dictionary, step_id: String, result: Variant) -> Dictionary:
 	var task: Dictionary = get_task(plan, step_id)
 	if task.is_empty() or not bool(task.get("repair_pending", false)):
@@ -965,12 +1292,18 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 	if not transient:
 		task["repair_attempts"] = int(task.get("repair_attempts", 0)) + 1
 	var passed: bool = result_passed(repair_tool, result)
+	var repair_outcome: Dictionary = ToolOutcomeScript.from_result(repair_tool, result, {
+		"objective_required": false,
+		"objective_proven": passed,
+		"attempt": int(task.get("repair_attempts", 0)) + 1
+	})
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
 		"tool_name": repair_tool,
 		"repair": true,
 		"passed": passed,
-		"summary": _compact_result_summary(result)
+		"status_name": String(repair_outcome.get("status_name", "")),
+		"summary": _build_step_evidence(plan, step_id, repair_tool, result, repair_outcome)
 	})
 	var workflow: Dictionary = plan.get("workflow", {})
 	if passed:
@@ -1063,6 +1396,9 @@ func _clear_failure_tracking(task: Dictionary, prefix: String) -> void:
 	task.erase(prefix + "_failure_fingerprint")
 	task.erase(prefix + "_same_failure_count")
 
+## 遗留的紧凑摘要。**仅用于兼容与体积极小的结果**：它只保留 11 个字段，
+## 会丢掉 assert_performance_budget 的 checks[]/actual_values、get_signals 的
+## callable/flags/receiver 等关键证据。主路径一律改用 _build_step_evidence。
 func _compact_result_summary(result: Variant) -> Dictionary:
 	if not (result is Dictionary):
 		return {"type": typeof(result)}
@@ -1074,6 +1410,71 @@ func _compact_result_summary(result: Variant) -> Dictionary:
 	if data.has("error"):
 		summary["error"] = String(data["error"]).substr(0, 512)
 	return summary
+
+
+## 构建步骤证据载荷。
+##
+## 这是"工作流证据丢失"问题的根治点：结果不再被压缩成 status=completed，
+## 而是完整保留；只有体积极大时才落盘并替换成 evidence_ref + digest。
+##
+## 返回结构（直接进 receipt）：
+## {
+##   summary,          # 判定字段 + 计数（供快速扫描）
+##   evidence,         # 完整证据（未落盘）或结构化摘要（已落盘）
+##   evidence_ref,     # 落盘路径
+##   evidence_digest,  # 完整证据 sha256
+##   evidence_bytes,
+##   evidence_spilled,
+##   outcome           # 统一 ToolOutcome 语义
+## }
+func _build_step_evidence(plan: Dictionary, step_id: String, tool_name: String,
+		result: Variant, outcome: Dictionary) -> Dictionary:
+	var workflow: Dictionary = plan.get("workflow", {})
+	var workflow_id: String = String(workflow.get("workflow_id", ""))
+	if workflow_id.is_empty():
+		workflow_id = String(plan.get("goal", "unknown")).sha256_text().substr(0, 16)
+
+	var payload: Dictionary = {
+		"summary": _compact_result_summary(result),
+		"outcome": _trim_outcome(outcome),
+		"evidence": {},
+		"evidence_ref": "",
+		"evidence_digest": "",
+		"evidence_bytes": 0,
+		"evidence_spilled": false
+	}
+	if not _evidence_enabled:
+		payload["evidence"] = result if result is Dictionary else {}
+		return payload
+
+	var stored: Dictionary = EvidenceStoreScript.store(
+		workflow_id, step_id, tool_name, result, _trim_outcome(outcome))
+	if bool(stored.get("evidence_spilled", false)):
+		_evidence_spills += 1
+	payload["evidence"] = stored.get("evidence", {})
+	payload["evidence_ref"] = String(stored.get("evidence_ref", ""))
+	payload["evidence_digest"] = String(stored.get("evidence_digest", ""))
+	payload["evidence_bytes"] = int(stored.get("evidence_bytes", 0))
+	payload["evidence_spilled"] = bool(stored.get("evidence_spilled", false))
+	payload["evidence_degraded"] = bool(stored.get("evidence_degraded", false))
+	return payload
+
+
+## 收据里的 outcome 只保留判定相关字段，避免把整份 evidence 复制一遍。
+func _trim_outcome(outcome: Dictionary) -> Dictionary:
+	if outcome.is_empty():
+		return {}
+	return {
+		"status_name": String(outcome.get("status_name", "")),
+		"objective_proven": bool(outcome.get("objective_proven", false)),
+		"transport_success": bool(outcome.get("transport_success", false)),
+		"category": String(outcome.get("category", "")),
+		"policy": String(outcome.get("policy", "")),
+		"message": String(outcome.get("message", "")),
+		"counters": outcome.get("counters", {}),
+		"verdicts": outcome.get("verdicts", {}),
+		"pending_progress": outcome.get("pending_progress", {})
+	}
 
 ## Register paths a successful creation step produced into the workflow's
 ## artifact registry (scene/script/theme/tileset/animation/screenshot +

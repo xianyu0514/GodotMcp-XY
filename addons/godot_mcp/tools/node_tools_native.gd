@@ -286,6 +286,11 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 				},
 				"property_value": {
 					"description": "New value for the property. Type conversion is handled automatically."
+				},
+				"require_verified": {
+					"type": "boolean",
+					"default": false,
+					"description": "When true, return an error instead of status='unverified' if the read-back value differs from the requested value."
 				}
 			},
 			"required": ["node_path", "property_name", "property_value"]
@@ -294,11 +299,14 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
-				"status": {"type": "string"},
+				"status": {"type": "string", "description": "success when the read-back matches the requested value, otherwise unverified."},
 				"node_path": {"type": "string"},
 				"property_name": {"type": "string"},
 				"old_value": {"type": "string"},
-				"new_value": {"type": "string"}
+				"requested_value": {"type": "string"},
+				"new_value": {"type": "string"},
+				"verified": {"type": "boolean"},
+				"warning": {"type": "string"}
 			}
 		},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
@@ -356,16 +364,58 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 		target_node.set(property_name, converted_value)
 	
 	var new_value: Variant = target_node.get(property_name)
-	
+	var verified: bool = _values_equivalent(converted_value, new_value)
+
 	editor_interface.mark_scene_as_unsaved()
-	
-	return {
-		"status": "success",
+
+	# 写入被 setter 夹紧/取整/忽略时必须说清楚。只返回 new_value 而不比较，
+	# 上层就会把"设置失败"当成"设置成功"。
+	var result: Dictionary = {
+		"status": "success" if verified else "unverified",
 		"node_path": node_path,
 		"property_name": property_name,
 		"old_value": str(old_value),
-		"new_value": str(new_value)
+		"requested_value": str(converted_value),
+		"new_value": str(new_value),
+		"verified": verified
 	}
+	if not verified:
+		result["warning"] = "Property write did not stick: read-back value differs from the requested value"
+		if bool(params.get("require_verified", false)):
+			return {
+				"error": result["warning"],
+				"node_path": node_path,
+				"property_name": property_name,
+				"requested_value": str(converted_value),
+				"actual_value": str(new_value)
+			}
+	return result
+
+
+## 写入后回读的等价判定。浮点/向量用近似比较，其余按值比较；
+## 无法可靠比较的容器类型返回 true（保持乐观，但至少标量/向量是确定的）。
+static func _values_equivalent(requested: Variant, actual: Variant) -> bool:
+	if typeof(requested) != typeof(actual):
+		return false
+	match typeof(requested):
+		TYPE_NIL:
+			return true
+		TYPE_BOOL, TYPE_INT, TYPE_STRING:
+			return requested == actual
+		TYPE_FLOAT:
+			return is_equal_approx(float(requested), float(actual))
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_QUATERNION, TYPE_PLANE:
+			return requested.is_equal_approx(actual)
+		TYPE_VECTOR2I, TYPE_VECTOR3I, TYPE_VECTOR4I:
+			return requested == actual
+		TYPE_RECT2, TYPE_RECT2I, TYPE_AABB:
+			return requested == actual
+		TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_BASIS, TYPE_PROJECTION:
+			return requested.is_equal_approx(actual)
+		TYPE_STRING_NAME, TYPE_NODE_PATH:
+			return String(requested) == String(actual)
+		_:
+			return true
 
 func _register_batch_update_node_properties(server_core: RefCounted) -> void:
 	server_core.register_tool(

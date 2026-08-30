@@ -5,6 +5,10 @@
 class_name ProjectResourcesTools
 extends RefCounted
 
+const PathNormalizerScript = preload("res://addons/godot_mcp/utils/path_normalizer.gd")
+const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+const ExportPresetToolsScript = preload("res://addons/godot_mcp/tools/export_preset_tools.gd")
+
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
 
@@ -1288,6 +1292,16 @@ func _register_scan_missing_resource_dependencies(server_core: RefCounted) -> vo
 				"type": "integer",
 				"description": "Maximum missing dependency issues to return. Default is 200.",
 				"default": 200
+			},
+			"include_generated": {
+				"type": "boolean",
+				"description": "Include generated/imported cache (.godot, .import, build) in the scan. Default false: only source assets are audited.",
+				"default": false
+			},
+			"include_tooling": {
+				"type": "boolean",
+				"description": "Include addons/ and test/ scaffolding in the scan. Default true.",
+				"default": true
 			}
 		}
 	}
@@ -1298,7 +1312,9 @@ func _register_scan_missing_resource_dependencies(server_core: RefCounted) -> vo
 			"search_path": {"type": "string"},
 			"scanned_resources": {"type": "integer"},
 			"issue_count": {"type": "integer"},
-			"issues": {"type": "array"}
+			"issues": {"type": "array"},
+			"domain_counts": {"type": "object"},
+			"filtered_out": {"type": "integer"}
 		}
 	}
 
@@ -1317,18 +1333,30 @@ func _register_scan_missing_resource_dependencies(server_core: RefCounted) -> vo
 func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
 	var max_results: int = max(1, int(params.get("max_results", 200)))
+	var include_generated: bool = bool(params.get("include_generated", false))
+	var include_tooling: bool = bool(params.get("include_tooling", true))
 
 	var validation: Dictionary = PathValidator.validate_directory_path(search_path)
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
-	search_path = validation["sanitized"]
+	# 规范化后再用：res://test 与 res://test/ 必须得到完全一致的扫描结果。
+	search_path = PathNormalizerScript.canonical_dir(validation["sanitized"])
 
 	var dependency_extensions: Array[String] = [
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
 	var resources: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources)
+	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources,
+		include_generated, include_tooling)
+	resources = PathNormalizerScript.deduplicate(resources)
 	resources.sort()
+
+	# 分桶：源码资产的缺失是真问题，生成物缺失只是"需要重导入"，不该混报。
+	var domain_counts: Dictionary = {}
+	var filtered_out: int = 0
+	for resource_path in resources:
+		var domain: String = GeneratedCacheFilterScript.domain_name(resource_path)
+		domain_counts[domain] = int(domain_counts.get(domain, 0)) + 1
 
 	var issues: Array = []
 	for resource_path in resources:
@@ -1337,6 +1365,8 @@ func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 			if bool(dependency.get("missing", false)):
 				issues.append({
 					"owner_path": resource_path,
+					"owner_domain": GeneratedCacheFilterScript.domain_name(resource_path),
+					"severity": "source" if GeneratedCacheFilterScript.is_source_asset(resource_path) else "generated",
 					"dependency": dependency
 				})
 				if issues.size() >= max_results:
@@ -1345,6 +1375,8 @@ func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 						"scanned_resources": resources.size(),
 						"issue_count": issues.size(),
 						"issues": issues,
+						"domain_counts": domain_counts,
+						"filtered_out": filtered_out,
 						"truncated": true
 					}
 
@@ -1353,6 +1385,8 @@ func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 		"scanned_resources": resources.size(),
 		"issue_count": issues.size(),
 		"issues": issues,
+		"domain_counts": domain_counts,
+		"filtered_out": filtered_out,
 		"truncated": false
 	}
 
@@ -1690,6 +1724,21 @@ func _register_audit_project_health(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum issue entries per category. Default is 200.",
 				"default": 200
+			},
+			"include_generated": {
+				"type": "boolean",
+				"description": "Include generated/imported cache (.godot, .import, build) in dependency scans. Default false: source assets are audited separately from rebuildable cache.",
+				"default": false
+			},
+			"check_runtime": {
+				"type": "boolean",
+				"description": "Also probe runtime readiness (main scene, autoloads). Default true.",
+				"default": true
+			},
+			"check_export": {
+				"type": "boolean",
+				"description": "Also probe export preset health. Default true.",
+				"default": true
 			}
 		}
 	}
@@ -1702,7 +1751,11 @@ func _register_audit_project_health(server_core: RefCounted) -> void:
 			"summary": {"type": "object"},
 			"broken_scripts": {"type": "array"},
 			"missing_dependencies": {"type": "array"},
-			"cyclic_dependencies": {"type": "array"}
+			"cyclic_dependencies": {"type": "array"},
+			"source_health": {"type": "object"},
+			"generated_cache_health": {"type": "object"},
+			"runtime_health": {"type": "object"},
+			"export_health": {"type": "object"}
 		}
 	}
 
@@ -1722,6 +1775,9 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
 	var include_warnings: bool = params.get("include_warnings", true)
 	var max_results: int = max(1, int(params.get("max_results", 200)))
+	var include_generated: bool = bool(params.get("include_generated", false))
+	var check_runtime: bool = bool(params.get("check_runtime", true))
+	var check_export: bool = bool(params.get("check_export", true))
 
 	var broken_scripts_result: Dictionary = _tool_detect_broken_scripts({
 		"search_path": search_path,
@@ -1733,7 +1789,8 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 
 	var missing_dependencies_result: Dictionary = _tool_scan_missing_resource_dependencies({
 		"search_path": search_path,
-		"max_results": max_results
+		"max_results": max_results,
+		"include_generated": include_generated
 	})
 	if missing_dependencies_result.has("error"):
 		return missing_dependencies_result
@@ -1745,29 +1802,191 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 	if cyclic_dependencies_result.has("error"):
 		return cyclic_dependencies_result
 
+	# 四个域分开判定。生成物缓存坏了是可重建的噪音，绝不能让它在同一个
+	# "failing" 结论里跟源码资产缺失混为一谈。
+	var source_issues: Array = []
+	var generated_issues: Array = []
+	for entry_value in (missing_dependencies_result.get("issues", []) as Array):
+		if not (entry_value is Dictionary):
+			continue
+		if String((entry_value as Dictionary).get("severity", "source")) == "generated":
+			generated_issues.append(entry_value)
+		else:
+			source_issues.append(entry_value)
+
+	var runtime_health: Dictionary = _probe_runtime_health() if check_runtime \
+		else {"status": "not_checked", "checks": []}
+	var export_health: Dictionary = _probe_export_health() if check_export \
+		else {"status": "not_checked", "checks": []}
+
 	var summary: Dictionary = {
 		"scanned_scripts": int(broken_scripts_result.get("scanned_scripts", 0)),
 		"broken_scripts": int(broken_scripts_result.get("broken_count", 0)),
 		"script_warnings": int(broken_scripts_result.get("warning_count", 0)),
 		"scanned_resources": int(missing_dependencies_result.get("scanned_resources", 0)),
-		"missing_dependencies": int(missing_dependencies_result.get("issue_count", 0)),
-		"cyclic_dependencies": int(cyclic_dependencies_result.get("issue_count", 0))
+		"missing_dependencies": source_issues.size(),
+		"missing_dependencies_generated": generated_issues.size(),
+		"cyclic_dependencies": int(cyclic_dependencies_result.get("issue_count", 0)),
+		"runtime_status": String(runtime_health.get("status", "not_checked")),
+		"export_status": String(export_health.get("status", "not_checked"))
 	}
-	var hard_failures: int = summary["broken_scripts"] + summary["missing_dependencies"] + summary["cyclic_dependencies"]
+
+	# 只有源码资产的硬失败才让整体验证为 failing；生成物单独一档。
+	var hard_failures: int = summary["broken_scripts"] + summary["missing_dependencies"] \
+		+ summary["cyclic_dependencies"]
 	var status: String = "healthy"
 	if hard_failures > 0:
 		status = "failing"
-	elif summary["script_warnings"] > 0:
+	elif summary["script_warnings"] > 0 or generated_issues.size() > 0:
 		status = "warning"
+
+	var source_health: Dictionary = {
+		"status": "failing" if hard_failures > 0 else ("warning" if summary["script_warnings"] > 0 else "healthy"),
+		"broken_scripts": summary["broken_scripts"],
+		"script_warnings": summary["script_warnings"],
+		"missing_dependencies": source_issues.size(),
+		"cyclic_dependencies": summary["cyclic_dependencies"],
+		"issues": source_issues
+	}
+	var generated_cache_health: Dictionary = {
+		"status": "healthy" if generated_issues.is_empty() else "rebuildable",
+		"rebuildable": true,
+		"note": "Generated/imported cache issues are recoverable by reimporting; they never make source_health fail.",
+		"issue_count": generated_issues.size(),
+		"issues": generated_issues
+	}
 
 	return {
 		"status": status,
 		"search_path": broken_scripts_result.get("search_path", search_path),
 		"summary": summary,
 		"broken_scripts": broken_scripts_result.get("issues", []),
-		"missing_dependencies": missing_dependencies_result.get("issues", []),
+		"missing_dependencies": source_issues,
+		"missing_dependencies_generated": generated_issues,
 		"cyclic_dependencies": cyclic_dependencies_result.get("issues", []),
+		"source_health": source_health,
+		"generated_cache_health": generated_cache_health,
+		"runtime_health": runtime_health,
+		"export_health": export_health,
 		"truncated": bool(broken_scripts_result.get("truncated", false)) or bool(missing_dependencies_result.get("truncated", false)) or bool(cyclic_dependencies_result.get("truncated", false))
+	}
+
+
+## 运行时就绪度：主场景存在且可加载、自动加载项都指向真实资源。
+## 判定不到的项报 unknown，不猜。
+func _probe_runtime_health() -> Dictionary:
+	var checks: Array[Dictionary] = []
+	var main_scene: String = String(ProjectSettings.get_setting("application/run/main_scene", ""))
+	main_scene = PathNormalizerScript.canonical_file(main_scene)
+	var main_exists: bool = not main_scene.is_empty() and ResourceLoader.exists(main_scene)
+	checks.append({
+		"check": "main_scene_configured",
+		"passed": not main_scene.is_empty(),
+		"status": "pass" if not main_scene.is_empty() else "fail",
+		"value": main_scene
+	})
+	checks.append({
+		"check": "main_scene_exists",
+		"passed": main_exists,
+		"status": "pass" if main_exists else ("unknown" if main_scene.is_empty() else "fail"),
+		"value": main_scene
+	})
+
+	# 自动加载项没有专门的脚本 API，只能从 ProjectSettings 的 autoload/* 属性读。
+	var autoload_issues: Array = []
+	var autoload_count: int = 0
+	for property_info_value in ProjectSettings.get_property_list():
+		if not (property_info_value is Dictionary):
+			continue
+		var property_name: String = String((property_info_value as Dictionary).get("name", ""))
+		if not property_name.begins_with("autoload/"):
+			continue
+		autoload_count += 1
+		var raw_value: String = String(ProjectSettings.get_setting(property_name, ""))
+		var resolved_path: String = raw_value.substr(1) if raw_value.begins_with("*") else raw_value
+		if resolved_path.is_empty():
+			autoload_issues.append({
+				"name": property_name.get_slice("/", 1), "path": "", "reason": "empty path"})
+			continue
+		if not ResourceLoader.exists(resolved_path):
+			autoload_issues.append({
+				"name": property_name.get_slice("/", 1), "path": resolved_path,
+				"reason": "resource not found"})
+	checks.append({
+		"check": "autoloads_resolvable",
+		"passed": autoload_issues.is_empty(),
+		"status": "pass" if autoload_issues.is_empty() else "fail",
+		"value": "%d autoload(s), %d broken" % [autoload_count, autoload_issues.size()]
+	})
+
+	var failed: int = 0
+	for entry_value in checks:
+		var entry: Dictionary = entry_value
+		if String(entry.get("status", "")) == "fail":
+			failed += 1
+	return {
+		"status": "failing" if failed > 0 else "healthy",
+		"main_scene": main_scene,
+		"autoload_count": autoload_count,
+		"autoload_issues": autoload_issues,
+		"checks": checks
+	}
+
+
+## 导出就绪度：预设文件存在、预设可判定、平台 API 是否可用。
+## 模板是否安装只有 EditorExport 可用时才可判定，否则明确返回 unknown。
+func _probe_export_health() -> Dictionary:
+	var loaded: Dictionary = ExportPresetToolsScript.read_presets()
+	var presets: Array = loaded.get("presets", [])
+	var platforms: Array[String] = []
+	for value in (loaded.get("platforms", []) as Array):
+		platforms.append(String(value))
+	var api_available: bool = bool(loaded.get("export_api_available", false))
+
+	var valid_count: int = 0
+	var invalid_count: int = 0
+	var unvalidated_count: int = 0
+	var preset_reports: Array = []
+	for entry_value in presets:
+		var preset: Dictionary = entry_value
+		var validation: Dictionary = ExportPresetToolsScript.validate_preset(preset, platforms)
+		var preset_status: String = String(validation.get("status", "unvalidated"))
+		if preset_status == "valid":
+			valid_count += 1
+		elif preset_status == "invalid":
+			invalid_count += 1
+		else:
+			unvalidated_count += 1
+		preset_reports.append({
+			"name": String(preset.get("name", "")),
+			"platform": String(preset.get("platform", "")),
+			"export_path": String(preset.get("export_path", "")),
+			"status": preset_status,
+			"templates_status": String(validation.get("templates_status", "unknown"))
+		})
+
+	var status: String = "unconfigured"
+	if not presets.is_empty():
+		if invalid_count > 0:
+			status = "failing"
+		elif unvalidated_count > 0:
+			status = "unvalidated"
+		else:
+			status = "healthy"
+	return {
+		"status": status,
+		"file_path": ExportPresetToolsScript.PRESET_FILE,
+		"file_exists": bool(loaded.get("file_exists", false)),
+		"export_api_available": api_available,
+		"templates_determinable": api_available,
+		"templates_status": "checkable" if api_available else "unknown",
+		"platforms": platforms,
+		"preset_count": presets.size(),
+		"valid_count": valid_count,
+		"invalid_count": invalid_count,
+		"unvalidated_count": unvalidated_count,
+		"presets": preset_reports,
+		"error": String(loaded.get("error", ""))
 	}
 
 

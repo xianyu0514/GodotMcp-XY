@@ -1291,6 +1291,23 @@ func get_tool_execution_traits(name: String) -> Dictionary:
 		"destructive": bool(tool.annotations.get("destructiveHint", false))
 	}
 
+## 给工作流引擎的依赖修订提供者。返回该工具依赖域的当前修订快照。
+##
+## 语义收据键需要它：只要依赖修订没变，之前验证过的只读/幂等结果就可以复用。
+## 这是对外的只读查询，不改变任何缓存状态。
+func revision_snapshot_for(tool_name: String, arguments: Dictionary = {}) -> Dictionary:
+	var tool: MCPTypes.MCPTool = _tools.get(tool_name, null)
+	if tool == null:
+		return {}
+	var tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.read_tags(tool_name, arguments)
+	if tags.is_empty():
+		tags = CACHE_REVISION_INDEX_SCRIPT.mutation_tags(tool_name, tool.group, arguments)
+	if tags.is_empty():
+		return {"global": _cache_generation}
+	var snapshot: Dictionary = _cache_revision_index.snapshot(tags)
+	snapshot["global"] = _cache_generation
+	return snapshot
+
 ## Execute one atomic capability authorized by a structurally validated game
 ## workflow. Visibility is deliberately ignored: hidden supplementary tools
 ## remain callable without mutating tools/list, catalog revisions or saved tool

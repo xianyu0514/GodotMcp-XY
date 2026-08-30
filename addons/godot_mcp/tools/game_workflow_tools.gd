@@ -58,8 +58,22 @@ func initialize(_editor_interface: EditorInterface) -> void:
 
 func register_tools(server_core: RefCounted) -> void:
 	_server_core = server_core
+	_wire_reliability_core(server_core)
 	_register_plan_tool(server_core)
 	_register_run_tool(server_core)
+
+## 把可靠性核心接进引擎：依赖修订 + 工具执行特征。
+##
+## 引擎不该反向持有 server_core，所以这里注入两个纯查询 Callable。修订快照让
+## 语义收据在依赖没变时可复用；执行特征决定某步结果是否允许被复用（只读或
+## 幂等才行，有副作用的绝不复用）。
+func _wire_reliability_core(server_core: RefCounted) -> void:
+	_engine.set_revision_provider(
+		func(tool_name: String, arguments: Dictionary) -> Dictionary:
+			return server_core.revision_snapshot_for(tool_name, arguments))
+	_engine.set_trait_provider(
+		func(tool_name: String) -> Dictionary:
+			return server_core.get_tool_execution_traits(tool_name))
 
 func _register_plan_tool(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -401,11 +415,34 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		var before_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 		if before_save.has("error"):
 			return before_save
+		# 语义收据复用：参数 + 依赖修订都没变，且上次结果带可回查证据时，
+		# 直接复用收据而不重跑（避免 replan 后重复副作用与无谓开销）。
+		var reusable: Dictionary = _engine.find_reusable_receipt(tool_name, arguments)
+		if bool(reusable.get("reusable", false)):
+			var reuse_verdict: Dictionary = _engine.record_reused_step_result(
+				plan, String(task.get("id", "")), reusable)
+			metrics["receipt_reuses"] = int(metrics.get("receipt_reuses", 0)) + 1
+			executed.append({
+				"step_id": task.get("id", ""),
+				"tool_name": tool_name,
+				"status": "completed",
+				"reused": true,
+				"receipt_key": reusable.get("semantic_key", ""),
+				"receipt_digest": (reuse_verdict.get("receipt", {}) as Dictionary).get("digest", "")
+			})
+			var reuse_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if reuse_save.has("error"):
+				return reuse_save
+			if reuse_verdict.has("error"):
+				return _runner_response(plan, plan_path, "blocked", executed, reuse_verdict)
+			continue
+
 		var authorization: Dictionary = _authorization(plan, task, false)
 		var raw_result: Variant = await _server_core.invoke_planned_tool(tool_name, arguments, authorization)
 		atomic_calls += 1
 		metrics["atomic_calls"] = int(metrics.get("atomic_calls", 0)) + 1
 		var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), raw_result)
+		_capture_receipt(tool_name, arguments, verdict)
 		executed.append({
 			"step_id": task.get("id", ""),
 			"tool_name": tool_name,
@@ -478,6 +515,7 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 		repair_tool, arguments, _authorization(plan, task, true))
 	task.erase("repair_in_progress")
 	var verdict: Dictionary = _engine.record_repair_result(plan, String(task.get("id", "")), raw_result)
+	_invalidate_after_repair(repair_tool)
 	var save_result: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 	if save_result.has("error"):
 		return {"stop": true, "status": "blocked", "error": save_result["error"]}
@@ -490,6 +528,31 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 			"receipt_digest": (verdict.get("receipt", {}) as Dictionary).get("digest", "")
 		}
 	}
+
+## 步骤完成后登记语义收据 / 定向失效。
+##
+## 成功的只读或幂等步骤登记收据，供 replan 后复用；有副作用的步骤则按
+## CapabilityDAG 的事实依赖作废旧收据（只废该废的，不清空整库）。
+## 刚登记成功的收据不会立刻被自己作废——只有"未能登记"才说明这是次变更。
+func _capture_receipt(tool_name: String, arguments: Dictionary, verdict: Dictionary) -> void:
+	if String(verdict.get("status", "")) != "completed":
+		return
+	var receipt: Dictionary = verdict.get("receipt", {}) if verdict.get("receipt", {}) is Dictionary else {}
+	if bool(receipt.get("reused", false)):
+		return
+	var summary: Dictionary = receipt.get("summary", {}) if receipt.get("summary", {}) is Dictionary else {}
+	var outcome: Dictionary = summary.get("outcome", {}) if summary.get("outcome", {}) is Dictionary else {}
+	var evidence: Dictionary = summary.get("evidence", {}) if summary.get("evidence", {}) is Dictionary else {}
+	var registered: Dictionary = _engine.register_receipt(
+		tool_name, arguments, outcome, String(summary.get("evidence_ref", "")), "", 0, evidence)
+	if not bool(registered.get("registered", false)):
+		_engine.invalidate_receipts_for(tool_name)
+
+
+## 修复步骤会改变项目状态，必须作废受影响的事实收据（连同本步自身的旧收据）。
+func _invalidate_after_repair(tool_name: String) -> void:
+	_engine.invalidate_receipts_for(tool_name)
+
 
 func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) -> Dictionary:
 	var arguments: Dictionary = {}
@@ -622,6 +685,7 @@ func _runner_response(plan: Dictionary, plan_path: String, status: String,
 	response["status"] = status
 	response["plan_path"] = plan_path
 	response["executed"] = executed
+	response["reliability"] = _engine.reliability_metrics()
 	for key in extra:
 		if key not in ["stop", "executed", "workflow", "receipt"]:
 			response[key] = extra[key]
