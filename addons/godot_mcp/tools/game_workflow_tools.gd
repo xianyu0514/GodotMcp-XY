@@ -31,7 +31,7 @@ const FOCUS_POLICY_TOOLS: Dictionary = {"open_scene": "allow_ui_focus"}
 # writes when multiple profiles create scenes in one goal).
 const SCENE_SCOPED_TOOLS: Array[String] = [
 	"create_node", "update_node_property", "delete_node", "set_anchor_preset",
-	"attach_script", "save_scene", "set_tilemap_layer_cells"
+	"attach_script", "save_scene", "set_tilemap_layer_cells", "run_project"
 ]
 
 # Schema-required input -> workflow artifact kind. Lets create -> configure
@@ -605,6 +605,61 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["track_path"] = ".:position"
 		task["derived_inputs"]["keys"] = "default-two-key-position"
+	# 导出预设验证/执行步骤默认指向 profile 建的 Windows Desktop 预设。
+	if tool_name in ["validate_export_preset", "run_export"] and not arguments.has("preset"):
+		arguments["preset"] = "Windows Desktop"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["preset"] = "Windows Desktop"
+	# 重导入步骤缺路径时：重导入本目标已产出的主题/瓦片/动画资源（磁盘真相）。
+	if tool_name == "reimport_resources" and not arguments.has("resource_paths"):
+		var produced: Array = []
+		for dir_name in ["themes", "tilesets", "animations", "scenes"]:
+			var dir_abs: String = ProjectSettings.globalize_path("res://" + dir_name)
+			if not DirAccess.dir_exists_absolute(dir_abs):
+				continue
+			var d: DirAccess = DirAccess.open(dir_abs)
+			if d == null:
+				continue
+			d.list_dir_begin()
+			while true:
+				var entry: String = d.get_next()
+				if entry.is_empty():
+					break
+				if entry.ends_with(".tres") or entry.ends_with(".tscn"):
+					produced.append("res://%s/%s" % [dir_name, entry])
+			d.list_dir_end()
+		if not produced.is_empty():
+			arguments["resource_paths"] = produced
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["resource_paths"] = "%d produced resources" % produced.size()
+	# 动画运行时链：profile 固定建 AnimPlayer；关键帧步骤自动接线（显式值优先）。
+	# 运行时探针用游戏内绝对路径 /root/<场景根名>/AnimPlayer。
+	if step_profile == "animation_audio":
+		var player_node_path: String = "/root/AnimPlayer"
+		var media_scene: String = String(artifacts.get("scene", ""))
+		if not media_scene.is_empty():
+			player_node_path = "/root/%s/AnimPlayer" % media_scene.get_file().get_basename()
+		if tool_name == "insert_animation_keys" and not arguments.has("attach_player_node"):
+			arguments["attach_player_node"] = "/root/AnimPlayer"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["attach_player_node"] = "/root/AnimPlayer"
+		if tool_name in ["list_runtime_animations", "play_runtime_animation",
+				"get_runtime_animation_state"] and not arguments.has("node_path"):
+			arguments["node_path"] = player_node_path
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["node_path"] = player_node_path
+		if tool_name == "get_runtime_audio_bus" and not arguments.has("bus_name"):
+			arguments["bus_name"] = "Master"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["bus_name"] = "Master"
+		if tool_name == "update_runtime_audio_bus" and not arguments.has("bus_name"):
+			arguments["bus_name"] = "Master"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["bus_name"] = "Master"
+		if tool_name == "play_runtime_animation" and not arguments.has("animation_name"):
+			arguments["animation_name"] = "anim"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["animation_name"] = "anim"
 	# 瓦片绘制步骤：level profile 固定建 LevelTiles 层；无纹理瓦片集没有图集
 	# 可画，给一个擦除型单元格保持步骤可执行且诚实（cells 数组非空）。
 	if tool_name == "set_tilemap_layer_cells" and step_profile == "level_design":

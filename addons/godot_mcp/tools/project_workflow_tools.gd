@@ -620,6 +620,29 @@ func _register_insert_animation_keys(server_core: RefCounted) -> void:
 						  output_schema, annotations,
 						  "supplementary", "Project-Advanced")
 
+func _workflow_editor_interface() -> EditorInterface:
+	if _editor_interface:
+		return _editor_interface
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.has_method("get_editor_interface"):
+			return plugin.get_editor_interface()
+	return null
+
+func _workflow_resolve_node(editor_interface: EditorInterface, node_path: String) -> Node:
+	var scene_root: Node = editor_interface.get_edited_scene_root()
+	if scene_root == null:
+		return null
+	if node_path == "/root" or node_path.is_empty():
+		return scene_root
+	var relative: String = node_path.trim_prefix("/root/")
+	var parts: PackedStringArray = relative.split("/")
+	if parts.size() > 0 and parts[0] == scene_root.name:
+		if parts.size() == 1:
+			return scene_root
+		return scene_root.get_node_or_null("/".join(parts.slice(1)))
+	return scene_root.get_node_or_null(relative)
+
 func _tool_insert_animation_keys(params: Dictionary) -> Dictionary:
 	var animation_path: String = str(params.get("animation_path", "")).strip_edges()
 	var track_path: String = str(params.get("track_path", "")).strip_edges()
@@ -689,6 +712,32 @@ func _tool_insert_animation_keys(params: Dictionary) -> Dictionary:
 	if error != OK:
 		return {"error": "Failed to save animation: " + error_string(error)}
 
+	# 可选接线：把动画挂进当前编辑场景里的 AnimationPlayer（默认库名 ""、
+	# 动画名 "anim"），供运行时 list/play 链使用。
+	var attach_player: String = str(params.get("attach_player_node", "")).strip_edges()
+	var attached_to: String = ""
+	if not attach_player.is_empty():
+		var editor_interface: EditorInterface = _workflow_editor_interface()
+		if editor_interface == null:
+			return {"error": "attach_player_node requires a live editor interface"}
+		var player_node: Node = _workflow_resolve_node(editor_interface, attach_player)
+		if player_node == null:
+			return {"error": "AnimationPlayer node not found: " + attach_player}
+		if not (player_node is AnimationPlayer):
+			return {"error": "attach target is not an AnimationPlayer: " + attach_player}
+		var player: AnimationPlayer = player_node as AnimationPlayer
+		var anim_name: String = str(params.get("animation_name", "anim")).strip_edges()
+		if anim_name.is_empty():
+			anim_name = "anim"
+		if player.has_animation_library(""):
+			player.get_animation_library("").add_animation(anim_name, animation)
+		else:
+			var library := AnimationLibrary.new()
+			library.add_animation(anim_name, animation)
+			player.add_animation_library("", library)
+		attached_to = attach_player
+		editor_interface.mark_scene_as_unsaved()
+
 	return {
 		"status": "success",
 		"animation_path": animation_path,
@@ -696,7 +745,8 @@ func _tool_insert_animation_keys(params: Dictionary) -> Dictionary:
 		"track_type": track_type_name,
 		"track_index": track_index,
 		"keys_inserted": keys_inserted,
-		"created_track": created_track
+		"created_track": created_track,
+		"attached_to": attached_to
 	}
 
 func _insert_animation_key(animation: Animation, track_index: int, track_type: int, track_type_name: String, time: float, raw_value: Variant, value_type: String) -> Dictionary:

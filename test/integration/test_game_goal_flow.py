@@ -67,7 +67,6 @@ SCENARIOS = [
     },
     {
         "name": "animation-audio",
-        "skip": "profile needs an AnimationPlayer node and animation wiring before the runtime chain can pass",
         "objective": (
             "Animate the game: create an animation resource, insert its keys, "
             "then play it and verify the runtime animation state with no "
@@ -78,7 +77,6 @@ SCENARIOS = [
     },
     {
         "name": "asset-pipeline",
-        "skip": "pending batch 3",
         "objective": (
             "Check the asset pipeline: list project resources and import "
             "status, reimport resources and verify no missing dependencies."
@@ -88,13 +86,14 @@ SCENARIOS = [
     },
     {
         "name": "release-export-validate",
-        "skip": "pending batch 3 (scratch has no export templates)",
         "objective": (
             "Prepare a release: list export presets and inspect export "
             "template availability, then validate the export preset."
         ),
         "profiles": ["release_export"],
         "assert_playable": False,
+        # scratch 无导出模板：验证链完成后 run_export 诚实失败是合法结局。
+        "accept_blocked_tool": "run_export",
     },
     {
         "name": "localization",
@@ -222,6 +221,10 @@ def run_scenario(scenario: dict) -> None:
             continue
         if state in ("blocked", "replan_required", "recovery_required", "failed", "error"):
             last = run.get("executed", [])[-1] if run.get("executed") else {}
+            if scenario.get("accept_blocked_tool") == last.get("tool_name"):
+                print(f"[{name}] honest boundary: {state} at {last.get('tool_name')} "
+                      f"({str(run.get('blocked_reason', ''))[:160]})", flush=True)
+                return
             raise AssertionError(
                 f"[{name}] Goal reached terminal failure state {state} at {last.get('tool_name', '?')}: "
                 f"{str(run.get('blocked_reason', ''))[:300]}")

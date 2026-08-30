@@ -403,8 +403,14 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 			return asset_specs
 		"animation_audio":
 			var media_specs: Array[Dictionary] = [
+				# 运行时链需要真实载体：自己的场景 + AnimationPlayer + 接线后的
+				# 保存，否则 list/play 动画步骤无目标可查。
+				_spec("media_scene", "create_scene", "build_create"),
+				_spec("anim_player", "create_node", "build_create", false,
+					{"parent_path": "/root", "node_type": "AnimationPlayer", "node_name": "AnimPlayer"}),
 				_spec("create_animation", "create_animation", "build_create"),
 				_spec("animation_keys", "insert_animation_keys", "build_configure"),
+				_spec("media_save", "save_scene", "build_save"),
 				_spec("runtime_animations", "list_runtime_animations", "runtime_inspect"),
 				_spec("play_animation", "play_runtime_animation", "runtime_action"),
 				_spec("animation_state", "get_runtime_animation_state", "runtime_evidence", true),
@@ -489,7 +495,12 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 		"release_export":
 			var release_specs: Array[Dictionary] = [
 				_spec("export_presets", "list_export_presets", "release_inspect"),
-				_spec("export_templates", "inspect_export_templates", "release_inspect")
+				_spec("export_templates", "inspect_export_templates", "release_inspect"),
+				# 全新项目没有导出预设：先建一个 Windows Desktop 预设，
+				# validate/run_export 链才有目标（已存在时 create 幂等报已存在）。
+				_spec("release_preset", "create_export_preset", "release_prepare", false,
+					{"name": "Windows Desktop", "platform": "Windows Desktop",
+					 "export_path": "res://build/game.exe"})
 			]
 			if platform == "android":
 				release_specs.append(_spec("android_config", "configure_android_export", "release_prepare"))
@@ -756,7 +767,8 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
 		return false
 	var data: Dictionary = result
-	if data.has("error"):
+	# 工具有携带空 error 字段的习惯；空字符串不是失败。
+	if data.has("error") and not String(data["error"]).strip_edges().is_empty():
 		return false
 	for verdict_key in ["passed", "success", "valid"]:
 		if data.has(verdict_key) and not bool(data[verdict_key]):
@@ -957,7 +969,8 @@ func _non_gate_result_usable(result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
 		return false
 	var data: Dictionary = result
-	if data.has("error"):
+	# 空字符串 error 字段不构成失败（部分工具习惯性携带）。
+	if data.has("error") and not String(data["error"]).strip_edges().is_empty():
 		return false
 	for verdict_key in ["passed", "success", "valid"]:
 		if data.has(verdict_key) and not bool(data[verdict_key]):
@@ -1101,6 +1114,13 @@ func _compact_result_summary(result: Variant, tool_name: String = "") -> Diction
 			summary[key] = data[key]
 	if data.has("error"):
 		summary["error"] = String(data["error"]).substr(0, 512)
+	# 导出失败必须携带原因（首条错误行），否则证据只剩 success:false。
+	if tool_name == "run_export" and not bool(data.get("success", true)):
+		var export_errors: Array = data.get("errors", [])
+		if not export_errors.is_empty():
+			summary["first_error"] = String(export_errors[0]).substr(0, 200)
+		elif data.has("exit_code"):
+			summary["first_error"] = "exit_code=%s" % str(data["exit_code"])
 	var evidence_keys: Array = GATE_EVIDENCE_KEYS.get(tool_name, []) if tool_name != "" else []
 	if not evidence_keys.is_empty():
 		var evidence: Dictionary = {}
