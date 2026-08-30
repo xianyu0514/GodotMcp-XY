@@ -674,6 +674,13 @@ static func validate_batch_edit_operation(operation: Dictionary) -> String:
 			return "Unsupported operation type: " + operation_type
 	return ""
 
+# Script.has_script_method 在 4.6 不存在；get_script_method_list 各版本稳定。
+static func _script_declares_method(script: Script, method_name: String) -> bool:
+	for method in script.get_script_method_list():
+		if String(method.get("name", "")) == method_name:
+			return true
+	return false
+
 # 先按场景树解析；失败时回退到本批次新建节点的路径映射（节点尚未入树）。
 func _resolve_batch_edit_node(node_path: String, batch_created_nodes: Dictionary) -> Node:
 	var resolved: Node = _resolve_node_path(node_path)
@@ -742,7 +749,6 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					return {"error": "Failed to instantiate node type '%s' as a Node." % node_type}
 				var new_node: Node = new_instance
 				new_node.name = node_name
-				new_node.owner = scene_root
 				var created_future_path: String = parent_path.trim_suffix("/").path_join(node_name)
 				batch_created_nodes[created_future_path] = new_node
 				batch_created_nodes[_append_child_path(
@@ -841,7 +847,15 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 				if not prop_target:
 					return {"error": "Node not found: " + prop_node_path}
 				var property_name: String = str(operation.get("property_name", ""))
-				if not property_name in prop_target:
+				# 属性可能在批次内将挂载的脚本上（do-method 到 commit 才真正 set）。
+				var pending_for_prop: Script = batch_pending_scripts.get(prop_target) as Script
+				var property_known: bool = property_name in prop_target
+				if not property_known and pending_for_prop != null:
+					for script_prop in pending_for_prop.get_script_property_list():
+						if String(script_prop.get("name", "")) == property_name:
+							property_known = true
+							break
+				if not property_known:
 					return {"error": "Property '" + property_name + "' not found on node " + prop_node_path}
 				var raw_value: Variant = operation.get("property_value")
 				if raw_value is String:
@@ -852,6 +866,20 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					if not ResourceLoader.exists(raw_value):
 						return {"error": "Resource path does not exist: " + raw_value
 							+ " for property " + property_name + " on node " + prop_node_path}
+				if raw_value is Dictionary:
+					# 常见数学类型的 JSON 字典形式转换（position/scale/modulate 等）。
+					var dict_value: Dictionary = raw_value
+					match typeof(prop_target.get(property_name)):
+						TYPE_VECTOR2:
+							if dict_value.has("x") and dict_value.has("y"):
+								raw_value = Vector2(float(dict_value["x"]), float(dict_value["y"]))
+						TYPE_VECTOR2I:
+							if dict_value.has("x") and dict_value.has("y"):
+								raw_value = Vector2i(int(dict_value["x"]), int(dict_value["y"]))
+						TYPE_COLOR:
+							if dict_value.has("r") and dict_value.has("g") and dict_value.has("b"):
+								raw_value = Color(float(dict_value["r"]), float(dict_value["g"]),
+									float(dict_value["b"]), float(dict_value.get("a", 1.0)))
 				var converted_value: Variant = _convert_value_for_property(prop_target, property_name, raw_value)
 				prepared_operations.append({
 					"type": "set_property",
@@ -904,7 +932,8 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 				if not has_the_signal:
 					return {"error": "Signal '" + signal_name + "' not found on node " + signal_node_path}
 				var has_the_method: bool = signal_target.has_method(method_name) \
-					or (pending_script != null and signal_target == signal_source and pending_script.has_method(method_name))
+					or (pending_script != null and signal_target == signal_source \
+						and _script_declares_method(pending_script, method_name))
 				if not has_the_method:
 					return {"error": "Method '" + method_name + "' not found on target node "
 						+ (target_node_path if not target_node_path.is_empty() else signal_node_path)}
@@ -1005,7 +1034,8 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"node_path": prepared["node_path"],
 						"property_name": prepared["property_name"],
 						"old_value": _serialize_value(prepared["old_value"]),
-						"new_value": _serialize_value(property_node.get(prepared["property_name"]))
+						# 此循环在 commit 前运行，读节点仍是旧值；报告已转换的待应用值。
+						"new_value": _serialize_value(prepared["new_value"])
 					})
 				"attach_script":
 					var attach_node: Node = prepared["node"]
@@ -1030,8 +1060,8 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"method_name": prepared["method_name"],
 						"already_connected": bool(prepared.get("already_connected", false))
 					})
-		undo_redo.commit_action()
-		editor_interface.mark_scene_as_unsaved()
+	undo_redo.commit_action()
+	editor_interface.mark_scene_as_unsaved()
 
 	var attach_count: int = 0
 	for prepared in prepared_operations:

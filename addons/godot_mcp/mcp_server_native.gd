@@ -167,19 +167,27 @@ func _process(_delta: float) -> void:
 		return
 	if is_server_running():
 		# 僵尸检测：套接字与线程仍在、心跳停跳（热重载斩断回调链的典型残留，
-		# 表现为端口监听但请求得到空响应）。停掉旧实例后由下方统一拉起。
-		var heartbeat_age: int = 0
-		if _native_server != null and _native_server.last_heartbeat_msec > 0:
+		# 表现为端口监听但请求得到空响应）。心跳字段在 HTTP 传输层上；stdio 等
+		# 无心跳概念的传输直接信任 is_running。
+		var transport: Object = _native_server.get_transport()
+		if transport == null or not ("last_heartbeat_msec" in transport):
 			_zero_heartbeat_since_msec = 0
-			heartbeat_age = now - int(_native_server.last_heartbeat_msec)
+			return
+		var heartbeat_msec: int = int(transport.get("last_heartbeat_msec"))
+		var heartbeat_age: int = 0
+		if heartbeat_msec > 0:
+			_zero_heartbeat_since_msec = 0
+			heartbeat_age = now - heartbeat_msec
+			if heartbeat_age <= 10000:
+				return
 		else:
+			# 热重载把新脚本套到僵尸实例上时字段被重置为 0 且死线程不再写：
+			# 持续为零超过宽限期同样判僵尸。
 			if _zero_heartbeat_since_msec == 0:
 				_zero_heartbeat_since_msec = now
 			heartbeat_age = now - _zero_heartbeat_since_msec
 			if heartbeat_age <= 15000:
 				return
-		if heartbeat_age <= 10000:
-			return
 		_zero_heartbeat_since_msec = 0
 		_log_info("Watchdog: server heartbeat stale (%d ms); rebuilding zombie transport" % heartbeat_age)
 		_native_server.stop()

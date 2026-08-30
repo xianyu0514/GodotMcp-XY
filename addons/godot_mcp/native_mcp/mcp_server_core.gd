@@ -569,6 +569,10 @@ func is_running() -> bool:
 		return _transport.is_running()
 	return false
 
+# 供插件看门狗读取传输层心跳（仅 HTTP 传输拥有 last_heartbeat_msec）。
+func get_transport() -> McpTransportBase:
+	return _transport
+
 # ============================================================================
 # 请求处理（根据mcp-builder优化）
 # ============================================================================
