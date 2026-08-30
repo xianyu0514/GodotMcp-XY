@@ -136,6 +136,27 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 # 生命周期方法
 # ============================================================================
 
+## 运行状态持久化：reload_project / 插件重载 / 编辑器重启后自动复活服务器。
+## 与隧道守护同一哲学——用户点过 Start，就应在下次 enter_tree 时自动回来；
+## 用户显式点 Stop 则写入 false，保持停止。文件是 user:// 级的轻量标记。
+const SERVER_STATE_FILE: String = "user://mcp_server_running.json"
+
+static func _write_server_running_state(running: bool) -> void:
+	var file: FileAccess = FileAccess.open(SERVER_STATE_FILE, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify({"running": running}))
+		file.close()
+
+static func _read_server_running_state() -> bool:
+	if not FileAccess.file_exists(SERVER_STATE_FILE):
+		return false
+	var file: FileAccess = FileAccess.open(SERVER_STATE_FILE, FileAccess.READ)
+	if file == null:
+		return false
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	return parsed is Dictionary and bool((parsed as Dictionary).get("running", false))
+
 func _enter_tree() -> void:
 	_log_info("Godot Native MCP Plugin entering tree...")
 
@@ -243,6 +264,9 @@ func _enter_tree() -> void:
 		_start_native_server()
 	elif auto_start:
 		_log_info("Auto-start enabled, starting MCP server")
+		_start_native_server()
+	elif _read_server_running_state():
+		_log_info("Resurrecting MCP server (it was running before reload/restart)")
 		_start_native_server()
 	else:
 		_log_info("MCP server not auto-started. Use Start button or --mcp-server flag.")
@@ -561,12 +585,15 @@ func _start_native_server() -> bool:
 	
 	if success:
 		_log_info("Native MCP Server started - transport: " + transport_mode)
+		_write_server_running_state(true)
 	else:
 		_log_error("Failed to start MCP Server")
 	
 	return success
 
 func _stop_native_server() -> void:
+	# 显式停止才落 false；_exit_tree 的被动停止不写状态，重载后据此复活。
+	_write_server_running_state(false)
 	if not _native_server:
 		return
 	
