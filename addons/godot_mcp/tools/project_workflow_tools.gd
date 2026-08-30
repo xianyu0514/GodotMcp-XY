@@ -1140,6 +1140,11 @@ func _i18n_extract(params: Dictionary) -> Dictionary:
 			ef.close()
 
 	var locale_cols: int = max(header.size() - 1, 0)
+	if locale_cols == 0:
+		# 无语言列的表无法被 import 接受（表头必须 keys,<locale>,...）：
+		# 默认补 "en"，保证 extract → import 链在空项目上也能走通。
+		header.append("en")
+		locale_cols = 1
 	var new_keys: Array = []
 	for key in found.keys():
 		if not existing_keys.has(key):

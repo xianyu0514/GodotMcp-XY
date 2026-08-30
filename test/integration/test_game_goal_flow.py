@@ -46,6 +46,24 @@ SCENARIOS = [
         "profiles": ["project_health", "performance"],
         "assert_playable": False,
     },
+    {
+        "name": "runtime-debug",
+        "objective": (
+            "Debug the running game: collect editor logs and the runtime scene "
+            "tree, and assert no runtime errors occur."
+        ),
+        "profiles": ["runtime_debug"],
+        "assert_playable": False,
+    },
+    {
+        "name": "localization",
+        "objective": (
+            "Extract translatable strings, import the translated messages and "
+            "list the localization tables for the game."
+        ),
+        "profiles": ["localization"],
+        "assert_playable": False,
+    },
 ]
 
 PROJECT_GODOT = """config_version=5
