@@ -2130,8 +2130,8 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			},
 			"connections": {
 				"type": "integer",
-				"description": "download: parallel connections (1-8), default 4, resumable.",
-				"default": 4
+				"description": "download: parallel connections (1-16), default 8, resumable.",
+				"default": 8
 			},
 			"keep_archive": {
 				"type": "boolean",
@@ -2791,7 +2791,7 @@ class TemplatesParallelFetch extends Node:
 	var _url: String = ""
 	var _dest_abs: String = ""
 	var _proxy: String = ""
-	var _connections: int = 4
+	var _connections: int = 8
 	var _idle_ms: int = 60000
 	var _total: int = -1
 	var _etag: String = ""
@@ -2805,7 +2805,7 @@ class TemplatesParallelFetch extends Node:
 	var _state_path: String = ""
 
 	static func plan_chunks(total: int, connections: int) -> Array:
-		var count: int = maxi(1, mini(connections, 8))
+		var count: int = maxi(1, mini(connections, 16))
 		if total <= 0:
 			return []
 		count = mini(count, maxi(1, int(ceil(float(total) / 1048576.0))))
@@ -2823,7 +2823,7 @@ class TemplatesParallelFetch extends Node:
 		_url = url
 		_dest_abs = dest_abs
 		_proxy = proxy
-		_connections = clampi(connections, 1, 8)
+		_connections = clampi(connections, 1, 16)
 		_idle_ms = idle_ms
 		_state_path = dest_abs + ".download.json"
 
@@ -3089,7 +3089,7 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 		return {"error": "No scene tree root available to host the download request."}
 	# 并行分块路径（默认 4 连接，上限 8）：Range 分块直写目标文件 + .download.json
 	# 断点续传；中断后重启只补未完成分块。资源有界：每 worker 每帧 1 MiB。
-	var connections: int = clampi(int(params.get("connections", 4)), 1, 8)
+	var connections: int = clampi(int(params.get("connections", 8)), 1, 16)
 	var tpz_abs: String = ProjectSettings.globalize_path(
 		TEMPLATES_DOWNLOAD_DIR.path_join(String(version_meta.get("tpz_filename", ""))))
 	if connections >= 2:

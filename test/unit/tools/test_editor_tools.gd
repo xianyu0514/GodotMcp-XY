@@ -569,6 +569,12 @@ func test_parallel_chunk_plan_covers_file_exactly() -> void:
 	assert_true(_editor_tools.TemplatesParallelFetch.plan_chunks(500, 8).size() <= 1,
 		"Small files collapse to a single chunk (1 MiB minimum per chunk)")
 
+func test_parallel_chunk_plan_caps_at_16_connections() -> void:
+	assert_eq(_editor_tools.TemplatesParallelFetch.plan_chunks(64 * 1048576, 99).size(), 16,
+		"Connection count is capped at 16")
+	assert_eq(_editor_tools.TemplatesParallelFetch.plan_chunks(3000000, 16).size(), 3,
+		"A 3 MiB file cannot exceed 3 chunks (1 MiB minimum per chunk)")
+
 func test_get_request_injects_range_header() -> void:
 	var request: String = _editor_tools.TemplatesHttpGetter.build_get_request(
 		"/x.tpz", "example.com", "bytes=5-9")
