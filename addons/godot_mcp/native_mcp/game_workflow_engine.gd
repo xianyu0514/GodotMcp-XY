@@ -699,11 +699,34 @@ func _task_blueprint(task: Dictionary) -> Dictionary:
 		"step_key": String(task.get("step_key", "")),
 		"stage": String(task.get("stage", "")),
 		"depends_on": (task.get("depends_on", []) as Array).duplicate(),
-		"arguments": (task.get("arguments", {}) as Dictionary).duplicate(true),
+		"arguments": _canonical_numbers(task.get("arguments", {})),
 		"objective_gate": bool(task.get("objective_gate", false)),
 		"repair_tool": String(task.get("repair_tool", "")),
 		"max_repair_attempts": int(task.get("max_repair_attempts", 0))
 	}
+
+
+## JSON round-trips turn integer literals (keycodes, indexes) into floats
+## (4194322 -> 4194322.0). Canonicalize numeric leaf values so a persisted
+## plan's blueprint still equals the freshly compiled one; real fractional
+## values (deadzone 0.2) are preserved.
+static func _canonical_numbers(value: Variant) -> Variant:
+	if value is float:
+		var as_float: float = value
+		if is_equal_approx(as_float, roundf(as_float)) and absf(as_float) < 9007199254740992.0:
+			return int(roundf(as_float))
+		return value
+	if value is Dictionary:
+		var result_dict: Dictionary = {}
+		for key in value:
+			result_dict[key] = _canonical_numbers(value[key])
+		return result_dict
+	if value is Array:
+		var result_array: Array = []
+		for item in value:
+			result_array.append(_canonical_numbers(item))
+		return result_array
+	return value
 
 func validate_integrity(plan: Dictionary, available_tools: Array[String]) -> Dictionary:
 	if not (plan.get("workflow") is Dictionary):

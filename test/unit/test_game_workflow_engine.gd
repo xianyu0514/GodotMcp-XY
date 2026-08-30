@@ -464,7 +464,8 @@ func test_platformer_goal_selects_gameplay_profile() -> void:
 	# （"screen"）：词表缺 platformer/jump/coin 时规划漏掉玩家/金币/胜利逻辑。
 	var result: Dictionary = _compile("Make a 2D platformer with coins and a win screen")
 	assert_false(result.has("error"), str(result.get("error", "")))
-	var profiles: Array = (result.get("plan", {}) as Dictionary).get("profiles", [])
+	var contract: Dictionary = ((result.get("plan", {}) as Dictionary).get("workflow", {}) as Dictionary) 		.get("goal_contract", {})
+	var profiles: Array = contract.get("profiles", [])
 	assert_true("gameplay_feature" in profiles,
 		"platformer+coins goal must select gameplay_feature (got: %s)" % str(profiles))
 
@@ -510,3 +511,13 @@ func test_save_scene_result_registers_scene_artifact() -> void:
 	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
 	assert_eq(String(artifacts.get("scene", "")), "res://scenes/gameplay-feature.tscn",
 		"save_scene result registers the scene artifact via saved_path")
+
+func test_numeric_step_arguments_survive_json_round_trip() -> void:
+	# JSON 往返把整型键码 4194322 变成 4194322.0：蓝图若不规范化数字，
+	# 含数字参数的持久化计划在重启校验时会被误判为被篡改。
+	var plan: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
+	var persisted: Dictionary = JSON.parse_string(JSON.stringify(plan))
+	assert_false(persisted.is_empty(), "plan serializes to JSON")
+	var integrity: Dictionary = _engine.validate_integrity(persisted, _available)
+	assert_false(integrity.has("error"),
+		"round-tripped plan still matches its blueprint (got: %s)" % str(integrity.get("error", "")))

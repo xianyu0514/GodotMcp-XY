@@ -38,17 +38,16 @@ func test_hard_engine_dependencies_exist() -> void:
 	for pair in required_methods:
 		assert_true(ClassDB.class_has_method(String(pair[0]), String(pair[1])),
 			"%s.%s 必须存在（引擎契约）" % [String(pair[0]), String(pair[1])])
-	# EditorPaths.get_export_templates_dir 是 4.7 新增（4.6 仅有 data/config/cache/
-	# project_settings 目录）——模板目录解析必须始终提供平台回退，不能只依赖它。
-	var info: Dictionary = Engine.get_version_info()
-	var is_47_or_newer: bool = int(info.get("major", 0)) > 4 		or (int(info.get("major", 0)) == 4 and int(info.get("minor", 0)) >= 7)
-	if is_47_or_newer:
-		assert_true(ClassDB.class_has_method("EditorPaths", "get_export_templates_dir"),
-			"4.7+ 必须提供 EditorPaths.get_export_templates_dir（插件目标版本契约）")
-	else:
-		assert_false(ClassDB.class_has_method("EditorPaths", "get_export_templates_dir")
-			and not ClassDB.class_has_method("EditorPaths", "get_data_dir"),
-			"4.6 的 EditorPaths 方法面与此契约记录不符，请复核引擎文档")
+	# EditorPaths.get_export_templates_dir 在已实测的引擎（4.6.3 / 4.7.2 stable）
+	# 均不存在——模板目录解析绝不能无条件依赖它，必须先 has_method 探测并
+	# 始终保留平台回退。这里锁定真实契约：方法缺失时解析函数照样返回路径。
+	var templates_root: String = load(
+		"res://addons/godot_mcp/tools/editor_tools_native.gd").new()._get_export_templates_root()
+	assert_false(templates_root.is_empty(),
+		"export templates root must resolve via platform fallbacks even without EditorPaths.get_export_templates_dir")
+	if not ClassDB.class_has_method("EditorPaths", "get_export_templates_dir"):
+		assert_true(ClassDB.class_has_method("EditorPaths", "get_data_dir"),
+			"4.6/4.7 的 EditorPaths 方法面与此契约记录不符，请复核引擎文档")
 
 func test_byte_array_search_contract() -> void:
 	# 下载器依赖 PackedByteArray.find(byte)（4.6 可用；曾误用不存在的 find_char）。

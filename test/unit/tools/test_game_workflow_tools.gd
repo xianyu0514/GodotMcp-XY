@@ -444,10 +444,11 @@ func test_missing_current_step_inputs_waits_without_invoking_or_losing_plan() ->
 	}
 	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
 	var result: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 10
 	})
 	assert_eq(result.get("status", ""), "needs_input")
-	assert_eq(_core.calls.size(), 2, "Only the two no-input inspections run before the missing build input")
+	# 移动目标在两次巡检与 create_scene 之间合法执行四个方向输入注册步骤。
+	assert_eq(_core.calls.size(), 6, "Two inspections plus four directional input steps run before the missing build input")
 	assert_true("scene_name" in result.get("missing_inputs", []))
 	assert_eq((result.get("input_schema", {}) as Dictionary).get("required", []), ["scene_name"],
 		"The current atomic schema is returned on demand without expanding tools/list")
@@ -482,7 +483,7 @@ func test_protected_path_and_tampered_blueprint_stop_before_execution() -> void:
 	var protected: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path,
 		"expected_workflow_id": planned["workflow_id"],
-		"max_steps": 1,
+		"max_steps": 8,
 		"step_inputs": {create_step["id"]: {"scene_path": "res://scenes/../addons/godot_mcp/overwrite.tscn"}}
 	})
 	assert_eq(protected.get("status", ""), "blocked")
@@ -545,7 +546,7 @@ func test_created_script_artifact_derives_attach_script_input() -> void:
 	var result: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path,
 		"expected_workflow_id": planned["workflow_id"],
-		"max_steps": 5,
+		"max_steps": 14,
 		"step_inputs": {"create_script": {"script_path": "res://scripts/player.gd"}}
 	})
 	assert_ne(String(result.get("status", "")), "needs_input",

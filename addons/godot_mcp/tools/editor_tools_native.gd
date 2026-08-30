@@ -62,9 +62,12 @@ func _get_export_templates_root() -> String:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if editor_interface:
 		var editor_paths: EditorPaths = editor_interface.get_editor_paths()
-		# get_editor_paths() 可能返回有效对象但目录为空串（部分编辑器上下文），
-		# 必须穿透到平台回退而不是把空路径当结论。
-		var from_paths: String = editor_paths.get_export_templates_dir() if editor_paths else ""
+		# get_export_templates_dir 并非所有引擎版本都提供（4.6.3/4.7.2 实测缺失），
+		# 无条件调用会让处理器中止——先探测方法存在性；且对象可能有效但目录
+		# 为空串，必须穿透到平台回退而不是把空路径当结论。
+		var from_paths: String = ""
+		if editor_paths and editor_paths.has_method("get_export_templates_dir"):
+			from_paths = String(editor_paths.get_export_templates_dir())
 		if not from_paths.is_empty():
 			return from_paths
 	# EditorPaths 单例兜底：工具实例可能拿不到 EditorInterface，但单例仍可用。
