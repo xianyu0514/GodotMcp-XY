@@ -583,6 +583,39 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						task["derived_inputs"]["script_path"] = arguments["script_path"]
 						break
 				dir.list_dir_end()
+	# 首个动画资源步骤：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_animation" and not arguments.has("animation_path") 			and not artifacts.has("animation"):
+		var anim_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["animation_path"] = "res://animations/%s.tres" % anim_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["animation_path"] = arguments["animation_path"]
+	# 动画关键帧步骤：默认给场景根 position 的两帧往返（工具会确保轨道存在）。
+	if tool_name == "insert_animation_keys" and not arguments.has("animation_path"):
+		var insert_anim_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["animation_path"] = "res://animations/%s.tres" % insert_anim_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["animation_path"] = arguments["animation_path"]
+	if tool_name == "insert_animation_keys" and not arguments.has("track_path"):
+		arguments["track_path"] = ".:position"
+		arguments["value_type"] = "vector2"
+		arguments["keys"] = [
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0}},
+			{"time": 1.0, "value": {"x": 96.0, "y": 0.0}},
+		]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["track_path"] = ".:position"
+		task["derived_inputs"]["keys"] = "default-two-key-position"
+	# 瓦片绘制步骤：level profile 固定建 LevelTiles 层；无纹理瓦片集没有图集
+	# 可画，给一个擦除型单元格保持步骤可执行且诚实（cells 数组非空）。
+	if tool_name == "set_tilemap_layer_cells" and step_profile == "level_design":
+		if not arguments.has("node_path"):
+			arguments["node_path"] = "/root/LevelTiles"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["node_path"] = "/root/LevelTiles"
+		if not arguments.has("cells"):
+			arguments["cells"] = [{"coords": [0, 0], "erase": true}, {"coords": [1, 0], "erase": true}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["cells"] = "default-erase-pattern"
 	# 性能预算门缺 budget 时给保守默认（30fps）；目标里的具体数值由调用方覆盖。
 	if tool_name == "assert_performance_budget" and not arguments.has("budget"):
 		arguments["budget"] = {"min_fps": 30}
@@ -608,6 +641,12 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["theme_path"] = "res://themes/%s.tres" % theme_slug
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["theme_path"] = arguments["theme_path"]
+	# 首个 TileSet 步骤同理：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_tileset" and not arguments.has("tileset_path") 			and not artifacts.has("tileset"):
+		var tileset_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["tileset_path"] = "res://tilesets/%s.tres" % tileset_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["tileset_path"] = arguments["tileset_path"]
 	if tool_name == "create_theme" and not arguments.has("theme_name"):
 		arguments["theme_name"] = "GameTheme"
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})

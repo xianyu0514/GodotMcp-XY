@@ -421,6 +421,10 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("level_scene", "create_scene", "build_create"),
 				_spec("tileset", "create_tileset", "build_create"),
 				_spec("tileset_layers", "configure_tileset_layers", "build_configure"),
+				# TileMapLayer 节点是 set_tilemap_layer_cells 的写入目标，
+				# 缺这一步整个 profile 在新场景上无从落笔。
+				_spec("map_node", "create_node", "build_create", false,
+					{"parent_path": "/root", "node_type": "TileMapLayer", "node_name": "LevelTiles"}),
 				_spec("tilemap_cells", "set_tilemap_layer_cells", "build_configure"),
 				_spec("level_save", "save_scene", "build_save"),
 				_spec("persistence_gate", "audit_scene_node_persistence", "static_verify", true),

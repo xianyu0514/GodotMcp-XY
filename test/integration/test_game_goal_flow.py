@@ -56,6 +56,47 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "level-design-tilemap",
+        "objective": (
+            "Build a tilemap level: create a tileset, configure its physics "
+            "layer, paint cells into the map, save the scene and verify the "
+            "visual result against a baseline."
+        ),
+        "profiles": ["level_design"],
+        "assert_playable": False,
+    },
+    {
+        "name": "animation-audio",
+        "skip": "profile needs an AnimationPlayer node and animation wiring before the runtime chain can pass",
+        "objective": (
+            "Animate the game: create an animation resource, insert its keys, "
+            "then play it and verify the runtime animation state with no "
+            "runtime errors; report the audio buses."
+        ),
+        "profiles": ["animation_audio"],
+        "assert_playable": False,
+    },
+    {
+        "name": "asset-pipeline",
+        "skip": "pending batch 3",
+        "objective": (
+            "Check the asset pipeline: list project resources and import "
+            "status, reimport resources and verify no missing dependencies."
+        ),
+        "profiles": ["asset_pipeline"],
+        "assert_playable": False,
+    },
+    {
+        "name": "release-export-validate",
+        "skip": "pending batch 3 (scratch has no export templates)",
+        "objective": (
+            "Prepare a release: list export presets and inspect export "
+            "template availability, then validate the export preset."
+        ),
+        "profiles": ["release_export"],
+        "assert_playable": False,
+    },
+    {
         "name": "localization",
         "objective": (
             "Extract translatable strings, import the translated messages and "
@@ -207,6 +248,9 @@ def main() -> int:
                 f"'{info.get('project_name', '?')}', not the scratch project")
 
         for scenario in SCENARIOS:
+            if scenario.get("skip"):
+                print(f"[goal-flow] scenario {scenario['name']} SKIPPED: {scenario['skip']}", flush=True)
+                continue
             run_scenario(scenario)
         return 0
     finally:
