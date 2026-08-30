@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 EXPORT_PRESETS_PATH = REPO_ROOT / "export_presets.cfg"
 EXPORT_DIR = REPO_ROOT / ".tmp_export"
 EXPORT_PACK_PATH = EXPORT_DIR / "integration_test_export.pck"
@@ -97,8 +98,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,

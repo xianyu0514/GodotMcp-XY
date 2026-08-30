@@ -1,3 +1,4 @@
+import os
 import json
 import subprocess
 import sys
@@ -7,8 +8,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 
 
 def rpc_call(method: str, params: dict | None = None, request_id: int = 1) -> dict:
@@ -61,8 +62,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -77,7 +77,7 @@ def main() -> int:
         # security downgrade; enable it explicitly for this flow.
         enable_result = tool_call(
             "enable_tools",
-            {"tools": ["execute_editor_script"], "enabled": True},
+            {"tools": ["enable_tools", "execute_editor_script", "expand_debug_variable", "get_debug_variables"], "enabled": True},
             request_id=1,
         )
         if enable_result.get("status") != "success":

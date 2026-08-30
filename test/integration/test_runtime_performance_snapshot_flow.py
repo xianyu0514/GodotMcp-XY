@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_runtime_performance_snapshot"
 SCENE_PATH = "res://.tmp_runtime_performance_snapshot/runtime_perf_scene.tscn"
 SCENE_FILE = TEMP_DIR / "runtime_perf_scene.tscn"
@@ -147,8 +148,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -192,8 +192,7 @@ def main() -> int:
             "rendered_objects_in_frame",
             "memory_static_bytes",
             "memory_static_mb",
-            "node_count",
-        ]
+            "node_count"]
         for field in required_numeric_fields:
             if field not in snapshot:
                 raise AssertionError(f"Missing runtime performance field {field}: {snapshot}")

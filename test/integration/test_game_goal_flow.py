@@ -103,8 +103,7 @@ SCENARIOS = [
         ),
         "profiles": ["localization"],
         "assert_playable": False,
-    },
-]
+    }]
 
 PROJECT_GODOT = """config_version=5
 

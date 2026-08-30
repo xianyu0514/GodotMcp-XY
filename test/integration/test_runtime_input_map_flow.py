@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_runtime_input_map"
 SCENE_PATH = "res://.tmp_runtime_input_map/runtime_input_map_scene.tscn"
 SCENE_FILE = TEMP_DIR / "runtime_input_map_scene.tscn"
@@ -231,8 +232,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -275,8 +275,7 @@ def main() -> int:
                 "erase_existing": True,
                 "events": [
                     {"type": "key", "keycode": 65, "pressed": True},
-                    {"type": "mouse_button", "button_index": 1, "pressed": True},
-                ],
+                    {"type": "mouse_button", "button_index": 1, "pressed": True}],
                 "timeout_ms": 2000,
             },
             "mcp:input_action_updated",

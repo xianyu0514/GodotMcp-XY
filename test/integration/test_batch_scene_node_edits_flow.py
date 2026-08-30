@@ -71,9 +71,8 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-        f"--mcp-port={MCP_PORT}",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}",
+        f"--mcp-port={MCP_PORT}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -88,7 +87,7 @@ def main() -> int:
         # security downgrade; enable it explicitly for this flow.
         enable_result = tool_call(
             "enable_tools",
-            {"tools": ["execute_editor_script", "batch_scene_node_edits"], "enabled": True},
+            {"tools": ["batch_scene_node_edits", "create_node", "create_scene", "create_script", "enable_tools", "execute_editor_script", "list_nodes", "open_scene"], "enabled": True},
             request_id=1,
         )
         if enable_result.get("status") != "success":
@@ -173,8 +172,7 @@ def main() -> int:
                     {
                         "type": "delete",
                         "node_path": "/root/temp_batch_nodes_scene/DeleteMe",
-                    },
-                ],
+                    }],
             },
             request_id=8,
         )
@@ -270,8 +268,7 @@ _custom_print(JSON.stringify({
                     {"type": "attach_script", "node_path": "/root/Enemy", "script_path": TEMP_SCRIPT_PATH},
                     {"type": "set_property", "node_path": "/root/Enemy", "property_name": "position", "property_value": {"x": 120, "y": 40}},
                     {"type": "set_property", "node_path": "/root/Enemy", "property_name": "speed", "property_value": 240.0},
-                    {"type": "connect_signal", "node_path": "/root/Enemy", "signal_name": "health_changed", "method_name": "_on_health_changed"},
-                ],
+                    {"type": "connect_signal", "node_path": "/root/Enemy", "signal_name": "health_changed", "method_name": "_on_health_changed"}],
             },
             request_id=12,
         )
