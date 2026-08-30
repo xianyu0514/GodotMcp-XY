@@ -541,11 +541,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["scene_path"] = "res://scenes/%s.tscn" % profile_slug
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["scene_path"] = arguments["scene_path"]
-	# 移动类目标的控制器需要 CharacterBody2D 根节点（蓝图脚本 extends 它）。
+	# 蓝图脚本永远 extends CharacterBody2D（金币/胜利蓝图同样依赖物理体），
+	# 因此根节点派生条件必须与 controller_script() 的触发条件一致：
+	# 任意动词命中即可，而不仅是移动动词——否则"金币+胜利屏"目标会得到
+	# 挂在 Node 根上的 CharacterBody2D 脚本，attach 阶段直接失败。
 	if tool_name == "create_scene" and not arguments.has("root_node_type") \
 			and step_profile == "gameplay_feature":
 		var scene_objective: String = String(plan.get("goal", ""))
-		if GoalBlueprintsScript._mentions(scene_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+		var scene_verbs: Dictionary = GoalBlueprintsScript.match_verbs(scene_objective)
+		if GoalBlueprintsScript.has_any_verb(scene_verbs):
 			arguments["root_node_type"] = "CharacterBody2D"
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["root_node_type"] = "CharacterBody2D"

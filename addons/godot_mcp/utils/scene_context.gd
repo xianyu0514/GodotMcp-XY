@@ -31,7 +31,7 @@ static func ensure_scene_active(editor_interface: EditorInterface,
 		saved_previous = true
 	editor_interface.open_scene_from_path(target)
 	var switched_path: String = ""
-	for _frame in range(60):
+	for _frame in range(120):
 		await Engine.get_main_loop().process_frame
 		var switched_root: Node = editor_interface.get_edited_scene_root()
 		switched_path = String(switched_root.scene_file_path) if switched_root else ""

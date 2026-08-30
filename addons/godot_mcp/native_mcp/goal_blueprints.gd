@@ -9,9 +9,12 @@ class_name GoalBlueprints
 extends RefCounted
 
 # 目标动词（双语）→ 蓝图块开关。
+# platformer/jump/player 与引擎 PROFILE_KEYWORDS 同步：插件自带 prompt 示例
+# 就是 "2D platformer vertical slice"，缺这些词会让规划漏掉移动蓝图。
 const MOVEMENT_KEYWORDS: Array[String] = [
 	"movement", "arrow-key", "arrow key", "move", "controller", "wasd",
-	"移动", "方向键", "移动控制",
+	"platformer", "jump", "player", "playable", "character",
+	"移动", "方向键", "移动控制", "平台跳跃", "跳跃", "玩家", "角色", "可玩",
 ]
 const COLLECTIBLE_KEYWORDS: Array[String] = [
 	"collectible", "collect", "coin", "pickup", "pick up", "item",

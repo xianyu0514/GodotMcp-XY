@@ -458,3 +458,55 @@ func test_runtime_screenshot_registers_screenshot_artifact() -> void:
 	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
 	assert_eq(String(artifacts.get("screenshot", "")), "user://mcp_runtime_capture.jpg",
 		"Visual gates derive their candidate from the captured screenshot")
+
+func test_platformer_goal_selects_gameplay_profile() -> void:
+	# 插件自带 prompt 示例 "2D platformer vertical slice" 曾只命中 ui_screen
+	# （"screen"）：词表缺 platformer/jump/coin 时规划漏掉玩家/金币/胜利逻辑。
+	var result: Dictionary = _compile("Make a 2D platformer with coins and a win screen")
+	assert_false(result.has("error"), str(result.get("error", "")))
+	var profiles: Array = (result.get("plan", {}) as Dictionary).get("profiles", [])
+	assert_true("gameplay_feature" in profiles,
+		"platformer+coins goal must select gameplay_feature (got: %s)" % str(profiles))
+
+func test_movement_goal_expands_directional_input_actions() -> void:
+	# 蓝图控制器读取 move_left/right/up/down；单个默认 upsert 只注册 move_up，
+	# get_vector 会退化到 ui_* 回退。移动目标必须展开四个方向动作步骤。
+	var plan: Dictionary = _compile(
+		"Arrow-key platformer movement with jumping", ["gameplay_feature"])["plan"]
+	var upserts: Array[Dictionary] = []
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "upsert_project_input_action":
+			upserts.append(task)
+	assert_eq(upserts.size(), 4, "Movement goal registers four directional actions (got %d)" % upserts.size())
+	var action_names: Array[String] = []
+	for task in upserts:
+		var args: Dictionary = task.get("arguments", {})
+		action_names.append(String(args.get("action_name", "")))
+	for expected in ["move_left", "move_right", "move_up", "move_down"]:
+		assert_true(expected in action_names, "Directional action %s registered" % expected)
+		var matched: Dictionary = upserts[action_names.find(expected)]
+		var events: Array = matched.get("arguments", {}).get("events", [])
+		assert_gt(events.size(), 0, "%s binds at least one key event" % expected)
+
+func test_collectible_only_goal_keeps_single_default_upsert() -> void:
+	var plan: Dictionary = _compile(
+		"Collect a coin and show a win label", ["gameplay_feature"])["plan"]
+	var upsert_count: int = 0
+	for task_value in plan.get("tasks", []):
+		if String((task_value as Dictionary).get("tool_name", "")) == "upsert_project_input_action":
+			upsert_count += 1
+	assert_eq(upsert_count, 1,
+		"Non-movement goals keep the single default upsert step (got %d)" % upsert_count)
+
+func test_save_scene_result_registers_scene_artifact() -> void:
+	# save_scene 返回 saved_path（不是 save_path）：键表缺它时产物映射是死代码，
+	# 依赖 $scene 引用的后续步骤会卡在 needs_input。
+	var plan: Dictionary = _compile("Create player movement", ["gameplay_feature"])["plan"]
+	var save_task: Dictionary = _task_for_tool(plan, "save_scene")
+	assert_false(save_task.is_empty(), "gameplay profile saves the scene")
+	_engine.record_step_result(plan, String(save_task.get("id", "")), {
+		"status": "saved", "saved_path": "res://scenes/gameplay-feature.tscn"})
+	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
+	assert_eq(String(artifacts.get("scene", "")), "res://scenes/gameplay-feature.tscn",
+		"save_scene result registers the scene artifact via saved_path")

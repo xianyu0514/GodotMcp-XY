@@ -61,3 +61,23 @@ func test_create_export_preset_requires_core_fields() -> void:
 	var missing_name: Dictionary = _tools._tool_create_export_preset({
 		"platform": "Windows Desktop", "export_path": "../build/game.exe"})
 	assert_true(missing_name.has("error"), "A preset without a name must fail fast")
+
+func test_create_export_preset_if_exists_modes() -> void:
+	# 工作流引擎 replan 会重放 create 步骤：if_exists="reuse" 必须幂等成功
+	# （status=reused），默认 "error" 保持显式创建的严格语义。
+	var first: Dictionary = _tools._tool_create_export_preset({
+		"name": "Windows Desktop", "platform": "Windows Desktop",
+		"export_path": "../build/game.exe"})
+	assert_eq(String(first.get("status", "")), "created", str(first.get("error", "")))
+	var strict: Dictionary = _tools._tool_create_export_preset({
+		"name": "Windows Desktop", "platform": "Windows Desktop",
+		"export_path": "../build/game.exe"})
+	assert_true(strict.has("error"), "Default mode errors on duplicate name")
+	var reuse: Dictionary = _tools._tool_create_export_preset({
+		"name": "Windows Desktop", "platform": "Windows Desktop",
+		"export_path": "../build/game.exe", "if_exists": "reuse"})
+	assert_false(reuse.has("error"), "reuse mode treats duplicate as idempotent success")
+	assert_eq(String(reuse.get("status", "")), "reused")
+	assert_true(bool(reuse.get("existing", false)), "reuse response marks the preset as existing")
+	assert_eq(_tools._tool_inspect_export_presets({}).get("presets", []).size(), 1,
+		"reuse must not append a second preset")

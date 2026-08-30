@@ -1,9 +1,8 @@
-# Changelog
-
-All notable user-facing changes are tracked here.
-
 ## Unreleased
 
+Nothing yet.
+
+## [1.1.0] - 2026-08-31
 - Goal matrix complete: all 12 production profiles now have goal-level coverage in one scratch project (11 reach `completed`, release_export reaches its honest boundary). This batch mined and fixed: `insert_animation_keys` gains `attach_player_node` wiring (adds the animation to an AnimationPlayer's default library in the edited scene); the animation_audio profile builds its own scene + AnimationPlayer and saves before the runtime chain, and runtime animation/audio steps derive their probe paths (`/root/<scene>/AnimPlayer`, Master bus); `run_project` joins the scene-scoped tools so the artifact scene is what actually runs; `reimport_resources` derives the goal's produced .tres/.tscn resources from disk; release_export creates a Windows Desktop preset when the project has none; empty-string `error` fields (a tool habit) no longer count as failures in gate verdicts; run_export failure receipts now carry the first error line instead of a bare `success:false`.
 - Mid-step crash regression: `test_game_goal_crash_midstep_flow.py` kills the editor WHILE a step is dispatched (the persisted plan shows the in-progress task, caught by polling), restarts and asserts fail-closed semantics — a replay-safe uncertain step auto-recovers and the goal completes; a non-idempotent uncertain step must be reported explicitly ("unknown outcome ... inspect and replan", naming the step) with replan-then-run still finishing the goal. Across four runs the kill consistently landed mid-`save_scene` (idempotent-tagged) and the goal completed 25/25 every time. Shared test helpers (`rpc_call`/`tool_call`/`wait_for_server`) now accept an `mcp_url` override for port-isolated test variants.
 - Resume-after-crash is now proven end-to-end: `test_game_goal_resume_flow.py` advances a goal one bounded slice, hard-kills the editor (process kill, no cleanup), restarts it on the same scratch project and drives the same plan to `completed` — same workflow id, no progress regression, completed-step count preserved through the crash (6 done before kill → 25 done at completion, verified twice). The checkpoint chain (per-step persisted plan, idempotent-safe replay, artifact registry) survives the restart without the model re-reading the project.

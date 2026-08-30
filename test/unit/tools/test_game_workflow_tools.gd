@@ -629,3 +629,32 @@ func test_scene_scoped_steps_derive_profile_scene_and_visual_paths() -> void:
 	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("baseline_path", "")),
 		"user://visual_baselines/mcp_runtime_capture.jpg",
 		"Visual gate baseline derives a deterministic golden-image location")
+
+func test_collectible_goal_derives_character_body_root() -> void:
+	# 蓝图控制器对任意动词（含金币/胜利）都 extends CharacterBody2D：
+	# 根节点派生必须与之一致，否则 collect-only 目标得到挂在 Node 根上的
+	# CharacterBody2D 脚本，attach 阶段直接失败。
+	_core.schemas["create_scene"] = {
+		"type": "object", "properties": {"scene_path": {"type": "string"}},
+		"required": ["scene_path"]
+	}
+	_core.responses["create_scene"] = {
+		"success": true, "scene_path": "res://scenes/gameplay-feature.tscn"
+	}
+	var planned: Dictionary = _plan(["gameplay_feature"],
+		"Collect a coin and show a win label")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 3
+	})
+	var create_scene_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "create_scene":
+			create_scene_call = call
+			break
+	assert_false(create_scene_call.is_empty(), "create_scene executed")
+	assert_eq(String((create_scene_call.get("arguments", {}) as Dictionary).get("root_node_type", "")),
+		"CharacterBody2D",
+		"Collectible-only goal still derives a CharacterBody2D scene root")

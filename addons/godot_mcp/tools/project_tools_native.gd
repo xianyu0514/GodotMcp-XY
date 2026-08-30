@@ -2421,4 +2421,3 @@ func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
 		"removed_value": removed_value,
 		"persisted": persisted
 	}
-

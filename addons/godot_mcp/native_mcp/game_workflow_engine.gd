@@ -11,6 +11,7 @@ extends RefCounted
 
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const TokenEstimatorScript = preload("res://addons/godot_mcp/utils/token_estimator.gd")
+const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 
 const SCHEMA_VERSION: int = 1
 const DEFAULT_STEPS_PER_RUN: int = 4
@@ -56,7 +57,14 @@ const PROFILE_COMPOSITION_ORDER: Array[String] = [
 ]
 
 const PROFILE_KEYWORDS: Dictionary = {
-	"gameplay_feature": ["gameplay", "player", "movement", "controller", "mechanic", "collision", "玩家", "移动", "控制", "玩法", "游戏机制", "碰撞"],
+	# gameplay_feature 词表刻意收录 platformer/jump/coin/collect/victory 等动词：
+	# 插件自带 prompt 示例 "2D platformer vertical slice" 若只命中 ui_screen
+	# （"screen"），规划会漏掉玩家/金币/胜利逻辑——这正是本 profile 存在的意义。
+	# 注意避免误触：不用裸 "platform"（会命中 cross-platform export 类目标）。
+	"gameplay_feature": ["gameplay", "player", "movement", "controller", "mechanic", "collision",
+		"platformer", "jump", "coin", "collect", "collectible", "pickup", "playable",
+		"victory", "win screen", "win label", "win condition",
+		"玩家", "移动", "控制", "玩法", "游戏机制", "碰撞", "平台跳跃", "跳跃", "金币", "收集", "拾取", "胜利", "通关", "可玩"],
 	"ui_screen": [" ui ", "menu", "hud", "pause", "button", "interface", "screen", "界面", "菜单", "暂停", "按钮", "主题", "屏幕"],
 	"script_repair": ["script error", "fix script", "compile error", "gdscript", "c#", "脚本错误", "修复脚本", "编译错误", "代码错误"],
 	"asset_pipeline": ["asset", "import", "texture", "model", "sprite", "gltf", "资源", "导入", "贴图", "模型", "精灵"],
@@ -140,7 +148,7 @@ const ARTIFACT_KIND_BY_TOOL: Dictionary = {
 
 const ARTIFACT_PATH_KEYS: Array[String] = [
 	"scene_path", "script_path", "theme_path", "tileset_path",
-	"animation_path", "test_path", "save_path", "path"
+	"animation_path", "test_path", "save_path", "saved_path", "path"
 ]
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
@@ -354,11 +362,50 @@ func _spec(key: String, tool_name: String, stage: String, objective_gate: bool =
 		"repair_tool": repair_tool
 	}
 
+
+## 蓝图控制器用到的四个移动动作（方向键 + WASD 双绑定）。
+## upsert_project_input_action 的事件载荷直接使用引擎键码常量。
+func _movement_input_actions() -> Array[Dictionary]:
+	return [
+		{
+			"action_name": "move_left",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_LEFT},
+				{"type": "key", "keycode": KEY_A}
+			]
+		},
+		{
+			"action_name": "move_right",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_RIGHT},
+				{"type": "key", "keycode": KEY_D}
+			]
+		},
+		{
+			"action_name": "move_up",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_UP},
+				{"type": "key", "keycode": KEY_W}
+			]
+		},
+		{
+			"action_name": "move_down",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_DOWN},
+				{"type": "key", "keycode": KEY_S}
+			]
+		}
+	]
+
 func _profile_specs(profile_id: String, objective: String, platform: String) -> Array[Dictionary]:
 	var goal: String = objective.to_lower()
 	match profile_id:
 		"gameplay_feature":
-			return [
+			var gameplay_specs: Array[Dictionary] = [
 				_spec("project_info", "get_project_info", "offline_inspect"),
 				_spec("input_actions", "list_project_input_actions", "offline_inspect"),
 				_spec("create_scene", "create_scene", "build_create"),
@@ -370,6 +417,19 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("play_verify", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
 				_spec("runtime_errors", "assert_no_runtime_errors", "runtime_evidence", true, {}, "modify_script")
 			]
+			# 移动类目标：蓝图控制器读取 move_left/right/up/down 四个动作。
+			# 单个默认 upsert 只注册 move_up，get_vector 会因其余动作缺失而退化
+			# 为 ui_* 回退——这里按目标词表补全四个方向动作（方向键 + WASD）。
+			if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+				var index: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
+					return String(spec.get("key", "")) == "upsert_input")
+				if index >= 0:
+					gameplay_specs.remove_at(index)
+				for direction in _movement_input_actions():
+					gameplay_specs.insert(2, _spec(
+						"input_%s" % direction.get("action_name", "").replace("move_", ""),
+						"upsert_project_input_action", "build_configure", false, direction))
+			return gameplay_specs
 		"ui_screen":
 			return [
 				_spec("current_scene", "get_current_scene", "offline_inspect"),
@@ -497,10 +557,12 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("export_presets", "list_export_presets", "release_inspect"),
 				_spec("export_templates", "inspect_export_templates", "release_inspect"),
 				# 全新项目没有导出预设：先建一个 Windows Desktop 预设，
-				# validate/run_export 链才有目标（已存在时 create 幂等报已存在）。
+				# validate/run_export 链才有目标。if_exists="reuse" 保证 replan
+				# 重放时已存在的预设是幂等成功而非报错（否则无 repair_tool 的
+				# 步骤会永久卡在 replan_required）。
 				_spec("release_preset", "create_export_preset", "release_prepare", false,
 					{"name": "Windows Desktop", "platform": "Windows Desktop",
-					 "export_path": "res://build/game.exe"})
+					 "export_path": "res://build/game.exe", "if_exists": "reuse"})
 			]
 			if platform == "android":
 				release_specs.append(_spec("android_config", "configure_android_export", "release_prepare"))

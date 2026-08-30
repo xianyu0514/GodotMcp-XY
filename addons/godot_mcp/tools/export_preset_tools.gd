@@ -415,6 +415,7 @@ func _register_create(server_core: RefCounted) -> void:
 			"name": {"type": "string", "description": "Preset name, e.g. 'Windows Desktop'."},
 			"platform": {"type": "string", "description": "Export platform name, e.g. 'Windows Desktop', 'Web', 'Linux'."},
 			"export_path": {"type": "string", "description": "Output artifact path, e.g. '../build/game.exe'."},
+			"if_exists": {"type": "string", "enum": ["error", "reuse"], "default": "error", "description": "Behavior when a preset with the same name already exists: 'error' (default) or 'reuse' (idempotent success returning the existing preset)."},
 			"runnable": {"type": "boolean", "default": true},
 			"export_filter": {"type": "string", "default": "all_resources"},
 			"include_filter": {"type": "string", "default": ""},
@@ -468,8 +469,27 @@ func _tool_create_export_preset(params: Dictionary) -> Dictionary:
 	if loaded.has("error"):
 		return {"error": String(loaded["error"])}
 	var presets: Array = loaded.get("presets", [])
-	if _find_by_name(presets, name) >= 0:
-		return {"error": "An export preset named '%s' already exists" % name}
+	var existing_index: int = _find_by_name(presets, name)
+	if existing_index >= 0:
+		# if_exists="reuse" 让重复创建成为幂等成功（返回既有预设），供工作流
+		# 引擎 replan 重放使用；默认 "error" 保持显式创建的严格语义。
+		if String(params.get("if_exists", "error")) != "reuse":
+			return {"error": "An export preset named '%s' already exists" % name}
+		var platforms_reuse: Array[String] = []
+		for value in (loaded.get("platforms", []) as Array):
+			platforms_reuse.append(String(value))
+		var existing: Dictionary = presets[existing_index]
+		var reuse_validation: Dictionary = validate_preset(existing, platforms_reuse)
+		return {
+			"status": "reused",
+			"index": int(existing.get("index", existing_index)),
+			"name": name,
+			"verified": true,
+			"validation_status": String(reuse_validation.get("status", "unvalidated")),
+			"validation": reuse_validation,
+			"preset_count": presets.size(),
+			"existing": true
+		}
 
 	var index: int = _next_index(presets)
 	var options: Dictionary = params.get("options", {}) if params.get("options", {}) is Dictionary else {}
