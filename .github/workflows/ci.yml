@@ -57,8 +57,12 @@ jobs:
           # production script failed to parse or load. A clean import under the
           # target engine is the cheapest, most objective "is it buildable" gate.
           godot --headless --path . --import 2>&1 | tee import.log
-          if grep -E "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" import.log; then
-            echo "::error::Project failed to import cleanly (script parse/load errors above)."
+          if grep -nE "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" import.log > import_errors.txt; then
+            # 把匹配行同时打进 annotation，API/PR 界面直接可见，便于无日志权限排查。
+            while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done < import_errors.txt | head -20
+            echo "::error::Project failed to import cleanly (see annotations)."
             exit 1
           fi
           # The plugin lifecycle must not rewrite the versioned project file
