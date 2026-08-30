@@ -2830,13 +2830,23 @@ class TemplatesParallelFetch extends Node:
 	func start() -> void:
 		_probe()
 
-	func _probe() -> void:
-		var probe: TemplatesHttpGetter = TemplatesHttpGetter.create(_url, "", _proxy, 20000, true)
+	func _run_probe() -> Dictionary:
+		var probe: TemplatesHttpGetter = TemplatesHttpGetter.create(_url, "", _proxy, 60000, true)
 		probe.range_header = "bytes=0-0"
 		probe.frame_drain_cap = 65536
 		get_tree().root.add_child(probe)
 		var outcome: Dictionary = await probe.completed
 		probe.queue_free()
+		return outcome
+
+	func _probe() -> void:
+		# 探针只有 1 字节，但重定向链 + TLS 握手在高延迟网络可能超过 20 秒；
+		# 与 worker 相同的 60 秒空闲上限，失败自动重试一次。
+		var outcome: Dictionary = await _run_probe()
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			outcome = await _run_probe()
 		if _finished:
 			return
 		if not bool(outcome.get("ok", false)):
