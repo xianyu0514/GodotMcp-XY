@@ -374,15 +374,27 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 			"root_node_type": String(active_root.get_class())
 		}
 
+	# 编辑器启动扫描未完成时，新保存的场景不在文件系统缓存里，
+	# open_scene_from_path 会静默失败；update_file 幂等，先登记再打开。
+	var editor_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if editor_fs != null:
+		editor_fs.update_file(scene_path)
 	editor_interface.open_scene_from_path(scene_path)
-
-	var opened_scene_root: Node = _get_user_scene_root()
-	if not opened_scene_root:
+	var scene_root: Node = null
+	for _frame in range(60):
+		await Engine.get_main_loop().process_frame
+		var candidate: Node = editor_interface.get_edited_scene_root()
+		if candidate and String(candidate.scene_file_path) == scene_path:
+			scene_root = candidate
+			break
+		var user_root: Node = _get_user_scene_root()
+		if user_root and user_root != candidate and String(user_root.scene_file_path) == scene_path:
+			scene_root = user_root
+			break
+	if not scene_root:
 		_scene_operation_in_progress = false
 		return {"error": "Failed to open scene: " + scene_path}
-
-	var scene_root: Node = _get_user_scene_root()
-	var root_type: String = scene_root.get_class() if scene_root else "Unknown"
+	var root_type: String = scene_root.get_class()
 
 	_scene_operation_in_progress = false
 	return {
@@ -808,6 +820,12 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		if not open_scene_paths.has(scene_path):
 			return {"error": "Scene is not currently open: " + scene_path}
 		editor_interface.open_scene_from_path(scene_path)
+		# 打开是延迟生效的：等切换完成再 close，否则关掉的是旧场景。
+		for _frame in range(60):
+			await Engine.get_main_loop().process_frame
+			var pending_root: Node = editor_interface.get_edited_scene_root()
+			if pending_root and String(pending_root.scene_file_path) == scene_path:
+				break
 
 	var active_root: Node = editor_interface.get_edited_scene_root()
 	var closed_scene: String = active_root.scene_file_path if active_root else scene_path

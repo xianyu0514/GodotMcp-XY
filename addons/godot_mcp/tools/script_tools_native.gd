@@ -1477,10 +1477,22 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 			var node: Node = _resolve_node_path(editor_interface, attach_to_node)
 			if node:
 				var script_res: Script = load(script_path)
+				# 刚写入的文件 load() 到的是未编译壳；现场编译（不注册路径，
+				# 避免被扫描失效），update_file 让后续会话按路径加载。
+				var cold_attach: bool = false
+				if script_res and not script_res.can_instantiate():
+					var fresh_attach: GDScript = GDScript.new()
+					fresh_attach.source_code = FileAccess.get_file_as_string(script_path)
+					if fresh_attach.reload() == OK:
+						script_res = fresh_attach
+						cold_attach = true
+					else:
+						script_res = null
 				if script_res:
 					node.set_script(script_res)
 					result["attached_to"] = attach_to_node
-					editor_interface.get_resource_filesystem().scan()
+					if cold_attach:
+						editor_interface.get_resource_filesystem().update_file(script_path)
 				else:
 					result["attach_warning"] = "Script created but failed to load for attachment"
 			else:
