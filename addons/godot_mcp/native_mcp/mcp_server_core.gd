@@ -865,8 +865,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
 		result = await tool.callable.call(arguments)
-		if result == null or not (result is Dictionary):
-			# GDScript 运行时错误会让处理器中止并返回 null；绝不能伪装成空成功。
+		if result == null or not (result is Dictionary) or (result as Dictionary).is_empty():
+			# GDScript 运行时错误会让处理器中止；带 Dictionary 返回类型的函数
+			# 中止时返回默认构造的空字典（而非 null）——空结果同样绝不伪装成功。
 			error = "Tool handler aborted without a result (runtime error; see the editor log for the stack)"
 	
 	# Tool execution finished: drop this request's cancellation marker (if the
@@ -1347,6 +1348,14 @@ func invoke_planned_tool(tool_name: String, arguments: Dictionary,
 	tool_execution_started.emit(tool_name, arguments)
 	var result: Variant = await tool.callable.call(arguments)
 	_execution_context = previous_context
+
+	# 处理器中止（运行时错误经 await 传播）会得到 null 或默认构造的空字典；
+	# 工作流步骤同样绝不能把空结果当作成功证据。
+	if result == null or not (result is Dictionary) or (result as Dictionary).is_empty():
+		_log_error("Authorized workflow step aborted: " + tool_name)
+		tool_execution_failed.emit(tool_name,
+			"Tool handler aborted without a result (runtime error; see the editor log)")
+		return {"error": "Tool handler aborted without a result (runtime error; see the editor log)"}
 
 	var has_error: bool = result is Dictionary and (result as Dictionary).has("error")
 	if is_cacheable_read:

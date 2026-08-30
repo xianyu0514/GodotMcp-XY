@@ -1234,3 +1234,33 @@ func test_run_project_test_progress_and_cancel_via_core():
 		sent_methods.append(m.get("method", ""))
 	assert_true("notifications/progress" in sent_methods, "a notifications/progress message was sent during polling")
 	tools._test_runner.flush()
+
+func test_aborting_handler_returns_isError_not_empty_success():
+	# 带返回类型的处理器中止时 GDScript 返回默认构造空字典；
+	# 服务器必须把它改写为显式错误，绝不伪装成空成功。
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	core.register_tool(
+		"aborting_probe_tool", "Aborts mid-handler via a nonexistent call.",
+		{"type": "object", "properties": {}},
+		Callable(self, "_run_aborting_handler"),
+		{}, {"readOnlyHint": false}, "core", "Test")
+	var response: Dictionary = await core._handle_request({
+		"jsonrpc": "2.0", "id": 410,
+		"method": "tools/call",
+		"params": {"name": "aborting_probe_tool", "arguments": {}},
+	})
+	for e in get_errors():
+		e.handled = true
+	var result: Dictionary = response.get("result", {})
+	assert_true(bool(result.get("isError", false)),
+		"An aborted handler must surface as isError, got: " + JSON.stringify(response))
+	assert_true(String(result.get("content", [{}])[0].get("text", "")).contains("aborted"),
+		"The error text must name the abort")
+
+func _run_aborting_handler(_args: Dictionary) -> Dictionary:
+	# 先挂起再在自身语句上中止：复现“await 后运行时中止返回类型默认值 {}”。
+	if Engine.get_main_loop() is SceneTree:
+		await Engine.get_main_loop().process_frame
+	var victim: RefCounted = RefCounted.new()
+	victim.nonexistent_method()
+	return {"status": "success"}
