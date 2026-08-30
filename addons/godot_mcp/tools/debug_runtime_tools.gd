@@ -445,14 +445,28 @@ func _register_update_runtime_node_property(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"property_name": {"type": "string"},
-				"property_value": {},
+				"property_value": {
+					"description": "Target value. Structured Godot types may be sent self-describing, e.g. {\"__godot_type\": \"Vector2i\", \"x\": 30, \"y\": 10}."
+				},
+				"require_verified": {
+					"type": "boolean",
+					"default": false,
+					"description": "When true, return an error instead of a warning if the write-back read does not match the requested value."
+				},
 				"session_id": {"type": "integer"},
 				"timeout_ms": {"type": "integer", "default": 1500}
 			},
 			"required": ["node_path", "property_name", "property_value"]
 		},
 		Callable(self, "_tool_update_runtime_node_property"),
-		{"type": "object", "properties": {"node_path": {"type": "string"}, "property_name": {"type": "string"}, "old_value": {}, "new_value": {}}},
+		{"type": "object", "properties": {
+			"node_path": {"type": "string"},
+			"property_name": {"type": "string"},
+			"old_value": {},
+			"requested_value": {"description": "What the probe asked the property to become, after type conversion."},
+			"new_value": {"description": "What the property actually became when read back."},
+			"verified": {"type": "boolean", "description": "True only when the read-back value matches the requested value."}
+		}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
 		"supplementary", "Debug-Advanced"
 	)
@@ -462,7 +476,25 @@ func _tool_update_runtime_node_property(params: Dictionary) -> Dictionary:
 	var property_name: String = params.get("property_name", "")
 	if node_path.is_empty() or property_name.is_empty() or not params.has("property_value"):
 		return {"error": "node_path, property_name, and property_value are required"}
-	return await DebugToolsNative._request_runtime_probe_poll("set_node_property", [node_path, property_name, params.get("property_value")], ["mcp:node_property_updated"], params, {"node_path": node_path, "property_name": property_name})
+	var result: Variant = await DebugToolsNative._request_runtime_probe_poll(
+		"set_node_property", [node_path, property_name, params.get("property_value")],
+		["mcp:node_property_updated"], params, {"node_path": node_path, "property_name": property_name})
+	# 探针已经做了写后回读并给出 verified。这里不覆写它的判定，只在判定为
+	# "没写进去" 时把结论显式化——静默地把 requested 当 actual 是假阳性源头。
+	if result is Dictionary:
+		var data: Dictionary = result
+		if data.has("verified") and not bool(data["verified"]):
+			data["warning"] = "Property write did not stick: read-back value differs from the requested value"
+			if bool(params.get("require_verified", false)):
+				return {
+					"error": data["warning"],
+					"node_path": data.get("node_path", node_path),
+					"property_name": property_name,
+					"requested_value": data.get("requested_value", null),
+					"actual_value": data.get("new_value", null)
+				}
+		return data
+	return result
 
 func _register_call_runtime_node_method(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -473,7 +505,11 @@ func _register_call_runtime_node_method(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"method_name": {"type": "string"},
-				"arguments": {"type": "array", "items": {"type": "object"}},
+				"arguments": {
+					"type": "array",
+					"items": {"type": "object"},
+					"description": "Method arguments. Send Godot built-ins self-describing, e.g. {\"__godot_type\": \"Vector2i\", \"x\": 30, \"y\": 10}; plain JSON values are passed through as-is."
+				},
 				"session_id": {"type": "integer"},
 				"timeout_ms": {"type": "integer", "default": 1500}
 			},

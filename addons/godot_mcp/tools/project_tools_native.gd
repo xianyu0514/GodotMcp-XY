@@ -6,6 +6,9 @@ extends RefCounted
 
 const MAX_CONCURRENT_TEST_JOBS: int = 4
 
+const PathNormalizerScript = preload("res://addons/godot_mcp/utils/path_normalizer.gd")
+const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+
 var _editor_interface: EditorInterface = null
 # 统一异步 job 框架（AsyncJobManager，基于 WorkerThreadPool）：单测与批次测试
 # 各用一个 manager 实例，共享同一个 MAX_CONCURRENT_TEST_JOBS 预算；文生3D 生成
@@ -76,37 +79,70 @@ func _send_tool_progress(progress_token: Variant, progress: int, total: int = 0,
 # ============================================================================
 
 # 辅助函数：递归收集资源文件
-static func _collect_resources(directory_path: String, extensions: Array[String], result: Array[String]) -> void:
-	var dir: DirAccess = DirAccess.open(directory_path)
-	
+#
+# 路径先规范化（"res://test" 与 "res://test/" 必须得到同一份结果），
+# 生成物目录（.godot/.import/build/...）与本插件运行期目录（.mcp）默认跳过，
+# 需要审计缓存本身时显式传 include_generated=true。
+static func _collect_resources(directory_path: String, extensions: Array[String],
+		result: Array[String], include_generated: bool = false,
+		include_tooling: bool = true) -> void:
+	var normalized: String = PathNormalizerScript.canonical_dir(directory_path)
+	if normalized.is_empty():
+		normalized = "res://"
+	var dir: DirAccess = DirAccess.open(normalized)
+
 	if not dir:
 		return
-	
+
 	# 列出所有文件和目录
 	dir.list_dir_begin()
 	var file_name: String = dir.get_next()
-	
+
 	while not file_name.is_empty():
 		# 跳过特殊目录
 		if file_name != "." and file_name != "..":
-			var full_path: String = directory_path
+			var full_path: String = normalized
 			if not full_path.ends_with("/"):
 				full_path += "/"
 			full_path += file_name
-			
+
 			if dir.current_is_dir():
+				if not _directory_scannable(full_path, include_generated, include_tooling):
+					file_name = dir.get_next()
+					continue
 				# 递归处理子目录
-				_collect_resources(full_path, extensions, result)
+				_collect_resources(full_path, extensions, result,
+					include_generated, include_tooling)
 			else:
+				if not include_generated and GeneratedCacheFilterScript.is_generated(full_path):
+					file_name = dir.get_next()
+					continue
+				if not include_tooling and GeneratedCacheFilterScript.domain_of(full_path) \
+						== GeneratedCacheFilterScript.Domain.TOOLING:
+					file_name = dir.get_next()
+					continue
 				# 检查文件扩展名
 				for ext in extensions:
 					if file_name.ends_with(ext):
 						result.append(full_path)
 						break
-		
+
 		file_name = dir.get_next()
-	
+
 	dir.list_dir_end()
+
+
+## 目录是否值得递归。生成物与插件运行期目录默认不进；tooling 由调用方决定。
+static func _directory_scannable(full_path: String, include_generated: bool,
+		include_tooling: bool) -> bool:
+	var domain: int = GeneratedCacheFilterScript.domain_of(full_path + "/")
+	if domain == GeneratedCacheFilterScript.Domain.MCP_RUNTIME:
+		return false
+	if domain == GeneratedCacheFilterScript.Domain.GENERATED:
+		return include_generated
+	if domain == GeneratedCacheFilterScript.Domain.TOOLING:
+		return include_tooling
+	return true
 
 static func _find_project_global_class_entry(target_class_name: String) -> Dictionary:
 	if not ProjectSettings.has_method("get_global_class_list"):
