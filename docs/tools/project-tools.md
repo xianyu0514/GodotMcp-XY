@@ -94,7 +94,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `inspect_export_presets` | advanced | Read all presets from export_presets.cfg: platform, export path, filters, per-preset options, plus editor platform availability (unvalidated when the export API is unavailable). |
-| `create_export_preset` | advanced | Create an export preset (platform, name, export_path, filters, platform options). Re-reads the file afterwards and reports `verified`. |
+| `create_export_preset` | advanced | Create an export preset (platform, name, export_path, filters, platform options; `if_exists="reuse"` makes duplicate names an idempotent success returning the existing preset). Re-reads the file afterwards and reports `verified`. |
 | `update_export_preset` | advanced | Update fields/options of an existing preset; only provided keys change. |
 | `duplicate_export_preset` | advanced | Duplicate a preset under a new name (options copied, export path suffixed). |
 | `remove_export_preset` | advanced | Remove a preset section (and its options) from export_presets.cfg. |
