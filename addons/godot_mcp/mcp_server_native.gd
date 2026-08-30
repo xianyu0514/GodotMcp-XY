@@ -147,6 +147,26 @@ static func _write_server_running_state(running: bool) -> void:
 		file.store_string(JSON.stringify({"running": running}))
 		file.close()
 
+# 自愈看门狗：reload_project 只重载资源与脚本（插件实例不重建、_enter_tree
+# 不再触发，热重载还会重置成员并掐断服务器线程），因此复活必须由常驻
+# _process 驱动：标记为运行而传输已死 -> 重新拉起。覆盖一切拆除路径。
+var _resurrect_check_msec: int = 0
+var _resurrect_backoff_until_msec: int = 0
+
+func _process(_delta: float) -> void:
+	var now: int = Time.get_ticks_msec()
+	if now - _resurrect_check_msec < 2000:
+		return
+	_resurrect_check_msec = now
+	if is_server_running() or not _read_server_running_state():
+		return
+	if now < _resurrect_backoff_until_msec:
+		return
+	_log_info("Watchdog: server flag says running but transport is down; resurrecting")
+	if not _start_native_server():
+		# 拉起失败（端口被占等）退避 30s，避免每 2 秒风暴式重试。
+		_resurrect_backoff_until_msec = now + 30000
+
 static func _read_server_running_state() -> bool:
 	if not FileAccess.file_exists(SERVER_STATE_FILE):
 		return false
