@@ -530,6 +530,65 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			task["derived_inputs"] = derived
 		else:
 			task.erase("derived_inputs")
+	# 首个建场景/建脚本步骤没有任何已注册工件可引用（上面的推导块只在有工件时
+	# 运行）：按 profile 推导确定性路径，让"给一个目标"从第一步起就不需要
+	# 调用方发明路径；step id 保证同 profile 多脚本不冲突。
+	var step_profile: String = String(task.get("profile", ""))
+	if tool_name == "create_scene" and not arguments.has("scene_path") \
+			and not artifacts.has("scene"):
+		var profile_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["scene_path"] = "res://scenes/%s.tscn" % profile_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["scene_path"] = arguments["scene_path"]
+	if tool_name == "create_script" and not arguments.has("script_path") \
+			and not artifacts.has("script"):
+		var script_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		var step_id: String = String(task.get("id", ""))
+		arguments["script_path"] = "res://scripts/%s%s.gd" % [
+			script_slug, "-" + step_id if not step_id.is_empty() else ""]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["script_path"] = arguments["script_path"]
+	# 挂载步骤缺 node_path 时默认场景根：gameplay profile 不建独立玩家节点，
+	# 控制器脚本挂到场景根即可运行。
+	if tool_name == "attach_script" and not arguments.has("node_path") \
+			and artifacts.has("scene"):
+		arguments["node_path"] = "/root"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["node_path"] = "/root"
+	# 输入动作步骤缺 action_name 时给移动类目标的规范默认；调用方可用
+	# step_inputs 覆盖为完整键位方案。
+	if tool_name == "upsert_project_input_action" and not arguments.has("action_name"):
+		arguments["action_name"] = "move_up"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["action_name"] = "move_up"
+	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_theme" and not arguments.has("theme_path") \
+			and not artifacts.has("theme"):
+		var theme_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["theme_path"] = "res://themes/%s.tres" % theme_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["theme_path"] = arguments["theme_path"]
+	if tool_name == "create_theme" and not arguments.has("theme_name"):
+		arguments["theme_name"] = "GameTheme"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["theme_name"] = "GameTheme"
+	# UI 建节点步骤的语义默认：场景根下一个 Label（与"win label"类目标对齐）。
+	if tool_name == "create_node" and not arguments.has("node_name") \
+			and artifacts.has("scene") and step_profile == "ui_screen":
+		arguments["parent_path"] = "/root"
+		arguments["node_type"] = "Label"
+		arguments["node_name"] = "WinLabel"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["parent_path"] = "/root"
+		task["derived_inputs"]["node_type"] = "Label"
+		task["derived_inputs"]["node_name"] = "WinLabel"
+	if tool_name == "set_anchor_preset" and not arguments.has("node_path") \
+			and artifacts.has("scene") and step_profile == "ui_screen":
+		arguments["node_path"] = "/root/WinLabel"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		arguments["preset"] = 8
+		task["derived_inputs"]["preset"] = 8
+		task["derived_inputs"]["node_path"] = "/root/WinLabel"
 	if tool_name in RUNTIME_WINDOW_TOOLS and not arguments.has("allow_window"):
 		arguments["allow_window"] = true
 	var focus_param: String = String(FOCUS_POLICY_TOOLS.get(tool_name, ""))

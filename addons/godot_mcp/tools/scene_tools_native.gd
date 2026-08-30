@@ -159,6 +159,11 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	packed_scene.pack(root_node)
 	
 	# 保存场景
+	# 目标目录不存在时先创建（工作流按 profile 推导的 res://scenes/ 等新目录）。
+	var parent_dir: String = scene_path.get_base_dir()
+	if parent_dir != "res://" and not parent_dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent_dir))
+
 	var error: Error = ResourceSaver.save(packed_scene, scene_path)
 	
 	# 清理

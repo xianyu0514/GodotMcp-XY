@@ -1449,6 +1449,10 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		else:
 			content = _get_script_template(template)
 
+	# 目标目录不存在时先创建（工作流按 profile 推导的 res://scripts/ 等新目录）。
+	var script_parent: String = script_path.get_base_dir()
+	if script_parent != "res://" and not script_parent.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(script_parent))
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
 	if not file:
 		return {"error": "Failed to create file: " + script_path}
@@ -1526,7 +1530,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 """
 	else:
-		return ""
+		# 0 字节脚本无法通过编译，也会让挂载与验证门禁失败；默认给最小合法脚本。
+		return "extends Node\n"
 
 func _get_csharp_script_template(template_name: String, script_class_name: String) -> String:
 	var safe_name: String = script_class_name.replace(" ", "_").replace("-", "_")
@@ -2122,14 +2127,21 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	var script_res: Script = load(script_path)
 	if not script_res:
 		return {"error": "Failed to load script: " + script_path}
-	# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源；强制编译。
+	# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源（有源码
+	# 无成员）。现场编译等价脚本且不注册路径：路径资源会被仍在进行的扫描
+	# 反复失效；更新文件系统登记足以让后续会话按路径正确加载。
+	var script_was_cold: bool = false
 	if not script_res.can_instantiate():
-		var compile_error: Error = script_res.reload()
-		if compile_error != OK or not script_res.can_instantiate():
+		var fresh_script: GDScript = GDScript.new()
+		fresh_script.source_code = FileAccess.get_file_as_string(script_path)
+		if fresh_script.reload() != OK:
 			return {"error": "Script did not compile: " + script_path}
+		script_res = fresh_script
+		script_was_cold = true
 
 	target_node.set_script(script_res)
-	editor_interface.get_resource_filesystem().scan()
+	if script_was_cold:
+		editor_interface.get_resource_filesystem().update_file(script_path)
 
 	return {
 		"status": "success",
@@ -2605,11 +2617,8 @@ func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_d
 # 收集待校验脚本路径：编辑器模式优先用 EditorFileSystem 缓存索引（比 DirAccess
 # 递归扫描快一个量级，大项目尤其明显）；无编辑器接口（headless/CI）时回退 DirAccess。
 func _collect_verify_script_paths(result: Array) -> void:
-	var ei: EditorInterface = _get_editor_interface()
-	var efs: EditorFileSystem = ei.get_resource_filesystem() if ei else null
-	if efs and efs.get_filesystem() != null:
-		_walk_editor_filesystem(efs.get_filesystem(), result, ["addons", "test", ".godot"])
-		return
+	# 磁盘为真相源：工作流刚创建的脚本在 EditorFileSystem 冷缓存里不存在，
+	# 走缓存会把 total_checked 报成 0，验证门禁因此永远失败。
 	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot"])
 
 func _walk_editor_filesystem(dir: EditorFileSystemDirectory, result: Array, skip_dir_names: Array) -> void:

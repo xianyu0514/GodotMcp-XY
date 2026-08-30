@@ -847,6 +847,17 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 
 	task["attempts"] = int(task.get("attempts", 0)) + 1
 	task["pending_polls"] = 0
+	# 预创建巡检的良性空态：全新项目里 get_current_scene 在建场景步骤之前
+	# 运行，"No scene is currently open" 是正常状态而非失败证据。
+	if not bool(task.get("objective_gate", false)) \
+			and String(task.get("tool_name", "")) == "get_current_scene" \
+			and result is Dictionary and (result as Dictionary).has("error") \
+			and String((result as Dictionary).get("error", "")).contains("No scene is currently open"):
+		result = {
+			"status": "ok",
+			"open": false,
+			"note": "benign empty state before scene creation",
+		}
 	var expect_failure: bool = bool(task.get("objective_gate", false)) \
 		and String(task.get("expect", "pass")) == "fail"
 	var evidence_passed: bool = result_passed(String(task.get("tool_name", "")), result) \
