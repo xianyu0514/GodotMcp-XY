@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
 
 # Minimal ship-loop CI (⑦): headless project import gate + GUT unit tests.
@@ -75,4 +75,41 @@ jobs:
           godot --headless --path . -s addons/gut/gut_cmdln.gd \
             -gdir=res://test/unit/ \
             -ginclude_subdirs \
-            -gexit
+            -gexit 2>&1 | tee gut.log
+          # Belt and braces: never miss a failing assertion even if GUT exits 0.
+          if grep -qE '^\s*\[Failed\]' gut.log; then
+            echo "::error::GUT reported failing assertions"
+            grep -E '^\s*\[Failed\]' gut.log | head -5
+            exit 1
+          fi
+
+  integration-fast:
+    name: Integration (fast set, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    needs: gut-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.6.3 (Windows build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p godot
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_win64.exe.zip
+          unzip -o godot.zip -d godot
+          rm godot.zip
+
+      - name: Run fast integration suite via the runner
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+        run: python test/integration/run_integration.py --timeout 420
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-failure-logs
+          path: test/integration/
