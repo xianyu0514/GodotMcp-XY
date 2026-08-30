@@ -356,7 +356,30 @@ func request_runtime_message(message: String, data: Array = [], response_message
 		"response_messages": response_messages
 	}
 
+## 全树遍历的节流间隔：调试器窗口只在会话启动/停止时增删，2 秒内重复
+## 请求拿到同一批连接即可；新窗口由 node_added 钩子即时挂接，不受节流影响。
+const DEBUGGER_RESCAN_INTERVAL_MS: int = 2000
+
+var _last_debugger_walk_msec: int = -DEBUGGER_RESCAN_INTERVAL_MS
+var _node_added_hooked: bool = false
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		_unhook_node_added()
+
+
+## 每个 get_runtime_* / assert_* 调用都会触发刷新：直接全树遍历编辑器 UI
+## 是 O(编辑器节点数) 的每调用开销。改为——node_added 钩子即时连接新的
+## ScriptEditorDebugger，周期性全树扫描仅作兜底（间隔内直接跳过）。
 func _refresh_script_debugger_connections() -> void:
+	_hook_node_added()
+	var now: int = Time.get_ticks_msec()
+	if now - _last_debugger_walk_msec < DEBUGGER_RESCAN_INTERVAL_MS:
+		_prune_freed_debuggers()
+		return
+	_last_debugger_walk_msec = now
+	_prune_freed_debuggers()
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if not tree:
 		return
@@ -370,6 +393,40 @@ func _refresh_script_debugger_connections() -> void:
 			_connect_script_debugger(node)
 		for child in node.get_children():
 			pending.append(child)
+
+
+func _hook_node_added() -> void:
+	if _node_added_hooked:
+		return
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if not tree:
+		return
+	var handler: Callable = Callable(self, "_on_tree_node_added")
+	if not tree.node_added.is_connected(handler):
+		tree.node_added.connect(handler)
+	_node_added_hooked = true
+
+
+func _unhook_node_added() -> void:
+	if not _node_added_hooked:
+		return
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if tree:
+		var handler: Callable = Callable(self, "_on_tree_node_added")
+		if tree.node_added.is_connected(handler):
+			tree.node_added.disconnect(handler)
+	_node_added_hooked = false
+
+
+func _on_tree_node_added(node: Node) -> void:
+	if is_instance_valid(node) and node.get_class() == "ScriptEditorDebugger":
+		_connect_script_debugger(node)
+
+
+func _prune_freed_debuggers() -> void:
+	for index in range(_connected_script_debuggers.size() - 1, -1, -1):
+		if not is_instance_valid(_connected_script_debuggers[index]):
+			_connected_script_debuggers.remove_at(index)
 
 func _connect_script_debugger(debugger: Object) -> void:
 	if _connected_script_debuggers.has(debugger):
@@ -475,7 +532,8 @@ func _append_captured_message(session_id: int, message: String, data: Array) -> 
 		"timestamp": Time.get_unix_time_from_system()
 	})
 	if _captured_messages.size() > _max_messages:
-		_captured_messages = _captured_messages.slice(_captured_messages.size() - _max_messages)
+		# remove_at(0) 原位弹出：饱和后每条消息不再复制整个 n 元数组
+		_captured_messages.remove_at(0)
 
 func _append_state_event(event: Dictionary) -> void:
 	_message_sequence += 1
@@ -484,7 +542,7 @@ func _append_state_event(event: Dictionary) -> void:
 	entry["timestamp"] = Time.get_unix_time_from_system()
 	_state_events.append(entry)
 	if _state_events.size() > _max_state_events:
-		_state_events = _state_events.slice(_state_events.size() - _max_state_events)
+		_state_events.remove_at(0)
 
 func _append_output_event(event: Dictionary) -> void:
 	_message_sequence += 1
@@ -493,7 +551,7 @@ func _append_output_event(event: Dictionary) -> void:
 	entry["timestamp"] = Time.get_unix_time_from_system()
 	_output_events.append(entry)
 	if _output_events.size() > _max_output_events:
-		_output_events = _output_events.slice(_output_events.size() - _max_output_events)
+		_output_events.remove_at(0)
 
 func _map_output_category(type: int) -> String:
 	match type:

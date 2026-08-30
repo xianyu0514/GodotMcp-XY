@@ -51,7 +51,7 @@ func _on_log_message(level: String, message: String) -> void:
 	_log_mutex.lock()
 	_log_buffer.append(log_entry)
 	if _log_buffer.size() > _max_log_lines:
-		_log_buffer = _log_buffer.slice(_log_buffer.size() - _max_log_lines)
+		_log_buffer.remove_at(0)
 	_log_mutex.unlock()
 
 # ============================================================================
@@ -305,26 +305,37 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 			"source": "mcp"
 		}
 
+	var total_available: int = _log_buffer.size()
+	var result_logs: Array = []
+	if types.is_empty():
+		# 快路径：无类型过滤时先切窗口再解析，只复制/解析 count 行
+		# （默认 desc+100 最多处理 100 行，而非整个 1000 行缓冲）。
+		var window_lines: Array[String] = []
+		var window_indexes: Array[int] = []
+		if order == "desc":
+			for i in range(total_available - 1, -1, -1):
+				window_indexes.append(i)
+		else:
+			for i in range(total_available):
+				window_indexes.append(i)
+		var start: int = mini(offset, window_indexes.size())
+		var end: int = mini(start + count, window_indexes.size())
+		for k in range(start, end):
+			window_lines.append(_log_buffer[window_indexes[k]])
+		_log_mutex.unlock()
+		for k in range(window_lines.size()):
+			var parsed_entry: Dictionary = _parse_mcp_log_line(window_indexes[start + k], window_lines[k])
+			result_logs.append(parsed_entry)
+		return {
+			"logs": result_logs,
+			"count": result_logs.size(),
+			"total_available": total_available,
+			"source": "mcp"
+		}
+
 	var all_entries: Array = []
 	for i in range(_log_buffer.size()):
-		var line: String = _log_buffer[i]
-		var log_type: String = "Info"
-		var message: String = line
-		if line.begins_with("[ERROR]"):
-			log_type = "Error"
-			message = line.substr(7).strip_edges()
-		elif line.begins_with("[WARNING]"):
-			log_type = "Warning"
-			message = line.substr(9).strip_edges()
-		elif line.begins_with("[INFO]"):
-			log_type = "Info"
-			message = line.substr(6).strip_edges()
-		elif line.begins_with("[DEBUG]"):
-			log_type = "Debug"
-			message = line.substr(7).strip_edges()
-		all_entries.append({"index": i, "type": log_type, "message": message})
-
-	var total_available: int = all_entries.size()
+		all_entries.append(_parse_mcp_log_line(i, _log_buffer[i]))
 	_log_mutex.unlock()
 
 	var filtered: Array = all_entries
@@ -337,9 +348,9 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 	if order == "desc":
 		filtered.reverse()
 
-	var start: int = mini(offset, filtered.size())
-	var end: int = mini(start + count, filtered.size())
-	var result_logs: Array = filtered.slice(start, end)
+	var start_all: int = mini(offset, filtered.size())
+	var end_all: int = mini(start_all + count, filtered.size())
+	result_logs = filtered.slice(start_all, end_all)
 
 	return {
 		"logs": result_logs,
@@ -347,6 +358,24 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 		"total_available": total_available,
 		"source": "mcp"
 	}
+
+
+static func _parse_mcp_log_line(index: int, line: String) -> Dictionary:
+	var log_type: String = "Info"
+	var message: String = line
+	if line.begins_with("[ERROR]"):
+		log_type = "Error"
+		message = line.substr(7).strip_edges()
+	elif line.begins_with("[WARNING]"):
+		log_type = "Warning"
+		message = line.substr(9).strip_edges()
+	elif line.begins_with("[INFO]"):
+		log_type = "Info"
+		message = line.substr(6).strip_edges()
+	elif line.begins_with("[DEBUG]"):
+		log_type = "Debug"
+		message = line.substr(7).strip_edges()
+	return {"index": index, "type": log_type, "message": message}
 
 func _get_runtime_logs(types: Array, count: int, offset: int, order: String) -> Dictionary:
 	var log_path: String = "user://logs/godot.log"

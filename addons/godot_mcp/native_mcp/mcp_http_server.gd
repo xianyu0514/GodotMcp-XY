@@ -249,8 +249,10 @@ func stop() -> void:
 		_tcp_server.stop()
 		_tcp_server = null
 	
-	# 等待线程结束（必须在线程退出后再修改共享数据）
-	if _thread and _thread.is_alive():
+	# 等待线程结束（必须在线程退出后再修改共享数据）。以 is_started() 判断：
+	# 线程函数可能恰好在 is_alive() 检查前自行退出，跳过 wait_to_finish()
+	# 会让 Thread 对象在"未实现完成"状态下被销毁（引擎警告 + 潜在未收割资源）。
+	if _thread and _thread.is_started():
 		_thread.wait_to_finish()
 	_thread = null
 	
@@ -340,8 +342,14 @@ func _http_server_loop() -> void:
 				if _log_callback.is_valid():
 					_log_callback.call("WARN", "Dispatch watchdog: request timed out after %.0fs; replied 503" % DISPATCH_TIMEOUT)
 		
-		# 避免 CPU 占用过高
-		OS.delay_msec(2)
+			# 自适应休眠：有已派发请求（等主线程回填）或有在途请求状态时保持
+			# 2ms 响应度；完全空闲（无连接字节、无 SSE、无派发）放宽到 20ms，
+			# 空闲时约 50 次/秒唤醒足以维持 keepalive/看门狗精度。
+			var idle: bool = _dispatched_requests.is_empty() \
+				and _request_states.is_empty() \
+				and _sse_connections.is_empty() \
+				and _connections.is_empty()
+			OS.delay_msec(20 if idle else 2)
 	
 	# 清理所有 SSE 连接
 	_cleanup_all_sse_connections()

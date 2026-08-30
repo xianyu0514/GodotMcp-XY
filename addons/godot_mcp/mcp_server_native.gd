@@ -198,15 +198,27 @@ func _process(_delta: float) -> void:
 		# 拉起失败（端口被占等）退避 30s，避免每 2 秒风暴式重试。
 		_resurrect_backoff_until_msec = now + 30000
 
-static func _read_server_running_state() -> bool:
+# 状态文件解析缓存：看门狗每 2 秒轮询，但文件只在启停时变化——
+# 按 mtime 判断，未变化时直接复用上次结论，免去常驻的打开+JSON 解析。
+var _server_state_cached: bool = false
+var _server_state_mtime: int = -1
+
+func _read_server_running_state() -> bool:
 	if not FileAccess.file_exists(SERVER_STATE_FILE):
+		_server_state_mtime = -1
 		return false
+	var mtime: int = FileAccess.get_modified_time(SERVER_STATE_FILE)
+	if mtime > 0 and mtime == _server_state_mtime:
+		return _server_state_cached
 	var file: FileAccess = FileAccess.open(SERVER_STATE_FILE, FileAccess.READ)
 	if file == null:
 		return false
 	var parsed: Variant = JSON.parse_string(file.get_as_text())
 	file.close()
-	return parsed is Dictionary and bool((parsed as Dictionary).get("running", false))
+	var running: bool = parsed is Dictionary and bool((parsed as Dictionary).get("running", false))
+	_server_state_cached = running
+	_server_state_mtime = mtime
+	return running
 
 func _enter_tree() -> void:
 	_log_info("Godot Native MCP Plugin entering tree...")
