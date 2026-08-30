@@ -73,14 +73,19 @@ jobs:
             exit 1
           fi
 
-      - name: Run GUT unit tests (full suite)
+      - name: Run GUT unit tests (full suite, watchdogged)
         run: |
-          set -euo pipefail
-          godot --headless --path . -s addons/gut/gut_cmdln.gd \
-            -gdir=res://test/unit/ \
-            -ginclude_subdirs \
-            -gexit 2>&1 | tee gut.log
-          # Belt and braces: never miss a failing assertion even if GUT exits 0.
+          set -uo pipefail
+          # Linux CI never finished in 45m while the same suite runs in 43s
+          # locally - a test hangs here. The watchdog kills the run and the
+          # last log lines land in check annotations for diagnosis.
+          timeout 900 godot --headless --path . -s addons/gut/gut_cmdln.gd             -gdir=res://test/unit/             -ginclude_subdirs             -gexit 2>&1 | tee gut.log
+          gut_exit=${PIPESTATUS[0]}
+          if [ "$gut_exit" = "124" ]; then
+            echo "::error::GUT watchdog fired after 900s - suite hung. Last log lines:"
+            tail -15 gut.log | while IFS= read -r line; do echo "::error::${line:0:300}"; done
+            exit 1
+          fi
           if grep -qE '^\s*\[Failed\]' gut.log; then
             echo "::error::GUT reported failing assertions"
             grep -E '^\s*\[Failed\]' gut.log | head -5
