@@ -146,3 +146,62 @@ func test_pathless_filesystem_event_fails_safe_without_tool_catalog_churn() -> v
 		"Unknown file changes must not rebuild immutable tool discovery state")
 	assert_does_not_have(tags, INDEX_SCRIPT.TAG_GLOBAL,
 		"Fallback remains bounded to file-backed dependency domains")
+
+func test_whole_project_script_reads_depend_on_script_aggregate() -> void:
+	# verify_scripts 等全项目脚本读必须挂在 SCRIPT_AGGREGATE（modify_script/
+	# create_script/外部文件事件都会推进它）；不能挂 SCRIPT_ALL——
+	# modify_script 刻意不推进 ALL，单文件修复后的缓存会变陈旧。
+	for tool_name in ["verify_scripts", "detect_broken_scripts",
+			"list_project_script_symbols", "find_script_symbol_references"]:
+		var tags: Array[String] = INDEX_SCRIPT.read_tags(tool_name, {})
+		assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE, tool_name)
+		assert_does_not_have(tags, INDEX_SCRIPT.TAG_SCRIPT_ALL, tool_name)
+
+func test_modify_script_invalidates_cached_verify_scripts() -> void:
+	var index = INDEX_SCRIPT.new()
+	var snapshot: Dictionary = index.snapshot(
+		INDEX_SCRIPT.read_tags("verify_scripts", {}))
+	index.advance(INDEX_SCRIPT.mutation_tags("modify_script", "Script",
+		{"script_path": "res://scripts/player.gd"}))
+	assert_false(index.is_current(snapshot),
+		"a script repair must invalidate the cached whole-project verify")
+
+func test_health_scan_reads_depend_on_resource_and_script_aggregates() -> void:
+	for tool_name in ["audit_project_health", "scan_missing_resource_dependencies",
+			"scan_cyclic_resource_dependencies"]:
+		var tags: Array[String] = INDEX_SCRIPT.read_tags(tool_name, {})
+		assert_has(tags, INDEX_SCRIPT.TAG_RESOURCE_AGGREGATE, tool_name)
+		assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE, tool_name)
+
+func test_export_preset_reads_track_the_config_file() -> void:
+	for tool_name in ["list_export_presets", "inspect_export_presets", "validate_export_preset"]:
+		var tags: Array[String] = INDEX_SCRIPT.read_tags(tool_name, {})
+		assert_has(tags, "resource:res://export_presets.cfg", tool_name)
+	# 预设 CRUD 工具属于未特判分组，回退推进 GLOBAL——所有快照都含 GLOBAL，
+	# 因此 CRUD 后这三个读必然失效（不会拿到陈旧的预设列表）。
+	var index = INDEX_SCRIPT.new()
+	var snapshot: Dictionary = index.snapshot(
+		INDEX_SCRIPT.read_tags("inspect_export_presets", {}))
+	index.advance(INDEX_SCRIPT.mutation_tags("create_export_preset", "Project-Advanced", {}))
+	assert_false(index.is_current(snapshot), "preset CRUD must invalidate preset reads")
+
+func test_inspect_tileset_resource_is_scoped_by_path() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.read_tags("inspect_tileset_resource", {
+		"resource_path": "res://tilesets/ground.tres"})
+	assert_has(tags, "resource:res://tilesets/ground.tres")
+
+func test_import_status_is_time_domain_and_never_cached() -> void:
+	# get_import_status 汇报的是编辑器实时扫描进度——revision 标签无法跟踪
+	# 时间域状态，缓存它会让轮询方拿到冻结的 busy/progress 长达 TTL 窗口。
+	assert_false("get_import_status" in INDEX_SCRIPT.CACHEABLE_READ_TOOLS)
+
+func test_read_resource_properties_ignores_script_domain() -> void:
+	var tags: Array[String] = INDEX_SCRIPT.read_tags("read_resource_properties", {
+		"resource_path": "res://cards/strike.tres"})
+	assert_does_not_have(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE,
+		"unrelated script edits must not kill per-resource cache hits")
+
+func test_unused_resources_depend_on_script_owners() -> void:
+	# 脚本里的 preload/load 决定资源是否被使用：modify_script 后必须重算。
+	var tags: Array[String] = INDEX_SCRIPT.read_tags("list_unused_resources", {})
+	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE)

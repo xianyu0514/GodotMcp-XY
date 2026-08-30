@@ -2238,32 +2238,48 @@ var _tool_log_path: String = "user://mcp_tool_verification_log.json"
 var _tool_log_buffer: Array = []
 ## Maximum entries before auto-flushing to disk.
 const TOOL_LOG_FLUSH_THRESHOLD: int = 20
+## File ceiling for the JSONL tool log. Exceeding it rotates the file (a
+## `_log_rotated` marker starts the fresh segment) so a long session cannot
+## grow the log without bound.
+const TOOL_LOG_MAX_BYTES: int = 4 * 1024 * 1024
 
 func clear_tool_log() -> void:
 	_tool_log_buffer.clear()
 	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE)
 	if file:
-		file.store_string("[]")
+		file.store_string("")
 		file.close()
 
-## Flush buffered tool log entries to disk.
+## Flush buffered tool log entries to disk (append-only JSONL, one object
+## per line). Cost is O(buffer) per flush — the previous array-rewrite
+## implementation reparsed and reserialized the whole accumulated file
+## every 20 calls (O(N²) over a session) on the editor main thread.
 func flush_tool_log() -> void:
 	if _tool_log_buffer.is_empty():
 		return
-	var existing: Array = []
-	if FileAccess.file_exists(_tool_log_path):
-		var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.READ)
-		if file:
-			var json: JSON = JSON.new()
-			if json.parse(file.get_as_text()) == OK:
-				existing = json.get_data()
-			file.close()
-	existing.append_array(_tool_log_buffer)
-	_tool_log_buffer.clear()
-	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(existing, "\t"))
+	# WRITE_READ 创建或打开文件并把位置置于 0；超过大小上限则截断轮转，
+	# 否则跳到末尾追加。每行一个 JSON 对象（JSONL）。
+	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE_READ)
+	if file == null:
+		_tool_log_buffer.clear()
+		return
+	if file.get_length() > TOOL_LOG_MAX_BYTES:
 		file.close()
+		file = FileAccess.open(_tool_log_path, FileAccess.WRITE)
+		if file == null:
+			_tool_log_buffer.clear()
+			return
+		file.store_line(JSON.stringify({
+			"tool": "_log_rotated",
+			"timestamp": Time.get_unix_time_from_system(),
+			"note": "earlier entries dropped at size cap"
+		}))
+	else:
+		file.seek_end()
+	for entry_value in _tool_log_buffer:
+		file.store_line(JSON.stringify(entry_value))
+	file.close()
+	_tool_log_buffer.clear()
 
 
 # ============================================================================
