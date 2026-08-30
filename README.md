@@ -127,6 +127,7 @@ See [Configuration](docs/configuration.md) for transports, auth, CLI overrides, 
 | --- | --- |
 | [Getting Started](docs/getting-started.md) | Install, enable and connect the plugin |
 | [Complete Game Workflows](docs/game-workflows.md) | Durable multi-phase planning, execution states, evidence and limits |
+| [Goal Playbook](docs/goal-playbook.md) | How to phrase a goal, which path to take, what counts as done, and where to look when it stalls |
 | [Configuration](docs/configuration.md) | Ports, transports, auth, CLI flags, client snippets and presets |
 | [Remote & Cloud Access](docs/remote-access.md) | Cloudflare Quick Tunnel, Tailscale Funnel, ngrok and public client URLs |
 | [Architecture](docs/architecture.md) | Plugin lifecycle, server core, transports, tools, runtime probe and security model |

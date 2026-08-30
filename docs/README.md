@@ -8,6 +8,7 @@ This folder is the documentation hub for Godot MCP Native, a Godot 4.7 editor pl
 | --- | --- |
 | Install the plugin and connect an AI client | [Getting Started](getting-started.md) |
 | Complete a multi-phase game goal with objective evidence | [Complete Game Workflows](game-workflows.md) |
+| [Goal Playbook](goal-playbook.md) | Phrase goals, pick a path, know what counts as done, debug stalls |
 | Tune ports, transports, auth, CLI flags and tool presets | [Configuration](configuration.md) |
 | Expose the local MCP server to remote/cloud clients | [Remote & Cloud Access](remote-access.md) |
 | Understand internals before changing code | [Architecture](architecture.md) |
