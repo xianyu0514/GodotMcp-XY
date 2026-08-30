@@ -59,6 +59,9 @@
 
 ## 出问题时的取证顺序
 
+0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
+   这是设计行为而非故障；大型项目上 `list_project_tests` 实测 <0.1s，慢的错觉
+   常来自把禁用报错当成了超时）
 1. `run_game_workflow` 响应的 `blocked_reason` + 最后一个 `executed` 条目
 2. `manage_task_plan` / 计划文件（`.mcp/<plan>.json`）里的回执摘要
 3. `get_editor_logs`（`source='runtime'` 看运行错误，`source='editor_panel'` 看引擎报错）
