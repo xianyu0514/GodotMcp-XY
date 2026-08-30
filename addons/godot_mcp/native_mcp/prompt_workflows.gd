@@ -298,6 +298,42 @@ func _add_prompt(name: String, description: String, arguments: Array[Dictionary]
 		"callable": callable
 	}
 
+# 每个配方的双语触发关键词；enable_tools 路由命中时向客户端提示可用配方。
+const PROMPT_KEYWORDS: Dictionary = {
+	"iterate_play_verify": ["iterate", "playtest", "verify loop", "gate", "fps", "runtime error",
+		"迭代", "试玩", "验证循环", "帧率", "运行时错误", "性能"],
+	"release_export_flow": ["export", "release", "ship", "build", "smoke test", "version bump",
+		"导出", "发布", "出货", "打包", "冒烟", "版本"],
+	"fix_compile_errors": ["compile", "parse error", "syntax", "validation error",
+		"编译", "语法错误", "解析错误", "校验错误"],
+	"debug_runtime_error": ["runtime error", "stack trace", "crash", "debug",
+		"运行错误", "堆栈", "崩溃", "调试"],
+	"plan_game_feature": ["gdd", "feature request", "task graph", "vertical slice", "plan",
+		"需求", "功能设计", "任务图", "规划", "计划"],
+	"visual_playtest": ["visual regression", "screenshot", "baseline", "golden",
+		"视觉回归", "截图", "基线", "黄金"],
+	"review_scene": ["scene audit", "review scene", "persistence issue",
+		"场景审计", "场景检查", "持久化"],
+	"run_test_suite": ["run tests", "test suite", "unit test", "gut",
+		"跑测试", "测试套件", "单元测试"],
+	"onboard_new_project": ["onboard", "new project", "discover tools",
+		"上手", "新项目", "工具发现"]
+}
+
+## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
+## 未命中返回空字典。
+func match_prompt(query: String) -> Dictionary:
+	var text: String = query.to_lower()
+	var best: Dictionary = {}
+	var best_len: int = 0
+	for prompt_name in PROMPT_KEYWORDS:
+		for keyword in PROMPT_KEYWORDS[prompt_name]:
+			var keyword_text: String = String(keyword).to_lower()
+			if text.contains(keyword_text) and keyword_text.length() > best_len:
+				best = {"name": prompt_name, "description": String(_prompts.get(prompt_name, {}).get("description", ""))}
+				best_len = keyword_text.length()
+	return best
+
 # ============================================================================
 # 查询 API
 # ============================================================================

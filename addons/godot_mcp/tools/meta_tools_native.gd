@@ -11,10 +11,12 @@ extends RefCounted
 const PRESET_MANAGER_PATH: String = "res://addons/godot_mcp/native_mcp/mcp_tool_preset_manager.gd"
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const TranslationManagerScript = preload("res://addons/godot_mcp/native_mcp/translation_manager.gd")
+const PROMPT_WORKFLOWS_SCRIPT = preload("res://addons/godot_mcp/native_mcp/prompt_workflows.gd")
 const SEARCH_LIMIT_DEFAULT: int = 12
 const SEARCH_LIMIT_MAX: int = 50
 
 var _server_core: RefCounted = null
+var _prompt_matcher: RefCounted = null
 var _preset_manager: RefCounted = null
 var _workflow_router: RefCounted = WorkflowRouterScript.new()
 var _routing_hints: Dictionary = {}
@@ -361,7 +363,7 @@ func _register_enable_tools(server_core: RefCounted) -> void:
 			}
 		},
 		Callable(self, "_tool_enable_tools"),
-		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "workflow_query": {"type": "string"}, "workflow": {"type": "object"}, "replaced_supplementary": {"type": "boolean"}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
+		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "workflow_query": {"type": "string"}, "workflow": {"type": "object"}, "replaced_supplementary": {"type": "boolean"}, "suggested_prompt": {"type": "object", "description": "Present when the query matches an executable prompt recipe; fetch it via prompts/get."}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
 		"meta", "Meta"
 	)
@@ -512,6 +514,12 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 		response["workflow_query"] = workflow_query
 		response["workflow"] = workflow
 		response["replaced_supplementary"] = replaced_supplementary
+		# 命中可执行配方时提示客户端：prompts/get 可拿到完整执行模板。
+		if _prompt_matcher == null:
+			_prompt_matcher = PROMPT_WORKFLOWS_SCRIPT.new()
+		var prompt_match: Dictionary = _prompt_matcher.match_prompt(workflow_query)
+		if not prompt_match.is_empty():
+			response["suggested_prompt"] = prompt_match
 	if include_enabled_tools:
 		response["enabled_tools"] = enabled_tools
 	return response

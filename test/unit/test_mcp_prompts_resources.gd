@@ -246,3 +246,20 @@ func test_prompt_release_export_flow_messages():
 	assert_true(defaulted.has("messages"), "No required args; defaults must render")
 	assert_true(str(defaulted["messages"][0]["content"]["text"]).contains("default export preset"),
 		"Empty platform falls back to the default preset wording")
+
+func test_prompt_keyword_matcher_bilingual():
+	var workflows: RefCounted = _new_workflows()
+	var export_hit: Dictionary = workflows.match_prompt("帮我导出 Windows 版本并跑冒烟测试")
+	assert_eq(String(export_hit.get("name", "")), "release_export_flow",
+		"Chinese export/release wording routes to release_export_flow")
+	var verify_hit: Dictionary = workflows.match_prompt("iterate the play loop and verify runtime errors stay zero")
+	assert_eq(String(verify_hit.get("name", "")), "iterate_play_verify",
+		"English iterate/verify wording routes to iterate_play_verify")
+	var none_hit: Dictionary = workflows.match_prompt("completely unrelated sentence about tea")
+	assert_true(none_hit.is_empty(), "Unrelated text matches no prompt")
+
+func test_longer_keyword_wins_over_generic():
+	var workflows: RefCounted = _new_workflows()
+	var hit: Dictionary = workflows.match_prompt("fix compile errors then verify runtime error gates")
+	assert_eq(String(hit.get("name", "")), "iterate_play_verify",
+		"The longer 'runtime error' phrase beats shorter 'compile' for mixed intents")
