@@ -22,7 +22,7 @@ Read, create, modify, validate and search project scripts. The category supports
 | `list_project_scripts` | core | List GDScript (.gd) and C# (.cs) script files in the project. Supports `limit`/`offset` pagination; `count` is the page size and `total_count` is the full total. Returns paths relative to res://. |
 | `read_script` | core | Read the content of a GDScript file (.gd). Returns the complete script source code. |
 | `create_script` | core | Create a new GDScript file with optional template. GDScript files are complete programs, not resource files. |
-| `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. |
+| `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. After writing, `.gd` files are inline-validated (`validate: false` skips) and the response carries a `validation` summary with the first errors, merging the edit→verify loop into one round trip. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
 | `attach_script` | core | Attach a script to a node. |
 | `execute_script` | advanced | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |

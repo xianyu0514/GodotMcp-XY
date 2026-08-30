@@ -426,3 +426,37 @@ func test_script_writes_report_editor_buffer_sync():
 	assert_false(modified.has("error"), str(modified.get("error", "")))
 	assert_eq(String(modified.get("buffers_synced", "")), "skipped")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_modify_script_inline_validation():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = "res://test/unit/.tmp_inline_validate.gd"
+	var created: Dictionary = tools._tool_create_script({
+		"script_path": temp_path, "content": "extends Node\n"})
+	assert_false(created.has("error"), str(created.get("error", "")))
+	var broken: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc broken(:\n"
+	})
+	# 引擎会把预期的解析错误打到控制台；标记已处理，避免 GUT 判为意外失败。
+	for e in get_errors():
+		e.handled = true
+	assert_false(broken.has("error"), str(broken.get("error", "")))
+	var broken_check: Dictionary = broken.get("validation", {})
+	assert_false(bool(broken_check.get("valid", true)),
+		"Broken .gd content must report validation.valid=false inline")
+	assert_gt(int(broken_check.get("error_count", 0)), 0, "Broken content reports at least one error")
+	var fixed: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc fixed() -> void:\n\tpass\n"
+	})
+	var fixed_check: Dictionary = fixed.get("validation", {})
+	assert_true(bool(fixed_check.get("valid", false)),
+		"Valid .gd content must report validation.valid=true inline")
+	var skipped: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc still_broken(:\n",
+		"validate": false
+	})
+	assert_false(skipped.has("validation"),
+		"validate:false must skip the inline check entirely")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))

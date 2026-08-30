@@ -1629,6 +1629,11 @@ func _register_modify_script(server_core: RefCounted) -> void:
 			"line_number": {
 				"type": "integer",
 				"description": "Optional line number to replace (1-indexed). If provided with 'content', replaces that line only."
+			},
+			"validate": {
+				"type": "boolean",
+				"description": "Inline-validate .gd after writing and return errors in 'validation' (default true).",
+				"default": true
 			}
 		},
 		"required": ["script_path", "content"]
@@ -1714,7 +1719,7 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	# 计算行数
 	var line_count: int = final_content.split("\n").size()
 
-	return {
+	var response: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
 		"line_count": line_count,
@@ -1722,6 +1727,20 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
 			_get_editor_interface(), script_path).get("status", "")
 	}
+	# 内联校验：编辑→验证从两次往返并为一次。默认只对 .gd 开启（GDScript
+	# 解析器无法校验 C#），可用 validate:false 关闭。
+	if script_path.ends_with(".gd") and bool(params.get("validate", true)):
+		var check: Dictionary = _tool_validate_script({"script_path": script_path, "check_warnings": false})
+		if check.has("error"):
+			response["validation"] = {"valid": true, "note": String(check["error"])}
+		else:
+			var errors: Array = check.get("errors", [])
+			response["validation"] = {
+				"valid": bool(check.get("valid", true)),
+				"error_count": int(check.get("error_count", errors.size())),
+				"errors": errors.slice(0, 5)
+			}
+	return response
 
 # ============================================================================
 # analyze_script - 分析脚本结构（完整版）
