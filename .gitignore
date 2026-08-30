@@ -45,3 +45,4 @@ addons/gut/
 .tmp_*
 .test_tmp_*
 .codeartsdoer/
+.workbuddy/
