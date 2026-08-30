@@ -75,6 +75,9 @@ var _sessions: Dictionary = {}  # session_id -> session_data
 var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
 # peer -> {"at": msec}：已 call_deferred 到主线程、等待响应的请求（仅服务器线程读写）。
 var _dispatched_requests: Dictionary = {}
+# 服务器线程每轮循环刷新；主线程据此检测"套接字活着但泵已死"的僵尸态
+# （热重载斩断回调链后线程与端口仍在，请求却派发进失效 Callable）。
+var last_heartbeat_msec: int = 0
 
 ## 尚未接收完整的 HTTP 请求状态。服务器线程按轮询增量组装每个 peer 的请求，
 ## 避免一个慢客户端在等待剩余正文时阻塞其他连接与 SSE 心跳。
@@ -281,9 +284,11 @@ func _http_server_loop() -> void:
 	
 	var last_keepalive: int = Time.get_ticks_msec()
 	
+	last_heartbeat_msec = Time.get_ticks_msec()
 	while _active:
 		if not _tcp_server:
 			break
+		last_heartbeat_msec = Time.get_ticks_msec()
 		
 		# 检查新连接
 		var peer: StreamPeerTCP = null

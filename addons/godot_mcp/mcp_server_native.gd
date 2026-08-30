@@ -158,10 +158,21 @@ func _process(_delta: float) -> void:
 	if now - _resurrect_check_msec < 2000:
 		return
 	_resurrect_check_msec = now
-	if is_server_running() or not _read_server_running_state():
+	if not _read_server_running_state():
 		return
 	if now < _resurrect_backoff_until_msec:
 		return
+	if is_server_running():
+		# 僵尸检测：套接字与线程仍在、心跳停跳（热重载斩断回调链的典型残留，
+		# 表现为端口监听但请求得到空响应）。停掉旧实例后由下方统一拉起。
+		var heartbeat_age: int = now - int(_native_server.last_heartbeat_msec) \
+			if _native_server != null and _native_server.last_heartbeat_msec > 0 else 0
+		if heartbeat_age <= 10000:
+			return
+		_log_info("Watchdog: server heartbeat stale (%d ms); rebuilding zombie transport" % heartbeat_age)
+		_native_server.stop()
+		if is_server_running():
+			return
 	_log_info("Watchdog: server flag says running but transport is down; resurrecting")
 	if not _start_native_server():
 		# 拉起失败（端口被占等）退避 30s，避免每 2 秒风暴式重试。
