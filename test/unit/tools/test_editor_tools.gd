@@ -207,6 +207,15 @@ func test_manage_export_templates_net_diag_requires_host():
 	assert_true(result.has("error"), "Blank host must fail fast without spawning nodes")
 	assert_true(str(result["error"]).contains("host"), "Error should mention host")
 
+func test_getter_never_started_does_not_self_fail() -> void:
+	var getter: Node = _editor_tools.TemplatesHttpGetter.create(
+		"https://example.com/x.tpz", "", "", 60000, true)
+	add_child(getter)
+	await wait_seconds(0.3)
+	assert_eq(str(getter.get("_phase")), "idle",
+		"A getter whose start() was never called must stay idle instead of self-failing")
+	getter.queue_free()
+
 func test_update_continuously_guard_without_editor_interface():
 	_editor_tools._template_download = {"phase": "downloading"}
 	_editor_tools._templates_begin_update_continuously()

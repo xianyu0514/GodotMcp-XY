@@ -2645,7 +2645,7 @@ class TemplatesHttpGetter extends Node:
 		return true
 
 	func _process(_delta: float) -> void:
-		if _phase == "done":
+		if _phase == "done" or _phase == "idle":
 			return
 		if Time.get_ticks_msec() - _last_progress_msec > _idle_timeout_msec:
 			_fail("idle timeout (%d ms without progress)" % _idle_timeout_msec)
@@ -2953,6 +2953,9 @@ class TemplatesParallelFetch extends Node:
 		probe.range_header = "bytes=0-0"
 		probe.frame_drain_cap = 65536
 		get_tree().root.add_child(probe)
+		# start() 同时初始化 _last_progress_msec；漏掉会让空闲检查拿 0 比较，
+		# 编辑器运行超过 60s 后探测在第一帧就"瞬间超时"且从未拨号。
+		probe.start()
 		var outcome: Dictionary = await probe.completed
 		probe.queue_free()
 		return outcome
