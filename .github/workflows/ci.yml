@@ -24,25 +24,36 @@ env:
 
 jobs:
   gut-tests:
-    name: Headless import + GUT unit tests
-    runs-on: ubuntu-latest
+    # Windows 实证同套件 43 秒跑完；ubuntu 上 --import 平台性挂起（报错修复
+    # 后暴露，watchdog 注释已留待根因）。深度与速度兼得：单测与集成都在
+    # Windows runner 上跑，Linux 挂起问题单独跟踪。
+    name: Headless import + GUT unit tests (Windows)
+    runs-on: windows-latest
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Godot ${{ env.GODOT_VERSION }} (headless)
+      - name: Cache Godot
+        uses: actions/cache@v4
+        with:
+          path: godot
+          key: godot-${{ env.GODOT_VERSION }}-win64-ci
+
+      - name: Download Godot ${{ env.GODOT_VERSION }} (Windows)
+        shell: bash
         run: |
           set -euo pipefail
-          BASE="https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable"
-          ZIP="Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          curl -fL --retry 3 -o godot.zip "${BASE}/${ZIP}"
-          unzip -o godot.zip
-          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
-          chmod +x /usr/local/bin/godot
-          godot --version
+          if [ ! -f "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" ]; then
+            mkdir -p godot
+            curl -fL --retry 3 -o godot.zip               "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_win64.exe.zip"
+            unzip -o godot.zip -d godot
+            rm godot.zip
+          fi
+          "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" --version
 
       - name: Fetch GUT ${{ env.GUT_VERSION }} test runner
+        shell: bash
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "v${GUT_VERSION}" https://github.com/bitwes/Gut.git /tmp/gut
@@ -51,12 +62,13 @@ jobs:
           test -f addons/gut/gut_cmdln.gd
 
       - name: Headless import gate (project must import cleanly)
+        shell: bash
         run: |
           set -euo pipefail
           # Import assets / build the resource cache, then fail the build if any
           # production script failed to parse or load. A clean import under the
           # target engine is the cheapest, most objective "is it buildable" gate.
-          godot --headless --path . --import 2>&1 | tee import.log
+          "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" --headless --path . --import 2>&1 | tee import.log
           if grep -nE "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" import.log > import_errors.txt; then
             # 把匹配行同时打进 annotation，API/PR 界面直接可见，便于无日志权限排查。
             while IFS= read -r line; do
@@ -76,21 +88,20 @@ jobs:
       # 全量 GUT 在 Linux CI 存在平台性挂起（本地 43s / CI 45min 不完，
       # watchdog 注释已就位待定位）。行为深度由 Windows 集成 job（36 个真实
       # 编辑器测试）承担；导入门禁保证全部脚本可解析加载。
-      - name: GUT smoke (top-level unit files)
+      - name: GUT unit tests (full suite, watchdogged)
+        shell: bash
         run: |
           set -uo pipefail
-          timeout 600 godot --headless --path . -s addons/gut/gut_cmdln.gd \
-            -gdir=res://test/unit/ \
-            -gexit 2>&1 | tee gut_smoke.log
+          timeout 900 "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" --headless --path .             -s addons/gut/gut_cmdln.gd             -gdir=res://test/unit/             -ginclude_subdirs             -gexit 2>&1 | tee gut.log
           gut_exit=${PIPESTATUS[0]}
           if [ "$gut_exit" = "124" ]; then
             echo "::error::smoke watchdog fired - suite hung. Last log lines:"
-            tail -15 gut_smoke.log | while IFS= read -r line; do echo "::error::${line:0:300}"; done
+            tail -15 gut.log | while IFS= read -r line; do echo "::error::${line:0:300}"; done
             exit 1
           fi
-          if grep -qE '^\s*\[Failed\]' gut_smoke.log; then
+          if grep -qE '^\s*\[Failed\]' gut.log; then
             echo "::error::smoke suite reported failing assertions"
-            grep -E '^\s*\[Failed\]' gut_smoke.log | head -5
+            grep -E '^\s*\[Failed\]' gut.log | head -5
             exit 1
           fi
 
