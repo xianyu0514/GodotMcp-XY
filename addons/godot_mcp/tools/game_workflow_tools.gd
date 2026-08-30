@@ -566,6 +566,28 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			arguments["content"] = blueprint_source
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["content"] = "goal-blueprint"
+	# 读取脚本步骤无工件可引用时，回退到磁盘上项目脚本目录的第一个脚本。
+	if tool_name == "read_script" and not arguments.has("script_path") 			and not artifacts.has("script"):
+		var scripts_dir: String = ProjectSettings.globalize_path("res://scripts")
+		if DirAccess.dir_exists_absolute(scripts_dir):
+			var dir: DirAccess = DirAccess.open(scripts_dir)
+			if dir != null:
+				dir.list_dir_begin()
+				while true:
+					var entry: String = dir.get_next()
+					if entry.is_empty():
+						break
+					if entry.ends_with(".gd"):
+						arguments["script_path"] = "res://scripts/" + entry
+						task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+						task["derived_inputs"]["script_path"] = arguments["script_path"]
+						break
+				dir.list_dir_end()
+	# 性能预算门缺 budget 时给保守默认（30fps）；目标里的具体数值由调用方覆盖。
+	if tool_name == "assert_performance_budget" and not arguments.has("budget"):
+		arguments["budget"] = {"min_fps": 30}
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["budget"] = {"min_fps": 30}
 	# 挂载步骤缺 node_path 时默认场景根：gameplay profile 不建独立玩家节点，
 	# 控制器脚本挂到场景根即可运行。
 	if tool_name == "attach_script" and not arguments.has("node_path") \

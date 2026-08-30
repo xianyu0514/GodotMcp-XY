@@ -26,12 +26,27 @@ SCRATCH = REPO_ROOT / "tmp_goal_flow_project"
 PLAN_PATH = "res://.mcp/goal_flow_plan.json"
 RUN_ITERATIONS = int(os.environ.get("GOAL_FLOW_ITERATIONS", "40"))
 
-OBJECTIVE = (
-    "Minimal 2D game: an arrow-key player movement controller, a collectible "
-    "coin that disappears on touch, and a win label shown after collection. "
-    "Validate the scripts and run a project smoke test."
-)
-PROFILES = ["gameplay_feature", "ui_screen", "quality_assurance"]
+SCENARIOS = [
+    {
+        "name": "playable-minimal-game",
+        "objective": (
+            "Minimal 2D game: an arrow-key player movement controller, a collectible "
+            "coin that disappears on touch, and a win label shown after collection. "
+            "Validate the scripts and run a project smoke test."
+        ),
+        "profiles": ["gameplay_feature", "ui_screen", "quality_assurance"],
+        "assert_playable": True,
+    },
+    {
+        "name": "performance-and-health",
+        "objective": (
+            "Audit project health and verify the game holds at least 30 fps "
+            "with low memory and no runtime errors."
+        ),
+        "profiles": ["project_health", "performance"],
+        "assert_playable": False,
+    },
+]
 
 PROJECT_GODOT = """config_version=5
 
@@ -100,6 +115,62 @@ def build_scratch_project() -> None:
     (SCRATCH / "project.godot").write_text(PROJECT_GODOT, encoding="utf-8", newline="\n")
 
 
+
+def run_scenario(scenario: dict) -> None:
+    name = scenario["name"]
+    print(f"[goal-flow] scenario: {name}", flush=True)
+    plan = tool_call(
+        "plan_game_workflow",
+        {"action": "plan", "objective": scenario["objective"], "profiles": scenario["profiles"],
+         "replace": True, "plan_path": PLAN_PATH},
+        request_id=2,
+    )
+    if str(plan.get("status", "")) not in ("planned", "resumed", "ok", "compiled", "success"):
+        raise AssertionError(f"[{name}] plan_game_workflow returned unexpected status: {json.dumps(plan)[:600]}")
+
+    for iteration in range(RUN_ITERATIONS):
+        run = tool_call("run_game_workflow", {"plan_path": PLAN_PATH}, request_id=100 + iteration)
+        state = str(run.get("state", run.get("status", "")))
+        print(f"[{name}] iter {iteration}: state={state} progress={json.dumps(run.get('progress', {}))[:160]}", flush=True)
+        if state == "completed":
+            executed = run.get("executed", [])
+            if not executed:
+                raise AssertionError(f"[{name}] completed without any executed steps")
+            if scenario.get("assert_playable"):
+                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
+                if not script_files:
+                    raise AssertionError(f"[{name}] completed without any generated scripts")
+                controller = script_files[0].read_text(encoding="utf-8")
+                if "move_and_slide()" not in controller:
+                    raise AssertionError(f"[{name}] controller lacks real movement code: {controller[:200]}")
+                if "_on_coin_touched" not in controller:
+                    raise AssertionError(f"[{name}] controller lacks pickup logic for the coin goal")
+                scene_file = SCRATCH / "scenes" / "gameplay-feature.tscn"
+                if not scene_file.exists() or "CharacterBody2D" not in scene_file.read_text(encoding="utf-8"):
+                    raise AssertionError(f"[{name}] movement goal must produce a CharacterBody2D-rooted scene")
+                note = "; playable controller verified"
+            else:
+                note = ""
+            print(f"[{name}] completed after {iteration + 1} run calls; "
+                  f"executed {len(executed)} steps in the last slice{note}", flush=True)
+            return
+        if state == "needs_input" or (state == "waiting" and run.get("needs_input")):
+            needs = run.get("needs_input", run.get("needs", []))
+            raise AssertionError(f"[{name}] Goal stalled requiring input — derivation gap: {json.dumps(needs)[:600]}")
+        if state == "waiting":
+            # 纯 pending（无缺失输入）：异步步骤进行中，继续轮询。
+            time.sleep(1.0)
+            continue
+        if state in ("blocked", "replan_required", "recovery_required", "failed", "error"):
+            last = run.get("executed", [])[-1] if run.get("executed") else {}
+            raise AssertionError(
+                f"[{name}] Goal reached terminal failure state {state} at {last.get('tool_name', '?')}: "
+                f"{str(run.get('blocked_reason', ''))[:300]}")
+        time.sleep(0.5)
+
+    raise TimeoutError(f"[{name}] Goal did not complete within {RUN_ITERATIONS} run calls")
+
+
 def main() -> int:
     build_scratch_project()
     process = subprocess.Popen(
@@ -117,53 +188,9 @@ def main() -> int:
                 f"Port {MCP_PORT} is serving a stale editor for project "
                 f"'{info.get('project_name', '?')}', not the scratch project")
 
-        plan = tool_call(
-            "plan_game_workflow",
-            {"action": "plan", "objective": OBJECTIVE, "profiles": PROFILES,
-             "replace": True, "plan_path": PLAN_PATH},
-            request_id=2,
-        )
-        if str(plan.get("status", "")) not in ("planned", "resumed", "ok", "compiled", "success"):
-            raise AssertionError(f"plan_game_workflow returned unexpected status: {json.dumps(plan)[:600]}")
-
-        for iteration in range(RUN_ITERATIONS):
-            run = tool_call("run_game_workflow", {"plan_path": PLAN_PATH}, request_id=100 + iteration)
-            state = str(run.get("state", run.get("status", "")))
-            print(f"[goal-flow] iter {iteration}: state={state} progress={json.dumps(run.get('progress', {}))[:160]}", flush=True)
-            if state == "completed":
-                executed = run.get("executed", [])
-                if not executed:
-                    raise AssertionError("completed without any executed steps")
-                # 蓝图断言：产出的必须是真实可玩内容，不是占位脚本。
-                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
-                if not script_files:
-                    raise AssertionError("completed without any generated scripts")
-                controller = script_files[0].read_text(encoding="utf-8")
-                if "move_and_slide()" not in controller:
-                    raise AssertionError(f"controller lacks real movement code: {controller[:200]}")
-                if "_on_coin_touched" not in controller:
-                    raise AssertionError("controller lacks pickup logic for the coin goal")
-                scene_file = SCRATCH / "scenes" / "gameplay-feature.tscn"
-                if not scene_file.exists() or "CharacterBody2D" not in scene_file.read_text(encoding="utf-8"):
-                    raise AssertionError("movement goal must produce a CharacterBody2D-rooted scene")
-                print(f"[goal-flow] completed after {iteration + 1} run calls; "
-                      f"executed {len(executed)} steps; playable controller verified")
-                return 0
-            if state == "needs_input" or (state == "waiting" and run.get("needs_input")):
-                needs = run.get("needs_input", run.get("needs", []))
-                raise AssertionError(f"Goal stalled requiring input — derivation gap: {json.dumps(needs)[:600]}")
-            if state == "waiting":
-                # 纯 pending（无缺失输入）：异步步骤进行中，继续轮询。
-                time.sleep(1.0)
-                continue
-            if state in ("blocked", "replan_required", "recovery_required", "failed", "error"):
-                last = run.get("executed", [])[-1] if run.get("executed") else {}
-                raise AssertionError(
-                    f"Goal reached terminal failure state {state} at {last.get('tool_name', '?')}: "
-                    f"{str(run.get('blocked_reason', ''))[:300]}")
-            time.sleep(0.5)
-
-        raise TimeoutError(f"Goal did not complete within {RUN_ITERATIONS} run calls")
+        for scenario in SCENARIOS:
+            run_scenario(scenario)
+        return 0
     finally:
         process.terminate()
         try:
