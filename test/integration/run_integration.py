@@ -85,6 +85,12 @@ def main() -> int:
         if verdict != "PASS":
             tail = "\n".join(output.strip().splitlines()[-12:])
             print("    " + tail.replace("\n", "\n    "), flush=True)
+            # GitHub Actions converts ::error:: lines into check annotations,
+            # so failures are identifiable without log-download access.
+            first_error = next((l for l in output.splitlines()
+                                if "AssertionError" in l or "TimeoutError" in l or "Error" in l), "")
+            if first_error:
+                print(f"::error::{name} {verdict}: {first_error[:350]}", flush=True)
 
     failures = [(n, v) for n, v, _ in results if v != "PASS"]
     print("\n==== summary ====")
