@@ -554,3 +554,52 @@ func test_export_templates_root_falls_back_to_platform_path():
 		assert_false(root.is_empty(), "A Windows editor must always resolve a templates root")
 		assert_true(root.to_lower().contains("godot") and root.to_lower().contains("export_templates"),
 			"The fallback path is %APPDATA%/Godot/export_templates, got: " + root)
+
+func test_parallel_chunk_plan_covers_file_exactly() -> void:
+	var chunks: Array = _editor_tools.TemplatesParallelFetch.plan_chunks(5000000, 4)
+	assert_eq(chunks.size(), 4)
+	var covered: int = 0
+	var previous_end: int = -1
+	for chunk_value in chunks:
+		var chunk: Dictionary = chunk_value
+		assert_eq(int(chunk["start"]), previous_end + 1, "Chunks are contiguous")
+		covered += int(chunk["end"]) - int(chunk["start"]) + 1
+		previous_end = int(chunk["end"])
+	assert_eq(covered, 5000000, "Chunk plan covers the file exactly, no gaps or overlaps")
+	assert_true(_editor_tools.TemplatesParallelFetch.plan_chunks(500, 8).size() <= 1,
+		"Small files collapse to a single chunk (1 MiB minimum per chunk)")
+
+func test_get_request_injects_range_header() -> void:
+	var request: String = _editor_tools.TemplatesHttpGetter.build_get_request(
+		"/x.tpz", "example.com", "bytes=5-9")
+	assert_true(request.contains("Range: bytes=5-9"), "Range header is injected")
+	var plain: String = _editor_tools.TemplatesHttpGetter.build_get_request(
+		"/x.tpz", "example.com", "")
+	assert_false(plain.contains("Range:"), "No Range header without one")
+
+func test_status_acceptance_rules() -> void:
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(200, false))
+	assert_false(_editor_tools.TemplatesHttpGetter.is_acceptable_status(206, false),
+		"206 without a Range request is unexpected")
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(206, true))
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(200, true),
+		"200 with Range means the origin ignored it (handled separately)")
+
+func test_resume_state_round_trip() -> void:
+	var fetch: Node = _editor_tools.TemplatesParallelFetch.new()
+	fetch.setup("https://example.com/a.tpz", "user://zz_resume_test.tpz", "", 4)
+	fetch._total = 100
+	fetch._etag = "abc"
+	fetch._chunks = [{"start": 0, "end": 49, "have": 50, "retries": 0},
+		{"start": 50, "end": 99, "have": 10, "retries": 0}]
+	var dest_touch: FileAccess = FileAccess.open("user://zz_resume_test.tpz", FileAccess.WRITE)
+	if dest_touch:
+		dest_touch.close()
+	fetch._persist()
+	assert_true(fetch._load_state(), "State reloads when url+total match")
+	assert_eq(int((fetch._chunks[1] as Dictionary).get("have", -1)), 10,
+		"Per-chunk progress survives for resume")
+	fetch._total = 999
+	assert_false(fetch._load_state(), "Size mismatch invalidates the resume state")
+	fetch.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://zz_resume_test.tpz.download.json"))

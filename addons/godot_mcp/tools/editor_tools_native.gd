@@ -2110,13 +2110,13 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			"action": {
 				"type": "string",
 				"enum": ["status", "install", "remove", "download", "download_status", "download_cancel"],
-				"description": "Operation. Default status.",
+				"description": "Operation.",
 				"default": "status"
 			},
 			"mirror": {
 				"type": "string",
 				"enum": ["godotengine", "github", "tuxfamily"],
-				"description": "download: mirror. Default godotengine (official geo-redirecting portal, same source as the editor's template manager).",
+				"description": "download: mirror. Default godotengine (official geo portal).",
 				"default": "godotengine"
 			},
 			"proxy": {
@@ -2125,12 +2125,17 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			},
 			"require_integrity": {
 				"type": "boolean",
-				"description": "download: fail when the official asset size cannot be fetched for the cross-check. Default false.",
+				"description": "download: fail when the official size check is unreachable.",
 				"default": false
+			},
+			"connections": {
+				"type": "integer",
+				"description": "download: parallel connections (1-8), default 4, resumable.",
+				"default": 4
 			},
 			"keep_archive": {
 				"type": "boolean",
-				"description": "download: keep the .tpz after installation. Default false.",
+				"description": "download: keep the .tpz.",
 				"default": false
 			},
 			"tpz_path": {
@@ -2454,11 +2459,20 @@ class TemplatesHttpGetter extends Node:
 	var _body_memory: PackedByteArray = PackedByteArray()
 	var _to_memory: bool = false
 	var _content_length: int = -1
+	# 并行分块支持：Range 头（接受 206）、写偏移（多 worker 共享目标文件）、
+	# 打开模式（worker 用 READ_WRITE 避免互相截断）与响应头透出。
+	var range_header: String = ""
+	var write_offset: int = -1
+	var file_open_mode: int = FileAccess.WRITE
+	var response_headers: Dictionary = {}
+	var response_status: int = 0
 	var _chunked: bool = false
 	var _body_buffer: PackedByteArray = PackedByteArray()
 	var _chunk_remaining: int = -1
 	var _bytes_downloaded: int = 0
 	var _redirects_left: int = 5
+	# 单帧最大读取量；并行 worker 由协调器调低以控制总资源占用。
+	var frame_drain_cap: int = 4 * 1024 * 1024
 
 	static func create(url: String, dest_abs: String, proxy: String,
 			idle_timeout_msec: int = 30000, to_memory: bool = false) -> TemplatesHttpGetter:
@@ -2569,6 +2583,18 @@ class TemplatesHttpGetter extends Node:
 		_last_progress_msec = Time.get_ticks_msec()
 		_start_tls()
 
+	static func build_get_request(path_and_query: String, host: String, range: String) -> String:
+		var request_text: String = "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: GodotMCP\r\nAccept: */*\r\n" % [path_and_query, host]
+		if not range.is_empty():
+			request_text += "Range: %s\r\n" % range
+		request_text += "Connection: close\r\n\r\n"
+		return request_text
+
+	static func is_acceptable_status(code: int, expects_partial: bool) -> bool:
+		if expects_partial:
+			return code == 206 or code == 200
+		return code == 200
+
 	func _start_tls() -> void:
 		_tls = StreamPeerTLS.new()
 		if _tls.connect_to_stream(_tcp, _connect_host) != OK:
@@ -2585,8 +2611,8 @@ class TemplatesHttpGetter extends Node:
 			var path_and_query: String = _url.substr(("https://" + authority).length())
 			if not path_and_query.begins_with("/"):
 				path_and_query = "/" + path_and_query
-			var request_text: String = "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: GodotMCP\r\nAccept: */*\r\nConnection: close\r\n\r\n" % [
-				path_and_query, _connect_host]
+			var request_text: String = build_get_request(path_and_query, _connect_host, range_header)
+
 			_tls.put_data(request_text.to_utf8_buffer())
 			_phase = "headers"
 		elif status == StreamPeerTLS.STATUS_ERROR:
@@ -2626,10 +2652,17 @@ class TemplatesHttpGetter extends Node:
 				return
 			_url = location
 			return
-		if status_code != 200:
-			_fail("HTTP %d for %s (status line: %s)" % [
-				status_code, _url, header_text.split("
-")[0]])
+		response_status = status_code
+		for raw_line in header_text.split("\r\n"):
+			var line_separator: int = String(raw_line).find(":")
+			if line_separator > 0:
+				response_headers[String(raw_line).substr(0, line_separator).strip_edges().to_lower()] = \
+					String(raw_line).substr(line_separator + 1).strip_edges()
+		if not is_acceptable_status(status_code, not range_header.is_empty()):
+			_fail("HTTP %d for %s" % [status_code, _url])
+			return
+		if not range_header.is_empty() and status_code == 200 and write_offset > 0:
+			_fail("Origin ignored the Range request; parallel chunks would corrupt the file")
 			return
 		var length_text: String = _header_value(header_text, "content-length")
 		_chunked = _header_value(header_text, "transfer-encoding").to_lower().contains("chunked")
@@ -2640,10 +2673,12 @@ class TemplatesHttpGetter extends Node:
 		_body_buffer = _header_bytes.slice(header_end + 4)
 		_header_bytes = PackedByteArray()
 		if not _to_memory:
-			_body_file = FileAccess.open(_dest_abs, FileAccess.WRITE)
+			_body_file = FileAccess.open(_dest_abs, file_open_mode)
 			if _body_file == null:
 				_fail("Cannot open destination file: " + _dest_abs)
 				return
+			if write_offset > 0:
+				_body_file.seek(write_offset)
 		_bytes_downloaded = 0
 		_phase = "body"
 		_consume_body_buffer()
@@ -2655,7 +2690,7 @@ class TemplatesHttpGetter extends Node:
 		# 读取会把吞吐锁死在"帧率 × 单帧到达量"（实测 152KB/s）；紧循环读取
 		# 才能吃满 TCP 接收窗口，同时上限保证编辑器帧不被下载饿死。
 		var drained: int = 0
-		while drained < 4 * 1024 * 1024:
+		while drained < frame_drain_cap:
 			var available: int = _tls.get_available_bytes()
 			if available <= 0:
 				break
@@ -2719,7 +2754,8 @@ class TemplatesHttpGetter extends Node:
 	func _finish_body() -> void:
 		var outcome: Dictionary = {
 			"ok": true, "bytes": _bytes_downloaded, "total": _content_length,
-			"chunked": _chunked}
+			"chunked": _chunked, "status": response_status,
+			"headers": response_headers.duplicate()}
 		if _to_memory:
 			outcome["text"] = _body_memory.get_string_from_utf8()
 		_cleanup()
@@ -2741,6 +2777,228 @@ class TemplatesHttpGetter extends Node:
 			if line.substr(0, separator).strip_edges().to_lower() == name:
 				return line.substr(separator + 1).strip_edges()
 		return ""
+
+
+## 并行分块下载协调器：N 条 Range 连接（默认 4，上限 8）各写同一目标文件的
+## 独立偏移区间。分块进度持久化到 <dest>.download.json，任何中断后重启只补
+## 未完成分块（断点续传）。资源有界：每 worker 每帧 1 MiB 读取上限、磁盘流式
+## 直写、固定小块缓冲，无内存增长。
+class TemplatesParallelFetch extends Node:
+	signal completed(outcome: Dictionary)
+	## progress_cb(bytes, total)
+	var progress_cb: Callable = Callable()
+
+	var _url: String = ""
+	var _dest_abs: String = ""
+	var _proxy: String = ""
+	var _connections: int = 4
+	var _idle_ms: int = 60000
+	var _total: int = -1
+	var _etag: String = ""
+	var _chunks: Array = []
+	var _workers: Array = []
+	var _done_count: int = 0
+	var _failed: bool = false
+	var _finished: bool = false
+	var _resumed: bool = false
+	var _last_persist_ms: int = 0
+	var _state_path: String = ""
+
+	static func plan_chunks(total: int, connections: int) -> Array:
+		var count: int = maxi(1, mini(connections, 8))
+		if total <= 0:
+			return []
+		count = mini(count, maxi(1, int(ceil(float(total) / 1048576.0))))
+		var chunk_size: int = int(total / count)
+		var out: Array = []
+		var start: int = 0
+		for i in range(count):
+			var end: int = total - 1 if i == count - 1 else start + chunk_size - 1
+			out.append({"start": start, "end": end, "have": 0, "retries": 0})
+			start = end + 1
+		return out
+
+	func setup(url: String, dest_abs: String, proxy: String, connections: int,
+			idle_ms: int = 60000) -> void:
+		_url = url
+		_dest_abs = dest_abs
+		_proxy = proxy
+		_connections = clampi(connections, 1, 8)
+		_idle_ms = idle_ms
+		_state_path = dest_abs + ".download.json"
+
+	func start() -> void:
+		_probe()
+
+	func _probe() -> void:
+		var probe: TemplatesHttpGetter = TemplatesHttpGetter.create(_url, "", _proxy, 20000, true)
+		probe.range_header = "bytes=0-0"
+		probe.frame_drain_cap = 65536
+		get_tree().root.add_child(probe)
+		var outcome: Dictionary = await probe.completed
+		probe.queue_free()
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			_finish(false, "probe failed: " + String(outcome.get("error", "")))
+			return
+		var headers: Dictionary = outcome.get("headers", {})
+		_etag = String(headers.get("etag", ""))
+		var content_range: String = String(headers.get("content-range", ""))
+		if content_range.contains("/") and content_range.get_slice("/", 1).is_valid_int():
+			_total = int(content_range.get_slice("/", 1))
+		elif String(outcome.get("total", "-1")).is_valid_int() and int(outcome.get("total", -1)) > 1:
+			_total = int(outcome["total"])
+		if _total <= 0:
+			_finish(false, "origin did not report a usable size for parallel ranges")
+			return
+		_resumed = _load_state()
+		if not _resumed:
+			_chunks = plan_chunks(_total, _connections)
+			var preallocate: FileAccess = FileAccess.open(_dest_abs, FileAccess.WRITE)
+			if preallocate == null:
+				_finish(false, "cannot create destination file: " + _dest_abs)
+				return
+			preallocate.close()
+		_persist()
+		_spawn_missing_workers()
+
+	func _state_dict() -> Dictionary:
+		return {
+			"url": _url, "total": _total, "etag": _etag,
+			"chunks": _chunks.duplicate(true),
+		}
+
+	func _persist() -> void:
+		_last_persist_ms = Time.get_ticks_msec()
+		var file: FileAccess = FileAccess.open(_state_path, FileAccess.WRITE)
+		if file:
+			file.store_string(JSON.stringify(_state_dict()))
+			file.close()
+
+	func _load_state() -> bool:
+		if not FileAccess.file_exists(_state_path) or not FileAccess.file_exists(_dest_abs):
+			return false
+		var file: FileAccess = FileAccess.open(_state_path, FileAccess.READ)
+		if file == null:
+			return false
+		var parsed: Variant = JSON.parse_string(file.get_as_text())
+		file.close()
+		if not (parsed is Dictionary):
+			return false
+		var state: Dictionary = parsed
+		if int(state.get("total", -1)) != _total or String(state.get("url", "")) != _url:
+			return false
+		var stored: Array = state.get("chunks", [])
+		if stored.is_empty():
+			return false
+		var rebuilt: Array = []
+		for chunk_value in stored:
+			var chunk: Dictionary = chunk_value
+			chunk["retries"] = 0
+			rebuilt.append(chunk)
+		_chunks = rebuilt
+		return true
+
+	func _chunk_length(chunk: Dictionary) -> int:
+		return int(chunk.get("end", 0)) - int(chunk.get("start", 0)) + 1
+
+	func _spawn_missing_workers() -> void:
+		if _failed:
+			return
+		for chunk_value in _chunks:
+			var chunk: Dictionary = chunk_value
+			if int(chunk.get("have", 0)) >= _chunk_length(chunk):
+				_done_count += 1
+				continue
+			_spawn_worker(chunk)
+		if _done_count >= _chunks.size():
+			_all_done()
+
+	func _spawn_worker(chunk: Dictionary) -> void:
+		var worker: TemplatesHttpGetter = TemplatesHttpGetter.create(
+			_url, _dest_abs, _proxy, _idle_ms)
+		var offset: int = int(chunk.get("start", 0)) + int(chunk.get("have", 0))
+		worker.range_header = "bytes=%d-%d" % [offset, int(chunk.get("end", 0))]
+		worker.write_offset = offset
+		worker.file_open_mode = FileAccess.READ_WRITE
+		worker.frame_drain_cap = 1024 * 1024
+		worker.progress_cb = Callable(self, "_on_worker_progress").bind(chunk)
+		worker.completed.connect(_on_worker_completed.bind(chunk))
+		_workers.append(worker)
+		get_tree().root.add_child(worker)
+		worker.start()
+
+	func _on_worker_progress(bytes: int, _chunk_total: int, chunk: Dictionary) -> void:
+		if _finished or _failed:
+			return
+		chunk["have"] = mini(bytes, _chunk_length(chunk))
+		if Time.get_ticks_msec() - _last_persist_ms > 30000:
+			_persist()
+		if progress_cb.is_valid():
+			var aggregate: int = 0
+			for chunk_value in _chunks:
+				aggregate += int((chunk_value as Dictionary).get("have", 0))
+			progress_cb.call(aggregate, _total)
+
+	func _on_worker_completed(outcome: Dictionary, chunk: Dictionary) -> void:
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			if int(chunk.get("retries", 0)) < 2 and not _failed:
+				chunk["retries"] = int(chunk.get("retries", 0)) + 1
+				_persist()
+				_spawn_worker(chunk)
+			else:
+				_fail_all(String(outcome.get("error", "chunk failed")))
+			return
+		chunk["have"] = _chunk_length(chunk)
+		_done_count += 1
+		_persist()
+		if _done_count >= _chunks.size():
+			_all_done()
+
+	func _all_done() -> void:
+		var staged: FileAccess = FileAccess.open(_dest_abs, FileAccess.READ)
+		var size: int = staged.get_length() if staged != null else -1
+		if staged != null:
+			staged.close()
+		if size != _total:
+			_finish(false, "assembled size %d != expected %d" % [size, _total])
+			return
+		_finish(true, "")
+
+	func _fail_all(reason: String) -> void:
+		for worker_value in _workers:
+			var worker: Node = worker_value
+			if is_instance_valid(worker) and worker.has_method("_fail"):
+				worker.call("_fail", "coordinator cancelled")
+		_finish(false, reason)
+
+	func cancel() -> void:
+		if _finished:
+			return
+		_persist()
+		_fail_all("cancelled")
+
+	func _finish(ok: bool, reason: String) -> void:
+		if _finished:
+			return
+		_finished = true
+		_failed = not ok
+		for worker_value in _workers:
+			var worker: Node = worker_value
+			if is_instance_valid(worker) and worker.is_inside_tree():
+				worker.get_parent().remove_child(worker)
+				worker.queue_free()
+		_workers.clear()
+		var outcome: Dictionary = {
+			"ok": ok, "bytes": _total if ok else 0, "total": _total,
+			"connections": _chunks.size(), "resumed": _resumed,
+		}
+		if not ok:
+			outcome["error"] = reason
+		completed.emit(outcome)
 
 ## 校验代理参数：仅允许本机回环代理（http://127.0.0.1:PORT / http://localhost:PORT）。
 static func _templates_proxy_allowed(raw: String) -> String:
@@ -2819,7 +3077,44 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
 	if root == null:
 		return {"error": "No scene tree root available to host the download request."}
-	# 手写 HTTPS GET：直连或经回环代理 CONNECT 隧道（HTTPRequest 不支持代理）。
+	# 并行分块路径（默认 4 连接，上限 8）：Range 分块直写目标文件 + .download.json
+	# 断点续传；中断后重启只补未完成分块。资源有界：每 worker 每帧 1 MiB。
+	var connections: int = clampi(int(params.get("connections", 4)), 1, 8)
+	var tpz_abs: String = ProjectSettings.globalize_path(
+		TEMPLATES_DOWNLOAD_DIR.path_join(String(version_meta.get("tpz_filename", ""))))
+	if connections >= 2:
+		var fetch: TemplatesParallelFetch = TemplatesParallelFetch.new()
+		fetch.setup(url, tpz_abs, proxy, connections, 60000)
+		fetch.progress_cb = Callable(self, "_on_templates_download_progress")
+		fetch.completed.connect(_on_templates_download_completed)
+		root.add_child(fetch)
+		_template_download = {
+			"phase": "downloading",
+			"report_status": "pending",
+			"mirror": mirror,
+			"url": url,
+			"part_abs": "",
+			"tpz_abs": tpz_abs,
+			"tpz_filename": String(version_meta.get("tpz_filename", "")),
+			"coordinator": fetch,
+			"started_ms": Time.get_ticks_usec() / 1000,
+			"bytes": 0,
+			"total_bytes": 0,
+			"templates_root": templates_root,
+			"version_meta": version_meta.duplicate(true),
+			"godot_version": godot_version,
+			"proxy": proxy,
+			"state_json": tpz_abs + ".download.json",
+			"require_integrity": bool(params.get("require_integrity", false)),
+			"keep_archive": bool(params.get("keep_archive", false)),
+		}
+		fetch.start()
+		return {
+			"action": "download", "status": "pending",
+			"download": _templates_download_snapshot(),
+			"poll": "Poll with action='download_status'; cancel with action='download_cancel'."
+		}
+	# 单连接路径：手写 HTTPS GET（直连或回环代理 CONNECT 隧道）。
 	var getter: TemplatesHttpGetter = TemplatesHttpGetter.create(url, part_abs, proxy, 60000)
 	root.add_child(getter)
 
@@ -2867,6 +3162,10 @@ func _templates_download_cancel() -> Dictionary:
 	if _template_download.is_empty():
 		return {"action": "download_cancel", "status": "idle",
 			"message": "No template download has been started."}
+	var coordinator: Node = _template_download.get("coordinator", null)
+	if coordinator != null and is_instance_valid(coordinator) and coordinator.has_method("cancel"):
+		# 并行路径：保留目标文件与 .download.json，重启后从断点续传。
+		coordinator.call("cancel")
 	var getter: Node = _template_download.get("getter", null)
 	if getter != null and is_instance_valid(getter) and getter.has_method("_fail"):
 		getter.call("_fail", "cancelled")
@@ -2899,6 +3198,9 @@ func _templates_download_finish(status: String, message: String, keep_tpz: bool)
 		DirAccess.remove_absolute(part_abs)
 	if status != "done" and not keep_tpz and FileAccess.file_exists(tpz_abs):
 		DirAccess.remove_absolute(tpz_abs)
+	if status == "done" and not String(state.get("state_json", "")).is_empty():
+		# 成功后清除断点状态；失败/取消保留以便续传。
+		DirAccess.remove_absolute(String(state.get("state_json", "")))
 	# 终态保留 result/checksum 供 download_status 轮询读取；"completed" 与
 	# 工作流引擎的成功状态词表对齐。
 	var finished: Dictionary = {
