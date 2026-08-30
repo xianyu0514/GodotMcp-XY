@@ -2593,11 +2593,13 @@ class TemplatesHttpGetter extends Node:
 			_fail("TLS handshake failed for " + _connect_host)
 
 	func _pump_headers() -> void:
-		var available: int = _tls.get_available_bytes()
-		if available <= 0:
-			return
-		_header_bytes.append_array((_tls.get_data(available) as Array)[1])
-		_last_progress_msec = Time.get_ticks_msec()
+		while true:
+			var available: int = _tls.get_available_bytes()
+			if available <= 0:
+				break
+			_header_bytes.append_array((_tls.get_data(available) as Array)[1])
+		if _header_bytes.size() > 0:
+			_last_progress_msec = Time.get_ticks_msec()
 		var header_end: int = _find_double_crlf(_header_bytes)
 		if header_end < 0:
 			if _header_bytes.size() > 64 * 1024:
@@ -2649,12 +2651,20 @@ class TemplatesHttpGetter extends Node:
 			progress_cb.call(_bytes_downloaded, _content_length)
 
 	func _pump_body() -> void:
-		var available: int = _tls.get_available_bytes()
-		if available > 0:
+		# 每帧循环榨干缓冲（上限 4 MiB/帧）：编辑器失焦时帧率骤降，每帧单次
+		# 读取会把吞吐锁死在"帧率 × 单帧到达量"（实测 152KB/s）；紧循环读取
+		# 才能吃满 TCP 接收窗口，同时上限保证编辑器帧不被下载饿死。
+		var drained: int = 0
+		while drained < 4 * 1024 * 1024:
+			var available: int = _tls.get_available_bytes()
+			if available <= 0:
+				break
 			_body_buffer.append_array((_tls.get_data(available) as Array)[1])
+			drained += available
+		if drained > 0:
 			_last_progress_msec = Time.get_ticks_msec()
 		_consume_body_buffer()
-		if progress_cb.is_valid() and available > 0:
+		if progress_cb.is_valid() and drained > 0:
 			progress_cb.call(_bytes_downloaded, _content_length)
 
 	## 按需解码：Content-Length 直读；chunked 走 hex 大小行状态机。
