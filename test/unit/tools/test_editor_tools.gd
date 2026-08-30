@@ -484,9 +484,10 @@ func test_templates_mirror_urls_are_official_and_version_pinned():
 	var tuxfamily: String = _editor_tools.templates_mirror_url(
 		"tuxfamily", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
 	assert_true(tuxfamily.begins_with("https://downloads.tuxfamily.org/godotengine/4.7/"))
-	var legacy: String = _editor_tools.templates_mirror_url(
+	var portal: String = _editor_tools.templates_mirror_url(
 		"godotengine", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
-	assert_true(legacy.begins_with("https://downloads.godotengine.org/export_templates/4.7/"))
+	assert_true(portal.begins_with("https://downloads.godotengine.org/?version=4.7"),
+		"The godotengine mirror is the official geo-redirecting download portal")
 
 func test_templates_url_allowlist_blocks_untrusted_hosts():
 	assert_true(_editor_tools.is_trusted_templates_url(

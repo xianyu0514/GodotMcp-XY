@@ -2115,9 +2115,9 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			},
 			"mirror": {
 				"type": "string",
-				"enum": ["github", "tuxfamily", "godotengine"],
-				"description": "download: official mirror. Default github.",
-				"default": "github"
+				"enum": ["godotengine", "github", "tuxfamily"],
+				"description": "download: mirror. Default godotengine (official geo-redirecting portal, same source as the editor's template manager).",
+				"default": "godotengine"
 			},
 			"proxy": {
 				"type": "string",
@@ -2201,13 +2201,15 @@ func _version_tag_and_tpz() -> Dictionary:
 	}
 
 ## 官方镜像的模板下载 URL（按镜像 + 版本推导；调用方不可指定任意 URL）。
+## "godotengine" 是官方下载门户（编辑器模板管理器同源入口）：按地理位置重定向到
+## 实际对象存储（实测比 GitHub Releases 直连快一个数量级以上）。
 static func templates_mirror_url(mirror: String, base_version: String,
 		version_tag: String, tpz_filename: String) -> String:
 	match mirror:
 		"tuxfamily":
 			return "https://downloads.tuxfamily.org/godotengine/%s/%s" % [base_version, tpz_filename]
 		"godotengine":
-			return "https://downloads.godotengine.org/export_templates/%s/%s" % [base_version, tpz_filename]
+			return "https://downloads.godotengine.org/?version=%s&flavor=stable&slug=export_templates.tpz&platform=templates" % base_version
 		_:
 			return "https://github.com/godotengine/godot/releases/download/%s/%s" % [version_tag, tpz_filename]
 
@@ -2784,7 +2786,7 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 			"download": _templates_download_snapshot(),
 			"message": "A download is already in progress; poll with action='download_status'."
 		}
-	var mirror: String = String(params.get("mirror", "github")).strip_edges().to_lower()
+	var mirror: String = String(params.get("mirror", "godotengine")).strip_edges().to_lower()
 	if not mirror in ["github", "tuxfamily", "godotengine"]:
 		return {"error": "Invalid mirror '%s'. Expected one of: github, tuxfamily, godotengine." % mirror}
 	var info: Dictionary = Engine.get_version_info()
