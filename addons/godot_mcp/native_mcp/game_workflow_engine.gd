@@ -881,6 +881,11 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 			return status in ["healthy", "warning"] and data.get("summary") is Dictionary and not (data["summary"] as Dictionary).is_empty()
 		"play_and_verify":
 			return bool(data.get("passed", false)) and data.get("runtime_info") is Dictionary and not (data["runtime_info"] as Dictionary).is_empty()
+		"get_runtime_animation_state":
+			# 作为 objective gate 时必须证明动画真的在播：is_playing 缺席/false
+			# 或 current_animation 为空都算未达成——否则 play_runtime_animation
+			# 失败了这个门禁也照样通过（重言式）。
+			return bool(data.get("is_playing", false)) and not String(data.get("current_animation", "")).is_empty()
 		"list_project_tests":
 			return int(data.get("count", 0)) > 0 and not data.has("error") and status not in ["unconfigured", "missing", "blocked"]
 		"run_project_test", "run_project_tests":

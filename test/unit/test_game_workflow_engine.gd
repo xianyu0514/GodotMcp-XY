@@ -521,3 +521,16 @@ func test_numeric_step_arguments_survive_json_round_trip() -> void:
 	var integrity: Dictionary = _engine.validate_integrity(persisted, _available)
 	assert_false(integrity.has("error"),
 		"round-tripped plan still matches its blueprint (got: %s)" % str(integrity.get("error", "")))
+
+func test_animation_state_gate_requires_playing_animation() -> void:
+	# is_playing=false / current_animation 为空时门禁必须判失败：
+	# 否则 play_runtime_animation 失败了门禁照样通过（重言式）。
+	assert_false(_engine.result_passed("get_runtime_animation_state",
+		{"status": "success", "is_playing": false, "current_animation": ""}),
+		"idle animation state must fail the gate")
+	assert_false(_engine.result_passed("get_runtime_animation_state",
+		{"status": "success", "is_playing": false, "current_animation": "idle"}),
+		"not-playing state must fail the gate")
+	assert_true(_engine.result_passed("get_runtime_animation_state",
+		{"status": "success", "is_playing": true, "current_animation": "idle"}),
+		"genuinely playing animation passes")

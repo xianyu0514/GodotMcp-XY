@@ -659,3 +659,48 @@ func test_collectible_goal_derives_character_body_root() -> void:
 	assert_eq(String((create_scene_call.get("arguments", {}) as Dictionary).get("root_node_type", "")),
 		"CharacterBody2D",
 		"Collectible-only goal still derives a CharacterBody2D scene root")
+
+func test_movement_goal_derives_play_and_verify_input_steps() -> void:
+	# 空 steps 的 play_and_verify 只证明"能启动不崩"；派生的方向键演练让
+	# _physics_process 真正执行，控制器脚本错误才会被捕获。
+	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var play_task: Dictionary = {}
+	for task_value in (status["plan"] as Dictionary).get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			play_task = task
+			break
+	assert_false(play_task.is_empty(), "gameplay profile has a play gate")
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		status["plan"], play_task, "play_and_verify",
+		_tools._resolve_inputs(play_task, {}, false))
+	var steps: Array = arguments.get("steps", [])
+	assert_gt(steps.size(), 0, "movement goal derives input exercise steps")
+	var actions: Array = []
+	for step_value in steps:
+		actions.append(String((step_value as Dictionary).get("action", "")))
+	assert_true("move_left" in actions and "move_right" in actions,
+		"derived steps exercise horizontal movement (got %s)" % str(actions))
+	assert_ne(str(arguments.get("steps", [])), "", str(planned.get("error", "")))
+
+func test_gate_repair_requeues_profile_screenshot_evidence() -> void:
+	# 修复改变项目状态后必须重采截图：否则视觉门禁拿旧候选与旧基线恒等比较。
+	var plan: Dictionary = _plan(["ui_screen"], "Polished pause menu with a screen")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var shot_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "get_runtime_screenshot":
+			shot_task = task
+			break
+	shot_task["status"] = "completed"
+	var repaired_gate: Dictionary = {"profile": "ui_screen", "id": "wf_xxx"}
+	_tools._requeue_profile_evidence(loaded, repaired_gate)
+	assert_eq(String(shot_task.get("status", "")), "pending",
+		"completed screenshot of the repaired profile is requeued for fresh evidence")

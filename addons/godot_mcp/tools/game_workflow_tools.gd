@@ -479,6 +479,8 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 		repair_tool, arguments, _authorization(plan, task, true))
 	task.erase("repair_in_progress")
 	var verdict: Dictionary = _engine.record_repair_result(plan, String(task.get("id", "")), raw_result)
+	if not verdict.has("error") and String(verdict.get("status", "")) not in ["blocked", "recovery_required"]:
+		_requeue_profile_evidence(plan, task)
 	var save_result: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 	if save_result.has("error"):
 		return {"stop": true, "status": "blocked", "error": save_result["error"]}
@@ -491,6 +493,24 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 			"receipt_digest": (verdict.get("receipt", {}) as Dictionary).get("digest", "")
 		}
 	}
+
+## 修复改变了项目状态：把同 profile 已完成的运行期证据步骤（截图）重置为
+## pending，让视觉门禁在下一片重新截图比对。否则门禁拿修复前的旧候选与
+## 旧基线比较（恒等），修复是否生效永远验证不出来（重言式门禁）。
+func _requeue_profile_evidence(plan: Dictionary, repaired_task: Dictionary) -> void:
+	var profile: String = String(repaired_task.get("profile", ""))
+	if profile.is_empty():
+		return
+	for task_value in plan.get("tasks", []):
+		var candidate: Dictionary = task_value
+		if String(candidate.get("profile", "")) != profile:
+			continue
+		if String(candidate.get("tool_name", "")) != "get_runtime_screenshot":
+			continue
+		if String(candidate.get("status", "")) != "completed":
+			continue
+		candidate["status"] = "pending"
+		candidate.erase("needs_input")
 
 func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) -> Dictionary:
 	var arguments: Dictionary = {}
@@ -693,6 +713,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["action_name"] = "move_up"
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["action_name"] = "move_up"
+	# 游玩门禁缺步骤时给移动类目标派生输入演练：空 steps 的 play_and_verify
+	# 只证明"游戏能启动不崩"，输入驱动的 _physics_process 根本不会执行——
+	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
+	if tool_name == "play_and_verify" and not arguments.has("steps"):
+		var play_objective: String = String(plan.get("goal", ""))
+		if GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+			arguments["steps"] = _movement_play_steps()
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "movement-exercise"
 	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
 	if tool_name == "create_theme" and not arguments.has("theme_path") \
 			and not artifacts.has("theme"):
@@ -737,6 +766,16 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 ## Visual gates derive candidate_path from the latest runtime screenshot and a
 ## deterministic baseline location; assert_visual_baseline captures the golden
 ## image itself on first run, so the gate never stalls on missing paths.
+## 移动类目标的游玩演练：依次按下/释放四个方向动作。蓝图控制器的
+## _physics_process 只有在输入驱动下才会执行，脚本错误才会暴露给
+## play_and_verify 的错误捕获（空 steps 的门禁是重言式）。
+func _movement_play_steps() -> Array:
+	var steps: Array = []
+	for action_name in ["move_left", "move_right", "move_up", "move_down"]:
+		steps.append({"action": action_name, "pressed": true, "wait_ms": 250})
+		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
+	return steps
+
 func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
 		artifacts: Dictionary, derived: Dictionary) -> void:
 	if tool_name != "assert_visual_baseline":
