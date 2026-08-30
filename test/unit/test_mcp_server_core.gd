@@ -1136,7 +1136,7 @@ func test_tool_call_clears_cancelled_marker():
 	var observed: Array = []
 	_core.register_tool("cancel_probe", "Probe", {"type": "object"}, func(args):
 		observed.append(_core.is_request_cancelled(77))
-		return {})
+		return {"status": "ok"})
 	_core._cancelled_requests[77] = true
 	var msg: Dictionary = {"jsonrpc": "2.0", "id": 77, "method": "tools/call", "params": {"name": "cancel_probe", "arguments": {}}}
 	var response: Dictionary = await _core._handle_tool_call(msg)
@@ -1149,7 +1149,7 @@ func test_execution_context_set_during_call_and_cleared_after():
 	var observed: Array = []
 	_core.register_tool("ctx_probe", "Probe", {"type": "object"}, func(args):
 		observed.append(_core._execution_context.duplicate())
-		return {})
+		return {"status": "ok"})
 	var msg: Dictionary = {"jsonrpc": "2.0", "id": 55, "method": "tools/call", "params": {"name": "ctx_probe", "arguments": {"_meta": {"progressToken": "pt-55"}}}}
 	await _core._handle_tool_call(msg)
 	assert_eq(observed.size(), 1, "tool executed once")
