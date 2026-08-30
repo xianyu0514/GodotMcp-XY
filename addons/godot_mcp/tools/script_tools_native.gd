@@ -2097,7 +2097,7 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
 
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}
@@ -2122,6 +2122,11 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	var script_res: Script = load(script_path)
 	if not script_res:
 		return {"error": "Failed to load script: " + script_path}
+	# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源；强制编译。
+	if not script_res.can_instantiate():
+		var compile_error: Error = script_res.reload()
+		if compile_error != OK or not script_res.can_instantiate():
+			return {"error": "Script did not compile: " + script_path}
 
 	target_node.set_script(script_res)
 	editor_interface.get_resource_filesystem().scan()

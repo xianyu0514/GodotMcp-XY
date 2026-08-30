@@ -865,6 +865,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
 		result = await tool.callable.call(arguments)
+		if result == null or not (result is Dictionary):
+			# GDScript 运行时错误会让处理器中止并返回 null；绝不能伪装成空成功。
+			error = "Tool handler aborted without a result (runtime error; see the editor log for the stack)"
 	
 	# Tool execution finished: drop this request's cancellation marker (if the
 	# client cancelled mid-run) and the execution context so the next request

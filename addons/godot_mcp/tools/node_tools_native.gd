@@ -125,7 +125,7 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}
@@ -245,7 +245,7 @@ func _tool_delete_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}
@@ -328,7 +328,7 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}
@@ -886,6 +886,9 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					"node_path": prop_node_path,
 					"node": prop_target,
 					"property_name": property_name,
+					# 脚本普通变量（非 @export）不在属性表里，add_do_property 不会生效，
+					# 需要走方法式 set；此类条目跳过单独 undo（建节点场景随节点整体撤销）。
+					"via_method": not (property_name in prop_target),
 					"old_value": prop_target.get(property_name),
 					"new_value": converted_value
 				})
@@ -904,6 +907,15 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 				var script_resource: Script = load(script_path)
 				if script_resource == null:
 					return {"error": "Failed to load script: " + script_path}
+				# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源
+				# （有源码但无成员）。现场编译等价脚本且不注册路径：路径资源会被
+				# 仍在进行的扫描反复失效，而内存脚本不受影响；保存场景时源码内联。
+				if not script_resource.can_instantiate():
+					var fresh_script: GDScript = GDScript.new()
+					fresh_script.source_code = FileAccess.get_file_as_string(script_path)
+					if fresh_script.reload() != OK:
+						return {"error": "Script did not compile: " + script_path}
+					script_resource = fresh_script
 				batch_pending_scripts[attach_target] = script_resource
 				prepared_operations.append({
 					"type": "attach_script",
@@ -1027,16 +1039,26 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					})
 				"set_property":
 					var property_node: Node = prepared["node"]
-					undo_redo.add_do_property(property_node, prepared["property_name"], prepared["new_value"])
-					undo_redo.add_undo_property(property_node, prepared["property_name"], prepared["old_value"])
-					result_operations.append({
+					if bool(prepared.get("via_method", false)):
+						undo_redo.add_do_method(property_node, "set",
+							prepared["property_name"], prepared["new_value"])
+					else:
+						undo_redo.add_do_property(property_node, prepared["property_name"], prepared["new_value"])
+						undo_redo.add_undo_property(property_node, prepared["property_name"], prepared["old_value"])
+					# 编辑器中非 @export 脚本变量不绑定成员（占位实例）；诚实上报。
+					var bound_now: bool = String(prepared["property_name"]) in property_node
+					var prop_entry: Dictionary = {
 						"type": "set_property",
 						"node_path": prepared["node_path"],
 						"property_name": prepared["property_name"],
 						"old_value": _serialize_value(prepared["old_value"]),
 						# 此循环在 commit 前运行，读节点仍是旧值；报告已转换的待应用值。
-						"new_value": _serialize_value(prepared["new_value"])
-					})
+						"new_value": _serialize_value(prepared["new_value"]),
+						"bound": bound_now
+					}
+					if not bound_now:
+						prop_entry["note"] = "non-exported script variables do not bind on editor scene nodes; mark the variable @export"
+					result_operations.append(prop_entry)
 				"attach_script":
 					var attach_node: Node = prepared["node"]
 					undo_redo.add_do_method(attach_node, "set_script", prepared["new_script"])
@@ -1063,14 +1085,6 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 	undo_redo.commit_action()
 	editor_interface.mark_scene_as_unsaved()
 
-	var attach_count: int = 0
-	for prepared in prepared_operations:
-		if String(prepared["type"]) == "attach_script":
-			attach_count += 1
-	if attach_count > 0:
-		# 与 attach_script 工具保持一致：挂载后触发一次文件系统扫描。
-		editor_interface.get_resource_filesystem().scan()
-
 	var save_requested: bool = bool(params.get("save", false))
 	var scene_saved: bool = false
 	var save_note: String = ""
@@ -1082,6 +1096,12 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 			scene_saved = save_error == OK
 			if not scene_saved:
 				save_note = "save_scene returned error %d" % save_error
+
+	# save_scene 会把节点脚本换回路径缓存资源（新写入文件时是未编译壳）；
+	# 保存后对挂载操作补一次直接 set，节点上最终是已编译、成员可绑定的实例。
+	for prepared in prepared_operations:
+		if String(prepared["type"]) == "attach_script" and is_instance_valid(prepared["node"]):
+			(prepared["node"] as Node).set_script(prepared["new_script"])
 
 	var response: Dictionary = {
 		"status": "success",
@@ -2250,7 +2270,7 @@ func _tool_set_anchor_preset(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}

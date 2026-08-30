@@ -227,7 +227,7 @@ func _tool_save_scene(params: Dictionary) -> Dictionary:
 
 	# Optional scene_path pins WHICH scene is saved (guards cross-scene drift);
 	# file_path below is the destination on disk.
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}
@@ -1201,7 +1201,7 @@ func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 		return {"error": "Editor interface not available"}
 	if not _get_user_scene_root():
 		return {"error": "No scene is currently open"}
-	var context_guard: Dictionary = SCENE_CONTEXT.ensure_scene_active(
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
 		editor_interface, String(params.get("scene_path", "")))
 	if not bool(context_guard.get("ok", false)):
 		return {"error": String(context_guard.get("error", "scene context guard failed"))}

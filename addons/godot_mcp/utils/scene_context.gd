@@ -8,7 +8,9 @@ extends RefCounted
 
 ## Ensures `target_scene_path` is the active edited scene. A no-op when the
 ## target is already active; saves the previous scene first when it has
-## unsaved edits so a context switch never loses work.
+## unsaved edits so a context switch never loses work. open_scene_from_path
+## takes effect on a later frame, so the switch is confirmed by polling a few
+## frames — callers must await this coroutine.
 static func ensure_scene_active(editor_interface: EditorInterface,
 		target_scene_path: String) -> Dictionary:
 	var target: String = target_scene_path.strip_edges()
@@ -28,11 +30,14 @@ static func ensure_scene_active(editor_interface: EditorInterface,
 		editor_interface.save_scene()
 		saved_previous = true
 	editor_interface.open_scene_from_path(target)
-	var switched_root: Node = editor_interface.get_edited_scene_root()
-	var switched_path: String = String(switched_root.scene_file_path) if switched_root else ""
-	if switched_path != target:
-		return {"ok": false, "error": "Failed to activate scene: " + target}
-	return {"ok": true, "switched": true, "saved_previous": saved_previous}
+	var switched_path: String = ""
+	for _frame in range(60):
+		await Engine.get_main_loop().process_frame
+		var switched_root: Node = editor_interface.get_edited_scene_root()
+		switched_path = String(switched_root.scene_file_path) if switched_root else ""
+		if switched_path == target:
+			return {"ok": true, "switched": true, "saved_previous": saved_previous}
+	return {"ok": false, "error": "Failed to activate scene: " + target}
 
 static func scene_is_modified(editor_interface: EditorInterface, scene_root: Node) -> bool:
 	if editor_interface == null or scene_root == null:

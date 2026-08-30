@@ -6,13 +6,13 @@ extends "res://addons/gut/test.gd"
 const GuardScript = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 func test_empty_target_is_a_no_op() -> void:
-	var verdict: Dictionary = GuardScript.ensure_scene_active(null, "   ")
+	var verdict: Dictionary = await GuardScript.ensure_scene_active(null, "   ")
 	assert_true(bool(verdict.get("ok", false)))
 	assert_false(bool(verdict.get("switched", true)),
 		"No target scene means nothing to activate")
 
 func test_missing_editor_interface_fails_closed() -> void:
-	var verdict: Dictionary = GuardScript.ensure_scene_active(null, "res://main.tscn")
+	var verdict: Dictionary = await GuardScript.ensure_scene_active(null, "res://main.tscn")
 	assert_false(bool(verdict.get("ok", true)))
 	assert_true(String(verdict.get("error", "")).length() > 0,
 		"A named target without an editor must fail explicitly, not guess")
