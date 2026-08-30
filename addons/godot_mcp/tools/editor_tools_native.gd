@@ -2281,6 +2281,17 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 	if not (action in ["status", "install", "remove", "download", "download_status", "download_cancel"]):
 		return {"error": "Invalid action '%s'. Expected one of: status, install, remove, download, download_status, download_cancel." % action}
 
+	# download_status / download_cancel 只读写下载状态机，不需要安装目录；
+	# 必须在 templates_root 解析之前分发，调用方才不必为轮询重复传 root。
+	if action == "download_status":
+		if _template_download.is_empty():
+			return {"action": "download_status", "status": "idle",
+				"message": "No template download has been started."}
+		return {"action": "download_status", "status": _template_download.get("report_status", "pending"),
+			"download": _templates_download_snapshot()}
+	if action == "download_cancel":
+		return _templates_download_cancel()
+
 	var templates_root: String = str(params.get("templates_root", "")).strip_edges()
 	if templates_root.is_empty():
 		templates_root = _get_export_templates_root()
@@ -2315,14 +2326,6 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 
 	if action == "download":
 		return _templates_download_start(params, templates_root, version_meta, godot_version)
-	if action == "download_status":
-		if _template_download.is_empty():
-			return {"action": "download_status", "status": "idle",
-				"message": "No template download has been started."}
-		return {"action": "download_status", "status": _template_download.get("report_status", "pending"),
-			"download": _templates_download_snapshot()}
-	if action == "download_cancel":
-		return _templates_download_cancel()
 
 	if action == "install":
 		var tpz_path: String = str(params.get("tpz_path", "")).strip_edges()
