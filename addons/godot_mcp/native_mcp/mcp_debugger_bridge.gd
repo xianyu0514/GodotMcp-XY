@@ -362,6 +362,9 @@ const DEBUGGER_RESCAN_INTERVAL_MS: int = 2000
 
 var _last_debugger_walk_msec: int = -DEBUGGER_RESCAN_INTERVAL_MS
 var _node_added_hooked: bool = false
+# 弱引用代理的连接 Callable：脚本热重载/退出期间 node_added 若在实例半释放后
+# 触发，强引用 Callable 会在空实例上报 SCRIPT ERROR（4.7 导入门禁因此失败）。
+var _node_added_proxy: Callable = Callable()
 
 
 func _notification(what: int) -> void:
@@ -401,9 +404,13 @@ func _hook_node_added() -> void:
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if not tree:
 		return
-	var handler: Callable = Callable(self, "_on_tree_node_added")
-	if not tree.node_added.is_connected(handler):
-		tree.node_added.connect(handler)
+	var weak: WeakRef = weakref(self)
+	_node_added_proxy = func(node: Node) -> void:
+		var bridge: MCPDebuggerBridge = weak.get_ref() as MCPDebuggerBridge
+		if bridge != null:
+			bridge._on_tree_node_added(node)
+	if not tree.node_added.is_connected(_node_added_proxy):
+		tree.node_added.connect(_node_added_proxy)
 	_node_added_hooked = true
 
 
@@ -412,9 +419,8 @@ func _unhook_node_added() -> void:
 		return
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if tree:
-		var handler: Callable = Callable(self, "_on_tree_node_added")
-		if tree.node_added.is_connected(handler):
-			tree.node_added.disconnect(handler)
+		if _node_added_proxy.is_valid() and tree.node_added.is_connected(_node_added_proxy):
+			tree.node_added.disconnect(_node_added_proxy)
 	_node_added_hooked = false
 
 
