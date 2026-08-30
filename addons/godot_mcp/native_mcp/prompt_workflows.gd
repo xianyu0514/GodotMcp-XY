@@ -165,6 +165,50 @@ Script paths: {{script_paths_block}}
 # Prompt 注册表
 # ============================================================================
 
+const ITERATE_PLAY_VERIFY_TEMPLATE: String = """
+You are executing the "Iterate: Play, Verify, Fix" loop against the Godot project through MCP tools.
+Repeat the loop until every gate passes or you have isolated a root cause you cannot fix.
+
+Target: {{target}}
+Gates: {{gates}}
+
+1. Play — {"tool": "run_project", "args": {"scene_path": "<scene if not the main scene>"}}.
+   For an orchestrated one-shot, {"tool": "play_and_verify"} already runs, samples and gates.
+2. Observe — {"tool": "get_editor_logs", "args": {"source": "runtime"}} for errors;
+   {"tool": "get_runtime_info"} and {"tool": "evaluate_runtime_expression", "args": {"expression": "<state to check>"}}
+   for live state while the game runs.
+3. Gate — {"tool": "assert_no_runtime_errors", "args": {"max_errors": 0}} and, when a frame
+   budget applies, {"tool": "assert_performance_budget", "args": {"budget": {"min_fps": 55}}}.
+   Scenario-specific expectations: {"tool": "assert_runtime_condition", "args": {"expression": "<expr>"}}.
+4. Fix — when a gate fails, read the reported error/state, patch the smallest coherent cause
+   (script or scene edit), stop with {"tool": "stop_project"}, and restart from step 1.
+5. Cap — after 3 consecutive identical failures with no progress, stop and report the isolated
+   root cause instead of looping.
+
+Done when: assert_no_runtime_errors passes, every requested gate reports pass, and the last
+play session reached the scenario's expected state.
+"""
+
+const RELEASE_EXPORT_FLOW_TEMPLATE: String = """
+You are executing the "Release Export Checklist" workflow against the Godot project through MCP tools.
+
+Platform: {{platform}}
+Notes: {{notes}}
+
+1. Templates — {"tool": "manage_export_templates", "args": {"action": "status"}}: matching_version_installed
+   must be true; when false, download with {"action": "download"} and poll {"action": "download_status"}.
+2. Preset — {"tool": "inspect_export_preset"} then {"tool": "validate_export_preset"}: resolve every
+   reported issue (export_path, template availability, platform fields) before exporting.
+3. Version — {"tool": "bump_version"}: raise the project version per the requested step and record
+   the changelog entry it returns.
+4. Export — {"tool": "run_export"} for the target preset; the result carries the artifact path.
+5. Smoke — {"tool": "smoke_test_export", "args": {"launch": true}}: the product must exist and the
+   launched process must exit with the expected code.
+6. Report — summarize artifact path, size, version and smoke verdict in one block.
+
+Done when: steps 1-5 all pass; any blocking failure is reported with the exact tool message.
+"""
+
 var _prompts: Dictionary = {}  # name -> {name, description, arguments, callable}
 
 func _init() -> void:
@@ -226,6 +270,24 @@ func _register_all() -> void:
 			{"name": "script_paths", "description": "Optional comma-separated script paths to fix. When omitted, discover offending scripts from validation errors.", "required": false}
 		],
 		Callable(self, "_get_fix_compile_errors")
+	)
+	_add_prompt(
+		"iterate_play_verify",
+		"Run the play -> verify -> fix loop: launch the project, pull runtime logs and live state, gate on no-runtime-errors / performance / scenario conditions, patch the smallest cause and repeat until green.",
+		[
+			{"name": "target", "description": "What to verify, e.g. 'enemy wave spawner keeps 55 fps with zero runtime errors'.", "required": true},
+			{"name": "gates", "description": "Optional gate list, e.g. 'no_runtime_errors, min_fps=55, player.y never < 0'. Defaults to no-runtime-errors.", "required": false}
+		],
+		Callable(self, "_get_iterate_play_verify")
+	)
+	_add_prompt(
+		"release_export_flow",
+		"Walk the release export checklist: template availability, preset validation, version bump, export, launched smoke test and a final report.",
+		[
+			{"name": "platform", "description": "Target platform/preset, e.g. 'Windows Desktop'.", "required": false},
+			{"name": "notes", "description": "Optional release notes or version step, e.g. 'patch bump, fix controller pause'.", "required": false}
+		],
+		Callable(self, "_get_release_export_flow")
 	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
@@ -330,6 +392,25 @@ func _get_run_test_suite(args: Dictionary) -> Dictionary:
 
 func _get_visual_playtest(args: Dictionary) -> Dictionary:
 	return _render(VISUAL_PLAYTEST_TEMPLATE, args, ["scenario"])
+
+func _get_iterate_play_verify(args: Dictionary) -> Dictionary:
+	var content: String = ITERATE_PLAY_VERIFY_TEMPLATE
+	var gates: String = str(args.get("gates", "")).strip_edges()
+	if gates.is_empty():
+		gates = "no runtime errors (max_errors=0)"
+	content = content.replace("{{gates}}", gates)
+	return _render(content, args, ["target"])
+
+func _get_release_export_flow(args: Dictionary) -> Dictionary:
+	var content: String = RELEASE_EXPORT_FLOW_TEMPLATE
+	var platform: String = str(args.get("platform", "")).strip_edges()
+	if platform.is_empty():
+		platform = "the project's default export preset"
+	var notes: String = str(args.get("notes", "")).strip_edges()
+	if notes.is_empty():
+		notes = "none"
+	content = content.replace("{{platform}}", platform).replace("{{notes}}", notes)
+	return _render(content, args, [])
 
 func _get_onboard_new_project(args: Dictionary) -> Dictionary:
 	return _render(ONBOARD_NEW_PROJECT_TEMPLATE, args, [])
