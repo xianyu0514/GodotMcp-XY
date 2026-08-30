@@ -12,6 +12,7 @@ extends RefCounted
 const EngineScript = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
+const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -540,6 +541,14 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["scene_path"] = "res://scenes/%s.tscn" % profile_slug
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["scene_path"] = arguments["scene_path"]
+	# 移动类目标的控制器需要 CharacterBody2D 根节点（蓝图脚本 extends 它）。
+	if tool_name == "create_scene" and not arguments.has("root_node_type") \
+			and step_profile == "gameplay_feature":
+		var scene_objective: String = String(plan.get("goal", ""))
+		if GoalBlueprintsScript._mentions(scene_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+			arguments["root_node_type"] = "CharacterBody2D"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["root_node_type"] = "CharacterBody2D"
 	if tool_name == "create_script" and not arguments.has("script_path") \
 			and not artifacts.has("script"):
 		var script_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
@@ -548,6 +557,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			script_slug, "-" + step_id if not step_id.is_empty() else ""]
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["script_path"] = arguments["script_path"]
+	# 目标命中蓝图动词时生成真实可运行内容（调用方显式 content 永远优先）。
+	if tool_name == "create_script" and not arguments.has("content") \
+			and step_profile == "gameplay_feature":
+		var objective: String = String(plan.get("goal", ""))
+		var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
+		if not blueprint_source.is_empty():
+			arguments["content"] = blueprint_source
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["content"] = "goal-blueprint"
 	# 挂载步骤缺 node_path 时默认场景根：gameplay profile 不建独立玩家节点，
 	# 控制器脚本挂到场景根即可运行。
 	if tool_name == "attach_script" and not arguments.has("node_path") \

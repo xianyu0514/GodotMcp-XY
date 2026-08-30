@@ -134,8 +134,20 @@ def main() -> int:
                 executed = run.get("executed", [])
                 if not executed:
                     raise AssertionError("completed without any executed steps")
+                # 蓝图断言：产出的必须是真实可玩内容，不是占位脚本。
+                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
+                if not script_files:
+                    raise AssertionError("completed without any generated scripts")
+                controller = script_files[0].read_text(encoding="utf-8")
+                if "move_and_slide()" not in controller:
+                    raise AssertionError(f"controller lacks real movement code: {controller[:200]}")
+                if "_on_coin_touched" not in controller:
+                    raise AssertionError("controller lacks pickup logic for the coin goal")
+                scene_file = SCRATCH / "scenes" / "gameplay-feature.tscn"
+                if not scene_file.exists() or "CharacterBody2D" not in scene_file.read_text(encoding="utf-8"):
+                    raise AssertionError("movement goal must produce a CharacterBody2D-rooted scene")
                 print(f"[goal-flow] completed after {iteration + 1} run calls; "
-                      f"executed {len(executed)} steps in the last slice")
+                      f"executed {len(executed)} steps; playable controller verified")
                 return 0
             if state == "needs_input" or (state == "waiting" and run.get("needs_input")):
                 needs = run.get("needs_input", run.get("needs", []))

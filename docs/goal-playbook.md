@@ -55,6 +55,7 @@
 - **编辑器失焦可能节流主循环**：长下载等节点驱动任务会临时开启 Update Continuously 保活，结束自动恢复。
 - **刚写入的脚本文件是"冷资源"**：工具内部已做编译守卫；自定义脚本若手动 `load()` 刚写的文件，注意 `can_instantiate()`。
 - **首场景/首脚本路径自动推导**：不传路径时按 profile 落到 `res://scenes|scripts|themes/<profile>...`；要控制位置就显式传 `scene_path`/`script_path`。
+- **目标蓝图**：目标提到移动/收集/胜利（双语）时，`create_script` 自动生成真实控制器（含运行期生成的拾取体与胜利标签）、场景根派生为 `CharacterBody2D`；显式传 `content` 永远优先。
 
 ## 出问题时的取证顺序
 
