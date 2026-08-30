@@ -3182,6 +3182,7 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 			"download": _templates_download_snapshot(),
 			"message": "A download is already in progress; poll with action='download_status'."
 		}
+	_templates_kill_stale_download_nodes()
 	var mirror: String = String(params.get("mirror", "godotengine")).strip_edges().to_lower()
 	if not mirror in ["github", "tuxfamily", "godotengine"]:
 		return {"error": "Invalid mirror '%s'. Expected one of: github, tuxfamily, godotengine." % mirror}
@@ -3213,8 +3214,8 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 	if connections >= 2:
 		var fetch: TemplatesParallelFetch = TemplatesParallelFetch.new()
 		fetch.setup(url, tpz_abs, proxy, connections, 60000)
-		fetch.progress_cb = Callable(self, "_on_templates_download_progress")
-		fetch.completed.connect(_on_templates_download_completed)
+		fetch.progress_cb = Callable(self, "_on_templates_download_progress").bind(fetch)
+		fetch.completed.connect(_on_templates_download_completed.bind(fetch))
 		root.add_child(fetch)
 		_template_download = {
 			"phase": "downloading",
@@ -3266,8 +3267,8 @@ func _templates_download_start(params: Dictionary, templates_root: String,
 		"require_integrity": bool(params.get("require_integrity", false)),
 		"keep_archive": bool(params.get("keep_archive", false)),
 	}
-	getter.progress_cb = Callable(self, "_on_templates_download_progress")
-	getter.completed.connect(_on_templates_download_completed)
+	getter.progress_cb = Callable(self, "_on_templates_download_progress").bind(getter)
+	getter.completed.connect(_on_templates_download_completed.bind(getter))
 	_templates_begin_update_continuously()
 	getter.start()
 	return {
@@ -3282,8 +3283,42 @@ func _templates_download_cleanup_getter(getter: Node) -> void:
 			getter.get_parent().remove_child(getter)
 		getter.queue_free()
 
-func _on_templates_download_progress(bytes: int, total_bytes: int) -> void:
+# 终态尝试残留的协调器/getter 节点会迟到地发出 completed 信号污染新尝试；
+# 新尝试启动前取消并释放全部游离下载节点（含热重载后失去引用的历史残留）。
+func _templates_kill_stale_download_nodes() -> void:
+	var nodes: Array = []
+	var stale_coordinator: Node = _template_download.get("coordinator", null)
+	if stale_coordinator != null and is_instance_valid(stale_coordinator):
+		if stale_coordinator.has_method("cancel"):
+			stale_coordinator.call("cancel")
+		nodes.append(stale_coordinator)
+	var stale_getter: Node = _template_download.get("getter", null)
+	if stale_getter != null and is_instance_valid(stale_getter):
+		nodes.append(stale_getter)
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root != null:
+		for child in root.get_children():
+			if child is TemplatesHttpGetter or child is TemplatesParallelFetch:
+				nodes.append(child)
+	for node_value in nodes:
+		var stale: Node = node_value
+		if stale == null or not is_instance_valid(stale):
+			continue
+		if stale.is_inside_tree():
+			stale.get_parent().remove_child(stale)
+		stale.queue_free()
+
+func _on_templates_download_progress(bytes: int, total_bytes: int, source: Node = null) -> void:
 	if _template_download.is_empty():
+		return
+	# 丢弃陈旧尝试的迟到进度：source 绑定自启动时的协调器/getter；
+	# 当前尝试存在绑定来源而无 source 的，必为热重载前的旧连接。
+	if source == null and (_template_download.has("coordinator") or _template_download.has("getter")):
+		return
+	if source != null and source != _template_download.get("coordinator") \
+			and source != _template_download.get("getter"):
+		return
+	if String(_template_download.get("phase", "")) != "downloading":
 		return
 	_template_download["bytes"] = bytes
 	_template_download["total_bytes"] = total_bytes
@@ -3340,8 +3375,17 @@ func _templates_download_cancel() -> Dictionary:
 	return {"action": "download_cancel", "status": "cancelled",
 		"message": "Template download cancelled; partial file removed."}
 
-func _on_templates_download_completed(outcome: Dictionary) -> void:
+func _on_templates_download_completed(outcome: Dictionary, source: Node = null) -> void:
 	if _template_download.is_empty():
+		return
+	# 丢弃陈旧尝试的迟到 completed 信号：旧协调器/getter 的失败会在新尝试
+	# 启动几十秒内到达，把正在进行的下载误标为 failed（跨尝试信号污染）。
+	if source == null and (_template_download.has("coordinator") or _template_download.has("getter")):
+		return
+	if source != null and source != _template_download.get("coordinator") \
+			and source != _template_download.get("getter"):
+		return
+	if String(_template_download.get("phase", "")) != "downloading":
 		return
 	if not bool(outcome.get("ok", false)):
 		var detail: String = String(outcome.get("error", "unknown failure"))
