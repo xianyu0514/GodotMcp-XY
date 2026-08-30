@@ -2102,7 +2102,7 @@ const _ANDROID_ARCHITECTURES: PackedStringArray = ["arm64-v8a", "armeabi-v7a", "
 
 func _register_manage_export_templates(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_export_templates"
-	var description: String = "Manage export templates. status: report installed versions + official URL for the current editor version. download: trusted background download from an allowlisted official mirror, verified and auto-installed; returns pending — poll with download_status, cancel with download_cancel. install: extract a local .tpz. remove: delete a version. net_diag: dial hostname/IP from the editor to separate DNS, outbound-block and processing issues. Tool-side trusted network path (ScriptSandbox never applies). Godot 4.6+."
+	var description: String = "Manage export templates. status: report installed versions + official URL for the current editor version. download: trusted background download from an allowlisted official mirror, verified and auto-installed; returns pending — poll with download_status, cancel with download_cancel. install: extract a local .tpz. remove: delete a version. net_diag: editor-side connectivity diagnosis. Trusted path (ScriptSandbox never applies). Godot 4.6+."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -2121,7 +2121,7 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			},
 			"proxy": {
 				"type": "string",
-				"description": "download: loopback HTTP proxy (http://127.0.0.1:PORT); the system proxy is detected automatically."
+				"description": "download: loopback HTTP proxy; auto-detected from system."
 			},
 			"require_integrity": {
 				"type": "boolean",
@@ -2130,7 +2130,7 @@ func _register_manage_export_templates(server_core: RefCounted) -> void:
 			},
 			"connections": {
 				"type": "integer",
-				"description": "download: parallel connections (1-16), default 8, resumable.",
+				"description": "download: parallel connections 1-16 (default 8).",
 				"default": 8
 			},
 			"keep_archive": {

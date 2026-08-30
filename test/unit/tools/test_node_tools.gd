@@ -372,3 +372,42 @@ func test_node_type_error_rejects_abstract_node():
 func test_node_type_error_rejects_empty():
 	assert_true(NodeToolsNative._node_type_error("").length() > 0, "empty type -> error")
 	assert_true(NodeToolsNative._node_type_error("   ").length() > 0, "whitespace type -> error")
+
+func test_batch_edit_shape_validation_new_operations():
+	assert_eq(NodeToolsNative.validate_batch_edit_operation(
+		{"type": "set_property", "node_path": "/root/S/A", "property_name": "speed",
+			"property_value": 12.0}), "",
+		"set_property with all fields passes shape validation")
+	assert_eq(NodeToolsNative.validate_batch_edit_operation(
+		{"type": "attach_script", "node_path": "/root/S/A", "script_path": "res://a.gd"}), "",
+		"attach_script with all fields passes shape validation")
+	assert_eq(NodeToolsNative.validate_batch_edit_operation(
+		{"type": "connect_signal", "node_path": "/root/S/A",
+			"signal_name": "pressed", "method_name": "_on_pressed"}), "",
+		"connect_signal with all fields passes shape validation")
+
+func test_batch_edit_shape_validation_rejects_missing_fields():
+	var missing_value: String = NodeToolsNative.validate_batch_edit_operation(
+		{"type": "set_property", "node_path": "/root/S/A", "property_name": "speed"})
+	assert_true(missing_value.contains("property_value"), "set_property without value is rejected")
+	var missing_script: String = NodeToolsNative.validate_batch_edit_operation(
+		{"type": "attach_script", "node_path": "/root/S/A"})
+	assert_true(missing_script.contains("script_path"), "attach_script without script is rejected")
+	var missing_signal: String = NodeToolsNative.validate_batch_edit_operation(
+		{"type": "connect_signal", "node_path": "/root/S/A", "method_name": "_on_x"})
+	assert_true(missing_signal.contains("signal_name"), "connect_signal without signal is rejected")
+
+func test_batch_edit_handler_rejects_bad_shape_before_environment():
+	var tools: RefCounted = NodeToolsNative.new()
+	var result: Dictionary = tools._tool_batch_scene_node_edits(
+		{"operations": [{"type": "set_property", "node_path": "/root/S/A"}]})
+	assert_true(result.has("error"), "missing property_value is rejected")
+	assert_true(str(result["error"]).contains("property_value"),
+		"error names the missing field, not the missing editor interface")
+
+func test_batch_edit_handler_rejects_unknown_type_before_environment():
+	var tools: RefCounted = NodeToolsNative.new()
+	var result: Dictionary = tools._tool_batch_scene_node_edits(
+		{"operations": [{"type": "teleport", "node_path": "/root/S/A"}]})
+	assert_true(result.has("error") and str(result["error"]).contains("Unsupported operation type"),
+		"unknown op type is rejected by shape validation")
