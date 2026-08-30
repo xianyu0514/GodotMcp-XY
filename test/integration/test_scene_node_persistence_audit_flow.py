@@ -108,13 +108,14 @@ def main() -> int:
         if create_scene.get("status") != "success":
             raise AssertionError(f"create_scene failed: {create_scene}")
 
-        open_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH}, request_id=3)
+        open_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH, "allow_ui_focus": True}, request_id=3)
         if open_scene.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene}")
 
         persistent_child = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "PersistentChild"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "PersistentChild",
+             "scene_path": TEMP_SCENE_PATH},
             request_id=4,
         )
         if persistent_child.get("status") != "success":

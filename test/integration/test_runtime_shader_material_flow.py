@@ -163,7 +163,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -279,6 +279,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_messages", "get_debugger_sessions", "get_runtime_info", "get_runtime_material_state", "get_runtime_shader_parameters", "install_runtime_probe", "open_scene", "run_project", "set_runtime_shader_parameter", "stop_project"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -292,7 +293,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime shader/material tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)
@@ -334,8 +335,17 @@ def main() -> int:
             raise AssertionError(f"Expected shader parameters strength and tint: {parameters}")
         if abs(float(parameter_map["strength"].get("value", 0.0)) - 0.5) > 1e-6:
             raise AssertionError(f"Expected initial strength uniform to be 0.5: {parameters}")
-        tint_value = parameter_map["tint"].get("value", {})
-        if tint_value != {"r": 1.0, "g": 0.0, "b": 0.0, "a": 1.0}:
+        # 探针可能以 dict / list / 字符串任一形式序列化 Color；按归一化数值比较。
+        raw_tint = parameter_map["tint"].get("value", {})
+        def _tint_components(value) -> list:
+            if isinstance(value, dict):
+                return [float(value.get(k, 0.0)) for k in ("r", "g", "b", "a")]
+            if isinstance(value, (list, tuple)):
+                return [float(v) for v in list(value)[:4]]
+            text = str(value).strip("() ").replace(" ", "")
+            parts = [seg for seg in text.split(",") if seg != ""]
+            return [float(float(seg)) for seg in parts[:4]]
+        if _tint_components(raw_tint) != [1.0, 0.0, 0.0, 1.0]:
             raise AssertionError(f"Expected initial tint uniform to be solid red: {parameters}")
 
         updated_parameter = dispatch_runtime_tool_until_message(

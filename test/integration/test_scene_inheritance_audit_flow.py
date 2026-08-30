@@ -104,6 +104,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["audit_scene_inheritance", "open_scene"], "enabled": True}, request_id=90)
 
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
@@ -112,7 +113,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected inheritance audit tools: {missing_tools}")
 
-        open_scene = tool_call("open_scene", {"scene_path": PARENT_SCENE_PATH}, request_id=2)
+        open_scene = tool_call("open_scene", {"scene_path": PARENT_SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_scene.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene}")
 

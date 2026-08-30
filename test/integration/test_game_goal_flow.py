@@ -242,6 +242,7 @@ def main() -> int:
     )
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["plan_game_workflow", "run_game_workflow"], "enabled": True}, request_id=90)
         # 残留服务器防串台：确认应答的确实是 scratch 项目（project_name 一致）。
         info = tool_call("get_project_info", {}, request_id=1)
         if str(info.get("project_name", "")) != "GoalFlowScratch":

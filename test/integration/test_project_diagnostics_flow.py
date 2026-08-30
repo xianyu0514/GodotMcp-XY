@@ -100,6 +100,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["audit_project_health", "detect_broken_scripts"], "enabled": True}, request_id=90)
 
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}

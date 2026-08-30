@@ -183,6 +183,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_sessions", "get_runtime_info", "get_runtime_screenshot", "install_runtime_probe", "list_open_scenes", "open_scene", "run_project", "stop_project"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -192,7 +193,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime screenshot tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)
@@ -201,7 +202,7 @@ def main() -> int:
         if install_result.get("status") not in {"success", "already_installed"}:
             raise AssertionError(f"install_runtime_probe failed: {install_result}")
 
-        run_result = tool_call("run_project", {"scene_path": SCENE_PATH}, request_id=4)
+        run_result = tool_call("run_project", {"scene_path": SCENE_PATH, "allow_window": True}, request_id=4)
         if run_result.get("status") != "success":
             raise AssertionError(f"run_project failed: {run_result}")
         wait_for_active_debugger_session()

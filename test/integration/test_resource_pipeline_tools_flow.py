@@ -116,6 +116,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["create_resource", "fix_resource_uid", "get_import_metadata", "get_resource_dependencies", "get_resource_uid_info", "reimport_resources", "scan_missing_resource_dependencies"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")

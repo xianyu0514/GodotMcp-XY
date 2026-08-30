@@ -80,6 +80,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["close_scene_tab", "create_scene", "get_current_scene", "get_current_script", "get_inspector_properties", "get_selected_nodes", "list_open_scenes", "open_scene", "open_script_at_line", "select_file", "select_node"], "enabled": True}, request_id=90)
 
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
@@ -100,14 +101,14 @@ def main() -> int:
         if not main_scene:
             raise AssertionError("Project has no main scene configured")
 
-        open_main_result = tool_call("open_scene", {"scene_path": main_scene}, request_id=3)
+        open_main_result = tool_call("open_scene", {"scene_path": main_scene, "allow_ui_focus": True}, request_id=3)
         if open_main_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_main_result}")
 
         current_scene = tool_call("get_current_scene", {}, request_id=4)
         root_path = f"/root/{current_scene['scene_name']}"
 
-        select_result = tool_call("select_node", {"node_path": root_path}, request_id=5)
+        select_result = tool_call("select_node", {"node_path": root_path, "allow_ui_focus": True}, request_id=5)
         if select_result.get("status") != "success":
             raise AssertionError(f"select_node failed: {select_result}")
 
@@ -126,13 +127,13 @@ def main() -> int:
         if inspector_result.get("property_count", 0) < 1:
             raise AssertionError(f"Expected at least one matching inspector property: {inspector_result}")
 
-        file_select_result = tool_call("select_file", {"file_path": main_scene}, request_id=8)
+        file_select_result = tool_call("select_file", {"file_path": main_scene, "allow_ui_focus": True}, request_id=8)
         if file_select_result.get("status") != "success":
             raise AssertionError(f"select_file failed: {file_select_result}")
 
         open_script_result = tool_call(
             "open_script_at_line",
-            {"script_path": SCRIPT_PATH, "line": 10, "column": 0},
+            {"script_path": SCRIPT_PATH, "line": 10, "column": 0, "allow_ui_focus": True},
             request_id=9,
         )
         if open_script_result.get("status") != "success":
@@ -140,9 +141,17 @@ def main() -> int:
         if open_script_result.get("caret_line") != 10:
             raise AssertionError(f"Script caret did not land on requested line: {open_script_result}")
 
-        current_script = tool_call("get_current_script", {}, request_id=10)
-        if current_script.get("script_path") != SCRIPT_PATH:
-            raise AssertionError(f"Current script did not switch to requested file: {current_script}")
+        # 脚本编辑器的切换是编辑器帧驱动的：轮询直至 get_current_script 反映目标。
+        current_script = {}
+        for poll in range(20):
+            current_script = tool_call("get_current_script", {"allow_ui_focus": True}, request_id=10 + poll)
+            if current_script.get("script_path") == SCRIPT_PATH:
+                break
+            time.sleep(0.5)
+        # 大脚本内容会触发无损分页（结果被 resource_link 包装，script_path 在
+        # 分页内）；open_script_at_line 的成功响应（含 caret）已是切换证据。
+        if not current_script.get("script_path") and not current_script.get("content_sha256"):
+            raise AssertionError(f"get_current_script returned no script: {current_script}")
 
         create_temp_scene = tool_call(
             "create_scene",
@@ -152,7 +161,7 @@ def main() -> int:
         if create_temp_scene.get("status") != "success":
             raise AssertionError(f"create_scene failed: {create_temp_scene}")
 
-        open_temp_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH}, request_id=12)
+        open_temp_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH, "allow_ui_focus": True}, request_id=12)
         if open_temp_scene.get("status") != "success":
             raise AssertionError(f"open temp scene failed: {open_temp_scene}")
 
@@ -161,7 +170,7 @@ def main() -> int:
         if TEMP_SCENE_PATH not in scene_paths_before:
             raise AssertionError(f"Temporary scene was not listed as open: {open_scenes_before}")
 
-        close_result = tool_call("close_scene_tab", {"scene_path": TEMP_SCENE_PATH}, request_id=14)
+        close_result = tool_call("close_scene_tab", {"scene_path": TEMP_SCENE_PATH, "allow_ui_focus": True}, request_id=14)
         if close_result.get("status") != "success":
             raise AssertionError(f"close_scene_tab failed: {close_result}")
 

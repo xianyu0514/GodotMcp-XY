@@ -114,12 +114,12 @@ def main() -> int:
 
         mover = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Mover"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Mover", "scene_path": TEMP_SCENE_PATH},
             request_id=4,
         )
         pivot = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Pivot"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Pivot", "scene_path": TEMP_SCENE_PATH},
             request_id=5,
         )
         if mover.get("status") != "success" or pivot.get("status") != "success":

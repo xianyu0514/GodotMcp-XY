@@ -172,7 +172,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 2, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -219,6 +219,7 @@ def run_once() -> None:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_sessions", "get_runtime_info", "install_runtime_probe", "open_scene", "run_project", "simulate_runtime_input_event", "stop_project"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -228,7 +229,7 @@ def run_once() -> None:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime joypad input tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)

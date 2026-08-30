@@ -129,6 +129,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["find_script_symbol_definition"], "enabled": True}, request_id=90)
 
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
