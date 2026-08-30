@@ -666,6 +666,11 @@ func _register_execute_editor_script(server_core: RefCounted) -> void:
 			"code": {
 				"type": "string",
 				"description": "Full GDScript code to execute. Can contain multiple statements, loops, conditionals, and await. Use _custom_print(value) to send output back to the tool response (standard print() goes to editor panel only)."
+			},
+			"expect_files": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Paths the script must create; any missing file fails the call (anti false-success)."
 			}
 		},
 		"required": ["code"]
@@ -690,6 +695,25 @@ func _register_execute_editor_script(server_core: RefCounted) -> void:
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_execute_editor_script"),
 						  output_schema, annotations, "supplementary", "Editor")
+
+## 声明式副作用验证：调用方约定“这次执行应产生这些文件”。工具返回 success
+## 但预期文件缺失即判定失败——堵住 workflow completed 而证据未生成的假成功。
+static func verify_expected_files(expect_files: Array) -> Dictionary:
+	var cleaned: Array = []
+	for path_value in expect_files:
+		var declared_path: String = String(path_value).strip_edges()
+		if not declared_path.is_empty():
+			cleaned.append(declared_path)
+	var missing: Array = []
+	for declared_path in cleaned:
+		if not FileAccess.file_exists(declared_path):
+			missing.append(declared_path)
+	return {
+		"declared_count": cleaned.size(),
+		"verified_count": cleaned.size() - missing.size(),
+		"missing_files": missing,
+		"ok": missing.is_empty(),
+	}
 
 func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
@@ -776,10 +800,18 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 	if instance is RefCounted:
 		pass
 
-	return {
+	var result: Dictionary = {
 		"success": true,
 		"output": output
 	}
+	var expect_value: Variant = params.get("expect_files", [])
+	if expect_value is Array and not (expect_value as Array).is_empty():
+		var verification: Dictionary = verify_expected_files(expect_value as Array)
+		result["side_effects"] = verification
+		if not bool(verification.get("ok", true)):
+			result["success"] = false
+			result["error"] = "Execution finished but expected files were not created: " + ", ".join(verification.get("missing_files", []))
+	return result
 
 func _count_indent(line: String) -> int:
 	var count: int = 0

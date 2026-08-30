@@ -1,5 +1,7 @@
 extends "res://addons/gut/test.gd"
 
+const DebugToolsScript = preload("res://addons/godot_mcp/tools/debug_tools_native.gd")
+
 class FakeRuntimeBridge:
 	extends RefCounted
 
@@ -640,3 +642,15 @@ func test_scan_godot_log_error_lines_finds_script_errors():
 	assert_true(str(lines[1].get("message", "")).contains("PARSE ERROR"), "Second entry should be the parse error")
 	DirAccess.remove_absolute(log_path)
 	DirAccess.remove_absolute(tmp_dir)
+
+func test_verify_expected_files_flags_missing_side_effects() -> void:
+	# 声明存在的文件 → 通过；缺失的文件 → 失败并点名（防假成功契约）。
+	var existing: String = "res://project.godot"
+	var verdict: Dictionary = DebugToolsScript.verify_expected_files([existing, ""])
+	assert_true(bool(verdict.get("ok", false)), "Declared existing file verifies")
+	assert_eq(int(verdict.get("declared_count", -1)), 1, "Blank entries are ignored")
+	var failed: Dictionary = DebugToolsScript.verify_expected_files(
+		["res://definitely_not_created_zz.gd"])
+	assert_false(bool(failed.get("ok", true)))
+	assert_true((failed.get("missing_files", []) as Array).has("res://definitely_not_created_zz.gd"),
+		"Missing evidence files are named for actionable repair")

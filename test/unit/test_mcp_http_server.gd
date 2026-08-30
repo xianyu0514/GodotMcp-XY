@@ -443,3 +443,10 @@ func test_error_response_header_declares_connection_close() -> void:
 	assert_true(header.contains("Content-Length: 11"))
 	assert_true(header.contains("Connection: close"),
 		"Error responses share the same close-before-reuse contract")
+
+func test_dispatch_watchdog_timeout_is_bounded() -> void:
+	# 主线程阻塞时请求必须在一个有界时间内得到 503，而不是无限挂死连接。
+	assert_true(_http_server.DISPATCH_TIMEOUT >= 5.0,
+		"看门狗时限至少 5 秒（避免误杀慢工具）")
+	assert_true(_http_server.DISPATCH_TIMEOUT <= 120.0,
+		"看门狗时限至多 120 秒（导入/扫描期间的远程调用方不应等更久）")

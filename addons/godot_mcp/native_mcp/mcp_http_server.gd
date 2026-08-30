@@ -36,6 +36,11 @@ const AUTH_SCHEME: String = "Bearer"
 ## 最大并发连接数（防止连接数过多导致资源耗尽）
 const MAX_CONNECTIONS: int = 64
 
+# 已派发到主线程但尚未收到响应的请求：编辑器主线程阻塞（导入/全量扫描/
+# reload_project）时这些请求会无限挂死。超过该时限后由服务器线程直接回 503，
+# 让客户端（尤其是隧道后的远程调用方）得到明确的可重试信号而不是黑洞。
+const DISPATCH_TIMEOUT: float = 30.0
+
 
 # ==============================================================================
 # 状态变量（带类型提示 - 根据 godot-dev-guide）
@@ -68,6 +73,8 @@ var _sessions: Dictionary = {}  # session_id -> session_data
 ## POST 请求按 peer 协商的响应格式（"json" 或 "sse"），主线程 send_response 据此选择。
 ## 与 _sse_connections 相同的既有跨线程访问模式（服务器线程写、主线程读）。
 var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
+# peer -> {"at": msec}：已 call_deferred 到主线程、等待响应的请求（仅服务器线程读写）。
+var _dispatched_requests: Dictionary = {}
 
 ## 尚未接收完整的 HTTP 请求状态。服务器线程按轮询增量组装每个 peer 的请求，
 ## 避免一个慢客户端在等待剩余正文时阻塞其他连接与 SSE 心跳。
@@ -318,6 +325,16 @@ func _http_server_loop() -> void:
 			_send_sse_keepalive()
 			last_keepalive = current_time
 		
+		# 派发看门狗：主线程阻塞超时的请求回 503（连接随后被移除并清理登记）。
+		for dispatch_peer in _dispatched_requests.keys():
+			var entry: Dictionary = _dispatched_requests[dispatch_peer]
+			if current_time - int(entry.get("at", 0)) > DISPATCH_TIMEOUT * 1000:
+				_dispatched_requests.erase(dispatch_peer)
+				_send_http_error(dispatch_peer, 503,
+					"Editor main thread is busy (import/scan/reload). Retry shortly.")
+				if _log_callback.is_valid():
+					_log_callback.call("WARN", "Dispatch watchdog: request timed out after %.0fs; replied 503" % DISPATCH_TIMEOUT)
+		
 		# 避免 CPU 占用过高
 		OS.delay_msec(2)
 	
@@ -333,6 +350,7 @@ func _remove_connection_at(index: int) -> void:
 	if index < 0 or index >= _connections.size():
 		return
 	var p: StreamPeerTCP = _connections[index]
+	_dispatched_requests.erase(p)
 	if _sse_connections.has(p):
 		_close_sse_connection(p)
 	if _post_response_formats.has(p):
@@ -623,6 +641,9 @@ func _handle_post_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	
 	if is_notification:
 		_send_http_accepted(peer)
+	else:
+		# 带 id 的请求等待主线程回包；登记时间戳供看门狗判定编辑器忙死。
+		_dispatched_requests[peer] = {"at": Time.get_ticks_msec()}
 
 ## 从插件配置文件读取版本号
 ## @returns: String - 插件版本号；读取失败时回退 "0.0.0"
@@ -923,6 +944,7 @@ func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) ->
 		413: status_text = "Request Too Large"
 		415: status_text = "Unsupported Media Type"
 		500: status_text = "Internal Server Error"
+		503: status_text = "Service Unavailable"
 		501: status_text = "Not Implemented"
 		_: status_text = "Error"
 
