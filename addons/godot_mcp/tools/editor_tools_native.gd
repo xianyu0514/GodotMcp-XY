@@ -62,8 +62,19 @@ func _get_export_templates_root() -> String:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if editor_interface:
 		var editor_paths: EditorPaths = editor_interface.get_editor_paths()
-		if editor_paths:
-			return editor_paths.get_export_templates_dir()
+		# get_editor_paths() 可能返回有效对象但目录为空串（部分编辑器上下文），
+		# 必须穿透到平台回退而不是把空路径当结论。
+		var from_paths: String = editor_paths.get_export_templates_dir() if editor_paths else ""
+		if not from_paths.is_empty():
+			return from_paths
+	# EditorPaths 单例兜底：工具实例可能拿不到 EditorInterface，但单例仍可用。
+	# 仅在编辑器上下文尝试——游戏/headless 模式下获取该单例会打印引擎错误。
+	if Engine.is_editor_hint():
+		var paths_singleton: Object = Engine.get_singleton("EditorPaths")
+		if paths_singleton != null and paths_singleton.has_method("get_export_templates_dir"):
+			var singleton_dir: String = String(paths_singleton.call("get_export_templates_dir"))
+			if not singleton_dir.is_empty():
+				return singleton_dir
 	var os_name: String = OS.get_name()
 	if os_name == "Windows":
 		var appdata: String = OS.get_environment("APPDATA")

@@ -546,3 +546,10 @@ func test_integrity_source_url_is_trusted_and_tag_pinned():
 	var url: String = _editor_tools.templates_integrity_source_url("4.6.3-stable")
 	assert_true(_editor_tools.is_trusted_templates_url(url))
 	assert_true(url.contains("godotengine/godot/releases/tags/4.6.3-stable"))
+
+func test_export_templates_root_falls_back_to_platform_path():
+	var root: String = _editor_tools._get_export_templates_root()
+	if OS.get_name() == "Windows":
+		assert_false(root.is_empty(), "A Windows editor must always resolve a templates root")
+		assert_true(root.to_lower().contains("godot") and root.to_lower().contains("export_templates"),
+			"The fallback path is %APPDATA%/Godot/export_templates, got: " + root)
