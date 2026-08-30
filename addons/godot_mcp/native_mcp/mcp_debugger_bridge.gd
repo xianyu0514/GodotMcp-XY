@@ -369,7 +369,12 @@ var _node_added_proxy: Callable = Callable()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PREDELETE:
-		_unhook_node_added()
+		# 内联拆钩：脚本热重载期间 PREDELETE 派发时，调用自身方法会在
+		# 半释放实例上报 null-instance SCRIPT ERROR（Linux 导入门禁因此失败）。
+		var tree_at_delete: SceneTree = Engine.get_main_loop() as SceneTree
+		if tree_at_delete and _node_added_proxy.is_valid() 				and tree_at_delete.node_added.is_connected(_node_added_proxy):
+			tree_at_delete.node_added.disconnect(_node_added_proxy)
+		_node_added_hooked = false
 
 
 ## 每个 get_runtime_* / assert_* 调用都会触发刷新：直接全树遍历编辑器 UI
