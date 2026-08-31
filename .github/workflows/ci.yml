@@ -123,6 +123,18 @@ jobs:
           unzip -o godot.zip -d godot
           rm godot.zip
 
+      # 全新 checkout 没有 .godot/ 缓存：编辑器首启要全量导入约 235 个资源，
+      # MCP 服务器就绪慢于测试的等待窗口（超时类失败），且 main_scene 的
+      # uid:// 引用在冷缓存下解析为空（"no main scene configured"）。
+      # 先跑一次 --import 建缓存，后续每个测试的编辑器启动都是热缓存。
+      - name: Warm the import cache (cold checkout imports on first boot)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+        run: |
+          set -euo pipefail
+          "$GODOT_EXE" --headless --path . --import
+
       - name: Run fast integration suite via the runner
         shell: bash
         env:
