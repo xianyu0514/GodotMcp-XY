@@ -20,7 +20,7 @@ on:
 # counts as a failure, so CI stays a trustworthy gate.
 env:
   GODOT_VERSION: "4.7"
-  GUT_VERSION: "9.4.0"
+  GUT_VERSION: "9.7.1"
 
 jobs:
   gut-tests:
