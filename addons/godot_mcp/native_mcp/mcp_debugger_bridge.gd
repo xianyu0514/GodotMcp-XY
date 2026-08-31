@@ -22,8 +22,14 @@ var _latest_stack_variables: Dictionary = {}
 var _latest_evaluations: Dictionary = {}
 var _state_events: Array[Dictionary] = []
 var _output_events: Array[Dictionary] = []
+## 错误事件独立于 stdout 环：话多的游戏（每帧 print）会在不到一秒内把
+## 500 条环挤满，_ready 里的真实 stderr 错误被冲掉后，
+## assert_no_runtime_errors / play_and_verify 就再也看不到它——门禁带着
+## 活错误假绿。错误环容量独立且大得多，不受 stdout 音量影响。
+var _output_errors: Array[Dictionary] = []
 var _max_state_events: int = 200
 var _max_output_events: int = 500
+var _max_output_errors: int = 2000
 var _next_variables_reference: int = 1
 var _variable_references: Dictionary = {}
 var _scope_variables_references: Dictionary = {}
@@ -195,9 +201,26 @@ func get_state_events(count: int = 100, offset: int = 0, order: String = "desc")
 
 func get_output_events(count: int = 100, offset: int = 0, order: String = "desc", category: String = "") -> Dictionary:
 	var events: Array = []
-	for entry in _output_events:
-		if category.is_empty() or str(entry.get("category", "")) == category:
+	if category == "stderr":
+		for entry in _output_errors:
 			events.append(entry.duplicate(true))
+	elif category.is_empty():
+		# 全类别读 = 双环按 sequence 归并（两环各自升序）。
+		var i: int = 0
+		var j: int = 0
+		while i < _output_events.size() or j < _output_errors.size():
+			if j >= _output_errors.size() \
+					or (i < _output_events.size()
+						and int(_output_events[i].get("sequence", 0)) <= int(_output_errors[j].get("sequence", 0))):
+				events.append(_output_events[i].duplicate(true))
+				i += 1
+			else:
+				events.append(_output_errors[j].duplicate(true))
+				j += 1
+	else:
+		for entry in _output_events:
+			if str(entry.get("category", "")) == category:
+				events.append(entry.duplicate(true))
 	if order == "desc":
 		events.reverse()
 	var start: int = clampi(offset, 0, events.size())
@@ -617,6 +640,11 @@ func _append_output_event(event: Dictionary) -> void:
 	var entry: Dictionary = event.duplicate(true)
 	entry["sequence"] = _message_sequence
 	entry["timestamp"] = Time.get_unix_time_from_system()
+	if str(entry.get("category", "")) == "stderr":
+		_output_errors.append(entry)
+		if _output_errors.size() > _max_output_errors:
+			_output_errors.remove_at(0)
+		return
 	_output_events.append(entry)
 	if _output_events.size() > _max_output_events:
 		_output_events.remove_at(0)

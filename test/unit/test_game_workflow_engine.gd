@@ -570,3 +570,48 @@ func test_unsupported_status_is_negative_evidence() -> void:
 		"unsupported never passes a gate")
 	assert_false(_engine._non_gate_result_usable({"status": "unsupported"}),
 		"unsupported is not usable non-gate evidence")
+
+func test_stale_probe_fallback_never_passes_gates() -> void:
+	# 探针超时回退把缓存载荷包成 status=success + stale/from_cache：
+	# 这是"上次观测"，门禁据此通过即假 completed（游戏已崩/动画已停）。
+	var stale_payload: Dictionary = {
+		"status": "success", "from_cache": true, "stale": true,
+		"is_playing": true, "current_animation": "idle"}
+	assert_false(_engine.result_passed("get_runtime_animation_state", stale_payload),
+		"stale cached animation state must fail the gate")
+	assert_false(_engine.result_passed("play_and_verify", stale_payload.duplicate(true)),
+		"stale payloads fail any gate")
+
+func test_verify_scripts_truncation_fails_gate() -> void:
+	# 超过 max_scripts 的脚本没被检查：截断的验证不能当通过。
+	assert_false(_engine.result_passed("verify_scripts",
+		{"total_checked": 100, "verified": 100, "failed": 0, "truncated": true}),
+		"a truncated verification is not a passing verification")
+	assert_true(_engine.result_passed("verify_scripts",
+		{"total_checked": 100, "verified": 100, "failed": 0, "truncated": false}),
+		"a complete verification still passes")
+
+func test_modify_script_with_compile_errors_is_not_a_passing_repair() -> void:
+	assert_false(_engine.result_passed("modify_script",
+		{"status": "success", "validation": {"error_count": 2, "errors": []}}),
+		"a repair that leaves the script uncompiling must not pass")
+	assert_true(_engine.result_passed("modify_script",
+		{"status": "success", "validation": {"error_count": 0}}),
+		"a clean repair passes")
+
+func test_expect_fail_rejects_infrastructure_errors() -> void:
+	# 探测器基础设施故障（非空 error）不得翻转成"探测器按预期失败"。
+	var plan: Dictionary = _compile("Run project tests", ["quality_assurance"],
+		{"expect_fail": {"qa_2_tests": true}})["plan"]
+	var gate_task: Dictionary = {}
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("step_key", "")) == "qa_2_tests":
+			gate_task = task
+			break
+	assert_eq(String(gate_task.get("expect", "pass")), "fail",
+		"expect_fail marks the gate")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(gate_task.get("id", "")),
+		{"error": "Debugger bridge is not available"})
+	assert_ne(String(verdict.get("status", "")), "completed",
+		"infrastructure errors are not inverted into detector proof")

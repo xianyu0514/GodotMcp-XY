@@ -2631,7 +2631,10 @@ func _tool_verify_scripts(params: Dictionary) -> Dictionary:
 		"verified": verified,
 		"failed": failed,
 		"results": results,
-		"total_checked": checked
+		"total_checked": checked,
+		# 还有脚本没被检查（超过 max_scripts 截断）：调用方/门禁据此判定
+		# 本次验证不完整，不能当通过。
+		"truncated": checked < paths.size()
 	}
 
 # 校验单个脚本文件，返回与 validate_script 一致的结构化错误/警告。

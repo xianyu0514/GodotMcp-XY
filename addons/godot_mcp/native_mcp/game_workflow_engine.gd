@@ -155,7 +155,11 @@ const ARTIFACT_PATH_KEYS: Array[String] = [
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
 	"at", "last_at", "timestamp", "elapsed_ms", "duration_ms", "progress",
-	"request_id", "trace_id"
+	"request_id", "trace_id",
+	# 视觉门禁对活游戏重截图，diff 数值每轮必变：不剥离会让
+	# SAME_FAILURE_REPLAN_THRESHOLD 永不触发（每轮都是"新失败"），
+	# 修复循环在自适应模式下无界打转。
+	"diff_pixel_count", "diff_ratio", "rmse", "max_channel_delta"
 ]
 
 const FORBIDDEN_NESTED_CAPABILITIES: Array[String] = [
@@ -869,6 +873,10 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 	# 工具有携带空 error 字段的习惯；空字符串不是失败。
 	if data.has("error") and not String(data["error"]).strip_edges().is_empty():
 		return false
+	# 探针超时回退会把缓存载荷包装成 status=success + stale/from_cache：
+	# 这是"上次观测"而不是"本次证据"，任何门禁都不得据此通过。
+	if bool(data.get("stale", false)) or bool(data.get("from_cache", false)):
+		return false
 	for verdict_key in ["passed", "success", "valid"]:
 		if data.has(verdict_key) and not bool(data[verdict_key]):
 			return false
@@ -912,10 +920,20 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 			return bool(data.get("success", false)) and bool(data.get("artifact_exists", false))
 		"validate_export_preset":
 			return bool(data.get("valid", false))
+		"modify_script":
+			# 修复成功的前提是修复产物能编译：validation.error_count>0 说明
+			# 修复本身引入/保留了语法错误，不能当证据。
+			if data.get("validation") is Dictionary:
+				return int((data["validation"] as Dictionary).get("error_count", 0)) == 0
+			return true
 		"validate_script", "validate_shader":
 			return bool(data.get("valid", false)) or (status == "passed" and bool(data.get("passed", true)))
 		"verify_scripts":
-			return int(data.get("total_checked", 0)) > 0 and int(data.get("failed", -1)) == 0 and (status.is_empty() or status in ["ok", "passed", "success", "completed"])
+			# truncated=true 表示超过 max_scripts 的脚本根本没被检查：
+			# 截断的验证不能当通过（第 101 个脚本可能就是坏的）。
+			return int(data.get("total_checked", 0)) > 0 and int(data.get("failed", -1)) == 0 \
+				and not bool(data.get("truncated", false)) \
+				and (status.is_empty() or status in ["ok", "passed", "success", "completed"])
 		"audit_scene_node_persistence":
 			return int(data.get("total_nodes", 0)) > 0 and int(data.get("issue_count", -1)) == 0
 		"scan_missing_resource_dependencies", "scan_cyclic_resource_dependencies":
@@ -988,7 +1006,16 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 		if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
 	# A negative gate passes when the detector FAILS: fault-injection loops are
 	# proving the guardrail fires, so the observed verdict is inverted.
-	var passed: bool = (not evidence_passed) if expect_failure else evidence_passed
+	# 基础设施错误（如 "Debugger bridge is not available"）不是探测器触发：
+	# 带非空 error 的负结果不得翻转成通过，否则故障注入循环会在探测器
+	# 从未运行的情况下"证明"它工作。
+	var passed: bool = evidence_passed
+	if expect_failure:
+		var well_formed_negative: bool = not evidence_passed
+		if result is Dictionary \
+				and not String((result as Dictionary).get("error", "")).strip_edges().is_empty():
+			well_formed_negative = false
+		passed = well_formed_negative
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
 		"tool_name": task.get("tool_name", ""),

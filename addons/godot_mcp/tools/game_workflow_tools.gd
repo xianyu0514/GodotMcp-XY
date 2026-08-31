@@ -508,7 +508,7 @@ func _requeue_profile_evidence(plan: Dictionary, repaired_task: Dictionary) -> v
 			continue
 		if String(candidate.get("tool_name", "")) != "get_runtime_screenshot":
 			continue
-		if String(candidate.get("status", "")) != "completed":
+		if String(candidate.get("status", "")) != "done":
 			continue
 		candidate["status"] = "pending"
 		candidate.erase("needs_input")
@@ -546,7 +546,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			if not artifact_key.is_empty() and artifacts.has(artifact_key):
 				derived[param] = artifacts[artifact_key]
 				arguments[param] = artifacts[artifact_key]
-		_derive_visual_baseline_path(tool_name, arguments, artifacts, derived)
+		_derive_visual_baseline_path(tool_name, arguments, artifacts, derived,
+			String(plan.get("workflow", {}).get("workflow_id", "")))
 		_derive_scene_context(tool_name, profile, arguments, artifacts, derived)
 		if not derived.is_empty():
 			task["derived_inputs"] = derived
@@ -779,7 +780,7 @@ func _movement_play_steps() -> Array:
 	return steps
 
 func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
-		artifacts: Dictionary, derived: Dictionary) -> void:
+		artifacts: Dictionary, derived: Dictionary, workflow_id: String = "") -> void:
 	if tool_name != "assert_visual_baseline":
 		return
 	var screenshot: String = String(artifacts.get("screenshot", ""))
@@ -789,7 +790,10 @@ func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
 		arguments["candidate_path"] = screenshot
 		derived["candidate_path"] = screenshot
 	if not arguments.has("baseline_path"):
-		var baseline: String = "user://visual_baselines/" + screenshot.get_file()
+		# 基线按 workflow 隔离：截图文件名全目标相同（mcp_runtime_capture.jpg），
+		# 共用一个基线会让目标 B 拿目标 A 的图当金标准、或跨目标串基线。
+		var baseline: String = "user://visual_baselines/%s_%s" % [workflow_id, screenshot.get_file()] \
+			if not workflow_id.is_empty() else "user://visual_baselines/" + screenshot.get_file()
 		arguments["baseline_path"] = baseline
 		derived["baseline_path"] = baseline
 

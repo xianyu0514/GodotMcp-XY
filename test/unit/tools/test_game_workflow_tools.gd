@@ -627,9 +627,9 @@ func test_scene_scoped_steps_derive_profile_scene_and_visual_paths() -> void:
 	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("candidate_path", "")),
 		"user://mcp_runtime_capture.jpg",
 		"Visual gate candidate derives from the runtime screenshot artifact")
-	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("baseline_path", "")),
-		"user://visual_baselines/mcp_runtime_capture.jpg",
-		"Visual gate baseline derives a deterministic golden-image location")
+	var old_baseline: String = String((visual_call.get("arguments", {}) as Dictionary).get("baseline_path", ""))
+	assert_true(old_baseline.begins_with("user://visual_baselines/") and old_baseline.ends_with("_mcp_runtime_capture.jpg"),
+		"Visual gate baseline derives a per-workflow golden location (got " + old_baseline + ")")
 
 func test_collectible_goal_derives_character_body_root() -> void:
 	# 蓝图控制器对任意动词（含金币/胜利）都 extends CharacterBody2D：
@@ -699,11 +699,17 @@ func test_gate_repair_requeues_profile_screenshot_evidence() -> void:
 		if String(task.get("tool_name", "")) == "get_runtime_screenshot":
 			shot_task = task
 			break
-	shot_task["status"] = "completed"
+	shot_task["status"] = "done"
 	var repaired_gate: Dictionary = {"profile": "ui_screen", "id": "wf_xxx"}
 	_tools._requeue_profile_evidence(loaded, repaired_gate)
 	assert_eq(String(shot_task.get("status", "")), "pending",
-		"completed screenshot of the repaired profile is requeued for fresh evidence")
+		"done screenshot of the repaired profile is requeued for fresh evidence")
+	# 状态名不是 "completed"（引擎写 "done"）：错误的状态名曾让该函数静默
+	# 匹配不到任何步骤（死代码回归守卫）。
+	var mismatch_status: Dictionary = {"profile": "ui_screen"}
+	_tools._requeue_profile_evidence(loaded, mismatch_status)
+	assert_eq(String(shot_task.get("status", "")), "pending",
+		"already-pending screenshot is untouched by a second requeue")
 
 func test_anchor_step_with_caller_node_path_derives_preset() -> void:
 	# preset 是 set_anchor_preset 的 schema 必填项：调用方只给 node_path 时
@@ -720,7 +726,7 @@ func test_anchor_step_with_caller_node_path_derives_preset() -> void:
 func test_non_movement_goal_derives_boot_settle_steps() -> void:
 	# 非移动目标的 play_and_verify 此前是零 steps：编排立即返回，启动期
 	# 错误还没到调试桥——只证明了"发起过运行"。默认给一个启动等待窗口。
-	var planned: Dictionary = _plan(["quality_assurance"], "Run project tests")
+	var planned: Dictionary = _plan(["gameplay_feature"], "Collect a coin and show a win label")
 	var status: Dictionary = _tools._tool_plan_game_workflow({
 		"action": "status", "plan_path": _plan_path, "include_plan": true
 	})
@@ -731,15 +737,35 @@ func test_non_movement_goal_derives_boot_settle_steps() -> void:
 		if String(task.get("tool_name", "")) == "play_and_verify":
 			play_task = task
 			break
-	if play_task.is_empty():
-		pass_else_check(planned)
-		return
+	assert_false(play_task.is_empty(), "gameplay profile has a play gate")
 	var arguments: Dictionary = _tools._derive_step_arguments(
 		loaded, play_task, "play_and_verify",
 		_tools._resolve_inputs(play_task, {}, false))
 	var steps: Array = arguments.get("steps", [])
 	assert_gt(steps.size(), 0, "non-movement play gate derives a boot-settle window")
 
-func pass_else_check(_planned: Dictionary) -> void:
-	# quality_assurance profile 无 play 步骤时跳过（由 movement 用例覆盖派生路径）。
-	pass
+func test_visual_baseline_is_scoped_per_workflow() -> void:
+	# 截图文件名全目标相同（mcp_runtime_capture.jpg）：基线必须带
+	# workflow_id 隔离，否则目标 B 拿目标 A 的图当金标准。
+	var planned: Dictionary = _plan(["ui_screen"], "Polished pause menu with a screen")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	(loaded.get("workflow", {}) as Dictionary)["artifacts"] = {
+		"screenshot": "user://mcp_runtime_capture.jpg"}
+	var gate_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "assert_visual_baseline":
+			gate_task = task
+			break
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		loaded, gate_task, "assert_visual_baseline",
+		_tools._resolve_inputs(gate_task, {}, false))
+	var baseline: String = String(arguments.get("baseline_path", ""))
+	var workflow_id: String = String(loaded.get("workflow", {}).get("workflow_id", ""))
+	assert_true(baseline.contains(workflow_id),
+		"baseline path carries the workflow id (got %s)" % baseline)
+	assert_eq(String(arguments.get("candidate_path", "")), "user://mcp_runtime_capture.jpg",
+		"candidate still derives from the screenshot artifact")
