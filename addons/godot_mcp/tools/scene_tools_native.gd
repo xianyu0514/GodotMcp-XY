@@ -380,16 +380,16 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 	if editor_fs != null:
 		editor_fs.update_file(scene_path)
 	editor_interface.open_scene_from_path(scene_path)
+	# 确认条件必须是 get_edited_scene_root() 本身匹配：后续读取方
+	# （audit/get_current_scene 等）在 edited root 无效时经 open_scene_roots
+	# 回退解析，取的是"第一个打开的场景根"——若这里接受回退匹配提前返回，
+	# 切换中途的调用方会读到旧场景（TestScene 假阴性竞态）。
 	var scene_root: Node = null
 	for _frame in range(60):
 		await Engine.get_main_loop().process_frame
 		var candidate: Node = editor_interface.get_edited_scene_root()
 		if candidate and String(candidate.scene_file_path) == scene_path:
 			scene_root = candidate
-			break
-		var user_root: Node = _get_user_scene_root()
-		if user_root and user_root != candidate and String(user_root.scene_file_path) == scene_path:
-			scene_root = user_root
 			break
 	if not scene_root:
 		_scene_operation_in_progress = false
