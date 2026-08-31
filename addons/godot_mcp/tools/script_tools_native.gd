@@ -436,16 +436,30 @@ func _tool_find_script_symbol_references(params: Dictionary) -> Dictionary:
 	if not preferred_script_path.is_empty():
 		file_paths.sort_custom(Callable(self, "_compare_script_paths_for_preference").bind(preferred_script_path))
 
-	var definitions_by_path: Dictionary = {}
-	if not include_definitions:
-		definitions_by_path = _collect_definition_lines_by_path(file_paths, symbol_name, case_sensitive)
+	var reference_regex: RegEx = _symbol_reference_regex(symbol_name, case_sensitive)
 
 	var references: Array = []
 	for file_path in file_paths:
 		if references.size() >= max_results:
 			break
-		var definition_lines: Array = definitions_by_path.get(file_path, [])
-		var matches: Array = _find_symbol_references_in_file(file_path, symbol_name, case_sensitive, include_definitions, definition_lines, max_results - references.size())
+		# 每文件只读一次：定义行与引用匹配共用同一份行数组（此前定义扫描
+		# 与引用扫描各读一遍文件），且定义行只在本文件确有匹配时才计算。
+		var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+		if not file:
+			continue
+		var lines: PackedStringArray = file.get_as_text().split("\n")
+		file.close()
+		var has_match: bool = false
+		for line_value in lines:
+			if reference_regex.is_valid() and reference_regex.search(String(line_value)):
+				has_match = true
+				break
+		if not has_match:
+			continue
+		var definition_lines: Array = []
+		if not include_definitions and (file_path.ends_with(".gd") or file_path.ends_with(".cs")):
+			definition_lines = _definition_lines_for_content(file_path, lines, symbol_name, case_sensitive)
+		var matches: Array = _find_symbol_references_in_lines(file_path, lines, reference_regex, include_definitions, definition_lines, max_results - references.size())
 		for match in matches:
 			references.append(match)
 			if references.size() >= max_results:
@@ -742,7 +756,8 @@ func _index_script_symbols(script_path: String) -> Dictionary:
 	return {"error": "Unsupported script extension: " + script_path}
 
 func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary:
-	var line_count: int = content.split("\n").size()
+	var all_lines: PackedStringArray = content.split("\n")
+	var line_count: int = all_lines.size()
 	var has_class_name: bool = false
 	var class_name_value: String = ""
 	var extends_from: String = ""
@@ -751,7 +766,7 @@ func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary
 	var properties: Array = []
 	var constants: Array = []
 
-	for line in content.split("\n"):
+	for line in all_lines:
 		var trimmed: String = _strip_inline_comment(line).strip_edges()
 		if trimmed.is_empty():
 			continue
@@ -791,8 +806,26 @@ func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary
 		"symbol_count": functions.size() + signals.size() + properties.size() + constants.size()
 	}
 
+var _csharp_symbol_regex_cache: Dictionary = {}
+
+func _csharp_symbol_regex(kind: String) -> RegEx:
+	if _csharp_symbol_regex_cache.is_empty():
+		var patterns: Dictionary = {
+			"class": "class\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_\\.]*))?",
+			"method": "(?:public|private|protected|internal)\\s+(?:override\\s+|virtual\\s+|static\\s+|async\\s+|partial\\s+)*[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(",
+			"property": "(?:public|private|protected|internal)\\s+(?:static\\s+)?[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{",
+			"constant": "(?:public|private|protected|internal)\\s+const\\s+[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)",
+			"delegate": "delegate\\s+void\\s+([A-Za-z_][A-Za-z0-9_]*)EventHandler\\s*\\("
+		}
+		for kind_value in patterns:
+			var regex: RegEx = RegEx.new()
+			regex.compile(String(patterns[kind_value]))
+			_csharp_symbol_regex_cache[kind_value] = regex
+	return _csharp_symbol_regex_cache.get(kind, RegEx.new())
+
 func _index_csharp_symbols(script_path: String, content: String) -> Dictionary:
-	var line_count: int = content.split("\n").size()
+	var all_lines: PackedStringArray = content.split("\n")
+	var line_count: int = all_lines.size()
 	var class_name_value: String = ""
 	var extends_from: String = ""
 	var functions: Array = []
@@ -801,18 +834,14 @@ func _index_csharp_symbols(script_path: String, content: String) -> Dictionary:
 	var constants: Array = []
 	var next_delegate_is_signal: bool = false
 
-	var class_regex: RegEx = RegEx.new()
-	class_regex.compile("class\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_\\.]*))?")
-	var method_regex: RegEx = RegEx.new()
-	method_regex.compile("(?:public|private|protected|internal)\\s+(?:override\\s+|virtual\\s+|static\\s+|async\\s+|partial\\s+)*[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(")
-	var property_regex: RegEx = RegEx.new()
-	property_regex.compile("(?:public|private|protected|internal)\\s+(?:static\\s+)?[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{")
-	var constant_regex: RegEx = RegEx.new()
-	constant_regex.compile("(?:public|private|protected|internal)\\s+const\\s+[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)")
-	var delegate_regex: RegEx = RegEx.new()
-	delegate_regex.compile("delegate\\s+void\\s+([A-Za-z_][A-Za-z0-9_]*)EventHandler\\s*\\(")
+	# 五个模式为字面量：首次调用编译一次并按名复用（此前每个文件重编译五次）。
+	var class_regex: RegEx = _csharp_symbol_regex("class")
+	var method_regex: RegEx = _csharp_symbol_regex("method")
+	var property_regex: RegEx = _csharp_symbol_regex("property")
+	var constant_regex: RegEx = _csharp_symbol_regex("constant")
+	var delegate_regex: RegEx = _csharp_symbol_regex("delegate")
 
-	for line in content.split("\n"):
+	for line in all_lines:
 		var trimmed: String = _strip_csharp_line_comment(line).strip_edges()
 		if trimmed.is_empty():
 			continue
@@ -1121,15 +1150,55 @@ func _find_symbol_references_in_file(file_path: String, symbol_name: String, cas
 	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
 	if not file:
 		return []
-
 	var lines: PackedStringArray = file.get_as_text().split("\n")
 	file.close()
+	return _find_symbol_references_in_lines(file_path, lines,
+		_symbol_reference_regex(symbol_name, case_sensitive),
+		include_definitions, definition_lines, remaining_results)
 
-	var references: Array = []
-	var regex: RegEx = RegEx.new()
+
+## 符号引用正则按 (symbol, 大小写) 编译一次复用：此前每个文件重编译一次
+## 相同模式。上限 64 项（超出即整体重建，符号名空间天然有界）。
+var _symbol_regex_cache: Dictionary = {}
+
+func _symbol_reference_regex(symbol_name: String, case_sensitive: bool) -> RegEx:
 	var escaped_symbol_name: String = _escape_regex_pattern(symbol_name)
 	var compile_pattern: String = "(?i)(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % escaped_symbol_name if not case_sensitive else "(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % escaped_symbol_name
-	if regex.compile(compile_pattern) != OK:
+	if _symbol_regex_cache.size() >= 64:
+		_symbol_regex_cache.clear()
+	if not _symbol_regex_cache.has(compile_pattern):
+		var regex: RegEx = RegEx.new()
+		if regex.compile(compile_pattern) != OK:
+			return RegEx.new()
+		_symbol_regex_cache[compile_pattern] = regex
+	return _symbol_regex_cache[compile_pattern]
+
+
+## 从已读取的行数组计算定义行（供引用扫描排除定义处）。
+func _definition_lines_for_content(file_path: String, lines: PackedStringArray, symbol_name: String, case_sensitive: bool) -> Array:
+	var content: String = "\n".join(lines)
+	var definitions: Array
+	if file_path.ends_with(".gd"):
+		definitions = _find_gdscript_symbol_definitions(file_path, content, symbol_name, [])
+	elif file_path.ends_with(".cs"):
+		definitions = _find_csharp_symbol_definitions(file_path, content, symbol_name, [])
+	else:
+		return []
+	if not case_sensitive:
+		var filtered: Array = []
+		for definition in definitions:
+			if str(definition.get("symbol_name", "")).to_lower() == symbol_name.to_lower():
+				filtered.append(definition)
+		definitions = filtered
+	var result: Array = []
+	for definition in definitions:
+		result.append(int(definition.get("line", 0)))
+	return result
+
+
+func _find_symbol_references_in_lines(file_path: String, lines: PackedStringArray, regex: RegEx, include_definitions: bool, definition_lines: Array, remaining_results: int) -> Array:
+	var references: Array = []
+	if not regex.is_valid():
 		return []
 
 	for i in range(lines.size()):
