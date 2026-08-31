@@ -455,25 +455,34 @@ const _PERF_BUDGET_RULES: Array = [
 	{"key": "max_resource_count", "field": "resource_count", "comparator": "lte", "scale": 1.0},
 	{"key": "max_rendered_objects", "field": "rendered_objects_in_frame", "comparator": "lte", "scale": 1.0},
 	{"key": "max_memory_mb", "field": "memory_static_mb", "comparator": "lte", "scale": 1.0},
-	{"key": "max_node_count", "field": "node_count", "comparator": "lte", "scale": 1.0}
+	{"key": "max_node_count", "field": "node_count", "comparator": "lte", "scale": 1.0},
+	# 分位数指标：只有开启采样（sample_seconds > 0）时才有值。
+	# min_fps 看的是"最后一瞬间的 fps"，一帧抖动就能让整条流水线红掉；
+	# p1_fps / p95_frame_time_ms 看的是稳态分布，才是真正该卡的指标。
+	{"key": "min_p1_fps", "field": "p1_fps", "comparator": "gte", "scale": 1.0},
+	{"key": "max_p95_frame_time_ms", "field": "p95_frame_time_ms", "comparator": "lte", "scale": 1.0}
 ]
 
 func _register_assert_performance_budget(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"assert_performance_budget",
-		"Performance budget gate: capture a runtime performance snapshot from the running game and check it against a budget, returning a pass/fail verdict plus a per-metric breakdown. Budget keys: min_fps, max_frame_time_ms, max_physics_frame_time_ms, max_object_count, max_resource_count, max_rendered_objects, max_memory_mb, max_node_count (define only the ones to enforce). min_* checks actual >= limit; max_* checks actual <= limit. Pass an explicit 'snapshot' object to evaluate a previously captured snapshot instead of querying the game. Requires the game to be running with the runtime probe installed (unless 'snapshot' is supplied).",
+		"Performance budget gate: check a live runtime snapshot (or a provided 'snapshot') against min_*/max_* thresholds (fps, frame_time_ms, physics_frame_time_ms, object/resource/node counts, memory_mb; percentile keys min_p1_fps / max_p95_frame_time_ms require sampling). sample_seconds>0 samples a window after warmup and gates on percentiles instead of one instantaneous reading. Needs the game running with the probe installed unless 'snapshot' is supplied.",
 		{
 			"type": "object",
 			"properties": {
 				"budget": {"type": "object", "description": "Threshold map; see tool description for valid keys."},
 				"snapshot": {"type": "object", "description": "Optional pre-captured performance snapshot to evaluate instead of querying the game."},
+				"warmup_seconds": {"type": "number", "description": "Seconds to wait before sampling (skips shader-compile/first-frame hitches); used when sample_seconds>0.", "default": 0},
+				"sample_seconds": {"type": "number", "description": "Sampling window in seconds; 0 = single snapshot, >0 enables percentile metrics.", "default": 0},
+				"sample_interval_ms": {"type": "integer", "description": "Delay between samples in ms. Default 100.", "default": 100},
+				"percentile": {"type": "number", "description": "Tail percentile (default 95).", "default": 95},
 				"session_id": {"type": "integer"},
 				"timeout_ms": {"type": "integer", "default": 1500}
 			},
 			"required": ["budget"]
 		},
 		Callable(self, "_tool_assert_performance_budget"),
-		{"type": "object", "properties": {"passed": {"type": "boolean"}, "checks": {"type": "array"}, "snapshot": {"type": "object"}, "budget": {"type": "object"}}},
+		{"type": "object", "properties": {"passed": {"type": "boolean"}, "checks": {"type": "array"}, "snapshot": {"type": "object"}, "budget": {"type": "object"}, "sampling": {"type": "object"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
 		"supplementary", "Debug-Advanced"
 	)
@@ -526,6 +535,7 @@ func _tool_assert_performance_budget(params: Dictionary) -> Dictionary:
 			return {"error": "Unknown budget key: " + str(k) + ". Valid keys: " + ", ".join(valid_keys)}
 
 	var snapshot: Dictionary = {}
+	var sampling: Dictionary = {"enabled": false}
 	var provided: Variant = params.get("snapshot", null)
 	if provided is Dictionary and not (provided as Dictionary).is_empty():
 		snapshot = provided
@@ -533,7 +543,17 @@ func _tool_assert_performance_budget(params: Dictionary) -> Dictionary:
 		var rt: RefCounted = _get_runtime_tools()
 		if rt == null:
 			return {"error": "No running game with a runtime probe is reachable. Run the project and install_runtime_probe first."}
-		snapshot = await rt._tool_get_runtime_performance_snapshot(params)
+
+		var sample_seconds: float = float(params.get("sample_seconds", 0))
+		var warmup_seconds: float = maxf(float(params.get("warmup_seconds", 0)), 0.0)
+		if sample_seconds > 0.0:
+			var sampled: Dictionary = await _collect_performance_samples(rt, params, warmup_seconds, sample_seconds)
+			if sampled.has("error"):
+				return sampled
+			snapshot = sampled.get("snapshot", {})
+			sampling = sampled.get("sampling", {})
+		else:
+			snapshot = await rt._tool_get_runtime_performance_snapshot(params)
 		if snapshot.has("error"):
 			return snapshot
 		if not snapshot.has("fps"):
@@ -544,8 +564,103 @@ func _tool_assert_performance_budget(params: Dictionary) -> Dictionary:
 		"passed": bool(evaluation["passed"]),
 		"checks": evaluation["checks"],
 		"snapshot": snapshot,
-		"budget": budget
+		"budget": budget,
+		"sampling": sampling
 	}
+
+
+## 采样一段时间内的性能指标，给出稳态分位数。
+##
+## 单次瞬时快照拿到的 fps 极易被一帧抖动带偏：着色器编译、资源首次加载都会
+## 让某一帧掉到个位数，于是"性能达标"被误判成"性能不达标"。这里先 warmup
+## 掉冷启动开销，再在窗口内多次采样，用 p1（最差 1% 的 fps）和 p95（最差 5%
+## 的帧时间）作为判定依据。
+func _collect_performance_samples(runtime_tools: RefCounted, params: Dictionary,
+		warmup_seconds: float, sample_seconds: float) -> Dictionary:
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	var interval_ms: int = maxi(int(params.get("sample_interval_ms", 100)), 16)
+	var percentile: float = clampf(float(params.get("percentile", 95)), 1.0, 99.0)
+
+	var warmup_deadline: int = Time.get_ticks_msec() + int(warmup_seconds * 1000.0)
+	while Time.get_ticks_msec() < warmup_deadline:
+		if tree == null:
+			break
+		await tree.process_frame
+
+	var fps_samples: Array[float] = []
+	var frame_time_samples: Array[float] = []
+	var latest: Dictionary = {}
+	var started_msec: int = Time.get_ticks_msec()
+	var deadline: int = started_msec + int(sample_seconds * 1000.0)
+	var next_sample_msec: int = started_msec
+	while Time.get_ticks_msec() < deadline:
+		if Time.get_ticks_msec() >= next_sample_msec:
+			var raw: Variant = await runtime_tools._tool_get_runtime_performance_snapshot(params)
+			if raw is Dictionary:
+				var candidate: Dictionary = raw
+				if not candidate.has("error") and candidate.has("fps"):
+					latest = candidate
+					fps_samples.append(float(candidate.get("fps", 0.0)))
+					frame_time_samples.append(float(candidate.get("frame_time_sec", 0.0)) * 1000.0)
+			next_sample_msec = Time.get_ticks_msec() + interval_ms
+		if tree == null:
+			break
+		await tree.process_frame
+
+	if latest.is_empty():
+		return {"error": "No runtime performance samples could be collected (game not running or probe not ready)"}
+
+	var tail: float = 100.0 - percentile
+	var sorted_fps: Array[float] = fps_samples.duplicate()
+	sorted_fps.sort()
+	var sorted_frame: Array[float] = frame_time_samples.duplicate()
+	sorted_frame.sort()
+	var p1_fps: float = _percentile(sorted_fps, tail)
+	var p95_frame_time_ms: float = _percentile(sorted_frame, percentile)
+
+	var snapshot: Dictionary = latest.duplicate(true)
+	snapshot["p1_fps"] = p1_fps
+	snapshot["p95_frame_time_ms"] = p95_frame_time_ms
+	snapshot["fps_samples"] = fps_samples
+	snapshot["frame_time_ms_samples"] = frame_time_samples
+	return {
+		"snapshot": snapshot,
+		"sampling": {
+			"enabled": true,
+			"sample_count": fps_samples.size(),
+			"duration_ms": Time.get_ticks_msec() - started_msec,
+			"warmup_seconds": warmup_seconds,
+			"sample_seconds": sample_seconds,
+			"sample_interval_ms": interval_ms,
+			"percentile": percentile,
+			"p1_fps": p1_fps,
+			"p95_frame_time_ms": p95_frame_time_ms,
+			"fps_min": sorted_fps[0] if not sorted_fps.is_empty() else 0.0,
+			"fps_max": sorted_fps[-1] if not sorted_fps.is_empty() else 0.0,
+			"fps_mean": _mean(fps_samples),
+			"frame_time_ms_min": sorted_frame[0] if not sorted_frame.is_empty() else 0.0,
+			"frame_time_ms_max": sorted_frame[-1] if not sorted_frame.is_empty() else 0.0,
+			"frame_time_ms_mean": _mean(frame_time_samples)
+		}
+	}
+
+
+## 最近秩（nearest-rank）分位数：取上界，宁可保守也不乐观。
+static func _percentile(sorted_values: Array[float], percentile: float) -> float:
+	if sorted_values.is_empty():
+		return 0.0
+	var rank: int = int(ceil(percentile / 100.0 * float(sorted_values.size())))
+	rank = clampi(rank, 1, sorted_values.size())
+	return sorted_values[rank - 1]
+
+
+static func _mean(values: Array[float]) -> float:
+	if values.is_empty():
+		return 0.0
+	var total: float = 0.0
+	for value in values:
+		total += value
+	return total / float(values.size())
 
 func _register_assert_no_runtime_errors(server_core: RefCounted) -> void:
 	server_core.register_tool(

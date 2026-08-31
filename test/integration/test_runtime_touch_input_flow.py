@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_runtime_touch_input"
 SCENE_PATH = "res://.tmp_runtime_touch_input/runtime_touch_scene.tscn"
 SCRIPT_PATH = "res://.tmp_runtime_touch_input/runtime_touch_capture.gd"
@@ -173,7 +174,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 2, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -210,8 +211,7 @@ def run_once() -> None:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -221,6 +221,7 @@ def run_once() -> None:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_sessions", "get_runtime_info", "install_runtime_probe", "open_scene", "run_project", "simulate_runtime_input_event", "stop_project"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -230,7 +231,7 @@ def run_once() -> None:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime touch input tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)

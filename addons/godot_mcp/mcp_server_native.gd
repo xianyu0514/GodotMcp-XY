@@ -127,6 +127,7 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"ProjectTilesetTools": "res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"ProjectVerificationTools": "res://addons/godot_mcp/tools/project_verification_tools.gd",
 	"ProjectWorkflowTools": "res://addons/godot_mcp/tools/project_workflow_tools.gd",
+	"ExportPresetTools": "res://addons/godot_mcp/tools/export_preset_tools.gd",
 	"GameWorkflowTools": "res://addons/godot_mcp/tools/game_workflow_tools.gd",
 	"MetaToolsNative": "res://addons/godot_mcp/tools/meta_tools_native.gd"
 }
@@ -134,6 +135,96 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 # ============================================================================
 # 生命周期方法
 # ============================================================================
+
+## 运行状态持久化：reload_project / 插件重载 / 编辑器重启后自动复活服务器。
+## 与隧道守护同一哲学——用户点过 Start，就应在下次 enter_tree 时自动回来；
+## 用户显式点 Stop 则写入 false，保持停止。文件是 user:// 级的轻量标记。
+const SERVER_STATE_FILE: String = "user://mcp_server_running.json"
+
+static func _write_server_running_state(running: bool) -> void:
+	var file: FileAccess = FileAccess.open(SERVER_STATE_FILE, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify({"running": running}))
+		file.close()
+	# 写入方直接刷新解析缓存：文件系统时间戳粒度可能粗于连续两次写入
+	# （同秒且长度相同的 true/false 翻转），只靠 mtime 会让读侧拿到陈旧值。
+	_server_state_cached = running
+	_server_state_mtime = FileAccess.get_modified_time(SERVER_STATE_FILE)
+
+# 自愈看门狗：reload_project 只重载资源与脚本（插件实例不重建、_enter_tree
+# 不再触发，热重载还会重置成员并掐断服务器线程），因此复活必须由常驻
+# _process 驱动：标记为运行而传输已死 -> 重新拉起。覆盖一切拆除路径。
+var _resurrect_check_msec: int = 0
+var _resurrect_backoff_until_msec: int = 0
+# heartbeat==0 首次观测时间：热重载把新脚本套到僵尸实例上时，字段被重置为 0
+# 且死线程永远不会再写，必须按"持续为零"判僵尸，否则端口占用永远无法自愈。
+var _zero_heartbeat_since_msec: int = 0
+
+func _process(_delta: float) -> void:
+	var now: int = Time.get_ticks_msec()
+	if now - _resurrect_check_msec < 2000:
+		return
+	_resurrect_check_msec = now
+	if not _read_server_running_state():
+		return
+	if now < _resurrect_backoff_until_msec:
+		return
+	if is_server_running():
+		# 僵尸检测：套接字与线程仍在、心跳停跳（热重载斩断回调链的典型残留，
+		# 表现为端口监听但请求得到空响应）。心跳字段在 HTTP 传输层上；stdio 等
+		# 无心跳概念的传输直接信任 is_running。
+		var transport: Object = _native_server.get_transport()
+		if transport == null or not ("last_heartbeat_msec" in transport):
+			_zero_heartbeat_since_msec = 0
+			return
+		var heartbeat_msec: int = int(transport.get("last_heartbeat_msec"))
+		var heartbeat_age: int = 0
+		if heartbeat_msec > 0:
+			_zero_heartbeat_since_msec = 0
+			heartbeat_age = now - heartbeat_msec
+			if heartbeat_age <= 10000:
+				return
+		else:
+			# 热重载把新脚本套到僵尸实例上时字段被重置为 0 且死线程不再写：
+			# 持续为零超过宽限期同样判僵尸。
+			if _zero_heartbeat_since_msec == 0:
+				_zero_heartbeat_since_msec = now
+			heartbeat_age = now - _zero_heartbeat_since_msec
+			if heartbeat_age <= 15000:
+				return
+		_zero_heartbeat_since_msec = 0
+		_log_info("Watchdog: server heartbeat stale (%d ms); rebuilding zombie transport" % heartbeat_age)
+		_native_server.stop()
+		if is_server_running():
+			return
+	_log_info("Watchdog: server flag says running but transport is down; resurrecting")
+	if not _start_native_server():
+		# 拉起失败（端口被占等）退避 30s，避免每 2 秒风暴式重试。
+		_resurrect_backoff_until_msec = now + 30000
+
+# 状态文件解析缓存：看门狗每 2 秒轮询，但文件只在启停时变化——
+# 按 mtime 判断，未变化时直接复用上次结论，免去常驻的打开+JSON 解析。
+# static：插件实例在热重载中会重建，而该缓存属于进程级磁盘事实；
+# 同时保留 test_server_resurrection 的静态调用契约（类级读写标记位）。
+static var _server_state_cached: bool = false
+static var _server_state_mtime: int = -1
+
+static func _read_server_running_state() -> bool:
+	if not FileAccess.file_exists(SERVER_STATE_FILE):
+		_server_state_mtime = -1
+		return false
+	var mtime: int = FileAccess.get_modified_time(SERVER_STATE_FILE)
+	if mtime > 0 and mtime == _server_state_mtime:
+		return _server_state_cached
+	var file: FileAccess = FileAccess.open(SERVER_STATE_FILE, FileAccess.READ)
+	if file == null:
+		return false
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	var running: bool = parsed is Dictionary and bool((parsed as Dictionary).get("running", false))
+	_server_state_cached = running
+	_server_state_mtime = mtime
+	return running
 
 func _enter_tree() -> void:
 	_log_info("Godot Native MCP Plugin entering tree...")
@@ -243,6 +334,9 @@ func _enter_tree() -> void:
 	elif auto_start:
 		_log_info("Auto-start enabled, starting MCP server")
 		_start_native_server()
+	elif _read_server_running_state():
+		_log_info("Resurrecting MCP server (it was running before reload/restart)")
+		_start_native_server()
 	else:
 		_log_info("MCP server not auto-started. Use Start button or --mcp-server flag.")
 	
@@ -333,11 +427,20 @@ func _apply_persisted_settings() -> void:
 ## Apply command-line overrides on top of persisted/exported settings. The
 ## command line wins, letting multiple MCP instances run with distinct ports
 ## (--mcp-port=N) regardless of the persisted config.
+## 命令行覆盖只作用于本次进程：覆盖值不得写回 mcp_settings.cfg（面板
+## 同步会把覆盖值带进 UI，任何 debounce 保存都会把它持久化——测试的
+## --mcp-port=92xx 会永久污染用户配置，并让下次编辑器在陈旧端口上复活）。
+var _cmdline_overrides_active: bool = false
+
+func is_port_overridden_by_cmdline() -> bool:
+	return _cmdline_overrides_active
+
 func _apply_cmdline_overrides() -> void:
 	var o: Dictionary = parse_mcp_overrides(OS.get_cmdline_user_args())
 	var port_override: int = int(o["http_port"])
 	var transport_override: String = o["transport_mode"]
 	if port_override >= 0:
+		_cmdline_overrides_active = true
 		http_port = port_override
 		_log_info("MCP port overridden via command line: " + str(http_port))
 	if transport_override != "":
@@ -560,12 +663,15 @@ func _start_native_server() -> bool:
 	
 	if success:
 		_log_info("Native MCP Server started - transport: " + transport_mode)
+		_write_server_running_state(true)
 	else:
 		_log_error("Failed to start MCP Server")
 	
 	return success
 
 func _stop_native_server() -> void:
+	# 显式停止才落 false；_exit_tree 的被动停止不写状态，重载后据此复活。
+	_write_server_running_state(false)
 	if not _native_server:
 		return
 	

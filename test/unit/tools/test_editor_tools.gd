@@ -202,6 +202,31 @@ func test_manage_export_templates_invalid_action():
 	assert_true(result.has("error"), "Invalid action should return an error")
 	assert_true(str(result["error"]).contains("Invalid action"), "Error should mention invalid action")
 
+func test_manage_export_templates_net_diag_requires_host():
+	var result: Dictionary = _editor_tools._tool_manage_export_templates({"action": "net_diag", "host": "  "})
+	assert_true(result.has("error"), "Blank host must fail fast without spawning nodes")
+	assert_true(str(result["error"]).contains("host"), "Error should mention host")
+
+func test_getter_never_started_does_not_self_fail() -> void:
+	var getter: Node = _editor_tools.TemplatesHttpGetter.create(
+		"https://example.com/x.tpz", "", "", 60000, true)
+	add_child(getter)
+	await wait_seconds(0.3)
+	assert_eq(str(getter.get("_phase")), "idle",
+		"A getter whose start() was never called must stay idle instead of self-failing")
+	getter.queue_free()
+
+func test_update_continuously_guard_without_editor_interface():
+	_editor_tools._template_download = {"phase": "downloading"}
+	_editor_tools._templates_begin_update_continuously()
+	assert_false(_editor_tools._template_download.has("_uc_prev"),
+		"No flag is stored when EditorInterface is unavailable (headless)")
+	_editor_tools._template_download["_uc_prev"] = false
+	_editor_tools._templates_restore_update_continuously()
+	assert_false(_editor_tools._template_download.has("_uc_prev"),
+		"Restore always clears the private flag")
+	_editor_tools._template_download = {}
+
 func test_manage_export_templates_status():
 	var root: String = _unique_user_path("_templates")
 	DirAccess.make_dir_recursive_absolute(root)
@@ -474,3 +499,138 @@ func test_undo_redo_tools_registered_and_use_editor_undo_redo():
 class CounterBox:
 	extends RefCounted
 	var value: int = 0
+
+# --- Trusted export-template download (pure validation paths; no network in CI) ---
+
+func test_templates_mirror_urls_are_official_and_version_pinned():
+	var github: String = _editor_tools.templates_mirror_url(
+		"github", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(github.begins_with("https://github.com/godotengine/godot/releases/download/4.7-stable/"))
+	var tuxfamily: String = _editor_tools.templates_mirror_url(
+		"tuxfamily", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(tuxfamily.begins_with("https://downloads.tuxfamily.org/godotengine/4.7/"))
+	var portal: String = _editor_tools.templates_mirror_url(
+		"godotengine", "4.7", "4.7-stable", "Godot_v4.7-stable_export_templates.tpz")
+	assert_true(portal.begins_with("https://downloads.godotengine.org/?version=4.7"),
+		"The godotengine mirror is the official geo-redirecting download portal")
+
+func test_templates_url_allowlist_blocks_untrusted_hosts():
+	assert_true(_editor_tools.is_trusted_templates_url(
+		"https://github.com/godotengine/godot/releases/download/4.7-stable/x.tpz"))
+	assert_true(_editor_tools.is_trusted_templates_url(
+		"https://downloads.tuxfamily.org/godotengine/4.7/x.tpz"))
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"http://github.com/godotengine/x.tpz"), "Plain HTTP is never trusted")
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"https://evil.com/godotengine/x.tpz"), "Foreign hosts are rejected")
+	assert_false(_editor_tools.is_trusted_templates_url(
+		"https://github.com.evil.com/x.tpz"), "Host-suffix spoofs are rejected")
+
+func test_checksum_sums_parsing_finds_target_file():
+	var sums: String = "abc123  Godot_v4.7-stable_export_templates.tpz\ndef456  Godot_v4.7-stable_linux.x86_64.zip\n"
+	assert_eq(_editor_tools.parse_checksum_sums(sums, "Godot_v4.7-stable_export_templates.tpz"), "abc123")
+	assert_eq(_editor_tools.parse_checksum_sums(sums, "missing.tpz"), "",
+		"Missing entries return empty so the caller can treat it as unavailable")
+
+func test_templates_proxy_accepts_only_loopback():
+	assert_eq(_editor_tools._templates_proxy_allowed("http://127.0.0.1:7890"), "http://127.0.0.1:7890")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://LocalHost:8080/"), "http://localhost:8080")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://proxy.example.com:8080"), "",
+		"Non-loopback proxies are rejected (SSRF guard)")
+	assert_eq(_editor_tools._templates_proxy_allowed("http://127.0.0.1:notaport"), "")
+	assert_eq(_editor_tools._templates_proxy_allowed("socks5://127.0.0.1:7890"), "",
+		"Only HTTP proxies are supported")
+
+func test_download_actions_validate_before_touching_the_network():
+	var bad_mirror: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download", "mirror": "evil-mirror"})
+	assert_true(bad_mirror.has("error"), "Unknown mirrors are rejected before any request starts")
+	assert_true(String(bad_mirror.get("error", "")).contains("github"),
+		"The error names the supported mirrors")
+	var idle_status: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download_status"})
+	assert_eq(String(idle_status.get("status", "")), "idle")
+	var idle_cancel: Dictionary = _editor_tools._tool_manage_export_templates({
+		"action": "download_cancel"})
+	assert_eq(String(idle_cancel.get("status", "")), "idle")
+
+func test_release_json_size_extraction_finds_target_asset():
+	var sample: String = """{"assets":[
+		{"name":"Godot_v4.6.3-stable_linux.x86_64.zip","size":63000000},
+		{"name":"Godot_v4.6.3-stable_export_templates.tpz","size":1073741824}
+	]}"""
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		sample, "Godot_v4.6.3-stable_export_templates.tpz"), 1073741824,
+		"The official asset byte size is extracted for the integrity cross-check")
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		sample, "missing.tpz"), -1, "Missing assets report unavailable (-1)")
+	assert_eq(_editor_tools.templates_expected_size_from_release_json(
+		"{\"assets\": \"not-a-list\"}", "x.tpz"), -1,
+		"Non-list assets report unavailable")
+
+func test_integrity_source_url_is_trusted_and_tag_pinned():
+	var url: String = _editor_tools.templates_integrity_source_url("4.6.3-stable")
+	assert_true(_editor_tools.is_trusted_templates_url(url))
+	assert_true(url.contains("godotengine/godot/releases/tags/4.6.3-stable"))
+
+func test_export_templates_root_falls_back_to_platform_path():
+	var root: String = _editor_tools._get_export_templates_root()
+	if OS.get_name() == "Windows":
+		assert_false(root.is_empty(), "A Windows editor must always resolve a templates root")
+		assert_true(root.to_lower().contains("godot") and root.to_lower().contains("export_templates"),
+			"The fallback path is %APPDATA%/Godot/export_templates, got: " + root)
+
+func test_parallel_chunk_plan_covers_file_exactly() -> void:
+	var chunks: Array = _editor_tools.TemplatesParallelFetch.plan_chunks(5000000, 4)
+	assert_eq(chunks.size(), 4)
+	var covered: int = 0
+	var previous_end: int = -1
+	for chunk_value in chunks:
+		var chunk: Dictionary = chunk_value
+		assert_eq(int(chunk["start"]), previous_end + 1, "Chunks are contiguous")
+		covered += int(chunk["end"]) - int(chunk["start"]) + 1
+		previous_end = int(chunk["end"])
+	assert_eq(covered, 5000000, "Chunk plan covers the file exactly, no gaps or overlaps")
+	assert_true(_editor_tools.TemplatesParallelFetch.plan_chunks(500, 8).size() <= 1,
+		"Small files collapse to a single chunk (1 MiB minimum per chunk)")
+
+func test_parallel_chunk_plan_caps_at_16_connections() -> void:
+	assert_eq(_editor_tools.TemplatesParallelFetch.plan_chunks(64 * 1048576, 99).size(), 16,
+		"Connection count is capped at 16")
+	assert_eq(_editor_tools.TemplatesParallelFetch.plan_chunks(3000000, 16).size(), 3,
+		"A 3 MiB file cannot exceed 3 chunks (1 MiB minimum per chunk)")
+
+func test_get_request_injects_range_header() -> void:
+	var request: String = _editor_tools.TemplatesHttpGetter.build_get_request(
+		"/x.tpz", "example.com", "bytes=5-9")
+	assert_true(request.contains("Range: bytes=5-9"), "Range header is injected")
+	var plain: String = _editor_tools.TemplatesHttpGetter.build_get_request(
+		"/x.tpz", "example.com", "")
+	assert_false(plain.contains("Range:"), "No Range header without one")
+
+func test_status_acceptance_rules() -> void:
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(200, false))
+	assert_false(_editor_tools.TemplatesHttpGetter.is_acceptable_status(206, false),
+		"206 without a Range request is unexpected")
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(206, true))
+	assert_true(_editor_tools.TemplatesHttpGetter.is_acceptable_status(200, true),
+		"200 with Range means the origin ignored it (handled separately)")
+
+func test_resume_state_round_trip() -> void:
+	var fetch: Node = _editor_tools.TemplatesParallelFetch.new()
+	fetch.setup("https://example.com/a.tpz", "user://zz_resume_test.tpz", "", 4)
+	fetch._total = 100
+	fetch._etag = "abc"
+	fetch._chunks = [{"start": 0, "end": 49, "have": 50, "retries": 0},
+		{"start": 50, "end": 99, "have": 10, "retries": 0}]
+	var dest_touch: FileAccess = FileAccess.open("user://zz_resume_test.tpz", FileAccess.WRITE)
+	if dest_touch:
+		dest_touch.close()
+	fetch._persist()
+	assert_true(fetch._load_state(), "State reloads when url+total match")
+	assert_eq(int((fetch._chunks[1] as Dictionary).get("have", -1)), 10,
+		"Per-chunk progress survives for resume")
+	fetch._total = 999
+	assert_false(fetch._load_state(), "Size mismatch invalidates the resume state")
+	fetch.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://zz_resume_test.tpz.download.json"))

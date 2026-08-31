@@ -119,6 +119,41 @@ func test_startup_failure_classification_is_actionable_without_leaking_english_u
 	assert_eq(MCPTunnelManagerScript.classify_startup_failure("failed to request quick Tunnel: status 503"), "service")
 	assert_eq(MCPTunnelManagerScript.classify_startup_failure("unrecognized fatal line"), "unknown")
 
+func test_normalize_proxy_url_adds_scheme_and_trims_slash() -> void:
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("127.0.0.1:7890"), "http://127.0.0.1:7890")
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("http://127.0.0.1:7890/"), "http://127.0.0.1:7890")
+	assert_eq(MCPTunnelManagerScript.normalize_proxy_url("  "), "")
+
+func test_proxy_from_environment_prefers_https() -> void:
+	assert_eq(
+		MCPTunnelManagerScript.proxy_from_environment({
+			"HTTPS_PROXY": "http://127.0.0.1:7890",
+			"HTTP_PROXY": "http://127.0.0.1:8080",
+		}),
+		"http://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.proxy_from_environment({"http_proxy": "127.0.0.1:8080"}),
+		"http://127.0.0.1:8080"
+	)
+	assert_eq(MCPTunnelManagerScript.proxy_from_environment({}), "")
+
+func test_parse_windows_proxy_server_prefers_https() -> void:
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server(
+			"http=127.0.0.1:8080;https=127.0.0.1:7890;socks=127.0.0.1:1080"
+		),
+		"https://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server("127.0.0.1:7890"),
+		"http://127.0.0.1:7890"
+	)
+	assert_eq(
+		MCPTunnelManagerScript.parse_windows_proxy_server("socks=127.0.0.1:1080"),
+		"socks5://127.0.0.1:1080"
+	)
+
 func test_new_manager_is_not_running():
 	var mgr = MCPTunnelManagerScript.new()
 	assert_false(mgr.is_running(), "A freshly created manager should not be running")
@@ -135,7 +170,7 @@ func test_supervisor_launch_args_preserve_all_paths_without_shell_quoting() -> v
 	var stop_path: String = _tmp_root.path_join("stop.request")
 	var args: PackedStringArray = MCPTunnelManagerScript.build_supervisor_launch_args(
 		"C:/My Game", "C:/My Game/addons/supervisor.gd", "C:/Program Files/cloudflared.exe",
-		9080, log_path, runtime_path, stop_path, "session-123"
+		9080, log_path, runtime_path, stop_path, "session-123", "http://127.0.0.1:7890"
 	)
 	assert_eq(args[0], "--headless")
 	assert_true(args.has("--script"))
@@ -145,6 +180,7 @@ func test_supervisor_launch_args_preserve_all_paths_without_shell_quoting() -> v
 	assert_true(args.has("--mcp-tunnel-runtime=%s" % runtime_path))
 	assert_true(args.has("--mcp-tunnel-stop=%s" % stop_path))
 	assert_true(args.has("--mcp-tunnel-session=session-123"))
+	assert_true(args.has("--mcp-tunnel-proxy=http://127.0.0.1:7890"))
 
 func test_project_session_directory_is_stable_and_project_scoped() -> void:
 	var first: String = MCPTunnelManagerScript.default_session_dir("/work/game-a")
@@ -169,6 +205,27 @@ func test_start_persists_url_and_detach_keeps_process_alive() -> void:
 	assert_true(mgr.fake_running, "Detaching the Godot panel must not terminate cloudflared")
 	assert_eq(mgr.killed_pid, -1)
 	assert_true(FileAccess.file_exists(mgr.get_state_path()), "Detach must preserve the resumable session")
+
+func test_poll_reads_url_from_runtime_sidecar_without_log() -> void:
+	var mgr := FakeTunnelManager.new(_tmp_root)
+	assert_eq(mgr.start("/opt/cloudflared", 9080), OK)
+	var session_id: String = mgr.get_state_path().sha256_text().substr(0, 32)
+	var runtime_path: String = mgr.get_state_path().get_base_dir().path_join("runtime.json")
+	var sidecar_url: String = "https://sidecar-only.trycloudflare.com"
+	_write_file(runtime_path, JSON.stringify({
+		"schema_version": 1,
+		"session": session_id,
+		"supervisor_pid": mgr.get_pid(),
+		"cloudflared_pid": 777777,
+		"public_url": sidecar_url,
+	}, "\t"))
+	assert_eq(
+		mgr.poll(),
+		sidecar_url,
+		"Manager must discover the URL from the supervisor's lock-free sidecar"
+	)
+	var state: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(mgr.get_state_path()))
+	assert_eq(state.get("public_url", ""), sidecar_url, "Sidecar URL must be persisted to resumable state")
 
 func test_live_supervisor_captures_pipe_url_and_survives_detach() -> void:
 	if OS.get_name() != "Linux":
@@ -330,3 +387,12 @@ func test_supervisor_and_child_command_identity_are_session_scoped() -> void:
 	assert_false(MCPTunnelManagerScript.cloudflared_command_matches(
 		child_command, "C:\\Tools\\cloudflared.exe", 9081, "Windows"
 	))
+
+func test_cloudflared_command_matches_accepts_both_origin_forms() -> void:
+	var legacy: String = '"C:\\Tools\\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:9080'
+	assert_true(MCPTunnelManagerScript.cloudflared_command_matches(
+		legacy, "C:\\Tools\\cloudflared.exe", 9080, "Windows"),
+		"Persisted sessions from before the 127.0.0.1 switch must stay adoptable")
+	var modern: String = '"C:\\Tools\\cloudflared.exe" tunnel --no-autoupdate --url http://127.0.0.1:9080'
+	assert_true(MCPTunnelManagerScript.cloudflared_command_matches(
+		modern, "C:\\Tools\\cloudflared.exe", 9080, "Windows"))

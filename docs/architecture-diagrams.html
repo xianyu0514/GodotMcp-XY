@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Godot MCP Native 系统架构图集</title>
+<style>
+:root{
+  --ink:#1a1a18; --ink-2:#444441; --ink-3:#5F5E5A;
+  --line:#D3D1C7; --line-soft:#E8E6DE;
+  --surface:#FFFFFF; --surface-2:#F7F6F2; --page:#FBFAF7;
+  --blue-bg:#E6F1FB; --blue-line:#185FA5; --blue-ink:#0C447C; --blue-sub:#185FA5;
+  --amber-bg:#FAEEDA; --amber-line:#854F0B; --amber-ink:#633806; --amber-sub:#854F0B;
+  --gray-bg:#F1EFE8; --gray-line:#5F5E5A; --gray-ink:#2C2C2A;
+  --purple-bg:#EEEDFE; --purple-line:#534AB7; --purple-ink:#3C3489;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:0; background:var(--page); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:15px; line-height:1.7;
+}
+.wrap{max-width:960px; margin:0 auto; padding:56px 32px 96px}
+header{border-bottom:1px solid var(--line); padding-bottom:28px; margin-bottom:48px}
+h1{font-size:28px; font-weight:600; margin:0 0 10px; letter-spacing:-0.01em}
+.sub{color:var(--ink-3); font-size:14px; margin:0}
+.meta{display:flex; flex-wrap:wrap; gap:8px; margin-top:18px}
+.tag{background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:3px 12px; font-size:12px; color:var(--ink-2)}
+h2{font-size:20px; font-weight:600; margin:56px 0 8px; letter-spacing:-0.01em}
+h2 .num{color:var(--ink-3); font-weight:400; margin-right:10px}
+.lead{color:var(--ink-2); font-size:14px; margin:0 0 22px; max-width:76ch}
+figure{margin:0 0 8px; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:22px 18px}
+figure svg{display:block; width:100%; height:auto}
+figcaption{color:var(--ink-3); font-size:13px; margin-top:14px; padding-top:12px; border-top:1px solid var(--line-soft); max-width:82ch}
+table{width:100%; border-collapse:collapse; margin:22px 0 8px; font-size:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden}
+th{text-align:left; font-weight:600; font-size:13px; color:var(--ink-2); background:var(--surface-2); padding:11px 16px; border-bottom:1px solid var(--line)}
+td{padding:11px 16px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+tr:last-child td{border-bottom:none}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.88em; background:var(--surface-2); padding:1px 5px; border-radius:4px}
+.note{background:var(--amber-bg); border:1px solid var(--amber-line); border-radius:12px; padding:16px 20px; margin:24px 0; font-size:14px; color:var(--amber-ink)}
+.note strong{font-weight:600}
+footer{margin-top:72px; padding-top:24px; border-top:1px solid var(--line); color:var(--ink-3); font-size:13px}
+@media print{
+  body{background:#fff; font-size:11pt}
+  .wrap{max-width:none; padding:0}
+  figure{break-inside:avoid; page-break-inside:avoid; border-color:#bbb}
+  h2{break-after:avoid; page-break-after:avoid}
+  table{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Godot MCP Native 系统架构图集</h1>
+  <p class="sub">内嵌于 Godot 编辑器的原生 MCP 服务器 · 核心模块与数据流</p>
+  <div class="meta">
+    <span class="tag">版本 1.0.7-pre1</span>
+    <span class="tag">协议 2025-11-25</span>
+    <span class="tag">232 个工具</span>
+    <span class="tag">28 core · 198 supplementary · 6 meta</span>
+    <span class="tag">Godot 4.7 · GL Compatibility</span>
+  </div>
+</header>
+
+<h2><span class="num">01</span>整体分层架构</h2>
+<p class="lead">系统分为六层。客户端与宿主环境是外部系统，中间四层是插件本体。能力层的 232 个工具按领域归并，右侧数字为该领域工具数。</p>
+<figure>
+<svg viewBox="0 0 680 618" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>整体分层架构</title>
+<desc>自上而下：客户端层、传输与接入层、协议与编排内核、能力层、执行边界、宿主环境</desc>
+<style>.l{font-size:12px;font-weight:500}.c{font-size:12px}</style>
+<defs>
+<marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="40" y="40" width="600" height="72" rx="12" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="l" x="58" y="60" fill="#2C2C2A" dominant-baseline="central">客户端层 · MCP 客户端</text>
+<rect x="58" y="68" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="c" x="148" y="83" fill="#2C2C2A" text-anchor="middle" dominant-baseline="central">Claude Desktop</text>
+<rect x="250" y="68" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="c" x="340" y="83" fill="#2C2C2A" text-anchor="middle" dominant-baseline="central">Cursor / Cline</text>
+<rect x="442" y="68" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="c" x="532" y="83" fill="#2C2C2A" text-anchor="middle" dominant-baseline="central">自定义客户端</text>
+<path d="M340 112 L340 126" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#a1)"/>
+
+<rect x="40" y="128" width="600" height="72" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="l" x="58" y="148" fill="#0C447C" dominant-baseline="central">传输与接入层 · Transport</text>
+<rect x="58" y="156" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="124" y="171" fill="#0C447C" text-anchor="middle" dominant-baseline="central">HTTP + SSE</text>
+<rect x="202" y="156" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="268" y="171" fill="#0C447C" text-anchor="middle" dominant-baseline="central">stdio</text>
+<rect x="346" y="156" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="412" y="171" fill="#0C447C" text-anchor="middle" dominant-baseline="central">Bearer 认证</text>
+<rect x="490" y="156" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="556" y="171" fill="#0C447C" text-anchor="middle" dominant-baseline="central">Cloudflare 隧道</text>
+<path d="M340 200 L340 214" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a1)"/>
+
+<rect x="40" y="216" width="600" height="72" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="l" x="58" y="236" fill="#0C447C" dominant-baseline="central">协议与编排内核 · MCPServerCore</text>
+<rect x="58" y="244" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="124" y="259" fill="#0C447C" text-anchor="middle" dominant-baseline="central">JSON-RPC 分发</text>
+<rect x="202" y="244" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="268" y="259" fill="#0C447C" text-anchor="middle" dominant-baseline="central">串行请求队列</text>
+<rect x="346" y="244" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="412" y="259" fill="#0C447C" text-anchor="middle" dominant-baseline="central">工具注册表</text>
+<rect x="490" y="244" width="132" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="556" y="259" fill="#0C447C" text-anchor="middle" dominant-baseline="central">结果缓存与溢出</text>
+<path d="M340 288 L340 302" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a1)"/>
+
+<rect x="40" y="304" width="600" height="118" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="l" x="58" y="324" fill="#0C447C" dominant-baseline="central">能力层 · 232 个工具 + 资源 + prompts</text>
+<rect x="58" y="334" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="148" y="349" fill="#0C447C" text-anchor="middle" dominant-baseline="central">场景与节点 · 38</text>
+<rect x="250" y="334" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="340" y="349" fill="#0C447C" text-anchor="middle" dominant-baseline="central">脚本 · 18</text>
+<rect x="442" y="334" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="532" y="349" fill="#0C447C" text-anchor="middle" dominant-baseline="central">编辑器控制 · 27</text>
+<rect x="58" y="372" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="148" y="387" fill="#0C447C" text-anchor="middle" dominant-baseline="central">运行与调试 · 73</text>
+<rect x="250" y="372" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="340" y="387" fill="#0C447C" text-anchor="middle" dominant-baseline="central">项目与资源 · 69</text>
+<rect x="442" y="372" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="532" y="387" fill="#0C447C" text-anchor="middle" dominant-baseline="central">元工具 · 6</text>
+<path d="M340 422 L340 436" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a1)"/>
+
+<rect x="40" y="438" width="600" height="72" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="l" x="58" y="458" fill="#0C447C" dominant-baseline="central">执行边界 · Godot API 与运行时通道</text>
+<rect x="58" y="466" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="148" y="481" fill="#0C447C" text-anchor="middle" dominant-baseline="central">EditorInterface 通道</text>
+<rect x="250" y="466" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="340" y="481" fill="#0C447C" text-anchor="middle" dominant-baseline="central">调试器桥接</text>
+<rect x="442" y="466" width="180" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="532" y="481" fill="#0C447C" text-anchor="middle" dominant-baseline="central">运行时探针 Autoload</text>
+<path d="M340 510 L340 524" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#a1)"/>
+
+<rect x="40" y="526" width="600" height="72" rx="12" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="l" x="58" y="546" fill="#2C2C2A" dominant-baseline="central">宿主环境</text>
+<rect x="58" y="554" width="276" height="30" rx="6" fill="#FFFFFF" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="c" x="196" y="569" fill="#2C2C2A" text-anchor="middle" dominant-baseline="central">Godot 编辑器进程</text>
+<rect x="346" y="554" width="276" height="30" rx="6" fill="#FFFFFF" stroke="#5F5E5A" stroke-width="0.5"/>
+<text class="c" x="484" y="569" fill="#2C2C2A" text-anchor="middle" dominant-baseline="central">运行中的游戏进程</text>
+</svg>
+<figcaption>灰色为外部系统，蓝色为插件内部。能力层的领域划分由 <code>tools_manifest.gd</code> 的 group 归并而来。</figcaption>
+</figure>
+
+<h2><span class="num">02</span>核心模块关系</h2>
+<p class="lead"><code>MCPServerCore</code> 是唯一中枢。上方是接入侧，左右是注册与缓存两翼，下方是它驱动的能力与通道。</p>
+<figure>
+<svg viewBox="0 0 680 434" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>核心模块关系</title>
+<desc>以 MCPServerCore 为中心的星形依赖：接入侧、注册侧、缓存侧、能力侧</desc>
+<style>.h{font-size:13px;font-weight:500}.s{font-size:12px}.m{font-size:11px}</style>
+<defs>
+<marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+
+<rect x="40" y="40" width="180" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="130" y="60" fill="#0C447C" text-anchor="middle" dominant-baseline="central">传输层</text>
+<text class="s" x="130" y="78" fill="#185FA5" text-anchor="middle" dominant-baseline="central">HTTP · stdio</text>
+<rect x="250" y="40" width="180" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="340" y="60" fill="#0C447C" text-anchor="middle" dominant-baseline="central">认证与限流</text>
+<text class="s" x="340" y="78" fill="#185FA5" text-anchor="middle" dominant-baseline="central">Bearer · 1000 / 60s</text>
+<rect x="460" y="40" width="180" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="550" y="60" fill="#0C447C" text-anchor="middle" dominant-baseline="central">隧道管理</text>
+<text class="s" x="550" y="78" fill="#185FA5" text-anchor="middle" dominant-baseline="central">Cloudflare Quick Tunnel</text>
+<path d="M130 98 L280 168" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M340 98 L340 168" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M550 98 L400 168" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+
+<rect x="250" y="170" width="180" height="120" rx="10" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text class="h" x="340" y="200" fill="#3C3489" text-anchor="middle" dominant-baseline="central">MCPServerCore</text>
+<text class="s" x="340" y="224" fill="#534AB7" text-anchor="middle" dominant-baseline="central">JSON-RPC 分发</text>
+<text class="s" x="340" y="246" fill="#534AB7" text-anchor="middle" dominant-baseline="central">串行队列 · 背压</text>
+<text class="s" x="340" y="266" fill="#534AB7" text-anchor="middle" dominant-baseline="central">注册表 · 缓存 · 溢出</text>
+
+<rect x="40" y="180" width="190" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="135" y="200" fill="#0C447C" text-anchor="middle" dominant-baseline="central">工具注册表</text>
+<text class="s" x="135" y="222" fill="#185FA5" text-anchor="middle" dominant-baseline="central">manifest 单一真相</text>
+<rect x="40" y="264" width="190" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="135" y="284" fill="#0C447C" text-anchor="middle" dominant-baseline="central">分类 / 状态 / 预设</text>
+<text class="s" x="135" y="306" fill="#185FA5" text-anchor="middle" dominant-baseline="central">classifier 等三个管理器</text>
+<path d="M230 212 L248 226" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M230 296 L248 246" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+
+<rect x="450" y="180" width="190" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="545" y="200" fill="#0C447C" text-anchor="middle" dominant-baseline="central">CacheRevisionIndex</text>
+<text class="s" x="545" y="222" fill="#185FA5" text-anchor="middle" dominant-baseline="central">依赖标签 → revision</text>
+<rect x="450" y="264" width="190" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="545" y="284" fill="#0C447C" text-anchor="middle" dominant-baseline="central">结果缓存 LRU</text>
+<text class="s" x="545" y="306" fill="#185FA5" text-anchor="middle" dominant-baseline="central">64 条 · 32MB · 60s</text>
+<path d="M450 212 L432 226" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M450 296 L432 246" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+
+<rect x="40" y="350" width="180" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="130" y="370" fill="#0C447C" text-anchor="middle" dominant-baseline="central">15 个工具模块</text>
+<text class="s" x="130" y="392" fill="#185FA5" text-anchor="middle" dominant-baseline="central">231 个工具</text>
+<rect x="250" y="350" width="180" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="340" y="370" fill="#0C447C" text-anchor="middle" dominant-baseline="central">路由 + 工作流引擎</text>
+<text class="s" x="340" y="392" fill="#185FA5" text-anchor="middle" dominant-baseline="central">8 工具预算 · 12 profile</text>
+<rect x="460" y="350" width="180" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="550" y="370" fill="#0C447C" text-anchor="middle" dominant-baseline="central">调试器桥接 + 探针</text>
+<text class="s" x="550" y="392" fill="#185FA5" text-anchor="middle" dominant-baseline="central">编辑器 ↔ 游戏进程</text>
+<path d="M300 292 L130 348" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M340 292 L340 348" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+<path d="M380 292 L550 348" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a2)"/>
+</svg>
+<figcaption>核心只依赖 <code>McpTransportBase</code> 抽象，不感知具体传输实现；工具模块通过统一的 <code>register_tools(server_core)</code> 契约接入。</figcaption>
+</figure>
+
+<h2><span class="num">03</span>工具调用请求生命周期</h2>
+<p class="lead">第 ④ 步的分支是全链路的性能关键：只读工具命中缓存时，根本不会执行工具处理器。</p>
+<figure>
+<svg viewBox="0 0 680 620" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>工具调用请求生命周期</title>
+<desc>七个阶段，第四步为缓存判定分支，命中时跳过工具执行直接返回响应</desc>
+<style>.h{font-size:13px;font-weight:500}.s{font-size:12px}</style>
+<defs>
+<marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="40" y="40" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="60" fill="#0C447C" text-anchor="middle" dominant-baseline="central">① 客户端 tools/call</text>
+<text class="s" x="165" y="78" fill="#185FA5" text-anchor="middle" dominant-baseline="central">JSON-RPC 2.0 报文</text>
+<path d="M165 98 L165 120" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="124" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="144" fill="#0C447C" text-anchor="middle" dominant-baseline="central">② 传输层解析与鉴权</text>
+<text class="s" x="165" y="162" fill="#185FA5" text-anchor="middle" dominant-baseline="central">HTTP + SSE 或 stdio</text>
+<path d="M165 182 L165 204" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="208" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="228" fill="#0C447C" text-anchor="middle" dominant-baseline="central">③ 背压准入 + 串行队列</text>
+<text class="s" x="165" y="246" fill="#185FA5" text-anchor="middle" dominant-baseline="central">FIFO 排队，每帧执行一条</text>
+<path d="M165 266 L165 288" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="292" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="312" fill="#0C447C" text-anchor="middle" dominant-baseline="central">④ 缓存键与 revision 校验</text>
+<text class="s" x="165" y="330" fill="#185FA5" text-anchor="middle" dominant-baseline="central">工具名 + 规范化参数</text>
+<path d="M292 320 L386 320" fill="none" stroke="#854F0B" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="390" y="292" width="250" height="56" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text class="h" x="515" y="312" fill="#633806" text-anchor="middle" dominant-baseline="central">命中 → 跳过执行</text>
+<text class="s" x="515" y="330" fill="#854F0B" text-anchor="middle" dominant-baseline="central">直接返回缓存结果</text>
+<path d="M165 350 L165 372" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="376" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="396" fill="#0C447C" text-anchor="middle" dominant-baseline="central">⑤ 执行工具处理器</text>
+<text class="s" x="165" y="414" fill="#185FA5" text-anchor="middle" dominant-baseline="central">await tool.callable(args)</text>
+<path d="M165 434 L165 456" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="460" width="250" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="165" y="480" fill="#0C447C" text-anchor="middle" dominant-baseline="central">⑥ 格式化与溢出判定</text>
+<text class="s" x="165" y="498" fill="#185FA5" text-anchor="middle" dominant-baseline="central">超 50KB 落盘为结果资源</text>
+<path d="M165 518 L165 540" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a3)"/>
+<path d="M515 350 L515 540" fill="none" stroke="#854F0B" stroke-width="1.5" marker-end="url(#a3)"/>
+
+<rect x="40" y="544" width="600" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="340" y="564" fill="#0C447C" text-anchor="middle" dominant-baseline="central">⑦ 写回缓存或推进依赖 revision，返回 JSON-RPC 响应</text>
+<text class="s" x="340" y="582" fill="#185FA5" text-anchor="middle" dominant-baseline="central">只读工具落缓存（TTL 60s 兜底），变更工具只推进受影响的依赖标签</text>
+</svg>
+<figcaption>缓存键 = <code>工具名 + ":" + 规范化参数 JSON</code>（参数 key 排序后序列化），因此参数顺序不同的等价调用共享同一条目。</figcaption>
+</figure>
+
+<h2><span class="num">04</span>结果缓存失效链路</h2>
+<p class="lead">两套失效来源汇聚到同一个 revision 索引。写入路径是 O(受影响标签数)，从不扫描缓存；陈旧条目在被读到时才惰性逐出。</p>
+<figure>
+<svg viewBox="0 0 680 356" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>结果缓存依赖标签失效链路</title>
+<desc>MCP 写入与编辑器信号两条来源，经 CacheRevisionIndex 推进标签版本号，读取时惰性校验</desc>
+<style>.h{font-size:13px;font-weight:500}.s{font-size:12px}.c{font-size:12px}</style>
+<defs>
+<marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="40" y="40" width="280" height="72" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="180" y="60" fill="#0C447C" text-anchor="middle" dominant-baseline="central">来源 A · MCP 写入工具</text>
+<text class="s" x="180" y="80" fill="#185FA5" text-anchor="middle" dominant-baseline="central">mutation_tags(工具, 分组, 参数)</text>
+<text class="s" x="180" y="97" fill="#185FA5" text-anchor="middle" dominant-baseline="central">映射到最小受影响标签集</text>
+
+<rect x="360" y="40" width="280" height="72" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text class="h" x="500" y="60" fill="#633806" text-anchor="middle" dominant-baseline="central">来源 B · 编辑器 / 文件系统</text>
+<text class="s" x="500" y="80" fill="#854F0B" text-anchor="middle" dominant-baseline="central">cache_change_tracker 每帧合并</text>
+<text class="s" x="500" y="97" fill="#854F0B" text-anchor="middle" dominant-baseline="central">递归路径快照做增删差分</text>
+<path d="M180 114 L180 148" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a4)"/>
+<path d="M500 114 L500 148" fill="none" stroke="#854F0B" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="152" width="600" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="340" y="174" fill="#0C447C" text-anchor="middle" dominant-baseline="central">CacheRevisionIndex · 依赖标签 → 单调 revision</text>
+<text class="s" x="340" y="196" fill="#185FA5" text-anchor="middle" dominant-baseline="central">scene_content · script_all · resource:res://x.gd · project_settings · tool_catalog</text>
+<path d="M340 218 L340 246" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a4)"/>
+
+<rect x="40" y="248" width="600" height="88" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="340" y="270" fill="#0C447C" text-anchor="middle" dominant-baseline="central">结果缓存 LRU · 64 条 / 32MB · TTL 60s 兜底</text>
+<rect x="58" y="284" width="272" height="32" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="194" y="300" fill="#0C447C" text-anchor="middle" dominant-baseline="central">snapshot 一致 → 命中返回</text>
+<rect x="350" y="284" width="272" height="32" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="486" y="300" fill="#0C447C" text-anchor="middle" dominant-baseline="central">revision 失配 → 惰性逐出</text>
+</svg>
+<figcaption>两条来源的退化策略刻意不同：MCP 侧未知工具退化为 <code>global</code>；外部侧无路径事件退化为所有文件域，但保留 <code>tool_catalog</code>——文件系统变化不可能改变工具定义。</figcaption>
+</figure>
+
+<h2><span class="num">05</span>编辑器与游戏进程双通道</h2>
+<p class="lead">这套机制让 AI 能在游戏运行时读写场景树、模拟输入、采样性能——"改完自己试玩验证"闭环的基础。</p>
+<figure>
+<svg viewBox="0 0 680 354" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>编辑器与游戏进程双通道执行模型</title>
+<desc>编辑器进程通过调试器桥接与游戏进程内的 RuntimeProbe Autoload 双向通信</desc>
+<style>.h{font-size:13px;font-weight:500}.s{font-size:12px}.c{font-size:12px}.m{font-size:11px}</style>
+<defs>
+<marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>
+</defs>
+<rect x="40" y="40" width="210" height="210" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="h" x="145" y="62" fill="#0C447C" text-anchor="middle" dominant-baseline="central">编辑器进程</text>
+<text class="s" x="145" y="82" fill="#185FA5" text-anchor="middle" dominant-baseline="central">插件本体 + 工具模块</text>
+<rect x="58" y="98" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="145" y="113" fill="#0C447C" text-anchor="middle" dominant-baseline="central">EditorInterface</text>
+<rect x="58" y="134" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="145" y="149" fill="#0C447C" text-anchor="middle" dominant-baseline="central">ProjectSettings</text>
+<rect x="58" y="170" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="145" y="185" fill="#0C447C" text-anchor="middle" dominant-baseline="central">ResourceLoader / 导入</text>
+<rect x="58" y="206" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5"/>
+<text class="c" x="145" y="221" fill="#0C447C" text-anchor="middle" dominant-baseline="central">撤销 / 重做栈</text>
+
+<rect x="280" y="128" width="120" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="m" x="340" y="148" fill="#0C447C" text-anchor="middle" dominant-baseline="central" font-weight="500">MCPDebuggerBridge</text>
+<text class="m" x="340" y="166" fill="#185FA5" text-anchor="middle" dominant-baseline="central">调试器协议通道</text>
+<path d="M252 156 L276 156" fill="none" stroke="#185FA5" stroke-width="1.5" marker-end="url(#a5)" marker-start="url(#a5)"/>
+<path d="M404 156 L428 156" fill="none" stroke="#854F0B" stroke-width="1.5" marker-end="url(#a5)" marker-start="url(#a5)"/>
+
+<rect x="430" y="40" width="210" height="210" rx="12" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text class="h" x="535" y="62" fill="#633806" text-anchor="middle" dominant-baseline="central">游戏进程</text>
+<text class="s" x="535" y="82" fill="#854F0B" text-anchor="middle" dominant-baseline="central">RuntimeProbe Autoload</text>
+<rect x="448" y="98" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#854F0B" stroke-width="0.5"/>
+<text class="c" x="535" y="113" fill="#633806" text-anchor="middle" dominant-baseline="central">场景树读写</text>
+<rect x="448" y="134" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#854F0B" stroke-width="0.5"/>
+<text class="c" x="535" y="149" fill="#633806" text-anchor="middle" dominant-baseline="central">动画 / 音频 / 着色器</text>
+<rect x="448" y="170" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#854F0B" stroke-width="0.5"/>
+<text class="c" x="535" y="185" fill="#633806" text-anchor="middle" dominant-baseline="central">输入模拟 / 表达式</text>
+<rect x="448" y="206" width="174" height="30" rx="6" fill="#FFFFFF" stroke="#854F0B" stroke-width="0.5"/>
+<text class="c" x="535" y="221" fill="#633806" text-anchor="middle" dominant-baseline="central">截图 / 瓦片 / 主题</text>
+
+<rect x="40" y="270" width="600" height="64" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text class="s" x="340" y="290" fill="#0C447C" text-anchor="middle" dominant-baseline="central">请求：工具 → send_message("mcp:*") → 探针执行 → 回传</text>
+<text class="s" x="340" y="310" fill="#185FA5" text-anchor="middle" dominant-baseline="central">响应：探针注册 mcp 捕获前缀 → 桥接按 sequence 匹配 → 工具轮询取回</text>
+</svg>
+<figcaption><code>MCPRuntimeProbe</code> 是 Autoload 单例，会进入导出的游戏包——生产构建前需要评估裁剪。</figcaption>
+</figure>
+
+<h2><span class="num">06</span>关键常量速查</h2>
+<table>
+<thead><tr><th style="width:30%">常量</th><th style="width:18%">值</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td><code>MAX_REQUEST_QUEUE_SIZE</code></td><td>256</td><td>串行请求队列容量，超出进入准入等待</td></tr>
+<tr><td><code>MAX_WAITING_REQUESTS</code></td><td>256</td><td>同时等待槽位的协程上限，超出立即拒绝</td></tr>
+<tr><td><code>MAX_QUEUE_WAIT_SECONDS</code></td><td>30</td><td>等待槽位超时，返回 "server busy"</td></tr>
+<tr><td><code>RESULT_CACHE_MAX</code></td><td>64 条</td><td>结果缓存 LRU 条目上限</td></tr>
+<tr><td><code>RESULT_CACHE_MAX_BYTES</code></td><td>32 MB</td><td>结果缓存字节上限</td></tr>
+<tr><td><code>RESULT_CACHE_TTL_MS</code></td><td>60 s</td><td>兜底陈旧上限，防止 MCP 之外的编辑造成无限陈旧</td></tr>
+<tr><td><code>READ_SNAPSHOT_CACHE_MAX</code></td><td>8 条 / 4 MB</td><td>分页扫描快照，各 limit/offset 视图共享一次全量扫描</td></tr>
+<tr><td><code>RESULT_CACHE_SINGLE_FLIGHT_WAIT_MS</code></td><td>30 s</td><td>同 key 并发合并，等待"孪生"请求结果</td></tr>
+<tr><td><code>MAX_INLINE_RESULT_BYTES</code></td><td>50 KB</td><td>超过则落盘为结果资源，返回首尾预览</td></tr>
+<tr><td><code>SPILL_OUTPUT_DIR</code></td><td><code>res://.mcp/out</code></td><td>溢出文件目录，内容寻址 SHA-256 句柄</td></tr>
+<tr><td><code>RESULT_RESOURCE_PAGE_BYTES</code></td><td>16 KB</td><td><code>resources/read</code> 分页大小，按码点边界切分</td></tr>
+<tr><td><code>LIST_CACHE_TTL_MS</code></td><td>30 s</td><td>列表响应 <code>_meta.ttlMs</code>，MCP 规范要求</td></tr>
+<tr><td><code>DEFAULT_TOOL_BUDGET</code> / <code>MAX</code></td><td>8 / 10</td><td>工作流路由的单次启用预算与硬上限</td></tr>
+<tr><td><code>ROUTE_CACHE_MAX</code></td><td>64</td><td>路由结果 LRU，按 registry revision 失效</td></tr>
+<tr><td><code>DEFAULT_STEPS_PER_RUN</code></td><td>4</td><td><code>run_game_workflow</code> 自适应切片默认推进步数</td></tr>
+<tr><td><code>SAME_FAILURE_REPLAN_THRESHOLD</code></td><td>3</td><td>同一失败次数触发 replan</td></tr>
+<tr><td>速率限制</td><td>1000 / 60 s</td><td>按 client_id 统计，仅对请求生效，通知不计数</td></tr>
+<tr><td>HTTP 限制</td><td>1 MB / 30 s / 64</td><td>单请求体上限、请求超时、最大并发连接</td></tr>
+<tr><td>SSE 心跳</td><td>30 s</td><td>保持长连接存活</td></tr>
+</tbody>
+</table>
+
+<h2><span class="num">07</span>缓存依赖标签</h2>
+<p class="lead">14 个静态标签，外加按路径动态生成的 <code>script:&lt;路径&gt;</code> 与 <code>resource:&lt;路径&gt;</code>。</p>
+<table>
+<thead><tr><th style="width:26%">类别</th><th>标签</th></tr></thead>
+<tbody>
+<tr><td>全局</td><td><code>global</code>（保守兜底）、<code>tool_catalog</code></td></tr>
+<tr><td>场景</td><td><code>scene_content</code>、<code>scene_catalog</code>、<code>scene_tabs</code></td></tr>
+<tr><td>脚本</td><td><code>script_all</code>、<code>script_aggregate</code>、<code>script_catalog</code>、<code>script:&lt;路径&gt;</code></td></tr>
+<tr><td>资源</td><td><code>resource_all</code>、<code>resource_aggregate</code>、<code>resource_catalog</code>、<code>resource:&lt;路径&gt;</code></td></tr>
+<tr><td>项目</td><td><code>project_settings</code>、<code>project_tree</code>、<code>import_state</code></td></tr>
+</tbody>
+</table>
+
+<div class="note">
+<strong>注意：</strong>只有 27 个确定性只读工具进入缓存（<code>CACHEABLE_READ_TOOLS</code>），
+每个都必须在 <code>read_tags()</code> 中有覆盖，由单测强制。
+新增写入工具时若漏登记 <code>mutation_tags()</code>，会静默产生陈旧读——宁可先保守地多推进几个标签。
+</div>
+
+<footer>
+  Godot MCP Native · 系统架构图集 &nbsp;·&nbsp; 配套文档 <code>docs/system-design.md</code> &nbsp;·&nbsp; 依据 <code>tools_manifest.gd</code> 实测数据生成
+</footer>
+
+</div>
+</body>
+</html>

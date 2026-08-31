@@ -42,7 +42,7 @@ const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estim
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 223-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 231-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -569,6 +569,10 @@ func is_running() -> bool:
 		return _transport.is_running()
 	return false
 
+# 供插件看门狗读取传输层心跳（仅 HTTP 传输拥有 last_heartbeat_msec）。
+func get_transport() -> McpTransportBase:
+	return _transport
+
 # ============================================================================
 # 请求处理（根据mcp-builder优化）
 # ============================================================================
@@ -861,6 +865,10 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	if tool.callable.is_valid():
 		# 使用Callable调用工具（await 支持异步工具执行）
 		result = await tool.callable.call(arguments)
+		if result == null or not (result is Dictionary) or (result as Dictionary).is_empty():
+			# GDScript 运行时错误会让处理器中止；带 Dictionary 返回类型的函数
+			# 中止时返回默认构造的空字典（而非 null）——空结果同样绝不伪装成功。
+			error = "Tool handler aborted without a result (runtime error; see the editor log for the stack)"
 	
 	# Tool execution finished: drop this request's cancellation marker (if the
 	# client cancelled mid-run) and the execution context so the next request
@@ -1340,6 +1348,14 @@ func invoke_planned_tool(tool_name: String, arguments: Dictionary,
 	tool_execution_started.emit(tool_name, arguments)
 	var result: Variant = await tool.callable.call(arguments)
 	_execution_context = previous_context
+
+	# 处理器中止（运行时错误经 await 传播）会得到 null 或默认构造的空字典；
+	# 工作流步骤同样绝不能把空结果当作成功证据。
+	if result == null or not (result is Dictionary) or (result as Dictionary).is_empty():
+		_log_error("Authorized workflow step aborted: " + tool_name)
+		tool_execution_failed.emit(tool_name,
+			"Tool handler aborted without a result (runtime error; see the editor log)")
+		return {"error": "Tool handler aborted without a result (runtime error; see the editor log)"}
 
 	var has_error: bool = result is Dictionary and (result as Dictionary).has("error")
 	if is_cacheable_read:
@@ -2222,32 +2238,48 @@ var _tool_log_path: String = "user://mcp_tool_verification_log.json"
 var _tool_log_buffer: Array = []
 ## Maximum entries before auto-flushing to disk.
 const TOOL_LOG_FLUSH_THRESHOLD: int = 20
+## File ceiling for the JSONL tool log. Exceeding it rotates the file (a
+## `_log_rotated` marker starts the fresh segment) so a long session cannot
+## grow the log without bound.
+const TOOL_LOG_MAX_BYTES: int = 4 * 1024 * 1024
 
 func clear_tool_log() -> void:
 	_tool_log_buffer.clear()
 	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE)
 	if file:
-		file.store_string("[]")
+		file.store_string("")
 		file.close()
 
-## Flush buffered tool log entries to disk.
+## Flush buffered tool log entries to disk (append-only JSONL, one object
+## per line). Cost is O(buffer) per flush — the previous array-rewrite
+## implementation reparsed and reserialized the whole accumulated file
+## every 20 calls (O(N²) over a session) on the editor main thread.
 func flush_tool_log() -> void:
 	if _tool_log_buffer.is_empty():
 		return
-	var existing: Array = []
-	if FileAccess.file_exists(_tool_log_path):
-		var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.READ)
-		if file:
-			var json: JSON = JSON.new()
-			if json.parse(file.get_as_text()) == OK:
-				existing = json.get_data()
-			file.close()
-	existing.append_array(_tool_log_buffer)
-	_tool_log_buffer.clear()
-	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE)
-	if file:
-		file.store_string(JSON.stringify(existing, "\t"))
+	# WRITE_READ 创建或打开文件并把位置置于 0；超过大小上限则截断轮转，
+	# 否则跳到末尾追加。每行一个 JSON 对象（JSONL）。
+	var file: FileAccess = FileAccess.open(_tool_log_path, FileAccess.WRITE_READ)
+	if file == null:
+		_tool_log_buffer.clear()
+		return
+	if file.get_length() > TOOL_LOG_MAX_BYTES:
 		file.close()
+		file = FileAccess.open(_tool_log_path, FileAccess.WRITE)
+		if file == null:
+			_tool_log_buffer.clear()
+			return
+		file.store_line(JSON.stringify({
+			"tool": "_log_rotated",
+			"timestamp": Time.get_unix_time_from_system(),
+			"note": "earlier entries dropped at size cap"
+		}))
+	else:
+		file.seek_end()
+	for entry_value in _tool_log_buffer:
+		file.store_line(JSON.stringify(entry_value))
+	file.close()
+	_tool_log_buffer.clear()
 
 
 # ============================================================================

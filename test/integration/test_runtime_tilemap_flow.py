@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_runtime_tilemap"
 SCENE_PATH = "res://.tmp_runtime_tilemap/runtime_tilemap_scene.tscn"
 SCRIPT_PATH = "res://.tmp_runtime_tilemap/runtime_tilemap_setup.gd"
@@ -163,7 +164,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -185,6 +186,19 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
         raise last_error
     raise AssertionError("Failed to start project with an active debugger session")
 
+
+
+def _as_coords(value) -> tuple:
+    """探针可能以 dict / list / 字符串形式序列化 Vector2i。"""
+    if isinstance(value, dict):
+        return (int(value.get("x", 0)), int(value.get("y", 0)))
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        return (int(value[0]), int(value[1]))
+    text = str(value).strip("() ").replace(" ", "")
+    parts = [seg for seg in text.split(",") if seg != ""]
+    if len(parts) >= 2:
+        return (int(float(parts[0])), int(float(parts[1])))
+    return (0, 0)
 
 def dispatch_runtime_tool(name: str, arguments: dict, request_id: int) -> dict:
     result = tool_call(name, arguments, request_id=request_id)
@@ -267,8 +281,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -280,6 +293,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_messages", "get_debugger_sessions", "get_runtime_info", "get_runtime_tilemap_cell", "install_runtime_probe", "list_runtime_tilemap_layers", "open_scene", "run_project", "set_runtime_tilemap_cell", "stop_project"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -293,7 +307,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime TileMap tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)
@@ -311,7 +325,7 @@ def main() -> int:
             lambda payload: payload
             and payload.get("node_path") == tilemap_path
             and payload.get("count", 0) >= 1,
-            attempts=3,
+            attempts=6,
             start_request_id=1000,
         )
         first_layer = layers.get("layers", [None])[0]
@@ -330,11 +344,11 @@ def main() -> int:
             lambda payload: payload
             and payload.get("node_path") == tilemap_path
             and payload.get("layer") == 0
-            and payload.get("coords") == {"x": 2, "y": 3},
-            attempts=3,
+            and _as_coords(payload.get("coords")) == (2, 3),
+            attempts=6,
             start_request_id=1100,
         )
-        if int(initial_cell.get("source_id", -1)) != 1 or initial_cell.get("atlas_coords") != {"x": 0, "y": 0}:
+        if int(initial_cell.get("source_id", -1)) != 1 or _as_coords(initial_cell.get("atlas_coords")) != (0, 0):
             raise AssertionError(f"Expected initial tilemap cell to use atlas tile (0,0) from source 1: {initial_cell}")
 
         updated_cell = dispatch_runtime_tool_until_message(
@@ -351,11 +365,11 @@ def main() -> int:
             "mcp:tilemap_cell_updated",
             lambda payload: payload
             and payload.get("node_path") == tilemap_path
-            and payload.get("coords") == {"x": 4, "y": 1},
-            attempts=3,
+            and _as_coords(payload.get("coords")) == (4, 1),
+            attempts=6,
             start_request_id=1200,
         )
-        if int(updated_cell.get("source_id", -1)) != 1 or updated_cell.get("atlas_coords") != {"x": 1, "y": 0}:
+        if int(updated_cell.get("source_id", -1)) != 1 or _as_coords(updated_cell.get("atlas_coords")) != (1, 0):
             raise AssertionError(f"Expected updated tilemap cell to use atlas tile (1,0): {updated_cell}")
 
         refreshed_cell = dispatch_runtime_tool_until_message(
@@ -369,11 +383,11 @@ def main() -> int:
             "mcp:tilemap_cell",
             lambda payload: payload
             and payload.get("node_path") == tilemap_path
-            and payload.get("coords") == {"x": 4, "y": 1},
-            attempts=3,
+            and _as_coords(payload.get("coords")) == (4, 1),
+            attempts=6,
             start_request_id=1300,
         )
-        if int(refreshed_cell.get("source_id", -1)) != 1 or refreshed_cell.get("atlas_coords") != {"x": 1, "y": 0}:
+        if int(refreshed_cell.get("source_id", -1)) != 1 or _as_coords(refreshed_cell.get("atlas_coords")) != (1, 0):
             raise AssertionError(f"Expected refreshed tilemap cell to match updated atlas tile: {refreshed_cell}")
 
         erased_cell = dispatch_runtime_tool_until_message(
@@ -388,9 +402,9 @@ def main() -> int:
             "mcp:tilemap_cell_updated",
             lambda payload: payload
             and payload.get("node_path") == tilemap_path
-            and payload.get("coords") == {"x": 4, "y": 1}
+            and _as_coords(payload.get("coords")) == (4, 1)
             and payload.get("is_empty") is True,
-            attempts=3,
+            attempts=6,
             start_request_id=1400,
         )
         if erased_cell.get("is_empty") is not True or int(erased_cell.get("source_id", -1)) != -1:

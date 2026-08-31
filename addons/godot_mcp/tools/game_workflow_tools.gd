@@ -12,9 +12,44 @@ extends RefCounted
 const EngineScript = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
+const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
+
+# Workflow-authorized runtime tools: the objective already authorizes runtime
+# verification, so the interactive window-policy prompt must not stall the run.
+const RUNTIME_WINDOW_TOOLS: Array[String] = ["run_project", "stop_project"]
+
+# Scene activation changes editor focus; plan-authorized opens must not stall
+# on the interactive focus policy either. Key = tool, value = policy parameter.
+const FOCUS_POLICY_TOOLS: Dictionary = {"open_scene": "allow_ui_focus"}
+
+# Tools whose node writes target the currently edited scene. When the workflow
+# knows which scene a profile created, the runner passes scene_path so the
+# shared context guard activates exactly that scene (no silent cross-scene
+# writes when multiple profiles create scenes in one goal).
+const SCENE_SCOPED_TOOLS: Array[String] = [
+	"create_node", "update_node_property", "delete_node", "set_anchor_preset",
+	"attach_script", "save_scene", "set_tilemap_layer_cells", "run_project"
+]
+
+# Schema-required input -> workflow artifact kind. Lets create -> configure
+# chains (create_script -> attach_script, create_scene -> save_scene, ...)
+# proceed autonomously instead of stopping on needs_input.
+const DERIVED_INPUT_ARTIFACTS: Dictionary = {
+	"script_path": "script",
+	"scene_path": "scene",
+	"theme_path": "theme",
+	"tileset_path": "tileset",
+	"animation_path": "animation",
+	"animation_name": "animation_name",
+	"test_path": "smoke_test",
+	"search_path": "test_dir",
+	"test_dir": "test_dir",
+	"candidate_path": "screenshot",
+	"path": "model"
+}
 
 var _server_core: RefCounted = null
 var _engine: RefCounted = EngineScript.new()
@@ -40,6 +75,11 @@ func _register_plan_tool(server_core: RefCounted) -> void:
 				"profiles": {"type": "array", "items": {"type": "string", "enum": EngineScript.PROFILE_IDS}},
 				"required_capabilities": {"type": "array", "items": {"type": "string"}},
 				"platform": {"type": "string"},
+				"expect_fail": {
+					"type": "object",
+					"description": "Map of objective-gate step key to true (for example {\"verify_scripts\": true}) to invert that gate's verdict. Use for fault-injection loops that must prove a detector fails.",
+					"additionalProperties": {"type": "boolean"}
+				},
 				"max_repair_attempts": {
 					"type": "integer", "default": EngineScript.DEFAULT_REPAIR_ATTEMPTS,
 					"description": "0 adapts while failure evidence changes; a positive value is an explicit repair policy and requests replan when exhausted."
@@ -328,7 +368,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			break
 		var task: Dictionary = ready[0]
 		var tool_name: String = String(task.get("tool_name", ""))
-		var arguments: Dictionary = _resolve_inputs(task, step_inputs, false)
+		var arguments: Dictionary = _derive_step_arguments(
+			plan, task, tool_name, _resolve_inputs(task, step_inputs, false))
 		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
 		if not missing.is_empty():
 			task["needs_input"] = true
@@ -399,7 +440,8 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 
 func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, plan_path: String) -> Dictionary:
 	var repair_tool: String = String(task.get("repair_tool", ""))
-	var arguments: Dictionary = _resolve_inputs(task, step_inputs, true)
+	var arguments: Dictionary = _derive_step_arguments(
+		plan, task, repair_tool, _resolve_inputs(task, step_inputs, true))
 	var missing: Array[String] = _missing_required_inputs(repair_tool, arguments)
 	if not missing.is_empty():
 		task["needs_input"] = true
@@ -438,6 +480,8 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 		repair_tool, arguments, _authorization(plan, task, true))
 	task.erase("repair_in_progress")
 	var verdict: Dictionary = _engine.record_repair_result(plan, String(task.get("id", "")), raw_result)
+	if not verdict.has("error") and String(verdict.get("status", "")) not in ["blocked", "recovery_required"]:
+		_requeue_profile_evidence(plan, task)
 	var save_result: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 	if save_result.has("error"):
 		return {"stop": true, "status": "blocked", "error": save_result["error"]}
@@ -450,6 +494,24 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 			"receipt_digest": (verdict.get("receipt", {}) as Dictionary).get("digest", "")
 		}
 	}
+
+## 修复改变了项目状态：把同 profile 已完成的运行期证据步骤（截图）重置为
+## pending，让视觉门禁在下一片重新截图比对。否则门禁拿修复前的旧候选与
+## 旧基线比较（恒等），修复是否生效永远验证不出来（重言式门禁）。
+func _requeue_profile_evidence(plan: Dictionary, repaired_task: Dictionary) -> void:
+	var profile: String = String(repaired_task.get("profile", ""))
+	if profile.is_empty():
+		return
+	for task_value in plan.get("tasks", []):
+		var candidate: Dictionary = task_value
+		if String(candidate.get("profile", "")) != profile:
+			continue
+		if String(candidate.get("tool_name", "")) != "get_runtime_screenshot":
+			continue
+		if String(candidate.get("status", "")) != "done":
+			continue
+		candidate["status"] = "pending"
+		candidate.erase("needs_input")
 
 func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) -> Dictionary:
 	var arguments: Dictionary = {}
@@ -464,6 +526,299 @@ func _resolve_inputs(task: Dictionary, step_inputs: Dictionary, repair: bool) ->
 		# ephemeral input so a caller cannot change the authorized operation.
 		arguments.merge((task.get("arguments", {}) as Dictionary).duplicate(true), true)
 	return arguments
+
+## Resolve "$artifact" references and fill schema-required inputs from the
+## workflow artifact registry, then apply plan-authorized runtime defaults.
+func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: String,
+		arguments: Dictionary) -> Dictionary:
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts_value: Variant = workflow.get("artifacts", {})
+	var artifacts: Dictionary = artifacts_value if artifacts_value is Dictionary else {}
+	if not artifacts.is_empty():
+		var resolved: Variant = _engine.resolve_argument_references(arguments, artifacts)
+		if resolved is Dictionary:
+			arguments = resolved
+		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
+		var derived: Dictionary = {}
+		var profile: String = String(task.get("profile", ""))
+		for param in missing:
+			var artifact_key: String = String(DERIVED_INPUT_ARTIFACTS.get(param, ""))
+			if not artifact_key.is_empty() and artifacts.has(artifact_key):
+				derived[param] = artifacts[artifact_key]
+				arguments[param] = artifacts[artifact_key]
+		_derive_visual_baseline_path(tool_name, arguments, artifacts, derived,
+			String(plan.get("workflow", {}).get("workflow_id", "")))
+		_derive_scene_context(tool_name, profile, arguments, artifacts, derived)
+		if not derived.is_empty():
+			task["derived_inputs"] = derived
+		else:
+			task.erase("derived_inputs")
+	# 首个建场景/建脚本步骤没有任何已注册工件可引用（上面的推导块只在有工件时
+	# 运行）：按 profile 推导确定性路径，让"给一个目标"从第一步起就不需要
+	# 调用方发明路径；step id 保证同 profile 多脚本不冲突。
+	var step_profile: String = String(task.get("profile", ""))
+	if tool_name == "create_scene" and not arguments.has("scene_path") \
+			and not artifacts.has("scene"):
+		var profile_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["scene_path"] = "res://scenes/%s.tscn" % profile_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["scene_path"] = arguments["scene_path"]
+	if tool_name == "create_script" and not arguments.has("script_path") \
+			and not artifacts.has("script"):
+		var script_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		var step_id: String = String(task.get("id", ""))
+		arguments["script_path"] = "res://scripts/%s%s.gd" % [
+			script_slug, "-" + step_id if not step_id.is_empty() else ""]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["script_path"] = arguments["script_path"]
+	# 目标命中蓝图动词时生成真实可运行内容（调用方显式 content 永远优先）。
+	if tool_name == "create_script" and not arguments.has("content") \
+			and step_profile == "gameplay_feature":
+		var objective: String = String(plan.get("goal", ""))
+		var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
+		if not blueprint_source.is_empty():
+			arguments["content"] = blueprint_source
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["content"] = "goal-blueprint"
+	# 读取脚本步骤无工件可引用时，回退到磁盘上项目脚本目录的第一个脚本。
+	if tool_name == "read_script" and not arguments.has("script_path") 			and not artifacts.has("script"):
+		var scripts_dir: String = ProjectSettings.globalize_path("res://scripts")
+		if DirAccess.dir_exists_absolute(scripts_dir):
+			var dir: DirAccess = DirAccess.open(scripts_dir)
+			if dir != null:
+				dir.list_dir_begin()
+				while true:
+					var entry: String = dir.get_next()
+					if entry.is_empty():
+						break
+					if entry.ends_with(".gd"):
+						arguments["script_path"] = "res://scripts/" + entry
+						task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+						task["derived_inputs"]["script_path"] = arguments["script_path"]
+						break
+				dir.list_dir_end()
+	# 首个动画资源步骤：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_animation" and not arguments.has("animation_path") 			and not artifacts.has("animation"):
+		var anim_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["animation_path"] = "res://animations/%s.tres" % anim_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["animation_path"] = arguments["animation_path"]
+	# 动画关键帧步骤：默认给场景根 position 的两帧往返（工具会确保轨道存在）。
+	if tool_name == "insert_animation_keys" and not arguments.has("animation_path"):
+		var insert_anim_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["animation_path"] = "res://animations/%s.tres" % insert_anim_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["animation_path"] = arguments["animation_path"]
+	if tool_name == "insert_animation_keys" and not arguments.has("track_path"):
+		arguments["track_path"] = ".:position"
+		arguments["value_type"] = "vector2"
+		arguments["keys"] = [
+			{"time": 0.0, "value": {"x": 0.0, "y": 0.0}},
+			{"time": 1.0, "value": {"x": 96.0, "y": 0.0}},
+		]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["track_path"] = ".:position"
+		task["derived_inputs"]["keys"] = "default-two-key-position"
+	# 导出链步骤默认指向目标平台映射出的预设（与引擎 release_preset 步骤
+	# 同源：export_preset_for_platform）。此前硬编码 "Windows Desktop"，
+	# "export for web" 目标会校验/导出/冒烟一个 Windows .exe 并 completed。
+	if tool_name in ["validate_export_preset", "run_export", "smoke_test_export"] \
+			and not arguments.has("preset"):
+		var contract_platform: String = String(
+			plan.get("workflow", {}).get("goal_contract", {}).get("platform", ""))
+		var export_preset: Dictionary = EngineScript.export_preset_for_platform(contract_platform)
+		arguments["preset"] = export_preset["name"]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["preset"] = export_preset["name"]
+	# 重导入步骤缺路径时：重导入本目标已产出的主题/瓦片/动画资源（磁盘真相）。
+	if tool_name == "reimport_resources" and not arguments.has("resource_paths"):
+		var produced: Array = []
+		for dir_name in ["themes", "tilesets", "animations", "scenes"]:
+			var dir_abs: String = ProjectSettings.globalize_path("res://" + dir_name)
+			if not DirAccess.dir_exists_absolute(dir_abs):
+				continue
+			var d: DirAccess = DirAccess.open(dir_abs)
+			if d == null:
+				continue
+			d.list_dir_begin()
+			while true:
+				var entry: String = d.get_next()
+				if entry.is_empty():
+					break
+				if entry.ends_with(".tres") or entry.ends_with(".tscn"):
+					produced.append("res://%s/%s" % [dir_name, entry])
+			d.list_dir_end()
+		if not produced.is_empty():
+			arguments["resource_paths"] = produced
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["resource_paths"] = "%d produced resources" % produced.size()
+	# 动画运行时链：profile 固定建 AnimPlayer；关键帧步骤自动接线（显式值优先）。
+	# 运行时探针用游戏内绝对路径 /root/<场景根名>/AnimPlayer。
+	if step_profile == "animation_audio":
+		var player_node_path: String = "/root/AnimPlayer"
+		var media_scene: String = String(artifacts.get("scene", ""))
+		if not media_scene.is_empty():
+			player_node_path = "/root/%s/AnimPlayer" % media_scene.get_file().get_basename()
+		if tool_name == "insert_animation_keys" and not arguments.has("attach_player_node"):
+			arguments["attach_player_node"] = "/root/AnimPlayer"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["attach_player_node"] = "/root/AnimPlayer"
+		if tool_name in ["list_runtime_animations", "play_runtime_animation",
+				"get_runtime_animation_state"] and not arguments.has("node_path"):
+			arguments["node_path"] = player_node_path
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["node_path"] = player_node_path
+		if tool_name == "get_runtime_audio_bus" and not arguments.has("bus_name"):
+			arguments["bus_name"] = "Master"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["bus_name"] = "Master"
+		if tool_name == "update_runtime_audio_bus" and not arguments.has("bus_name"):
+			arguments["bus_name"] = "Master"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["bus_name"] = "Master"
+		if tool_name == "play_runtime_animation" and not arguments.has("animation_name"):
+			arguments["animation_name"] = "anim"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["animation_name"] = "anim"
+	# 瓦片绘制步骤：level profile 固定建 LevelTiles 层；无纹理瓦片集没有图集
+	# 可画，给一个擦除型单元格保持步骤可执行且诚实（cells 数组非空）。
+	if tool_name == "set_tilemap_layer_cells" and step_profile == "level_design":
+		if not arguments.has("node_path"):
+			arguments["node_path"] = "/root/LevelTiles"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["node_path"] = "/root/LevelTiles"
+		if not arguments.has("cells"):
+			arguments["cells"] = [{"coords": [0, 0], "erase": true}, {"coords": [1, 0], "erase": true}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["cells"] = "default-erase-pattern"
+	# 性能预算门缺 budget 时给保守默认（30fps）；目标里的具体数值由调用方覆盖。
+	if tool_name == "assert_performance_budget" and not arguments.has("budget"):
+		arguments["budget"] = {"min_fps": 30}
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["budget"] = {"min_fps": 30}
+	# 挂载步骤缺 node_path 时默认场景根：gameplay profile 不建独立玩家节点，
+	# 控制器脚本挂到场景根即可运行。
+	if tool_name == "attach_script" and not arguments.has("node_path") \
+			and artifacts.has("scene"):
+		arguments["node_path"] = "/root"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["node_path"] = "/root"
+	# 输入动作步骤缺 action_name 时给移动类目标的规范默认；调用方可用
+	# step_inputs 覆盖为完整键位方案。
+	if tool_name == "upsert_project_input_action" and not arguments.has("action_name"):
+		arguments["action_name"] = "move_up"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["action_name"] = "move_up"
+	# 游玩门禁缺步骤时给移动类目标派生输入演练：空 steps 的 play_and_verify
+	# 只证明"游戏能启动不崩"，输入驱动的 _physics_process 根本不会执行——
+	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
+	if tool_name == "play_and_verify" and not arguments.has("steps"):
+		var play_objective: String = String(plan.get("goal", ""))
+		if GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+			arguments["steps"] = _movement_play_steps()
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "movement-exercise"
+		else:
+			# 非移动目标也给一个启动等待窗口：零 steps 时编排立即返回，游戏
+			# 启动期的脚本错误还没到达调试桥——门禁只证明了"发起过运行"。
+			arguments["steps"] = [{"wait_ms": 600}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "boot-settle"
+	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_theme" and not arguments.has("theme_path") \
+			and not artifacts.has("theme"):
+		var theme_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["theme_path"] = "res://themes/%s.tres" % theme_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["theme_path"] = arguments["theme_path"]
+	# 首个 TileSet 步骤同理：按 profile 推导确定性 .tres 路径。
+	if tool_name == "create_tileset" and not arguments.has("tileset_path") 			and not artifacts.has("tileset"):
+		var tileset_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
+		arguments["tileset_path"] = "res://tilesets/%s.tres" % tileset_slug
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["tileset_path"] = arguments["tileset_path"]
+	if tool_name == "create_theme" and not arguments.has("theme_name"):
+		arguments["theme_name"] = "GameTheme"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["theme_name"] = "GameTheme"
+	# UI 建节点步骤的语义默认：场景根下一个 Label（与"win label"类目标对齐）。
+	if tool_name == "create_node" and not arguments.has("node_name") \
+			and artifacts.has("scene") and step_profile == "ui_screen":
+		arguments["parent_path"] = "/root"
+		arguments["node_type"] = "Label"
+		arguments["node_name"] = "WinLabel"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["parent_path"] = "/root"
+		task["derived_inputs"]["node_type"] = "Label"
+		task["derived_inputs"]["node_name"] = "WinLabel"
+	if tool_name == "set_anchor_preset" and not arguments.has("node_path") \
+			and artifacts.has("scene") and step_profile == "ui_screen":
+		arguments["node_path"] = "/root/WinLabel"
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		arguments["preset"] = 8
+		task["derived_inputs"]["preset"] = 8
+		task["derived_inputs"]["node_path"] = "/root/WinLabel"
+	# preset 是 schema 必填项：调用方自带 node_path 而未给 preset 时同样
+	# 派生 CENTER(8)，否则该步仍会停在 needs_input。
+	elif tool_name == "set_anchor_preset" and not arguments.has("preset") \
+			and arguments.has("node_path"):
+		arguments["preset"] = 8
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["preset"] = 8
+	if tool_name in RUNTIME_WINDOW_TOOLS and not arguments.has("allow_window"):
+		arguments["allow_window"] = true
+	var focus_param: String = String(FOCUS_POLICY_TOOLS.get(tool_name, ""))
+	if not focus_param.is_empty() and not arguments.has(focus_param):
+		arguments[focus_param] = true
+	return arguments
+
+## Visual gates derive candidate_path from the latest runtime screenshot and a
+## deterministic baseline location; assert_visual_baseline captures the golden
+## image itself on first run, so the gate never stalls on missing paths.
+## 移动类目标的游玩演练：依次按下/释放四个方向动作。蓝图控制器的
+## _physics_process 只有在输入驱动下才会执行，脚本错误才会暴露给
+## play_and_verify 的错误捕获（空 steps 的门禁是重言式）。
+func _movement_play_steps() -> Array:
+	var steps: Array = []
+	for action_name in ["move_left", "move_right", "move_up", "move_down"]:
+		steps.append({"action": action_name, "pressed": true, "wait_ms": 250})
+		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
+	return steps
+
+func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
+		artifacts: Dictionary, derived: Dictionary, workflow_id: String = "") -> void:
+	if tool_name != "assert_visual_baseline":
+		return
+	var screenshot: String = String(artifacts.get("screenshot", ""))
+	if screenshot.is_empty():
+		return
+	if not arguments.has("candidate_path"):
+		arguments["candidate_path"] = screenshot
+		derived["candidate_path"] = screenshot
+	if not arguments.has("baseline_path"):
+		# 基线按 workflow 隔离：截图文件名全目标相同（mcp_runtime_capture.jpg），
+		# 共用一个基线会让目标 B 拿目标 A 的图当金标准、或跨目标串基线。
+		var baseline: String = "user://visual_baselines/%s_%s" % [workflow_id, screenshot.get_file()] \
+			if not workflow_id.is_empty() else "user://visual_baselines/" + screenshot.get_file()
+		arguments["baseline_path"] = baseline
+		derived["baseline_path"] = baseline
+
+## Scene-scoped tools get the creating profile's scene as an optional
+## scene_path so the shared context guard pins the right edited scene even
+## when several profiles created scenes in the same goal.
+func _derive_scene_context(tool_name: String, profile: String, arguments: Dictionary,
+		artifacts: Dictionary, derived: Dictionary) -> void:
+	if tool_name not in SCENE_SCOPED_TOOLS or arguments.has("scene_path"):
+		return
+	var profile_scene: String = String(artifacts.get("scene:" + profile, ""))
+	if not profile_scene.is_empty():
+		arguments["scene_path"] = profile_scene
+		derived["scene_path"] = profile_scene
+		return
+	var last_scene: String = String(artifacts.get("scene", ""))
+	if not last_scene.is_empty():
+		arguments["scene_path"] = last_scene
+		derived["scene_path"] = last_scene
 
 func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array[String]:
 	var schema: Dictionary = _tool_input_schema(tool_name)

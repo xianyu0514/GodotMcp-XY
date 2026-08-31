@@ -76,6 +76,16 @@ func _plan(profiles: Array, objective: String = "Run project tests") -> Dictiona
 	})
 
 func _successful_gate_responses() -> void:
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.responses["ensure_project_directory"] = {
+		"status": "unchanged", "path": "res://test", "created": false, "already_exists": true
+	}
+	_core.responses["list_project_tests"] = {
+		"status": "ready", "count": 1, "tests": [{"name": "smoke"}]
+	}
 	_core.responses["verify_scripts"] = {
 		"status": "passed", "total_checked": 3, "verified": 3, "failed": 0
 	}
@@ -86,7 +96,7 @@ func _successful_gate_responses() -> void:
 func _universal_evidence() -> Dictionary:
 	return {
 		"status": "passed", "passed": true, "success": true, "valid": true,
-		"total_count": 1, "passed_count": 1, "failed_count": 0,
+		"count": 1, "total_count": 1, "passed_count": 1, "failed_count": 0,
 		"total_checked": 1, "verified": 1, "failed": 0,
 		"error_count": 0, "issue_count": 0, "must_fix_count": 0,
 		"broken_count": 0, "total_nodes": 1, "artifact_exists": true,
@@ -115,7 +125,16 @@ func test_plan_persists_contract_and_status_resumes_it() -> void:
 	assert_eq(status.get("state", ""), "planned")
 
 func test_runner_executes_hidden_atomic_tools_without_changing_visibility() -> void:
-	_core.responses["list_project_tests"] = {"tests": [{"name": "smoke"}]}
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.responses["ensure_project_directory"] = {
+		"status": "unchanged", "path": "res://test", "created": false, "already_exists": true
+	}
+	_core.responses["list_project_tests"] = {
+		"status": "ready", "count": 2, "tests": [{"name": "smoke", "framework": "native"}]
+	}
 	_core.responses["verify_scripts"] = {"total_checked": 2, "verified": 2, "failed": 0, "results": []}
 	_core.responses["run_project_tests"] = [
 		{"status": "pending", "job_id": "tests"},
@@ -123,17 +142,17 @@ func test_runner_executes_hidden_atomic_tools_without_changing_visibility() -> v
 	]
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var first: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 6
 	})
 	assert_eq(first.get("status", ""), "waiting", str(first.get("error", "")))
-	assert_eq(_core.calls.size(), 3)
+	assert_eq(_core.calls.size(), 5)
 	assert_true(_core.calls.all(func(call: Dictionary) -> bool:
 		return (call.get("authorization", {}) as Dictionary).get("kind", "") == "game_workflow"))
 	var second: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 6
 	})
 	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
-	assert_eq(_core.calls.size(), 4, "Polling reuses the same authorized step and arguments")
+	assert_eq(_core.calls.size(), 6, "Polling reuses the same authorized step and arguments")
 
 func test_default_runner_adapts_above_four_without_expanding_tools_list() -> void:
 	_successful_gate_responses()
@@ -357,11 +376,11 @@ func test_exact_atomic_name_augments_a_recognized_composite_goal() -> void:
 		"Explicit atomic intent must be proven, not merely executed as optional inspection")
 
 func test_transient_failure_yields_then_resumes_without_consuming_repair_budget() -> void:
+	_successful_gate_responses()
 	_core.responses["list_project_tests"] = [
 		{"error": "Service temporarily unavailable (503)"},
-		{"tests": [{"name": "smoke"}]}
+		{"status": "ready", "count": 1, "tests": [{"name": "smoke"}]}
 	]
-	_successful_gate_responses()
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var first: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"]
@@ -369,15 +388,18 @@ func test_transient_failure_yields_then_resumes_without_consuming_repair_budget(
 	assert_eq(first.get("status", ""), "waiting")
 	assert_gte(int(first.get("retry_after_ms", 0)), 1000,
 		"Transient retries expose backoff guidance instead of encouraging a hot loop")
-	assert_eq(_core.calls.size(), 1)
+	assert_eq(_core.calls.size(), 3)
 	var second: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"]
 	})
 	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
 
 func test_restart_replays_safe_read_but_never_guesses_unknown_mutation() -> void:
-	_successful_gate_responses()
-	_core.traits["list_project_tests"] = {"read_only": true, "idempotent": true, "destructive": false}
+	_core.responses["prepare_project_test_environment"] = {
+		"status": "ready", "count": 1, "recoverable": false,
+		"environment": [{"path": "res://test", "exists": true, "count": 1, "state": "ready"}]
+	}
+	_core.traits["prepare_project_test_environment"] = {"read_only": true, "idempotent": true, "destructive": false}
 	var planned: Dictionary = _plan(["quality_assurance"])
 	var status: Dictionary = _tools._tool_plan_game_workflow({
 		"action": "status", "plan_path": _plan_path, "include_plan": true
@@ -422,10 +444,11 @@ func test_missing_current_step_inputs_waits_without_invoking_or_losing_plan() ->
 	}
 	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
 	var result: Dictionary = await _tools._tool_run_game_workflow({
-		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 4
+		"plan_path": _plan_path, "expected_workflow_id": planned["workflow_id"], "max_steps": 10
 	})
 	assert_eq(result.get("status", ""), "needs_input")
-	assert_eq(_core.calls.size(), 2, "Only the two no-input inspections run before the missing build input")
+	# 移动目标在两次巡检与 create_scene 之间合法执行四个方向输入注册步骤。
+	assert_eq(_core.calls.size(), 6, "Two inspections plus four directional input steps run before the missing build input")
 	assert_true("scene_name" in result.get("missing_inputs", []))
 	assert_eq((result.get("input_schema", {}) as Dictionary).get("required", []), ["scene_name"],
 		"The current atomic schema is returned on demand without expanding tools/list")
@@ -460,7 +483,7 @@ func test_protected_path_and_tampered_blueprint_stop_before_execution() -> void:
 	var protected: Dictionary = await _tools._tool_run_game_workflow({
 		"plan_path": _plan_path,
 		"expected_workflow_id": planned["workflow_id"],
-		"max_steps": 1,
+		"max_steps": 8,
 		"step_inputs": {create_step["id"]: {"scene_path": "res://scenes/../addons/godot_mcp/overwrite.tscn"}}
 	})
 	assert_eq(protected.get("status", ""), "blocked")
@@ -504,3 +527,270 @@ func test_changed_replan_reclassifies_instead_of_reusing_stale_capabilities() ->
 	assert_true("get_project_info" in names)
 	assert_false("read_script" in names,
 		"A changed objective must not inherit the old adaptive route")
+
+# --- Workflow reliability: artifact-derived inputs and runtime window authorization ---
+
+func test_created_script_artifact_derives_attach_script_input() -> void:
+	_core.schemas["create_script"] = {
+		"type": "object", "properties": {"script_path": {"type": "string"}},
+		"required": ["script_path"]
+	}
+	_core.schemas["attach_script"] = {
+		"type": "object", "properties": {"script_path": {"type": "string"}},
+		"required": ["script_path"]
+	}
+	_core.responses["create_script"] = {
+		"success": true, "script_path": "res://scripts/player.gd"
+	}
+	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 14,
+		"step_inputs": {"create_script": {"script_path": "res://scripts/player.gd"}}
+	})
+	assert_ne(String(result.get("status", "")), "needs_input",
+		"attach_script must not stall when the artifact registry knows the script")
+	var attach_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "attach_script":
+			attach_call = call
+	assert_false(attach_call.is_empty(), "attach_script executed after derivation")
+	assert_eq(String((attach_call.get("arguments", {}) as Dictionary).get("script_path", "")),
+		"res://scripts/player.gd",
+		"script_path derives from the create_script artifact instead of asking the caller")
+
+func test_runner_auto_authorizes_runtime_window_for_planned_run() -> void:
+	var planned: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "plan",
+		"objective": "Run the game and verify runtime state",
+		"required_capabilities": ["run_project"],
+		"plan_path": _plan_path
+	})
+	assert_false(planned.has("error"), str(planned.get("error", "")))
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 10
+	})
+	assert_ne(String(result.get("status", "")), "needs_input")
+	var run_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "run_project":
+			run_call = call
+	assert_false(run_call.is_empty(), "run_project executed inside the plan")
+	assert_eq(bool((run_call.get("arguments", {}) as Dictionary).get("allow_window", false)), true,
+		"Plan-authorized runtime steps auto-pass the interactive window policy")
+
+func test_plan_tool_documents_expect_fail_option() -> void:
+	var properties: Dictionary = ((_core.registrations["plan_game_workflow"] as Dictionary)\
+		.get("input_schema", {}) as Dictionary).get("properties", {})
+	assert_true((properties as Dictionary).has("expect_fail"),
+		"Negative-gate configuration is discoverable in the plan schema")
+
+func test_scene_scoped_steps_derive_profile_scene_and_visual_paths() -> void:
+	_core.schemas["create_node"] = {
+		"type": "object", "properties": {"node_path": {"type": "string"}},
+		"required": ["node_path"]
+	}
+	_core.responses["create_scene"] = {
+		"success": true, "scene_path": "res://ui_main.tscn"
+	}
+	_core.responses["get_runtime_screenshot"] = {
+		"status": "ok", "save_path": "user://mcp_runtime_capture.jpg"
+	}
+	_core.responses["assert_visual_baseline"] = {
+		"passed": true, "baseline_created": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}
+	var planned: Dictionary = _plan(["ui_screen"], "Polished pause menu")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 12,
+		"step_inputs": {"create_node": {"node_path": "/root/UI/Panel"}}
+	})
+	assert_ne(String(result.get("status", "")), "needs_input",
+		"Scene-scoped and visual steps derive their inputs from artifacts")
+	var create_node_call: Dictionary = {}
+	var visual_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "create_node":
+			create_node_call = call
+		if String(call["tool_name"]) == "assert_visual_baseline":
+			visual_call = call
+	assert_eq(String((create_node_call.get("arguments", {}) as Dictionary).get("scene_path", "")),
+		"res://ui_main.tscn",
+		"Node writes pin the profile's created scene so they cannot land in another scene")
+	assert_eq(String((visual_call.get("arguments", {}) as Dictionary).get("candidate_path", "")),
+		"user://mcp_runtime_capture.jpg",
+		"Visual gate candidate derives from the runtime screenshot artifact")
+	var old_baseline: String = String((visual_call.get("arguments", {}) as Dictionary).get("baseline_path", ""))
+	assert_true(old_baseline.begins_with("user://visual_baselines/") and old_baseline.ends_with("_mcp_runtime_capture.jpg"),
+		"Visual gate baseline derives a per-workflow golden location (got " + old_baseline + ")")
+
+func test_collectible_goal_derives_character_body_root() -> void:
+	# 蓝图控制器对任意动词（含金币/胜利）都 extends CharacterBody2D：
+	# 根节点派生必须与之一致，否则 collect-only 目标得到挂在 Node 根上的
+	# CharacterBody2D 脚本，attach 阶段直接失败。
+	_core.schemas["create_scene"] = {
+		"type": "object", "properties": {"scene_path": {"type": "string"}},
+		"required": ["scene_path"]
+	}
+	_core.responses["create_scene"] = {
+		"success": true, "scene_path": "res://scenes/gameplay-feature.tscn"
+	}
+	var planned: Dictionary = _plan(["gameplay_feature"],
+		"Collect a coin and show a win label")
+	var result: Dictionary = await _tools._tool_run_game_workflow({
+		"plan_path": _plan_path,
+		"expected_workflow_id": planned["workflow_id"],
+		"max_steps": 3
+	})
+	var create_scene_call: Dictionary = {}
+	for call_value in _core.calls:
+		var call: Dictionary = call_value
+		if String(call["tool_name"]) == "create_scene":
+			create_scene_call = call
+			break
+	assert_false(create_scene_call.is_empty(), "create_scene executed")
+	assert_eq(String((create_scene_call.get("arguments", {}) as Dictionary).get("root_node_type", "")),
+		"CharacterBody2D",
+		"Collectible-only goal still derives a CharacterBody2D scene root")
+
+func test_movement_goal_derives_play_and_verify_input_steps() -> void:
+	# 空 steps 的 play_and_verify 只证明"能启动不崩"；派生的方向键演练让
+	# _physics_process 真正执行，控制器脚本错误才会被捕获。
+	var planned: Dictionary = _plan(["gameplay_feature"], "Create player movement")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var play_task: Dictionary = {}
+	for task_value in (status["plan"] as Dictionary).get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			play_task = task
+			break
+	assert_false(play_task.is_empty(), "gameplay profile has a play gate")
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		status["plan"], play_task, "play_and_verify",
+		_tools._resolve_inputs(play_task, {}, false))
+	var steps: Array = arguments.get("steps", [])
+	assert_gt(steps.size(), 0, "movement goal derives input exercise steps")
+	var actions: Array = []
+	for step_value in steps:
+		actions.append(String((step_value as Dictionary).get("action", "")))
+	assert_true("move_left" in actions and "move_right" in actions,
+		"derived steps exercise horizontal movement (got %s)" % str(actions))
+	assert_ne(str(arguments.get("steps", [])), "", str(planned.get("error", "")))
+
+func test_gate_repair_requeues_profile_screenshot_evidence() -> void:
+	# 修复改变项目状态后必须重采截图：否则视觉门禁拿旧候选与旧基线恒等比较。
+	var plan: Dictionary = _plan(["ui_screen"], "Polished pause menu with a screen")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var shot_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "get_runtime_screenshot":
+			shot_task = task
+			break
+	shot_task["status"] = "done"
+	var repaired_gate: Dictionary = {"profile": "ui_screen", "id": "wf_xxx"}
+	_tools._requeue_profile_evidence(loaded, repaired_gate)
+	assert_eq(String(shot_task.get("status", "")), "pending",
+		"done screenshot of the repaired profile is requeued for fresh evidence")
+	# 状态名不是 "completed"（引擎写 "done"）：错误的状态名曾让该函数静默
+	# 匹配不到任何步骤（死代码回归守卫）。
+	var mismatch_status: Dictionary = {"profile": "ui_screen"}
+	_tools._requeue_profile_evidence(loaded, mismatch_status)
+	assert_eq(String(shot_task.get("status", "")), "pending",
+		"already-pending screenshot is untouched by a second requeue")
+
+func test_anchor_step_with_caller_node_path_derives_preset() -> void:
+	# preset 是 set_anchor_preset 的 schema 必填项：调用方只给 node_path 时
+	# 必须派生默认 CENTER(8)，否则该步永远停在 needs_input。
+	var task: Dictionary = {
+		"id": "wf_anchor", "profile": "ui_screen", "tool_name": "set_anchor_preset",
+		"arguments": {"node_path": "/root/Hud/Label"}}
+	var plan: Dictionary = {"goal": "polished pause menu", "workflow": {"artifacts": {}}}
+	var derived: Dictionary = _tools._derive_step_arguments(
+		plan, task, "set_anchor_preset", task.get("arguments", {}).duplicate(true))
+	assert_eq(int(derived.get("preset", -1)), 8,
+		"missing preset derives CENTER even when node_path is caller-supplied")
+
+func test_non_movement_goal_derives_boot_settle_steps() -> void:
+	# 非移动目标的 play_and_verify 此前是零 steps：编排立即返回，启动期
+	# 错误还没到调试桥——只证明了"发起过运行"。默认给一个启动等待窗口。
+	var planned: Dictionary = _plan(["gameplay_feature"], "Collect a coin and show a win label")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var play_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			play_task = task
+			break
+	assert_false(play_task.is_empty(), "gameplay profile has a play gate")
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		loaded, play_task, "play_and_verify",
+		_tools._resolve_inputs(play_task, {}, false))
+	var steps: Array = arguments.get("steps", [])
+	assert_gt(steps.size(), 0, "non-movement play gate derives a boot-settle window")
+
+func test_visual_baseline_is_scoped_per_workflow() -> void:
+	# 截图文件名全目标相同（mcp_runtime_capture.jpg）：基线必须带
+	# workflow_id 隔离，否则目标 B 拿目标 A 的图当金标准。
+	var planned: Dictionary = _plan(["ui_screen"], "Polished pause menu with a screen")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	(loaded.get("workflow", {}) as Dictionary)["artifacts"] = {
+		"screenshot": "user://mcp_runtime_capture.jpg"}
+	var gate_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "assert_visual_baseline":
+			gate_task = task
+			break
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		loaded, gate_task, "assert_visual_baseline",
+		_tools._resolve_inputs(gate_task, {}, false))
+	var baseline: String = String(arguments.get("baseline_path", ""))
+	var workflow_id: String = String(loaded.get("workflow", {}).get("workflow_id", ""))
+	assert_true(baseline.contains(workflow_id),
+		"baseline path carries the workflow id (got %s)" % baseline)
+	assert_eq(String(arguments.get("candidate_path", "")), "user://mcp_runtime_capture.jpg",
+		"candidate still derives from the screenshot artifact")
+
+func test_export_chain_derives_the_goal_platform_preset() -> void:
+	# validate/run/smoke 三步的预设名必须来自目标平台（此前硬编码
+	# "Windows Desktop"：web 目标校验/导出/冒烟一个 Windows exe）。
+	var planned: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "plan", "objective": "Export the game for web",
+		"profiles": ["release_export"], "platform": "web", "plan_path": _plan_path})
+	assert_eq(planned.get("status", ""), "planned", str(planned.get("error", "")))
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	for expected_tool in ["validate_export_preset", "run_export", "smoke_test_export"]:
+		var chain_task: Dictionary = {}
+		for task_value in loaded.get("tasks", []):
+			var task: Dictionary = task_value
+			if String(task.get("tool_name", "")) == expected_tool:
+				chain_task = task
+				break
+		assert_false(chain_task.is_empty(), "%s present in release plan" % expected_tool)
+		var derived_args: Dictionary = _tools._derive_step_arguments(
+			loaded, chain_task, expected_tool,
+			_tools._resolve_inputs(chain_task, {}, false))
+		assert_eq(String(derived_args.get("preset", "")), "Web",
+			"%s derives the goal-platform preset (got %s)" % [expected_tool, derived_args.get("preset", "")])

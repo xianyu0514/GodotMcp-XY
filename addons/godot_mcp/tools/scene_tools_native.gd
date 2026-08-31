@@ -7,6 +7,7 @@ class_name SceneToolsNative
 extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 var _editor_interface: EditorInterface = null
 var _scene_operation_in_progress: bool = false
@@ -158,6 +159,11 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	packed_scene.pack(root_node)
 	
 	# 保存场景
+	# 目标目录不存在时先创建（工作流按 profile 推导的 res://scenes/ 等新目录）。
+	var parent_dir: String = scene_path.get_base_dir()
+	if parent_dir != "res://" and not parent_dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent_dir))
+
 	var error: Error = ResourceSaver.save(packed_scene, scene_path)
 	
 	# 清理
@@ -184,6 +190,7 @@ func _register_save_scene(server_core: RefCounted) -> void:
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
+			"scene_path": {"type": "string", "description": "Optional: ensure THIS scene is the active edited scene before saving (auto-activated; guards cross-scene drift). file_path is the destination on disk."},
 			"file_path": {
 				"type": "string",
 				"description": "Optional path to save the scene (e.g. 'res://scenes/MyScene.tscn'). If not provided, uses current scene path."
@@ -222,6 +229,13 @@ func _tool_save_scene(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+
+	# Optional scene_path pins WHICH scene is saved (guards cross-scene drift);
+	# file_path below is the destination on disk.
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var scene_root: Node = _get_user_scene_root()
 	if not scene_root:
@@ -346,16 +360,41 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 	if not editor_interface:
 		_scene_operation_in_progress = false
 		return {"error": "Editor interface not available"}
-	
-	editor_interface.open_scene_from_path(scene_path)
 
-	var opened_scene_root: Node = _get_user_scene_root()
-	if not opened_scene_root:
+	# Idempotent: re-opening the scene that is already being edited would
+	# discard unsaved state for no benefit.
+	var active_root: Node = _get_user_scene_root()
+	if active_root and String(active_root.scene_file_path) == scene_path:
+		_scene_operation_in_progress = false
+		return {
+			"status": "success",
+			"scene_path": scene_path,
+			"already_open": true,
+			"scene_name": String(active_root.name),
+			"root_node_type": String(active_root.get_class())
+		}
+
+	# 编辑器启动扫描未完成时，新保存的场景不在文件系统缓存里，
+	# open_scene_from_path 会静默失败；update_file 幂等，先登记再打开。
+	var editor_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if editor_fs != null:
+		editor_fs.update_file(scene_path)
+	editor_interface.open_scene_from_path(scene_path)
+	var scene_root: Node = null
+	for _frame in range(60):
+		await Engine.get_main_loop().process_frame
+		var candidate: Node = editor_interface.get_edited_scene_root()
+		if candidate and String(candidate.scene_file_path) == scene_path:
+			scene_root = candidate
+			break
+		var user_root: Node = _get_user_scene_root()
+		if user_root and user_root != candidate and String(user_root.scene_file_path) == scene_path:
+			scene_root = user_root
+			break
+	if not scene_root:
 		_scene_operation_in_progress = false
 		return {"error": "Failed to open scene: " + scene_path}
-
-	var scene_root: Node = _get_user_scene_root()
-	var root_type: String = scene_root.get_class() if scene_root else "Unknown"
+	var root_type: String = scene_root.get_class()
 
 	_scene_operation_in_progress = false
 	return {
@@ -781,6 +820,12 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		if not open_scene_paths.has(scene_path):
 			return {"error": "Scene is not currently open: " + scene_path}
 		editor_interface.open_scene_from_path(scene_path)
+		# 打开是延迟生效的：等切换完成再 close，否则关掉的是旧场景。
+		for _frame in range(60):
+			await Engine.get_main_loop().process_frame
+			var pending_root: Node = editor_interface.get_edited_scene_root()
+			if pending_root and String(pending_root.scene_file_path) == scene_path:
+				break
 
 	var active_root: Node = editor_interface.get_edited_scene_root()
 	var closed_scene: String = active_root.scene_file_path if active_root else scene_path
@@ -1108,6 +1153,7 @@ func _register_set_tilemap_layer_cells(server_core: RefCounted) -> void:
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
+			"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 			"node_path": {"type": "string", "description": "Path to the TileMapLayer node in the edited scene (e.g. '/root/Main/Ground')."},
 			"cells": {
 				"type": "array",
@@ -1178,10 +1224,23 @@ func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 		return {"error": "Editor interface not available"}
 	if not _get_user_scene_root():
 		return {"error": "No scene is currently open"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var node: Node = _resolve_node_path(node_path)
 	if not node:
-		return {"error": "Node not found: " + node_path}
+		# Name the active scene so the caller can recover from editor-context
+		# drift (created scene exists but a different one is being edited).
+		var active_root: Node = _get_user_scene_root()
+		var active_hint: String = ""
+		if active_root:
+			var active_scene: String = String(active_root.scene_file_path)
+			if active_scene.is_empty():
+				active_scene = String(active_root.name)
+			active_hint = " (active scene: " + active_scene + "; open the target scene first)"
+		return {"error": "Node not found: " + node_path + active_hint}
 	if not (node is TileMapLayer):
 		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
 	var layer: TileMapLayer = node
@@ -1290,7 +1349,16 @@ func _tool_get_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 
 	var node: Node = _resolve_node_path(node_path)
 	if not node:
-		return {"error": "Node not found: " + node_path}
+		# Name the active scene so the caller can recover from editor-context
+		# drift (created scene exists but a different one is being edited).
+		var active_root: Node = _get_user_scene_root()
+		var active_hint: String = ""
+		if active_root:
+			var active_scene: String = String(active_root.scene_file_path)
+			if active_scene.is_empty():
+				active_scene = String(active_root.name)
+			active_hint = " (active scene: " + active_scene + "; open the target scene first)"
+		return {"error": "Node not found: " + node_path + active_hint}
 	if not (node is TileMapLayer):
 		return {"error": "Node is not a TileMapLayer: " + node_path + " (got " + node.get_class() + ")"}
 	var layer: TileMapLayer = node

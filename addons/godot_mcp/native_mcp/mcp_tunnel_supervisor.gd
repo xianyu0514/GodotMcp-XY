@@ -25,6 +25,8 @@ var _attempt_count: int = 0
 var _attempt_started_msec: int = 0
 var _retry_at_msec: int = 0
 var _url_seen: bool = false
+var _url_persisted: bool = false
+var _public_url: String = ""
 var _scan_buffer: String = ""
 
 static func parse_user_args(args: PackedStringArray) -> Dictionary:
@@ -57,22 +59,41 @@ static func build_cloudflared_args(port: int) -> PackedStringArray:
 		"--protocol",
 		"http2",
 		"--url",
-		"http://localhost:%d" % port,
+		# 显式 IPv4 回环：Windows 上 "localhost" 可能先解析为 ::1，而 MCP
+		# 服务器只监听 IPv4，首次拨号失败会放大为隧道侧 502。
+		"http://127.0.0.1:%d" % port,
 	])
 
-static func contains_quick_tunnel_url(text: String) -> bool:
+## Maps a normalized proxy URL to the environment variables the cloudflared child
+## should inherit. `NO_PROXY` always includes the loopback origin so cloudflared
+## never tries to reach `http://localhost:<port>` through the proxy.
+static func proxy_environment(proxy: String) -> Dictionary:
+	var clean: String = proxy.strip_edges()
+	if clean.is_empty():
+		return {}
+	return {
+		"HTTPS_PROXY": clean,
+		"HTTP_PROXY": clean,
+		"ALL_PROXY": clean,
+		"NO_PROXY": "localhost,127.0.0.1,::1",
+	}
+
+## Extracts the first allocated trycloudflare.com URL, ignoring Cloudflare's own
+## api.trycloudflare.com hostname that may appear in error messages. This lets the
+## supervisor persist the exact public URL instead of only signaling its presence.
+static func extract_tunnel_url(text: String) -> String:
 	var regex: RegEx = RegEx.new()
 	if regex.compile(TRYCLOUDFLARE_PATTERN) != OK:
-		return false
+		return ""
 	var search_offset: int = 0
 	while search_offset < text.length():
 		var result: RegExMatch = regex.search(text, search_offset)
 		if result == null:
-			return false
+			return ""
 		if result.get_string(1).to_lower() != "api":
-			return true
+			return result.get_string()
 		search_offset = result.get_end()
-	return false
+	return ""
 
 static func should_retry_quick_tunnel(url_seen: bool, attempts: int, max_attempts: int) -> bool:
 	return not url_seen and attempts < max_attempts
@@ -99,8 +120,15 @@ func _initialize() -> void:
 		return
 	_append_text("[GodotMcp-XY] Tunnel supervisor %d starting cloudflared.\n" % OS.get_process_id())
 	_initialized_ok = true
+	_apply_proxy_environment()
 	if not _start_child():
 		_schedule_retry()
+
+func _apply_proxy_environment() -> void:
+	var proxy: String = String(_config.get("proxy", "")).strip_edges()
+	var environment: Dictionary = proxy_environment(proxy)
+	for key in environment:
+		OS.set_environment(String(key), String(environment[key]))
 
 func _start_child() -> bool:
 	_close_pipes()
@@ -209,8 +237,16 @@ func _append_bytes(bytes: PackedByteArray) -> void:
 	if bytes.is_empty() or _log_file == null or not _log_file.is_open():
 		return
 	_scan_buffer += bytes.get_string_from_utf8()
-	if contains_quick_tunnel_url(_scan_buffer):
-		_url_seen = true
+	if not _url_seen:
+		var detected: String = extract_tunnel_url(_scan_buffer)
+		if not detected.is_empty():
+			_url_seen = true
+			_public_url = detected
+	if _url_seen and not _url_persisted:
+		# Persist the URL in a small, atomically-rewritten sidecar file so the
+		# editor-side manager can discover it even on Windows, where reading the
+		# still-open cloudflared.log may fail until the supervisor closes it.
+		_url_persisted = _write_runtime_state() == OK
 	if _scan_buffer.length() > MAX_SCAN_BUFFER:
 		_scan_buffer = _scan_buffer.substr(_scan_buffer.length() - 4096)
 	_log_file.store_buffer(bytes)
@@ -244,7 +280,15 @@ func _close_pipes() -> void:
 	_stderr = null
 
 func _write_runtime_state() -> Error:
-	var runtime_path: String = String(_config["runtime"])
+	return write_runtime_state(_config, _child_pid, _public_url)
+
+## Atomically writes the supervisor's ownership + URL sidecar. Static so the
+## file-writing behavior (including the public URL) is directly unit-testable
+## without constructing a MainLoop instance.
+static func write_runtime_state(config: Dictionary, child_pid: int, public_url: String) -> Error:
+	var runtime_path: String = String(config.get("runtime", "")).strip_edges()
+	if runtime_path.is_empty() or String(config.get("session", "")).strip_edges().is_empty():
+		return ERR_INVALID_PARAMETER
 	var temporary_path: String = "%s.tmp-%d" % [runtime_path, OS.get_process_id()]
 	_remove_file_if_present(temporary_path)
 	var file: FileAccess = FileAccess.open(temporary_path, FileAccess.WRITE)
@@ -252,9 +296,10 @@ func _write_runtime_state() -> Error:
 		return ERR_FILE_CANT_WRITE
 	file.store_string(JSON.stringify({
 		"schema_version": 1,
-		"session": String(_config["session"]),
+		"session": String(config["session"]),
 		"supervisor_pid": OS.get_process_id(),
-		"cloudflared_pid": _child_pid,
+		"cloudflared_pid": child_pid,
+		"public_url": public_url,
 	}, "\t"))
 	file.flush()
 	file.close()
@@ -264,6 +309,6 @@ func _write_runtime_state() -> Error:
 		_remove_file_if_present(temporary_path)
 	return rename_error
 
-func _remove_file_if_present(path: String) -> void:
+static func _remove_file_if_present(path: String) -> void:
 	if not path.is_empty() and FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)

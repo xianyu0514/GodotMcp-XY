@@ -207,5 +207,5 @@ For complete goals, the 8-tool default and 10-tool hard route limits do not cap 
 - Keep the server on localhost unless remote access is required.
 - Enable auth before using Cloudflare, Tailscale, ngrok or any public tunnel.
 - Leave `security_level = 1` unless you are diagnosing a specific local issue. STRICT mode also enables the script sandbox guard that blocks `execute_editor_script` / `evaluate_*` calls referencing OS process execution, out-of-project filesystem paths, networking or other dangerous APIs.
-- Prefer workflow execution or enabling advanced tools by group/task rather than exposing all 223 tools all the time.
+- Prefer workflow execution or enabling advanced tools by group/task rather than exposing all 232 tools all the time.
 - Review tool calls that modify scenes, resources, project settings or exports.

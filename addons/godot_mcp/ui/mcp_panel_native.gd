@@ -2622,7 +2622,7 @@ func _save_settings() -> void:
 		return
 	var settings: Dictionary = {
 		"transport_mode": _transport_mode_option.get_item_text(_transport_mode_option.selected) if _transport_mode_option else "http",
-		"http_port": int(_http_port_spin.value) if _http_port_spin else 9080,
+		"http_port": _port_value_to_persist(),
 		"auth_enabled": _auth_enabled_check.button_pressed if _auth_enabled_check else false,
 		"auth_token": _auth_token_edit.text if _auth_token_edit else "",
 		"sse_enabled": _sse_enabled_check.button_pressed if _sse_enabled_check else true,
@@ -2639,6 +2639,15 @@ func _save_settings() -> void:
 		"asset_provider_endpoint": _asset_endpoint_edit.text if _asset_endpoint_edit else ""
 	}
 	_settings_manager.save_settings(settings)
+
+## 面板同步会把插件当前端口（可能含 --mcp-port 覆盖）带进 spinbox；
+## 覆盖激活期间保存必须保留磁盘上的既有端口，否则一次性覆盖被持久化。
+func _port_value_to_persist() -> int:
+	if _plugin and _plugin.has_method("is_port_overridden_by_cmdline") \
+			and _plugin.is_port_overridden_by_cmdline():
+		return int(_settings_manager.load_settings().get("http_port", 9080))
+	return int(_http_port_spin.value) if _http_port_spin else 9080
+
 
 func _on_language_selected(index: int) -> void:
 	var locales: Array = _translation_manager.get_available_locales() if _translation_manager else ["en", "zh"]

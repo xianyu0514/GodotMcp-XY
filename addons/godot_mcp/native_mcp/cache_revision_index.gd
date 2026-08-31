@@ -25,17 +25,37 @@ const SCENE_FILE_EXTENSIONS: Array[String] = ["tscn", "scn"]
 
 ## This is the single source of truth for reads admitted to the shared result
 ## cache. Every name must be covered by read_tags(); a unit test enforces it.
+## get_import_status is deliberately absent: it reports live editor scan
+## progress (a time-domain value), which no revision tag can track.
 const CACHEABLE_READ_TOOLS: Array[String] = [
 	"get_scene_structure", "list_nodes", "list_project_scenes",
 	"list_project_scripts", "get_project_structure", "list_open_scenes",
 	"get_scene_tree", "get_node_properties", "batch_get_node_properties",
 	"list_project_resources", "list_project_input_actions",
-	"list_project_autoloads", "list_project_global_classes", "get_import_status",
+	"list_project_autoloads", "list_project_global_classes",
 	"list_tool_catalog", "search_tools", "get_tool_details",
 	"read_script", "batch_read_scripts", "get_project_info",
 	"get_project_settings", "read_resource_properties", "get_resource_dependencies",
 	"find_resource_usages", "list_unused_resources",
-	"scan_migration_compatibility", "find_deprecated_api_usage"
+	"scan_migration_compatibility", "find_deprecated_api_usage",
+	# Whole-project script reads: the workflow engine re-runs these after every
+	# script repair round, so caching them by SCRIPT_AGGREGATE (advanced by any
+	# script-domain change, unlike SCRIPT_ALL) removes repeated full compiles.
+	"verify_scripts", "detect_broken_scripts", "list_project_script_symbols",
+	"find_script_symbol_definition", "find_script_symbol_references",
+	# Project-wide dependency/health scans (the project_health profile chains
+	# all of them per round; scripts participate as dependents/dependees).
+	"scan_missing_resource_dependencies", "scan_cyclic_resource_dependencies",
+	"audit_project_health",
+	# Content-driven lookups repeated in code-understanding loops.
+	"search_in_files", "get_class_api_metadata",
+	# Per-resource inspection keyed on the exact file path.
+	"inspect_tileset_resource",
+	# Export preset reads: export_presets.cfg is advanced precisely by the
+	# resource:<path> tag on external edits and by GLOBAL on preset CRUD.
+	"list_export_presets", "inspect_export_presets", "validate_export_preset",
+	# Test discovery: bounded res://test scans repeated by QA loops.
+	"list_project_tests", "prepare_project_test_environment"
 ]
 
 const STATIC_READ_TAGS: Dictionary = {
@@ -52,20 +72,36 @@ const STATIC_READ_TAGS: Dictionary = {
 	"list_project_input_actions": [TAG_PROJECT_SETTINGS],
 	"list_project_autoloads": [TAG_PROJECT_SETTINGS],
 	"list_project_global_classes": [TAG_SCRIPT_AGGREGATE, TAG_PROJECT_SETTINGS],
-	"get_import_status": [TAG_IMPORT_STATE, TAG_RESOURCE_CATALOG],
 	"list_tool_catalog": [TAG_TOOL_CATALOG],
 	"search_tools": [TAG_TOOL_CATALOG],
 	"get_tool_details": [TAG_TOOL_CATALOG],
 	"get_project_info": [TAG_PROJECT_SETTINGS],
 	"get_project_settings": [TAG_PROJECT_SETTINGS],
+	# Script owners (.gd/.cs preloads and loads) decide whether a resource is
+	# unused, so script-domain changes must invalidate this read too.
+	"list_unused_resources": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
+		TAG_RESOURCE_CATALOG, TAG_PROJECT_SETTINGS, TAG_SCRIPT_AGGREGATE],
 	"find_resource_usages": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
 		TAG_RESOURCE_CATALOG, TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE],
-	"list_unused_resources": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
-		TAG_RESOURCE_CATALOG, TAG_PROJECT_SETTINGS],
 	"scan_migration_compatibility": [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE,
 		TAG_SCRIPT_CATALOG],
 	"find_deprecated_api_usage": [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE,
-		TAG_SCRIPT_CATALOG]
+		TAG_SCRIPT_CATALOG],
+	"verify_scripts": [TAG_SCRIPT_AGGREGATE],
+	"detect_broken_scripts": [TAG_SCRIPT_AGGREGATE],
+	"list_project_script_symbols": [TAG_SCRIPT_AGGREGATE],
+	"find_script_symbol_definition": [TAG_SCRIPT_AGGREGATE],
+	"find_script_symbol_references": [TAG_SCRIPT_AGGREGATE],
+	"scan_missing_resource_dependencies": [TAG_RESOURCE_AGGREGATE, TAG_SCRIPT_AGGREGATE],
+	"scan_cyclic_resource_dependencies": [TAG_RESOURCE_AGGREGATE, TAG_SCRIPT_AGGREGATE],
+	"audit_project_health": [TAG_RESOURCE_AGGREGATE, TAG_SCRIPT_AGGREGATE],
+	"search_in_files": [TAG_RESOURCE_AGGREGATE, TAG_SCRIPT_AGGREGATE],
+	"get_class_api_metadata": [TAG_SCRIPT_AGGREGATE],
+	"list_export_presets": [TAG_RESOURCE_AGGREGATE, "resource:res://export_presets.cfg"],
+	"inspect_export_presets": [TAG_RESOURCE_AGGREGATE, "resource:res://export_presets.cfg"],
+	"validate_export_preset": [TAG_RESOURCE_AGGREGATE, "resource:res://export_presets.cfg"],
+	"list_project_tests": [TAG_PROJECT_TREE, TAG_SCRIPT_CATALOG, TAG_RESOURCE_CATALOG],
+	"prepare_project_test_environment": [TAG_PROJECT_TREE, TAG_SCRIPT_CATALOG, TAG_RESOURCE_CATALOG]
 }
 
 const GLOBAL_MUTATION_TOOLS: Array[String] = [
@@ -151,8 +187,12 @@ static func read_tags(tool_name: String, arguments: Dictionary) -> Array[String]
 			for path_value in arguments.get("script_paths", []):
 				_append_path_tag(tags, "script", path_value)
 		"read_resource_properties":
+			# 只读单个 .tres/.res：脚本域变化与其无关，不带 SCRIPT_AGGREGATE
+			# 以免无关的脚本编辑白白杀掉缓存命中。
 			tags.append(TAG_RESOURCE_ALL)
-			tags.append(TAG_SCRIPT_AGGREGATE)
+			_append_path_tag(tags, "resource", arguments.get("resource_path", ""))
+		"inspect_tileset_resource":
+			tags.append(TAG_RESOURCE_ALL)
 			_append_path_tag(tags, "resource", arguments.get("resource_path", ""))
 		"get_resource_dependencies":
 			tags.append(TAG_RESOURCE_ALL)
@@ -187,24 +227,35 @@ static func mutation_tags(tool_name: String, group: String, arguments: Dictionar
 		"rename_script_symbol", "save_all_scripts", "reload_open_scripts":
 			return [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE]
 		"attach_script":
-			return [TAG_SCENE_CONTENT]
+			# 场景从此引用该脚本：未使用资源/反向依赖读必须看到。
+			return [TAG_SCENE_CONTENT, TAG_RESOURCE_AGGREGATE]
 		"create_scene":
+			# RESOURCE_AGGREGATE：新 .tscn 的 ext_resource 集合参与
+			# scan_missing/scan_cyclic/audit/search_in_files(.tscn)。
 			return [TAG_SCENE_CONTENT, TAG_SCENE_CATALOG, TAG_SCENE_TABS,
-				TAG_RESOURCE_CATALOG, TAG_PROJECT_TREE]
+				TAG_RESOURCE_CATALOG, TAG_RESOURCE_AGGREGATE, TAG_PROJECT_TREE]
 		"open_scene", "close_scene_tab":
 			return [TAG_SCENE_CONTENT, TAG_SCENE_TABS]
 		"save_scene":
-			return [TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG, TAG_PROJECT_TREE]
+			return [TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG, TAG_RESOURCE_AGGREGATE,
+				TAG_PROJECT_TREE]
 		"save_branch_as_scene":
 			return [TAG_SCENE_CONTENT, TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG,
-				TAG_PROJECT_TREE]
+				TAG_RESOURCE_AGGREGATE, TAG_PROJECT_TREE]
 		"install_runtime_probe", "remove_runtime_probe":
 			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE, TAG_RESOURCE_CATALOG,
 				TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE, TAG_SCRIPT_CATALOG]
 		"reimport_resources":
 			return [TAG_IMPORT_STATE, TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE]
 		"configure_android_export":
-			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE]
+			# 直接改写 export_presets.cfg（config_path 默认值）：
+			# 预设读（list/inspect/validate_export_preset）依赖
+			# resource:<该文件> + RESOURCE_AGGREGATE，缺了会读到旧配置。
+			var android_tags: Array[String] = [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE,
+				TAG_RESOURCE_AGGREGATE]
+			_append_path_tag(android_tags, "resource",
+				arguments.get("config_path", "res://export_presets.cfg"))
+			return _deduplicated_sorted(android_tags)
 		"bump_version":
 			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE]
 		"manage_localization":

@@ -5,6 +5,9 @@
 class_name ProjectResourcesTools
 extends RefCounted
 
+const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
+const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
 
@@ -1327,7 +1330,11 @@ func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
 	var resources: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources)
+	# 与 detect_broken_scripts / verify_scripts 同口径：默认审计用户代码，
+	# 显式 include_tooling 或工具目录 search_path 才含 addons/。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources, false, include_tooling)
 	resources.sort()
 
 	var issues: Array = []
@@ -1412,7 +1419,9 @@ func _tool_scan_cyclic_resource_dependencies(params: Dictionary) -> Dictionary:
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
 	var resources: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources)
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources, false, include_tooling)
 	resources.sort()
 
 	var graph: Dictionary = {}
@@ -1449,7 +1458,15 @@ func _tool_scan_cyclic_resource_dependencies(params: Dictionary) -> Dictionary:
 		"truncated": false
 	}
 
+## 依赖解析按 (mtime+长度, 环境签名) 记忆：同一文件在一次审计内被
+## scan_missing 与 scan_cyclic 各解析一次、跨审计重扫时也不再重复
+## ResourceLoader.get_dependencies 的文件读取。
 func _parse_resource_dependencies(resource_path: String) -> Array:
+	var result: Variant = ScriptCompileMemoScript.result_for(resource_path, "deps",
+		func() -> Array: return _parse_resource_dependencies_uncached(resource_path))
+	return result if result is Array else []
+
+func _parse_resource_dependencies_uncached(resource_path: String) -> Array:
 	var dependencies: Array = []
 	for raw_dependency in ResourceLoader.get_dependencies(resource_path):
 		var raw_text: String = str(raw_dependency)
@@ -1572,7 +1589,12 @@ func _register_detect_broken_scripts(server_core: RefCounted) -> void:
 				"type": "integer",
 				"description": "Maximum number of script issue entries to return. Default is 200.",
 				"default": 200
-			}
+			},
+				"include_tooling": {
+					"type": "boolean",
+					"description": "Include tooling directories (addons/, test/, docs/). Default false — a project-health scan compiles user code, not third-party plugin internals (set true or pass search_path=res://addons to audit tooling).",
+					"default": false
+				}
 		}
 	}
 
@@ -1610,7 +1632,12 @@ func _tool_detect_broken_scripts(params: Dictionary) -> Dictionary:
 	search_path = validation["sanitized"]
 
 	var scripts: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, [".gd"], scripts)
+	# 默认只编译用户代码：addons/（第三方插件，本项目下即插件自身约 5 万行）
+	# 不属于"项目健康"要诊断的范围；显式 include_tooling 或把 search_path
+	# 指进工具目录仍可全量审计。与 verify_scripts 的默认收集口径保持一致。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	ProjectToolsNative._collect_resources(search_path, [".gd"], scripts, false, include_tooling)
 	scripts.sort()
 
 	var issues: Array = []
@@ -2072,6 +2099,12 @@ func _resolve_resource_root_path(raw_value: String) -> String:
 	return ""
 
 func _analyze_script_diagnostics(script_path: String, include_warnings: bool) -> Dictionary:
+	# 按路径记忆编译结果：全项目诊断重扫只重编译真正变化的文件。
+	return ScriptCompileMemoScript.diagnostics_for(script_path,
+		"analyze|%s" % str(include_warnings),
+		func() -> Dictionary: return _analyze_script_diagnostics_uncached(script_path, include_warnings))
+
+func _analyze_script_diagnostics_uncached(script_path: String, include_warnings: bool) -> Dictionary:
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
 	if not file:
 		return {"error": "Failed to open file"}

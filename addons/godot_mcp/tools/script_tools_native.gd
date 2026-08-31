@@ -6,6 +6,9 @@ class_name ScriptToolsNative
 extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
+const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
+const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 var _editor_interface: EditorInterface = null
 
@@ -429,21 +432,36 @@ func _tool_find_script_symbol_references(params: Dictionary) -> Dictionary:
 	var max_results: int = max(1, int(params.get("max_results", 100)))
 
 	var file_paths: Array = []
-	_collect_script_reference_files(search_path, include_extensions, file_paths)
+	_collect_script_reference_files(search_path, include_extensions, file_paths,
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
 	file_paths.sort()
 	if not preferred_script_path.is_empty():
 		file_paths.sort_custom(Callable(self, "_compare_script_paths_for_preference").bind(preferred_script_path))
 
-	var definitions_by_path: Dictionary = {}
-	if not include_definitions:
-		definitions_by_path = _collect_definition_lines_by_path(file_paths, symbol_name, case_sensitive)
+	var reference_regex: RegEx = _symbol_reference_regex(symbol_name, case_sensitive)
 
 	var references: Array = []
 	for file_path in file_paths:
 		if references.size() >= max_results:
 			break
-		var definition_lines: Array = definitions_by_path.get(file_path, [])
-		var matches: Array = _find_symbol_references_in_file(file_path, symbol_name, case_sensitive, include_definitions, definition_lines, max_results - references.size())
+		# 每文件只读一次：定义行与引用匹配共用同一份行数组（此前定义扫描
+		# 与引用扫描各读一遍文件），且定义行只在本文件确有匹配时才计算。
+		var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+		if not file:
+			continue
+		var lines: PackedStringArray = file.get_as_text().split("\n")
+		file.close()
+		var has_match: bool = false
+		for line_value in lines:
+			if reference_regex.is_valid() and reference_regex.search(String(line_value)):
+				has_match = true
+				break
+		if not has_match:
+			continue
+		var definition_lines: Array = []
+		if not include_definitions and (file_path.ends_with(".gd") or file_path.ends_with(".cs")):
+			definition_lines = _definition_lines_for_content(file_path, lines, symbol_name, case_sensitive)
+		var matches: Array = _find_symbol_references_in_lines(file_path, lines, reference_regex, include_definitions, definition_lines, max_results - references.size())
 		for match in matches:
 			references.append(match)
 			if references.size() >= max_results:
@@ -740,7 +758,8 @@ func _index_script_symbols(script_path: String) -> Dictionary:
 	return {"error": "Unsupported script extension: " + script_path}
 
 func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary:
-	var line_count: int = content.split("\n").size()
+	var all_lines: PackedStringArray = content.split("\n")
+	var line_count: int = all_lines.size()
 	var has_class_name: bool = false
 	var class_name_value: String = ""
 	var extends_from: String = ""
@@ -749,7 +768,7 @@ func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary
 	var properties: Array = []
 	var constants: Array = []
 
-	for line in content.split("\n"):
+	for line in all_lines:
 		var trimmed: String = _strip_inline_comment(line).strip_edges()
 		if trimmed.is_empty():
 			continue
@@ -789,8 +808,26 @@ func _index_gdscript_symbols(script_path: String, content: String) -> Dictionary
 		"symbol_count": functions.size() + signals.size() + properties.size() + constants.size()
 	}
 
+var _csharp_symbol_regex_cache: Dictionary = {}
+
+func _csharp_symbol_regex(kind: String) -> RegEx:
+	if _csharp_symbol_regex_cache.is_empty():
+		var patterns: Dictionary = {
+			"class": "class\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_\\.]*))?",
+			"method": "(?:public|private|protected|internal)\\s+(?:override\\s+|virtual\\s+|static\\s+|async\\s+|partial\\s+)*[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(",
+			"property": "(?:public|private|protected|internal)\\s+(?:static\\s+)?[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{",
+			"constant": "(?:public|private|protected|internal)\\s+const\\s+[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)",
+			"delegate": "delegate\\s+void\\s+([A-Za-z_][A-Za-z0-9_]*)EventHandler\\s*\\("
+		}
+		for kind_value in patterns:
+			var regex: RegEx = RegEx.new()
+			regex.compile(String(patterns[kind_value]))
+			_csharp_symbol_regex_cache[kind_value] = regex
+	return _csharp_symbol_regex_cache.get(kind, RegEx.new())
+
 func _index_csharp_symbols(script_path: String, content: String) -> Dictionary:
-	var line_count: int = content.split("\n").size()
+	var all_lines: PackedStringArray = content.split("\n")
+	var line_count: int = all_lines.size()
 	var class_name_value: String = ""
 	var extends_from: String = ""
 	var functions: Array = []
@@ -799,18 +836,14 @@ func _index_csharp_symbols(script_path: String, content: String) -> Dictionary:
 	var constants: Array = []
 	var next_delegate_is_signal: bool = false
 
-	var class_regex: RegEx = RegEx.new()
-	class_regex.compile("class\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?::\\s*([A-Za-z_][A-Za-z0-9_\\.]*))?")
-	var method_regex: RegEx = RegEx.new()
-	method_regex.compile("(?:public|private|protected|internal)\\s+(?:override\\s+|virtual\\s+|static\\s+|async\\s+|partial\\s+)*[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(")
-	var property_regex: RegEx = RegEx.new()
-	property_regex.compile("(?:public|private|protected|internal)\\s+(?:static\\s+)?[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{")
-	var constant_regex: RegEx = RegEx.new()
-	constant_regex.compile("(?:public|private|protected|internal)\\s+const\\s+[A-Za-z_][A-Za-z0-9_<>\\.?\\[\\]]*\\s+([A-Za-z_][A-Za-z0-9_]*)")
-	var delegate_regex: RegEx = RegEx.new()
-	delegate_regex.compile("delegate\\s+void\\s+([A-Za-z_][A-Za-z0-9_]*)EventHandler\\s*\\(")
+	# 五个模式为字面量：首次调用编译一次并按名复用（此前每个文件重编译五次）。
+	var class_regex: RegEx = _csharp_symbol_regex("class")
+	var method_regex: RegEx = _csharp_symbol_regex("method")
+	var property_regex: RegEx = _csharp_symbol_regex("property")
+	var constant_regex: RegEx = _csharp_symbol_regex("constant")
+	var delegate_regex: RegEx = _csharp_symbol_regex("delegate")
 
-	for line in content.split("\n"):
+	for line in all_lines:
 		var trimmed: String = _strip_csharp_line_comment(line).strip_edges()
 		if trimmed.is_empty():
 			continue
@@ -1073,28 +1106,22 @@ func _compare_script_paths_for_preference(left: String, right: String, preferred
 		return left_preferred
 	return left < right
 
-func _collect_script_reference_files(directory_path: String, extensions: Array, result: Array) -> void:
-	var dir: DirAccess = DirAccess.open(directory_path)
-	if not dir:
-		return
-
-	dir.list_dir_begin()
-	var file_name: String = dir.get_next()
-	while not file_name.is_empty():
-		if file_name != "." and file_name != "..":
-			var full_path: String = directory_path
-			if not full_path.ends_with("/"):
-				full_path += "/"
-			full_path += file_name
-
-			if dir.current_is_dir():
-				_collect_script_reference_files(full_path, extensions, result)
-			else:
-				var extension: String = "." + file_name.get_extension().to_lower()
-				if extensions.has(extension):
-					result.append(full_path)
-		file_name = dir.get_next()
-	dir.list_dir_end()
+## 引用文件收集走统一收集器：跳过 .godot/.import 生成域（此前裸 DirAccess
+## 会下探引擎缓存目录）。工具目录按调用方推断包含。
+func _collect_script_reference_files(directory_path: String, extensions: Array, result: Array,
+		include_tooling: bool = true) -> void:
+	var normalized: Array[String] = []
+	for ext_value in extensions:
+		var ext: String = String(ext_value).strip_edges().to_lower()
+		if not ext.begins_with("."):
+			ext = "." + ext
+		if not ext.is_empty() and not normalized.has(ext):
+			normalized.append(ext)
+	var collected: Array[String] = []
+	ProjectToolsNative._collect_resources(directory_path, normalized, collected, false, include_tooling)
+	collected.sort()
+	for path_value in collected:
+		result.append(path_value)
 
 func _collect_definition_lines_by_path(file_paths: Array, symbol_name: String, case_sensitive: bool) -> Dictionary:
 	var definitions_by_path: Dictionary = {}
@@ -1119,15 +1146,55 @@ func _find_symbol_references_in_file(file_path: String, symbol_name: String, cas
 	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
 	if not file:
 		return []
-
 	var lines: PackedStringArray = file.get_as_text().split("\n")
 	file.close()
+	return _find_symbol_references_in_lines(file_path, lines,
+		_symbol_reference_regex(symbol_name, case_sensitive),
+		include_definitions, definition_lines, remaining_results)
 
-	var references: Array = []
-	var regex: RegEx = RegEx.new()
+
+## 符号引用正则按 (symbol, 大小写) 编译一次复用：此前每个文件重编译一次
+## 相同模式。上限 64 项（超出即整体重建，符号名空间天然有界）。
+var _symbol_regex_cache: Dictionary = {}
+
+func _symbol_reference_regex(symbol_name: String, case_sensitive: bool) -> RegEx:
 	var escaped_symbol_name: String = _escape_regex_pattern(symbol_name)
 	var compile_pattern: String = "(?i)(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % escaped_symbol_name if not case_sensitive else "(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % escaped_symbol_name
-	if regex.compile(compile_pattern) != OK:
+	if _symbol_regex_cache.size() >= 64:
+		_symbol_regex_cache.clear()
+	if not _symbol_regex_cache.has(compile_pattern):
+		var regex: RegEx = RegEx.new()
+		if regex.compile(compile_pattern) != OK:
+			return RegEx.new()
+		_symbol_regex_cache[compile_pattern] = regex
+	return _symbol_regex_cache[compile_pattern]
+
+
+## 从已读取的行数组计算定义行（供引用扫描排除定义处）。
+func _definition_lines_for_content(file_path: String, lines: PackedStringArray, symbol_name: String, case_sensitive: bool) -> Array:
+	var content: String = "\n".join(lines)
+	var definitions: Array
+	if file_path.ends_with(".gd"):
+		definitions = _find_gdscript_symbol_definitions(file_path, content, symbol_name, [])
+	elif file_path.ends_with(".cs"):
+		definitions = _find_csharp_symbol_definitions(file_path, content, symbol_name, [])
+	else:
+		return []
+	if not case_sensitive:
+		var filtered: Array = []
+		for definition in definitions:
+			if str(definition.get("symbol_name", "")).to_lower() == symbol_name.to_lower():
+				filtered.append(definition)
+		definitions = filtered
+	var result: Array = []
+	for definition in definitions:
+		result.append(int(definition.get("line", 0)))
+	return result
+
+
+func _find_symbol_references_in_lines(file_path: String, lines: PackedStringArray, regex: RegEx, include_definitions: bool, definition_lines: Array, remaining_results: int) -> Array:
+	var references: Array = []
+	if not regex.is_valid():
 		return []
 
 	for i in range(lines.size()):
@@ -1448,18 +1515,28 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		else:
 			content = _get_script_template(template)
 
+	# 目标目录不存在时先创建（工作流按 profile 推导的 res://scripts/ 等新目录）。
+	var script_parent: String = script_path.get_base_dir()
+	if script_parent != "res://" and not script_parent.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(script_parent))
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
 	if not file:
 		return {"error": "Failed to create file: " + script_path}
 
 	file.store_string(content)
 	file.close()
+	# 写侧失效编译 memo：mtime 秒级 + 等长改写会让 memo 无限供出旧结论。
+	ScriptCompileMemoScript.invalidate(script_path)
 
 	var line_count: int = content.split("\n").size()
 	var result: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
-		"line_count": line_count
+		"line_count": line_count,
+		# 落盘后立即同步编辑器（文件系统 + 打开的缓冲区），使写入成为编辑器
+		# 内部操作而不是待确认的“外部修改”。
+		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
+			_get_editor_interface(), script_path).get("status", "")
 	}
 
 	if not attach_to_node.is_empty():
@@ -1468,10 +1545,22 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 			var node: Node = _resolve_node_path(editor_interface, attach_to_node)
 			if node:
 				var script_res: Script = load(script_path)
+				# 刚写入的文件 load() 到的是未编译壳；现场编译（不注册路径，
+				# 避免被扫描失效），update_file 让后续会话按路径加载。
+				var cold_attach: bool = false
+				if script_res and not script_res.can_instantiate():
+					var fresh_attach: GDScript = GDScript.new()
+					fresh_attach.source_code = FileAccess.get_file_as_string(script_path)
+					if fresh_attach.reload() == OK:
+						script_res = fresh_attach
+						cold_attach = true
+					else:
+						script_res = null
 				if script_res:
 					node.set_script(script_res)
 					result["attached_to"] = attach_to_node
-					editor_interface.get_resource_filesystem().scan()
+					if cold_attach:
+						editor_interface.get_resource_filesystem().update_file(script_path)
 				else:
 					result["attach_warning"] = "Script created but failed to load for attachment"
 			else:
@@ -1521,7 +1610,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 """
 	else:
-		return ""
+		# 0 字节脚本无法通过编译，也会让挂载与验证门禁失败；默认给最小合法脚本。
+		return "extends Node\n"
 
 func _get_csharp_script_template(template_name: String, script_class_name: String) -> String:
 	var safe_name: String = script_class_name.replace(" ", "_").replace("-", "_")
@@ -1624,6 +1714,11 @@ func _register_modify_script(server_core: RefCounted) -> void:
 			"line_number": {
 				"type": "integer",
 				"description": "Optional line number to replace (1-indexed). If provided with 'content', replaces that line only."
+			},
+			"validate": {
+				"type": "boolean",
+				"description": "Inline-validate .gd after writing and return errors in 'validation' (default true).",
+				"default": true
 			}
 		},
 		"required": ["script_path", "content"]
@@ -1705,15 +1800,35 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	
 	file.store_string(final_content)
 	file.close()
-	
+	# 写侧失效编译 memo：修复循环里同秒等长改写（== ↔ != 等）必须立即
+	# 重编译，否则 verify_scripts 拿到修复前的结论且无 TTL 上界。
+	ScriptCompileMemoScript.invalidate(script_path)
+
 	# 计算行数
 	var line_count: int = final_content.split("\n").size()
-	
-	return {
+
+	var response: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
-		"line_count": line_count
+		"line_count": line_count,
+		# 落盘后立即同步编辑器，避免“文件已在磁盘上修改”的重载弹窗。
+		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
+			_get_editor_interface(), script_path).get("status", "")
 	}
+	# 内联校验：编辑→验证从两次往返并为一次。默认只对 .gd 开启（GDScript
+	# 解析器无法校验 C#），可用 validate:false 关闭。
+	if script_path.ends_with(".gd") and bool(params.get("validate", true)):
+		var check: Dictionary = _tool_validate_script({"script_path": script_path, "check_warnings": false})
+		if check.has("error"):
+			response["validation"] = {"valid": true, "note": String(check["error"])}
+		else:
+			var errors: Array = check.get("errors", [])
+			response["validation"] = {
+				"valid": bool(check.get("valid", true)),
+				"error_count": int(check.get("error_count", errors.size())),
+				"errors": errors.slice(0, 5)
+			}
+	return response
 
 # ============================================================================
 # analyze_script - 分析脚本结构（完整版）
@@ -2022,6 +2137,7 @@ func _register_attach_script(server_core: RefCounted) -> void:
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
+			"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 			"node_path": {
 				"type": "string",
 				"description": "Path to the node to attach the script to (e.g. '/root/MainScene/Player')"
@@ -2069,6 +2185,11 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
 
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
 	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
 	if not validation["valid"]:
 		return {"error": "Invalid script path: " + validation["error"]}
@@ -2089,9 +2210,21 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	var script_res: Script = load(script_path)
 	if not script_res:
 		return {"error": "Failed to load script: " + script_path}
+	# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源（有源码
+	# 无成员）。现场编译等价脚本且不注册路径：路径资源会被仍在进行的扫描
+	# 反复失效；更新文件系统登记足以让后续会话按路径正确加载。
+	var script_was_cold: bool = false
+	if not script_res.can_instantiate():
+		var fresh_script: GDScript = GDScript.new()
+		fresh_script.source_code = FileAccess.get_file_as_string(script_path)
+		if fresh_script.reload() != OK:
+			return {"error": "Script did not compile: " + script_path}
+		script_res = fresh_script
+		script_was_cold = true
 
 	target_node.set_script(script_res)
-	editor_interface.get_resource_filesystem().scan()
+	if script_was_cold:
+		editor_interface.get_resource_filesystem().update_file(script_path)
 
 	return {
 		"status": "success",
@@ -2300,6 +2433,9 @@ func _collect_validation_error(test_script: GDScript, content: String) -> Dictio
 	}
 
 func _strip_class_names(source: String) -> String:
+	# 廉价守卫：无 class_name 声明时无需整段 split/join。
+	if not source.contains("class_name "):
+		return source
 	var lines: PackedStringArray = source.split("\n")
 	var result: PackedStringArray = []
 	for line in lines:
@@ -2366,6 +2502,9 @@ func _insert_autoload_decls_after_extends(content: String, autoload_decls: Strin
 	return "\n".join(result_lines)
 
 func _spaces_to_tabs(code: String) -> String:
+	# 廉价守卫：没有任何以 4 空格开头的行时跳过整段 split/join。
+	if not (code.begins_with("    ") or code.contains("\n    ")):
+		return code
 	var lines: PackedStringArray = code.split("\n")
 	var result_lines: PackedStringArray = []
 	for line in lines:
@@ -2492,7 +2631,10 @@ func _tool_verify_scripts(params: Dictionary) -> Dictionary:
 		"verified": verified,
 		"failed": failed,
 		"results": results,
-		"total_checked": checked
+		"total_checked": checked,
+		# 还有脚本没被检查（超过 max_scripts 截断）：调用方/门禁据此判定
+		# 本次验证不完整，不能当通过。
+		"truncated": checked < paths.size()
 	}
 
 # 校验单个脚本文件，返回与 validate_script 一致的结构化错误/警告。
@@ -2518,28 +2660,33 @@ func _verify_single_script(script_path: String, check_warnings: bool) -> Diction
 			"error_count": 1,
 			"warning_count": 0
 		}
-	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
-	if not file:
-		return {
-			"path": script_path,
-			"valid": false,
-			"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
-			"warnings": [],
-			"error_count": 1,
-			"warning_count": 0
-		}
-	var content: String = file.get_as_text()
-	file.close()
+	# 按路径记忆编译结果：依赖标签推进后的全量重扫只重编译真正变化的文件。
+	return ScriptCompileMemoScript.diagnostics_for(script_path,
+		"verify|%s" % str(check_warnings),
+		func() -> Dictionary:
+			var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+			if not file:
+				return {
+					"path": script_path,
+					"valid": false,
+					"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
+					"warnings": [],
+					"error_count": 1,
+					"warning_count": 0
+				}
+			var content: String = file.get_as_text()
+			file.close()
 
-	var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
-	return {
-		"path": script_path,
-		"valid": bool(vr.get("valid", false)),
-		"errors": vr.get("errors", []),
-		"warnings": vr.get("warnings", []),
-		"error_count": int(vr.get("error_count", 0)),
-		"warning_count": int(vr.get("warning_count", 0))
-	}
+			var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
+			return {
+				"path": script_path,
+				"valid": bool(vr.get("valid", false)),
+				"errors": vr.get("errors", []),
+				"warnings": vr.get("warnings", []),
+				"error_count": int(vr.get("error_count", 0)),
+				"warning_count": int(vr.get("warning_count", 0))
+			}
+	)
 
 # 递归收集 .gd 脚本，跳过指定名称的子目录（如 addons/test/.godot）。
 func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_dir_names: Array) -> void:
@@ -2567,11 +2714,8 @@ func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_d
 # 收集待校验脚本路径：编辑器模式优先用 EditorFileSystem 缓存索引（比 DirAccess
 # 递归扫描快一个量级，大项目尤其明显）；无编辑器接口（headless/CI）时回退 DirAccess。
 func _collect_verify_script_paths(result: Array) -> void:
-	var ei: EditorInterface = _get_editor_interface()
-	var efs: EditorFileSystem = ei.get_resource_filesystem() if ei else null
-	if efs and efs.get_filesystem() != null:
-		_walk_editor_filesystem(efs.get_filesystem(), result, ["addons", "test", ".godot"])
-		return
+	# 磁盘为真相源：工作流刚创建的脚本在 EditorFileSystem 冷缓存里不存在，
+	# 走缓存会把 total_checked 报成 0，验证门禁因此永远失败。
 	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot"])
 
 func _walk_editor_filesystem(dir: EditorFileSystemDirectory, result: Array, skip_dir_names: Array) -> void:
@@ -2623,7 +2767,17 @@ func _register_search_in_files(server_core: RefCounted) -> void:
 			"max_results": {
 				"type": "integer",
 				"description": "Maximum number of results to return. Default is 50."
-			}
+			},
+				"max_files": {
+					"type": "integer",
+					"description": "Maximum number of files to open. Default 2000; bounds zero-match scans over projects with many matching extensions.",
+					"default": 2000
+				},
+				"include_tooling": {
+					"type": "boolean",
+					"description": "Include tooling directories (addons/, test/, docs/). Default false unless search_path itself is inside one.",
+					"default": false
+				}
 		},
 		"required": ["pattern"]
 	}
@@ -2657,6 +2811,7 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 	var use_regex: bool = params.get("use_regex", false)
 	var case_sensitive: bool = params.get("case_sensitive", true)
 	var max_results: int = params.get("max_results", 50)
+	var max_files: int = maxi(1, int(params.get("max_files", 2000)))
 
 	if pattern.is_empty():
 		return {"error": "Missing required parameter: pattern"}
@@ -2673,21 +2828,41 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		if compile_err != OK:
 			return {"error": "Invalid regex pattern: " + pattern}
 
+	# 文件发现走统一收集器：跳过 .godot/.import 等生成域（此前裸 DirAccess
+	# 会下探引擎缓存与 __pycache__，零匹配也要读完所有文件）。工具目录
+	# （addons/test/docs）默认排除，显式 include_tooling 或指向工具目录的
+	# search_path 仍可搜索。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	var normalized_extensions: Array[String] = []
+	for ext_value in file_extensions:
+		var ext: String = String(ext_value).strip_edges().to_lower()
+		if not ext.begins_with("."):
+			ext = "." + ext
+		if not ext.is_empty() and not normalized_extensions.has(ext):
+			normalized_extensions.append(ext)
+	var files: Array[String] = []
+	ProjectToolsNative._collect_resources(search_path, normalized_extensions, files, false, include_tooling)
+	files.sort()
+
 	var state: Dictionary = {
 		"results": [],
 		"files_searched": 0,
 		"total_matches": 0,
 		"max_results": max_results
 	}
-
-	_search_recursive(search_path, pattern, file_extensions, use_regex,
-		case_sensitive, regex, state)
+	for file_path in files:
+		if state["total_matches"] >= state["max_results"] or state["files_searched"] >= max_files:
+			break
+		state["files_searched"] = int(state["files_searched"]) + 1
+		_search_file(file_path, pattern, use_regex, case_sensitive, regex, state)
 
 	return {
 		"pattern": pattern,
 		"results": state["results"],
 		"total_matches": state["total_matches"],
-		"files_searched": state["files_searched"]
+		"files_searched": state["files_searched"],
+		"files_available": files.size()
 	}
 
 func _search_recursive(

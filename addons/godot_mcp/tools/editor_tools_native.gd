@@ -6,9 +6,26 @@ class_name EditorToolsNative
 extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
+# 系统代理检测复用隧道管理器的实现（静态方法，避免重复造轮子）。
+const TUNNEL_MANAGER_SCRIPT = preload("res://addons/godot_mcp/native_mcp/mcp_tunnel_manager.gd")
 
 var _editor_interface: EditorInterface = null
 var _editor_operation_in_progress: bool = false
+# Tracks the scene of the last successful play so run_project can reuse a
+# matching live session instead of erroring on "already running".
+var _last_played_scene: String = ""
+# 导出模板下载状态机（工具自身的受信下载路径，不经过 execute_script 沙箱）。
+var _template_download: Dictionary = {}
+
+# 导出模板下载只允许官方分发主机；镜像 URL 由工具按版本推导，不接受任意 URL。
+# api.github.com 仅用于获取官方资产字节数做完整性交叉验证。
+const TEMPLATES_MIRROR_HOSTS: Array[String] = [
+	"github.com",
+	"api.github.com",
+	"downloads.tuxfamily.org",
+	"downloads.godotengine.org"
+]
+const TEMPLATES_DOWNLOAD_DIR: String = "user://mcp_export_templates"
 
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
@@ -45,8 +62,22 @@ func _get_export_templates_root() -> String:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if editor_interface:
 		var editor_paths: EditorPaths = editor_interface.get_editor_paths()
-		if editor_paths:
-			return editor_paths.get_export_templates_dir()
+		# get_export_templates_dir 并非所有引擎版本都提供（4.6.3/4.7.2 实测缺失），
+		# 无条件调用会让处理器中止——先探测方法存在性；且对象可能有效但目录
+		# 为空串，必须穿透到平台回退而不是把空路径当结论。
+		var from_paths: String = ""
+		if editor_paths and editor_paths.has_method("get_export_templates_dir"):
+			from_paths = String(editor_paths.get_export_templates_dir())
+		if not from_paths.is_empty():
+			return from_paths
+	# EditorPaths 单例兜底：工具实例可能拿不到 EditorInterface，但单例仍可用。
+	# 仅在编辑器上下文尝试——游戏/headless 模式下获取该单例会打印引擎错误。
+	if Engine.is_editor_hint():
+		var paths_singleton: Object = Engine.get_singleton("EditorPaths")
+		if paths_singleton != null and paths_singleton.has_method("get_export_templates_dir"):
+			var singleton_dir: String = String(paths_singleton.call("get_export_templates_dir"))
+			if not singleton_dir.is_empty():
+				return singleton_dir
 	var os_name: String = OS.get_name()
 	if os_name == "Windows":
 		var appdata: String = OS.get_environment("APPDATA")
@@ -264,7 +295,25 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 		return {"error": "Editor interface not available"}
 
 	if editor_interface.is_playing_scene():
-		return {"error": "Project is already running. Stop it first with stop_project."}
+		# Idempotent session reuse: re-running the live scene (or leaving the
+		# scene unspecified) succeeds instead of stalling callers that already
+		# started the game; a different scene switches sessions deterministically.
+		var requested_scene: String = String(params.get("scene_path", "")).strip_edges()
+		if requested_scene.is_empty() or requested_scene == _last_played_scene:
+			return {
+				"success": true,
+				"already_running": true,
+				"scene": _last_played_scene
+			}
+		editor_interface.stop_playing_scene()
+		_last_played_scene = ""
+		var settle_tree: SceneTree = Engine.get_main_loop() as SceneTree
+		var settle_deadline: int = Time.get_ticks_msec() + 2000
+		while editor_interface.is_playing_scene() and Time.get_ticks_msec() < settle_deadline:
+			if settle_tree:
+				await settle_tree.process_frame
+			else:
+				break
 
 	var scene_path: String = params.get("scene_path", "")
 	var played_scene: String = ""
@@ -303,6 +352,7 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 			"error": "Play was requested but no debugger session became active within the timeout. The scene likely failed to load — check ProjectSettings application/run/main_scene.",
 			"scene": played_scene
 		}
+	_last_played_scene = played_scene
 
 	# Give the runtime probe a brief window to signal ready so callers can use
 	# runtime tools (scene tree, screenshot, expression eval) right away.
@@ -312,6 +362,21 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 	while not probe_ready and tree and Time.get_ticks_msec() < probe_deadline:
 		await tree.process_frame
 		probe_ready = bridge.is_probe_ready() if bridge else false
+
+	# Grace check: a parse error or early crash kills the debugger session within
+	# the first moments. Reporting success there is a false positive — the engine
+	# verdict must see "started_but_exited" so gates fail honestly.
+	var grace_deadline: int = Time.get_ticks_msec() + 1200
+	while tree and Time.get_ticks_msec() < grace_deadline:
+		await tree.process_frame
+		if not _has_active_debugger_session():
+			_last_played_scene = ""
+			return {
+				"status": "started_but_exited",
+				"error": "The game process exited shortly after launch (parse error or early crash). Check get_editor_logs / assert_no_runtime_errors evidence.",
+				"scene": played_scene,
+				"probe_ready": probe_ready
+			}
 
 	return {
 		"status": "success",
@@ -377,6 +442,7 @@ func _tool_stop_project(params: Dictionary) -> Dictionary:
 		return {"error": "Project is not currently running."}
 
 	editor_interface.stop_playing_scene()
+	_last_played_scene = ""
 
 	# Wait for the process to fully exit (up to 5s)
 	var max_wait_ms: int = 5000
@@ -1662,6 +1728,38 @@ func _tool_reload_project(params: Dictionary) -> Dictionary:
 # Editor buffer sync (Godot 4.7 APIs with graceful 4.6 degradation)
 # ============================================================================
 
+## 在 MCP 直接写盘之后把变更同步进编辑器：更新 EditorFileSystem，并在
+## 该脚本已打开时重载其缓冲区。没有这一步，编辑器会把 MCP 的写入识别为
+## “外部程序修改了文件”并弹窗要求确认重载；有了它，MCP 的写入就是编辑
+## 器内部操作。供 script_tools 的写工具在落盘成功后调用。
+static func sync_script_buffer_after_write(editor_interface: EditorInterface,
+		script_path: String) -> Dictionary:
+	if editor_interface == null:
+		return {"status": "skipped", "reason": "no_editor_interface"}
+	var file_system: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if file_system != null:
+		file_system.update_file(script_path)
+	var script_editor: ScriptEditor = editor_interface.get_script_editor()
+	if script_editor == null:
+		return {"status": "ok", "reloaded": false}
+	var is_open: bool = false
+	for open_script_value in script_editor.get_open_scripts():
+		var open_script: Script = open_script_value
+		if open_script != null and String(open_script.resource_path) == script_path:
+			is_open = true
+			break
+	if not is_open:
+		return {"status": "ok", "reloaded": false}
+	var reload_method: String = ""
+	for candidate in ["reload_scripts", "reload_open_files"]:
+		if script_editor.has_method(candidate):
+			reload_method = candidate
+			break
+	if reload_method.is_empty():
+		return {"status": "skipped", "reason": "reload_api_unavailable"}
+	script_editor.call(reload_method)
+	return {"status": "ok", "reloaded": true}
+
 func _first_supported_method(obj: Object, candidates: Array) -> String:
 	if obj == null:
 		return ""
@@ -2007,28 +2105,53 @@ const _ANDROID_ARCHITECTURES: PackedStringArray = ["arm64-v8a", "armeabi-v7a", "
 
 func _register_manage_export_templates(server_core: RefCounted) -> void:
 	var tool_name: String = "manage_export_templates"
-	var description: String = "Manage locally installed Godot export templates. action='status' reports the templates directory, the current editor version, which versions are installed, and the official download URL + .tpz filename for the current version; action='install' extracts an export-templates .tpz/.zip into the templates directory; action='remove' deletes an installed version directory. Works on Godot 4.6+."
+	var description: String = "Manage export templates. status: report installed versions + official URL for the current editor version. download: trusted background download from an allowlisted official mirror, verified and auto-installed; returns pending — poll with download_status, cancel with download_cancel. install: extract a local .tpz. remove: delete a version. net_diag: editor-side connectivity diagnosis. Trusted path (ScriptSandbox never applies). Godot 4.6+."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
 			"action": {
 				"type": "string",
-				"enum": ["status", "install", "remove"],
-				"description": "Operation to perform. Default 'status'.",
+				"enum": ["status", "install", "remove", "download", "download_status", "download_cancel", "net_diag"],
+				"description": "Operation.",
 				"default": "status"
+			},
+			"mirror": {
+				"type": "string",
+				"enum": ["godotengine", "github", "tuxfamily"],
+				"description": "download: mirror. Default godotengine (official geo portal).",
+				"default": "godotengine"
+			},
+			"proxy": {
+				"type": "string",
+				"description": "download: loopback HTTP proxy; auto-detected from system."
+			},
+			"require_integrity": {
+				"type": "boolean",
+				"description": "download: fail when the official size check is unreachable.",
+				"default": false
+			},
+			"connections": {
+				"type": "integer",
+				"description": "download: parallel connections 1-16 (default 8).",
+				"default": 8
+			},
+			"keep_archive": {
+				"type": "boolean",
+				"description": "download: keep the .tpz.",
+				"default": false
 			},
 			"tpz_path": {
 				"type": "string",
-				"description": "For action='install': absolute or res:// path to an export-templates .tpz (or .zip) archive."
+				"description": "install: local .tpz/.zip archive path."
 			},
 			"version": {
 				"type": "string",
-				"description": "For action='remove': the installed version directory name to delete (e.g. '4.7.0.stable')."
+				"description": "remove: installed version directory name."
 			},
 			"templates_root": {
 				"type": "string",
-				"description": "Optional override for the export templates directory. Defaults to the editor's templates directory for the current platform."
+				"description": "Optional templates directory override."
 			}
 		},
 		"required": []
@@ -2079,10 +2202,70 @@ func _version_tag_and_tpz() -> Dictionary:
 	var tpz_filename: String = "Godot_v%s_export_templates.tpz" % tag
 	var download_url: String = "https://github.com/godotengine/godot/releases/download/%s/%s" % [tag, tpz_filename]
 	return {
+		"base_version": short_version,
 		"version_tag": tag,
 		"tpz_filename": tpz_filename,
 		"download_url": download_url
 	}
+
+## 官方镜像的模板下载 URL（按镜像 + 版本推导；调用方不可指定任意 URL）。
+## "godotengine" 是官方下载门户（编辑器模板管理器同源入口）：按地理位置重定向到
+## 实际对象存储（实测比 GitHub Releases 直连快一个数量级以上）。
+static func templates_mirror_url(mirror: String, base_version: String,
+		version_tag: String, tpz_filename: String) -> String:
+	match mirror:
+		"tuxfamily":
+			return "https://downloads.tuxfamily.org/godotengine/%s/%s" % [base_version, tpz_filename]
+		"godotengine":
+			return "https://downloads.godotengine.org/?version=%s&flavor=stable&slug=export_templates.tpz&platform=templates" % base_version
+		_:
+			return "https://github.com/godotengine/godot/releases/download/%s/%s" % [version_tag, tpz_filename]
+
+## 下载候选 URL 的主机必须命中官方白名单（纵深防御：即使未来改了 URL 构造）。
+static func is_trusted_templates_url(url: String) -> bool:
+	if not url.begins_with("https://"):
+		return false
+	var host: String = url.substr("https://".length()).get_slice("/", 0).to_lower()
+	return host in TEMPLATES_MIRROR_HOSTS
+
+## 解析官方 SUMS 文本（"<hash>  <filename>" 每行），返回对应文件的校验和。
+## 官方发布仅提供 SHA-512，而 Godot 引擎原声哈希不支持 SHA-512，因此该校验
+## 仅在引入外部哈希实现时才有意义；保留解析器供未来使用。
+static func parse_checksum_sums(sums_text: String, filename: String) -> String:
+	for raw_line in sums_text.split("\n"):
+		var line: String = String(raw_line).strip_edges()
+		if line.is_empty():
+			continue
+		var parts: PackedStringArray = line.split(" ", false)
+		if parts.size() < 2:
+			continue
+		var candidate_name: String = String(parts[parts.size() - 1]).get_file()
+		if candidate_name == filename:
+			return String(parts[0]).to_lower()
+	return ""
+
+## 从 GitHub 发布 API 的 JSON 中提取指定资产的官方字节数；找不到返回 -1。
+## 官方发布只附 SHA-512 校验和（引擎无法原生计算），因此完整性校验采用
+## “API 元数据字节数 == 实际下载数”的交叉验证（两个独立 HTTPS 端点）。
+static func templates_expected_size_from_release_json(json_text: String,
+		tpz_filename: String) -> int:
+	var parsed: Variant = JSON.parse_string(json_text)
+	if not (parsed is Dictionary):
+		return -1
+	var assets_value: Variant = (parsed as Dictionary).get("assets", [])
+	if not (assets_value is Array):
+		return -1
+	for asset_value in assets_value:
+		if not (asset_value is Dictionary):
+			continue
+		var asset: Dictionary = asset_value
+		if String(asset.get("name", "")) == tpz_filename:
+			return int(asset.get("size", -1))
+	return -1
+
+## 完整性元数据源：GitHub 发布 API（官方资产清单，含精确字节数）。
+static func templates_integrity_source_url(version_tag: String) -> String:
+	return "https://api.github.com/repos/godotengine/godot/releases/tags/%s" % version_tag
 
 func _scan_template_versions(templates_root: String) -> Array:
 	var versions: Array[String] = []
@@ -2105,8 +2288,23 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 	var action: String = str(params.get("action", "status")).strip_edges().to_lower()
 	if action.is_empty():
 		action = "status"
-	if not (action in ["status", "install", "remove"]):
-		return {"error": "Invalid action '%s'. Expected one of: status, install, remove." % action}
+	if not (action in ["status", "install", "remove", "download", "download_status", "download_cancel", "net_diag"]):
+		return {"error": "Invalid action '%s'. Expected one of: status, install, remove, download, download_status, download_cancel, net_diag." % action}
+
+	# net_diag 与下载状态机无关，也不需要 templates_root。
+	if action == "net_diag":
+		return _templates_net_diag(params)
+
+	# download_status / download_cancel 只读写下载状态机，不需要安装目录；
+	# 必须在 templates_root 解析之前分发，调用方才不必为轮询重复传 root。
+	if action == "download_status":
+		if _template_download.is_empty():
+			return {"action": "download_status", "status": "idle",
+				"message": "No template download has been started."}
+		return {"action": "download_status", "status": _template_download.get("report_status", "pending"),
+			"download": _templates_download_snapshot()}
+	if action == "download_cancel":
+		return _templates_download_cancel()
 
 	var templates_root: String = str(params.get("templates_root", "")).strip_edges()
 	if templates_root.is_empty():
@@ -2140,6 +2338,9 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 			"godot_version": godot_version
 		}
 
+	if action == "download":
+		return _templates_download_start(params, templates_root, version_meta, godot_version)
+
 	if action == "install":
 		var tpz_path: String = str(params.get("tpz_path", "")).strip_edges()
 		if tpz_path.is_empty():
@@ -2148,65 +2349,12 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 			tpz_path = ProjectSettings.globalize_path(tpz_path)
 		if not FileAccess.file_exists(tpz_path):
 			return {"error": "Template archive not found: " + tpz_path}
-
-		var reader: ZIPReader = ZIPReader.new()
-		var open_error: Error = reader.open(tpz_path)
-		if open_error != OK:
-			return {"error": "Failed to open archive: " + error_string(open_error)}
-
-		var archive_files: PackedStringArray = reader.get_files()
-		# Determine the installed version: prefer templates/version.txt inside the archive.
-		var installed_version: String = version_meta["version_tag"]
-		for f in archive_files:
-			if f.get_file() == "version.txt":
-				var raw: PackedByteArray = reader.read_file(f)
-				var txt: String = raw.get_string_from_utf8().strip_edges()
-				if not txt.is_empty():
-					installed_version = txt
-				break
-
-		var dest_dir: String = templates_root.path_join(installed_version)
-		var mkdir_error: Error = DirAccess.make_dir_recursive_absolute(dest_dir)
-		if mkdir_error != OK and not DirAccess.dir_exists_absolute(dest_dir):
-			reader.close()
-			return {"error": "Failed to create destination dir: " + error_string(mkdir_error)}
-
-		var extracted: Array[String] = []
-		for entry in archive_files:
-			if entry.ends_with("/"):
-				continue
-			# Strip a leading "templates/" prefix as shipped inside official .tpz files.
-			var rel: String = entry
-			if rel.begins_with("templates/"):
-				rel = rel.substr("templates/".length())
-			if rel.is_empty():
-				continue
-			var data: PackedByteArray = reader.read_file(entry)
-			var out_path: String = dest_dir.path_join(rel)
-			var out_base: String = out_path.get_base_dir()
-			if not out_base.is_empty():
-				DirAccess.make_dir_recursive_absolute(out_base)
-			var out_file: FileAccess = FileAccess.open(out_path, FileAccess.WRITE)
-			if out_file == null:
-				continue
-			out_file.store_buffer(data)
-			out_file.close()
-			extracted.append(rel)
-		reader.close()
-		extracted.sort()
-
-		if extracted.is_empty():
-			return {"error": "Archive contained no extractable files: " + tpz_path}
-
-		return {
-			"action": "install",
-			"templates_root": templates_root,
-			"installed_version": installed_version,
-			"dest_dir": dest_dir,
-			"extracted_count": extracted.size(),
-			"files": extracted,
-			"godot_version": godot_version
-		}
+		var installed_result: Dictionary = _install_templates_from_tpz(
+			tpz_path, templates_root, version_meta, godot_version)
+		if installed_result.has("error"):
+			return installed_result
+		installed_result["action"] = "install"
+		return installed_result
 
 	# action == "remove"
 	var version: String = str(params.get("version", "")).strip_edges()
@@ -2227,6 +2375,1151 @@ func _tool_manage_export_templates(params: Dictionary) -> Dictionary:
 		"removed_count": removed,
 		"godot_version": godot_version
 	}
+
+## 将 .tpz/.zip 模板包解压安装到 templates 目录（install 动作与下载完成后共用）。
+func _install_templates_from_tpz(tpz_path: String, templates_root: String,
+		version_meta: Dictionary, godot_version: String) -> Dictionary:
+	var reader: ZIPReader = ZIPReader.new()
+	var open_error: Error = reader.open(tpz_path)
+	if open_error != OK:
+		return {"error": "Failed to open archive: " + error_string(open_error)}
+
+	var archive_files: PackedStringArray = reader.get_files()
+	# Determine the installed version: prefer templates/version.txt inside the archive.
+	var installed_version: String = String(version_meta.get("version_tag", ""))
+	for f in archive_files:
+		if f.get_file() == "version.txt":
+			var raw: PackedByteArray = reader.read_file(f)
+			var txt: String = raw.get_string_from_utf8().strip_edges()
+			if not txt.is_empty():
+				installed_version = txt
+			break
+
+	var dest_dir: String = templates_root.path_join(installed_version)
+	var mkdir_error: Error = DirAccess.make_dir_recursive_absolute(dest_dir)
+	if mkdir_error != OK and not DirAccess.dir_exists_absolute(dest_dir):
+		reader.close()
+		return {"error": "Failed to create destination dir: " + error_string(mkdir_error)}
+
+	var extracted: Array[String] = []
+	for entry in archive_files:
+		if entry.ends_with("/"):
+			continue
+		# Strip a leading "templates/" prefix as shipped inside official .tpz files.
+		var rel: String = entry
+		if rel.begins_with("templates/"):
+			rel = rel.substr("templates/".length())
+		if rel.is_empty():
+			continue
+		var data: PackedByteArray = reader.read_file(entry)
+		var out_path: String = dest_dir.path_join(rel)
+		var out_base: String = out_path.get_base_dir()
+		if not out_base.is_empty():
+			DirAccess.make_dir_recursive_absolute(out_base)
+		var out_file: FileAccess = FileAccess.open(out_path, FileAccess.WRITE)
+		if out_file == null:
+			continue
+		out_file.store_buffer(data)
+		out_file.close()
+		extracted.append(rel)
+	reader.close()
+	extracted.sort()
+
+	if extracted.is_empty():
+		return {"error": "Archive contained no extractable files: " + tpz_path}
+
+	return {
+		"templates_root": templates_root,
+		"installed_version": installed_version,
+		"dest_dir": dest_dir,
+		"extracted_count": extracted.size(),
+		"files": extracted,
+		"godot_version": godot_version
+	}
+
+# ============================================================================
+# 导出模板受信下载（官方镜像白名单 + 完整性交叉验证 + 完成后自动安装）
+# ============================================================================
+
+## 单次 HTTPS GET 驱动节点：直连，或经回环 HTTP 代理的 CONNECT 隧道 + TLS。
+## Godot 的 HTTPRequest 不支持代理，而 GitHub 发布资产在部分网络只能经代理
+## 可达，因此下载使用手写客户端；两条路径共用同一实现。
+# 下载链路诊断：同一 _process 泵并行拨号 域名（DNS+TCP）/ IP 字面量（仅 TCP）/
+# 公共对照 IP，上报 _process tick 数与状态时间线。判读：
+#   ticks==0            —— 节点未被主循环处理（树挂载/线程问题，下载器同病）
+#   ticks>0 全 connecting —— 编辑器进程出站 TCP 被网络层拦截
+#   ip 通而域名卡        —— 进程内 DNS 解析挂起
+class TemplatesNetDiag extends Node:
+	var peers: Array = []
+	var ticks: int = 0
+	var started_ms: int = 0
+	var deadline_ms: int = 12000
+	var _done: bool = false
+
+	static func _status_name(s: int) -> String:
+		match s:
+			StreamPeerTCP.STATUS_NONE: return "none"
+			StreamPeerTCP.STATUS_CONNECTING: return "connecting"
+			StreamPeerTCP.STATUS_CONNECTED: return "connected"
+			StreamPeerTCP.STATUS_ERROR: return "error"
+		return str(s)
+
+	static func _spawn(label: String, host: String, port: int) -> Dictionary:
+		var tcp: StreamPeerTCP = StreamPeerTCP.new()
+		tcp.connect_to_host(host, port)
+		return {"label": label, "tcp": tcp, "last": -1, "log": []}
+
+	func setup(host: String, port: int, ip_control: String) -> void:
+		peers = [
+			_spawn("dns:" + host, host, port),
+			_spawn("ip:" + ip_control, ip_control, port),
+			_spawn("ip:1.1.1.1", "1.1.1.1", 443),
+		]
+		started_ms = Time.get_ticks_msec()
+
+	func is_finished() -> bool:
+		return _done
+
+	func _process(_delta: float) -> void:
+		ticks += 1
+		if _done:
+			return
+		var pending: int = 0
+		for peer in peers:
+			var tcp: StreamPeerTCP = peer["tcp"]
+			tcp.poll()
+			var s: int = tcp.get_status()
+			if s != int(peer["last"]):
+				peer["last"] = s
+				(peer["log"] as Array).append([Time.get_ticks_msec() - started_ms, _status_name(s)])
+			if s == StreamPeerTCP.STATUS_CONNECTING or s == StreamPeerTCP.STATUS_NONE:
+				pending += 1
+		if pending == 0 or Time.get_ticks_msec() - started_ms > deadline_ms:
+			_done = true
+			for peer in peers:
+				(peer["tcp"] as StreamPeerTCP).disconnect_from_host()
+
+	func report() -> Dictionary:
+		var out_peers: Array = []
+		for peer in peers:
+			out_peers.append({
+				"label": peer["label"],
+				"status": _status_name(int(peer["last"])) if int(peer["last"]) >= 0 else "unpolled",
+				"timeline": peer["log"],
+			})
+		return {
+			"action": "net_diag",
+			"status": "finished" if _done else "running",
+			"process_ticks": ticks,
+			"elapsed_ms": (Time.get_ticks_msec() - started_ms) if started_ms > 0 else 0,
+			"node_id": get_instance_id(),
+			"in_tree": is_inside_tree(),
+			"path": str(get_path()) if is_inside_tree() else "",
+			"process_enabled": is_processing(),
+			"peers": out_peers,
+		}
+
+# static 存储：热重载会重置工具实例成员，诊断节点句柄必须跨实例存活。
+static var _net_diag_shared: Node = null
+static var _net_diag_last_frames: int = -1
+
+func _templates_net_diag(params: Dictionary) -> Dictionary:
+	var host: String = str(params.get("host", "downloads.godotengine.org")).strip_edges()
+	if host.is_empty():
+		return {"error": "host must not be empty for net_diag."}
+	var port: int = clampi(int(params.get("port", 443)), 1, 65535)
+	var ip_control: String = str(params.get("ip", "172.67.193.253")).strip_edges()
+	var base: Dictionary = {
+		"handler_on_main_thread": Thread.is_main_thread(),
+		"engine_frames": Engine.get_process_frames(),
+	}
+	if _net_diag_last_frames >= 0:
+		base["frames_delta_since_last_call"] = Engine.get_process_frames() - _net_diag_last_frames
+	_net_diag_last_frames = Engine.get_process_frames()
+	if _net_diag_shared != null and is_instance_valid(_net_diag_shared):
+		var running: TemplatesNetDiag = _net_diag_shared as TemplatesNetDiag
+		if not running.is_finished():
+			var rep: Dictionary = running.report()
+			rep.merge(base, true)
+			return rep
+		running.queue_free()
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root == null:
+		base["error"] = "No scene tree root available for net diagnostics."
+		return base
+	var diag: TemplatesNetDiag = TemplatesNetDiag.new()
+	diag.setup(host, port, ip_control)
+	root.add_child(diag)
+	if not diag.is_inside_tree():
+		base["error"] = "net_diag node failed to enter the scene tree (add_child rejected)."
+		return base
+	_net_diag_shared = diag
+	var rep2: Dictionary = diag.report()
+	rep2.merge(base, true)
+	return rep2
+
+class TemplatesHttpGetter extends Node:
+	signal completed(outcome: Dictionary)
+	## progress_cb(bytes, total)
+	var progress_cb: Callable = Callable()
+
+	var _tcp: StreamPeerTCP = StreamPeerTCP.new()
+	var _tls: StreamPeerTLS = null
+	var _url: String = ""
+	var _proxy: String = ""
+	var _dest_abs: String = ""
+	var _idle_timeout_msec: int = 30000
+	var _last_progress_msec: int = 0
+	var _phase: String = "idle"  # idle|tcp|tunnel|tls|headers|body|done
+	var _connect_host: String = ""
+	var _connect_port: int = 443
+	var _tunnel_buffer: PackedByteArray = PackedByteArray()
+	var _tunnel_scan: int = 0
+	var _header_bytes: PackedByteArray = PackedByteArray()
+	var _body_file: FileAccess = null
+	var _body_memory: PackedByteArray = PackedByteArray()
+	var _to_memory: bool = false
+	var _content_length: int = -1
+	# 并行分块支持：Range 头（接受 206）、写偏移（多 worker 共享目标文件）、
+	# 打开模式（worker 用 READ_WRITE 避免互相截断）与响应头透出。
+	var range_header: String = ""
+	var write_offset: int = -1
+	var file_open_mode: int = FileAccess.WRITE
+	var response_headers: Dictionary = {}
+	var response_status: int = 0
+	var _chunked: bool = false
+	var _body_buffer: PackedByteArray = PackedByteArray()
+	var _chunk_remaining: int = -1
+	var _bytes_downloaded: int = 0
+	var _redirects_left: int = 5
+	# 单帧最大读取量；并行 worker 由协调器调低以控制总资源占用。
+	var frame_drain_cap: int = 4 * 1024 * 1024
+
+	static func create(url: String, dest_abs: String, proxy: String,
+			idle_timeout_msec: int = 30000, to_memory: bool = false) -> TemplatesHttpGetter:
+		var getter: TemplatesHttpGetter = TemplatesHttpGetter.new()
+		getter._url = url
+		getter._dest_abs = dest_abs
+		getter._proxy = proxy
+		getter._idle_timeout_msec = idle_timeout_msec
+		getter._to_memory = to_memory
+		return getter
+
+	func start() -> void:
+		_last_progress_msec = Time.get_ticks_msec()
+		if not _begin_request(_url):
+			_fail("invalid URL: " + _url)
+
+	func _fail(reason: String) -> void:
+		_cleanup()
+		completed.emit({"ok": false, "error": reason, "bytes": _bytes_downloaded})
+
+	func _cleanup() -> void:
+		_phase = "done"
+		if _body_file != null:
+			_body_file.close()
+			_body_file = null
+		_tcp.disconnect_from_host()
+		set_process(false)
+
+	func _begin_request(url: String) -> bool:
+		if not url.begins_with("https://"):
+			return false
+		var host_port: String = url.substr("https://".length()).get_slice("/", 0)
+		_connect_host = host_port.get_slice(":", 0)
+		var port_text: String = host_port.get_slice(":", 1)
+		_connect_port = int(port_text) if port_text.is_valid_int() else 443
+		if _connect_host.is_empty():
+			return false
+		_header_bytes = PackedByteArray()
+		_content_length = -1
+		_bytes_downloaded = 0
+		_tls = null
+		_tunnel_buffer = PackedByteArray()
+		_tunnel_scan = 0
+		var dial_host: String = _connect_host
+		var dial_port: int = _connect_port
+		if not _proxy.is_empty():
+			var proxy_host_port: String = _proxy.substr("http://".length())
+			dial_host = proxy_host_port.get_slice(":", 0)
+			dial_port = int(proxy_host_port.get_slice(":", 1))
+		_tcp.connect_to_host(dial_host, dial_port)
+		_phase = "tcp"
+		return true
+
+	func _process(_delta: float) -> void:
+		if _phase == "done" or _phase == "idle":
+			return
+		if Time.get_ticks_msec() - _last_progress_msec > _idle_timeout_msec:
+			_fail("idle timeout (%d ms without progress)" % _idle_timeout_msec)
+			return
+		# 裸 StreamPeer 不会自行推进：连接建立与 TLS 握手都依赖每帧 poll()。
+		_tcp.poll()
+		if _tls != null:
+			_tls.poll()
+		match _phase:
+			"tcp":
+				_pump_tcp()
+			"tunnel":
+				_pump_tunnel()
+			"tls":
+				_pump_tls()
+			"headers":
+				_pump_headers()
+			"body":
+				_pump_body()
+
+	func _pump_tcp() -> void:
+		var status: int = _tcp.get_status()
+		if status == StreamPeerTCP.STATUS_CONNECTED:
+			_last_progress_msec = Time.get_ticks_msec()
+			if _proxy.is_empty():
+				_start_tls()
+			else:
+				var connect_line: String = "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n" % [
+					_connect_host, _connect_port, _connect_host, _connect_port]
+				_tcp.put_data(connect_line.to_utf8_buffer())
+				_phase = "tunnel"
+		elif status == StreamPeerTCP.STATUS_ERROR:
+			_fail("TCP connect failed (host=%s proxy=%s)" % [_connect_host, _proxy])
+
+	func _pump_tunnel() -> void:
+		var available: int = _tcp.get_available_bytes()
+		if available <= 0:
+			return
+		_tunnel_buffer.append_array((_tcp.get_data(available) as Array)[1])
+		var header_end: int = _find_double_crlf(_tunnel_buffer)
+		if header_end < 0:
+			if _tunnel_buffer.size() > 16 * 1024:
+				_fail("Proxy CONNECT response too large")
+			return
+		var first_line: String = _tunnel_buffer.slice(0, _tunnel_buffer.find(13)).get_string_from_utf8()
+		var code_text: String = first_line.get_slice(" ", 1).split(" ")[0]
+		if not code_text.is_valid_int():
+			_fail("Malformed proxy CONNECT response")
+			return
+		if int(code_text) != 200:
+			_fail("Proxy CONNECT rejected: " + first_line)
+			return
+		_last_progress_msec = Time.get_ticks_msec()
+		_start_tls()
+
+	static func build_get_request(path_and_query: String, host: String, range: String) -> String:
+		var request_text: String = "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: GodotMCP\r\nAccept: */*\r\n" % [path_and_query, host]
+		if not range.is_empty():
+			request_text += "Range: %s\r\n" % range
+		request_text += "Connection: close\r\n\r\n"
+		return request_text
+
+	static func is_acceptable_status(code: int, expects_partial: bool) -> bool:
+		if expects_partial:
+			return code == 206 or code == 200
+		return code == 200
+
+	func _start_tls() -> void:
+		_tls = StreamPeerTLS.new()
+		if _tls.connect_to_stream(_tcp, _connect_host) != OK:
+			_tls = null
+			_fail("TLS setup failed for " + _connect_host)
+			return
+		_phase = "tls"
+
+	func _pump_tls() -> void:
+		var status: int = _tls.get_status()
+		if status == StreamPeerTLS.STATUS_CONNECTED:
+			_last_progress_msec = Time.get_ticks_msec()
+			var authority: String = _url.substr("https://".length()).get_slice("/", 0)
+			var path_and_query: String = _url.substr(("https://" + authority).length())
+			if not path_and_query.begins_with("/"):
+				path_and_query = "/" + path_and_query
+			var request_text: String = build_get_request(path_and_query, _connect_host, range_header)
+
+			_tls.put_data(request_text.to_utf8_buffer())
+			_phase = "headers"
+		elif status == StreamPeerTLS.STATUS_ERROR:
+			_fail("TLS handshake failed for " + _connect_host)
+
+	func _pump_headers() -> void:
+		while true:
+			var available: int = _tls.get_available_bytes()
+			if available <= 0:
+				break
+			_header_bytes.append_array((_tls.get_data(available) as Array)[1])
+		if _header_bytes.size() > 0:
+			_last_progress_msec = Time.get_ticks_msec()
+		var header_end: int = _find_double_crlf(_header_bytes)
+		if header_end < 0:
+			if _header_bytes.size() > 64 * 1024:
+				_fail("Response headers exceeded 64 KiB")
+			return
+		var header_text: String = _header_bytes.slice(0, header_end).get_string_from_utf8()
+		var code_text: String = header_text.get_slice(" ", 1).split(" ")[0]
+		if not code_text.is_valid_int():
+			_fail("Malformed HTTP status line")
+			return
+		var status_code: int = int(code_text)
+		if status_code >= 300 and status_code < 400 and _redirects_left > 0:
+			var location: String = _header_value(header_text, "location")
+			if location.is_empty():
+				_fail("Redirect without Location header")
+				return
+			_redirects_left -= 1
+			if location.begins_with("/"):
+				location = "https://" + _connect_host + location
+			_tcp.disconnect_from_host()
+			_tcp = StreamPeerTCP.new()
+			if not _begin_request(location):
+				_fail("Invalid redirect target: " + location)
+				return
+			_url = location
+			return
+		response_status = status_code
+		for raw_line in header_text.split("\r\n"):
+			var line_separator: int = String(raw_line).find(":")
+			if line_separator > 0:
+				response_headers[String(raw_line).substr(0, line_separator).strip_edges().to_lower()] = \
+					String(raw_line).substr(line_separator + 1).strip_edges()
+		if not is_acceptable_status(status_code, not range_header.is_empty()):
+			_fail("HTTP %d for %s" % [status_code, _url])
+			return
+		if not range_header.is_empty() and status_code == 200 and write_offset > 0:
+			_fail("Origin ignored the Range request; parallel chunks would corrupt the file")
+			return
+		var length_text: String = _header_value(header_text, "content-length")
+		_chunked = _header_value(header_text, "transfer-encoding").to_lower().contains("chunked")
+		if not _chunked and not length_text.is_valid_int():
+			_fail("Response has neither Content-Length nor chunked encoding")
+			return
+		_content_length = int(length_text) if length_text.is_valid_int() else -1
+		_body_buffer = _header_bytes.slice(header_end + 4)
+		_header_bytes = PackedByteArray()
+		if not _to_memory:
+			_body_file = FileAccess.open(_dest_abs, file_open_mode)
+			if _body_file == null:
+				_fail("Cannot open destination file: " + _dest_abs)
+				return
+			if write_offset > 0:
+				_body_file.seek(write_offset)
+		_bytes_downloaded = 0
+		_phase = "body"
+		_consume_body_buffer()
+		if progress_cb.is_valid():
+			progress_cb.call(_bytes_downloaded, _content_length)
+
+	func _pump_body() -> void:
+		# 每帧循环榨干缓冲（上限 4 MiB/帧）：编辑器失焦时帧率骤降，每帧单次
+		# 读取会把吞吐锁死在"帧率 × 单帧到达量"（实测 152KB/s）；紧循环读取
+		# 才能吃满 TCP 接收窗口，同时上限保证编辑器帧不被下载饿死。
+		var drained: int = 0
+		while drained < frame_drain_cap:
+			var available: int = _tls.get_available_bytes()
+			if available <= 0:
+				break
+			_body_buffer.append_array((_tls.get_data(available) as Array)[1])
+			drained += available
+		if drained > 0:
+			_last_progress_msec = Time.get_ticks_msec()
+		_consume_body_buffer()
+		if progress_cb.is_valid() and drained > 0:
+			progress_cb.call(_bytes_downloaded, _content_length)
+
+	## 按需解码：Content-Length 直读；chunked 走 hex 大小行状态机。
+	func _consume_body_buffer() -> void:
+		if not _chunked:
+			if _body_buffer.is_empty():
+				if _content_length == 0:
+					_finish_body()
+				return
+			var decoded: PackedByteArray = _body_buffer
+			_body_buffer = PackedByteArray()
+			_store_body(decoded)
+			if _content_length >= 0 and _bytes_downloaded >= _content_length:
+				_finish_body()
+			elif _content_length < 0 and _phase != "done":
+				_finish_body()
+			return
+		while true:
+			if _chunk_remaining < 0:
+				var line_end: int = _body_buffer.find(13)
+				if line_end < 0 or line_end + 1 >= _body_buffer.size() or _body_buffer[line_end + 1] != 10:
+					if _body_buffer.size() > 1024:
+						_fail("Chunked size line exceeded 1 KiB")
+					return
+				var size_text: String = _body_buffer.slice(0, line_end).get_string_from_utf8().strip_edges()
+				size_text = size_text.split(";")[0].strip_edges()
+				if not size_text.is_valid_hex_number():
+					_fail("Malformed chunk size: " + size_text)
+					return
+				_chunk_remaining = size_text.hex_to_int()
+				_body_buffer = _body_buffer.slice(line_end + 2)
+				if _chunk_remaining == 0:
+					_finish_body()
+					return
+				continue
+			if _body_buffer.size() < _chunk_remaining + 2:
+				return
+			var chunk: PackedByteArray = _body_buffer.slice(0, _chunk_remaining)
+			_body_buffer = _body_buffer.slice(_chunk_remaining + 2)
+			_chunk_remaining = -1
+			_store_body(chunk)
+
+	func _store_body(decoded: PackedByteArray) -> void:
+		if decoded.is_empty():
+			return
+		if _to_memory:
+			_body_memory.append_array(decoded)
+		elif _body_file != null:
+			_body_file.store_buffer(decoded)
+		_bytes_downloaded += decoded.size()
+
+	func _finish_body() -> void:
+		var outcome: Dictionary = {
+			"ok": true, "bytes": _bytes_downloaded, "total": _content_length,
+			"chunked": _chunked, "status": response_status,
+			"headers": response_headers.duplicate()}
+		if _to_memory:
+			outcome["text"] = _body_memory.get_string_from_utf8()
+		_cleanup()
+		completed.emit(outcome)
+
+	static func _find_double_crlf(data: PackedByteArray) -> int:
+		var limit: int = data.size() - 4
+		for i in range(limit + 1):
+			if data[i] == 13 and data[i + 1] == 10 and data[i + 2] == 13 and data[i + 3] == 10:
+				return i
+		return -1
+
+	static func _header_value(header_text: String, name: String) -> String:
+		for raw_line in header_text.split("\r\n"):
+			var line: String = String(raw_line)
+			var separator: int = line.find(":")
+			if separator <= 0:
+				continue
+			if line.substr(0, separator).strip_edges().to_lower() == name:
+				return line.substr(separator + 1).strip_edges()
+		return ""
+
+
+## 并行分块下载协调器：N 条 Range 连接（默认 4，上限 8）各写同一目标文件的
+## 独立偏移区间。分块进度持久化到 <dest>.download.json，任何中断后重启只补
+## 未完成分块（断点续传）。资源有界：每 worker 每帧 1 MiB 读取上限、磁盘流式
+## 直写、固定小块缓冲，无内存增长。
+class TemplatesParallelFetch extends Node:
+	signal completed(outcome: Dictionary)
+	## progress_cb(bytes, total)
+	var progress_cb: Callable = Callable()
+
+	var _url: String = ""
+	var _dest_abs: String = ""
+	var _proxy: String = ""
+	var _connections: int = 8
+	var _idle_ms: int = 60000
+	var _total: int = -1
+	var _etag: String = ""
+	var _chunks: Array = []
+	var _workers: Array = []
+	var _done_count: int = 0
+	var _failed: bool = false
+	var _finished: bool = false
+	var _resumed: bool = false
+	var _last_persist_ms: int = 0
+	var _state_path: String = ""
+
+	static func plan_chunks(total: int, connections: int) -> Array:
+		var count: int = maxi(1, mini(connections, 16))
+		if total <= 0:
+			return []
+		count = mini(count, maxi(1, int(ceil(float(total) / 1048576.0))))
+		var chunk_size: int = int(total / count)
+		var out: Array = []
+		var start: int = 0
+		for i in range(count):
+			var end: int = total - 1 if i == count - 1 else start + chunk_size - 1
+			out.append({"start": start, "end": end, "have": 0, "retries": 0})
+			start = end + 1
+		return out
+
+	func setup(url: String, dest_abs: String, proxy: String, connections: int,
+			idle_ms: int = 60000) -> void:
+		_url = url
+		_dest_abs = dest_abs
+		_proxy = proxy
+		_connections = clampi(connections, 1, 16)
+		_idle_ms = idle_ms
+		_state_path = dest_abs + ".download.json"
+
+	func start() -> void:
+		_probe()
+
+	func _run_probe() -> Dictionary:
+		var probe: TemplatesHttpGetter = TemplatesHttpGetter.create(_url, "", _proxy, 60000, true)
+		probe.range_header = "bytes=0-0"
+		probe.frame_drain_cap = 65536
+		get_tree().root.add_child(probe)
+		# start() 同时初始化 _last_progress_msec；漏掉会让空闲检查拿 0 比较，
+		# 编辑器运行超过 60s 后探测在第一帧就"瞬间超时"且从未拨号。
+		probe.start()
+		var outcome: Dictionary = await probe.completed
+		probe.queue_free()
+		return outcome
+
+	func _probe() -> void:
+		# 探针只有 1 字节，但重定向链 + TLS 握手在高延迟网络可能超过 20 秒；
+		# 与 worker 相同的 60 秒空闲上限，失败自动重试一次。
+		var outcome: Dictionary = await _run_probe()
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			outcome = await _run_probe()
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			_finish(false, "probe failed: " + String(outcome.get("error", "")))
+			return
+		var headers: Dictionary = outcome.get("headers", {})
+		_etag = String(headers.get("etag", ""))
+		var content_range: String = String(headers.get("content-range", ""))
+		if content_range.contains("/") and content_range.get_slice("/", 1).is_valid_int():
+			_total = int(content_range.get_slice("/", 1))
+		elif String(outcome.get("total", "-1")).is_valid_int() and int(outcome.get("total", -1)) > 1:
+			_total = int(outcome["total"])
+		if _total <= 0:
+			_finish(false, "origin did not report a usable size for parallel ranges")
+			return
+		_resumed = _load_state()
+		if not _resumed:
+			_chunks = plan_chunks(_total, _connections)
+			var preallocate: FileAccess = FileAccess.open(_dest_abs, FileAccess.WRITE)
+			if preallocate == null:
+				_finish(false, "cannot create destination file: " + _dest_abs)
+				return
+			preallocate.close()
+		_persist()
+		_spawn_missing_workers()
+
+	func _state_dict() -> Dictionary:
+		return {
+			"url": _url, "total": _total, "etag": _etag,
+			"chunks": _chunks.duplicate(true),
+		}
+
+	func _persist() -> void:
+		_last_persist_ms = Time.get_ticks_msec()
+		var file: FileAccess = FileAccess.open(_state_path, FileAccess.WRITE)
+		if file:
+			file.store_string(JSON.stringify(_state_dict()))
+			file.close()
+
+	func _load_state() -> bool:
+		if not FileAccess.file_exists(_state_path) or not FileAccess.file_exists(_dest_abs):
+			return false
+		var file: FileAccess = FileAccess.open(_state_path, FileAccess.READ)
+		if file == null:
+			return false
+		var parsed: Variant = JSON.parse_string(file.get_as_text())
+		file.close()
+		if not (parsed is Dictionary):
+			return false
+		var state: Dictionary = parsed
+		if int(state.get("total", -1)) != _total or String(state.get("url", "")) != _url:
+			return false
+		var stored: Array = state.get("chunks", [])
+		if stored.is_empty():
+			return false
+		var rebuilt: Array = []
+		for chunk_value in stored:
+			var chunk: Dictionary = chunk_value
+			chunk["retries"] = 0
+			rebuilt.append(chunk)
+		_chunks = rebuilt
+		return true
+
+	func _chunk_length(chunk: Dictionary) -> int:
+		return int(chunk.get("end", 0)) - int(chunk.get("start", 0)) + 1
+
+	func _spawn_missing_workers() -> void:
+		if _failed:
+			return
+		for chunk_value in _chunks:
+			var chunk: Dictionary = chunk_value
+			if int(chunk.get("have", 0)) >= _chunk_length(chunk):
+				_done_count += 1
+				continue
+			_spawn_worker(chunk)
+		if _done_count >= _chunks.size():
+			_all_done()
+
+	func _spawn_worker(chunk: Dictionary) -> void:
+		var worker: TemplatesHttpGetter = TemplatesHttpGetter.create(
+			_url, _dest_abs, _proxy, _idle_ms)
+		var offset: int = int(chunk.get("start", 0)) + int(chunk.get("have", 0))
+		worker.range_header = "bytes=%d-%d" % [offset, int(chunk.get("end", 0))]
+		worker.write_offset = offset
+		worker.file_open_mode = FileAccess.READ_WRITE
+		worker.frame_drain_cap = 1024 * 1024
+		worker.progress_cb = Callable(self, "_on_worker_progress").bind(chunk)
+		worker.completed.connect(_on_worker_completed.bind(chunk))
+		_workers.append(worker)
+		get_tree().root.add_child(worker)
+		worker.start()
+
+	func _on_worker_progress(bytes: int, _chunk_total: int, chunk: Dictionary) -> void:
+		if _finished or _failed:
+			return
+		chunk["have"] = mini(bytes, _chunk_length(chunk))
+		if Time.get_ticks_msec() - _last_persist_ms > 30000:
+			_persist()
+		if progress_cb.is_valid():
+			var aggregate: int = 0
+			for chunk_value in _chunks:
+				aggregate += int((chunk_value as Dictionary).get("have", 0))
+			progress_cb.call(aggregate, _total)
+
+	func _on_worker_completed(outcome: Dictionary, chunk: Dictionary) -> void:
+		if _finished:
+			return
+		if not bool(outcome.get("ok", false)):
+			if int(chunk.get("retries", 0)) < 2 and not _failed:
+				chunk["retries"] = int(chunk.get("retries", 0)) + 1
+				_persist()
+				_spawn_worker(chunk)
+			else:
+				_fail_all(String(outcome.get("error", "chunk failed")))
+			return
+		chunk["have"] = _chunk_length(chunk)
+		_done_count += 1
+		_persist()
+		if _done_count >= _chunks.size():
+			_all_done()
+
+	func _all_done() -> void:
+		var staged: FileAccess = FileAccess.open(_dest_abs, FileAccess.READ)
+		var size: int = staged.get_length() if staged != null else -1
+		if staged != null:
+			staged.close()
+		if size != _total:
+			_finish(false, "assembled size %d != expected %d" % [size, _total])
+			return
+		_finish(true, "")
+
+	func _fail_all(reason: String) -> void:
+		# 先置 _failed 再通知 worker：worker._fail 同步发 completed 会重入
+		# _on_worker_completed，晚置位会级联出多轮 _fail_all，把真实失败原因
+		# 淹没成硬编码的 cancelled 文案。
+		if _finished or _failed:
+			return
+		_failed = true
+		for worker_value in _workers:
+			var worker: Node = worker_value
+			if is_instance_valid(worker) and worker.has_method("_fail"):
+				worker.call("_fail", reason)
+		_finish(false, reason)
+
+	func cancel() -> void:
+		if _finished:
+			return
+		_persist()
+		_fail_all("cancelled")
+
+	func _finish(ok: bool, reason: String) -> void:
+		if _finished:
+			return
+		_finished = true
+		_failed = not ok
+		for worker_value in _workers:
+			var worker: Node = worker_value
+			if is_instance_valid(worker) and worker.is_inside_tree():
+				worker.get_parent().remove_child(worker)
+				worker.queue_free()
+		_workers.clear()
+		var outcome: Dictionary = {
+			"ok": ok, "bytes": _total if ok else 0, "total": _total,
+			"connections": _chunks.size(), "resumed": _resumed,
+		}
+		if not ok:
+			outcome["error"] = reason
+		completed.emit(outcome)
+
+## 校验代理参数：仅允许本机回环代理（http://127.0.0.1:PORT / http://localhost:PORT）。
+static func _templates_proxy_allowed(raw: String) -> String:
+	var proxy: String = raw.strip_edges()
+	if proxy.is_empty():
+		return ""
+	if proxy.begins_with("http://"):
+		var host_port: String = proxy.substr("http://".length()).strip_edges().trim_suffix("/")
+		var host: String = host_port.get_slice(":", 0).to_lower()
+		var port_text: String = host_port.get_slice(":", 1)
+		if (host == "127.0.0.1" or host == "localhost") and port_text.is_valid_int() \
+				and int(port_text) > 0 and int(port_text) < 65536:
+			return "http://%s:%d" % [host, int(port_text)]
+	return ""
+
+func _templates_download_snapshot() -> Dictionary:
+	var state: Dictionary = _template_download
+	var snapshot: Dictionary = {
+		"phase": String(state.get("phase", "")),
+		"mirror": String(state.get("mirror", "")),
+		"url": String(state.get("url", "")),
+		"bytes": int(state.get("bytes", 0)),
+		"total_bytes": int(state.get("total_bytes", 0)),
+		"elapsed_ms": Time.get_ticks_usec() / 1000 - int(state.get("started_ms", 0)),
+	}
+	var total_bytes: int = int(snapshot["total_bytes"])
+	if total_bytes > 0:
+		snapshot["percent"] = round(float(snapshot["bytes"]) / float(total_bytes) * 1000.0) / 10.0
+	var elapsed_sec: float = float(snapshot["elapsed_ms"]) / 1000.0
+	if elapsed_sec > 0.5 and int(snapshot["bytes"]) > 0:
+		snapshot["speed_kbps"] = int(float(snapshot["bytes"]) / 1024.0 / elapsed_sec)
+	if state.has("integrity"):
+		snapshot["integrity"] = state["integrity"]
+	if state.has("result"):
+		snapshot["result"] = state["result"]
+	if state.has("error"):
+		snapshot["error"] = state["error"]
+	return snapshot
+
+func _templates_download_proxy(params: Dictionary) -> String:
+	var explicit: String = _templates_proxy_allowed(String(params.get("proxy", "")))
+	if not explicit.is_empty():
+		return explicit
+	# 无显式代理时自动检测系统代理（仅回环地址会被采用）。
+	return _templates_proxy_allowed(TUNNEL_MANAGER_SCRIPT.detect_system_proxy())
+
+func _templates_download_start(params: Dictionary, templates_root: String,
+		version_meta: Dictionary, godot_version: String) -> Dictionary:
+	var active_phase: String = String(_template_download.get("phase", ""))
+	if active_phase in ["downloading", "verifying", "installing"]:
+		return {
+			"action": "download", "status": "pending",
+			"download": _templates_download_snapshot(),
+			"message": "A download is already in progress; poll with action='download_status'."
+		}
+	_templates_kill_stale_download_nodes()
+	var mirror: String = String(params.get("mirror", "godotengine")).strip_edges().to_lower()
+	if not mirror in ["github", "tuxfamily", "godotengine"]:
+		return {"error": "Invalid mirror '%s'. Expected one of: github, tuxfamily, godotengine." % mirror}
+	var info: Dictionary = Engine.get_version_info()
+	if int(info.get("major", 0)) == 0:
+		return {"error": "Could not determine the running editor version."}
+	var tpz_filename: String = String(version_meta.get("tpz_filename", ""))
+	var url: String = templates_mirror_url(mirror,
+		String(version_meta.get("base_version", "")),
+		String(version_meta.get("version_tag", "")), tpz_filename)
+	if not is_trusted_templates_url(url):
+		return {"error": "Derived download URL is not on the trusted template hosts: " + url}
+	var proxy: String = _templates_download_proxy(params)
+
+	var dir_abs: String = ProjectSettings.globalize_path(TEMPLATES_DOWNLOAD_DIR)
+	DirAccess.make_dir_recursive_absolute(dir_abs)
+	var part_path: String = TEMPLATES_DOWNLOAD_DIR.path_join(tpz_filename + ".part")
+	var part_abs: String = ProjectSettings.globalize_path(part_path)
+	DirAccess.remove_absolute(part_abs)  # 不做断点续传，旧分片一律作废
+
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root == null:
+		return {"error": "No scene tree root available to host the download request."}
+	# 并行分块路径（默认 4 连接，上限 8）：Range 分块直写目标文件 + .download.json
+	# 断点续传；中断后重启只补未完成分块。资源有界：每 worker 每帧 1 MiB。
+	var connections: int = clampi(int(params.get("connections", 8)), 1, 16)
+	var tpz_abs: String = ProjectSettings.globalize_path(
+		TEMPLATES_DOWNLOAD_DIR.path_join(String(version_meta.get("tpz_filename", ""))))
+	if connections >= 2:
+		var fetch: TemplatesParallelFetch = TemplatesParallelFetch.new()
+		fetch.setup(url, tpz_abs, proxy, connections, 60000)
+		fetch.progress_cb = Callable(self, "_on_templates_download_progress").bind(fetch)
+		fetch.completed.connect(_on_templates_download_completed.bind(fetch))
+		root.add_child(fetch)
+		_template_download = {
+			"phase": "downloading",
+			"report_status": "pending",
+			"mirror": mirror,
+			"url": url,
+			"part_abs": "",
+			"tpz_abs": tpz_abs,
+			"tpz_filename": String(version_meta.get("tpz_filename", "")),
+			"coordinator": fetch,
+			"started_ms": Time.get_ticks_usec() / 1000,
+			"bytes": 0,
+			"total_bytes": 0,
+			"templates_root": templates_root,
+			"version_meta": version_meta.duplicate(true),
+			"godot_version": godot_version,
+			"proxy": proxy,
+			"state_json": tpz_abs + ".download.json",
+			"require_integrity": bool(params.get("require_integrity", false)),
+			"keep_archive": bool(params.get("keep_archive", false)),
+		}
+		_templates_begin_update_continuously()
+		fetch.start()
+		return {
+			"action": "download", "status": "pending",
+			"download": _templates_download_snapshot(),
+			"poll": "Poll with action='download_status'; cancel with action='download_cancel'."
+		}
+	# 单连接路径：手写 HTTPS GET（直连或回环代理 CONNECT 隧道）。
+	var getter: TemplatesHttpGetter = TemplatesHttpGetter.create(url, part_abs, proxy, 60000)
+	root.add_child(getter)
+
+	_template_download = {
+		"phase": "downloading",
+		"report_status": "pending",
+		"mirror": mirror,
+		"url": url,
+		"part_abs": part_abs,
+		"tpz_abs": ProjectSettings.globalize_path(TEMPLATES_DOWNLOAD_DIR.path_join(tpz_filename)),
+		"tpz_filename": tpz_filename,
+		"getter": getter,
+		"started_ms": Time.get_ticks_usec() / 1000,
+		"bytes": 0,
+		"total_bytes": 0,
+		"templates_root": templates_root,
+		"version_meta": version_meta.duplicate(true),
+		"godot_version": godot_version,
+		"proxy": proxy,
+		"require_integrity": bool(params.get("require_integrity", false)),
+		"keep_archive": bool(params.get("keep_archive", false)),
+	}
+	getter.progress_cb = Callable(self, "_on_templates_download_progress").bind(getter)
+	getter.completed.connect(_on_templates_download_completed.bind(getter))
+	_templates_begin_update_continuously()
+	getter.start()
+	return {
+		"action": "download", "status": "pending",
+		"download": _templates_download_snapshot(),
+		"poll": "Poll with action='download_status'; cancel with action='download_cancel'."
+	}
+
+func _templates_download_cleanup_getter(getter: Node) -> void:
+	if getter != null and is_instance_valid(getter):
+		if getter.is_inside_tree():
+			getter.get_parent().remove_child(getter)
+		getter.queue_free()
+
+# 终态尝试残留的协调器/getter 节点会迟到地发出 completed 信号污染新尝试；
+# 新尝试启动前取消并释放全部游离下载节点（含热重载后失去引用的历史残留）。
+func _templates_kill_stale_download_nodes() -> void:
+	var nodes: Array = []
+	var stale_coordinator: Node = _template_download.get("coordinator", null)
+	if stale_coordinator != null and is_instance_valid(stale_coordinator):
+		if stale_coordinator.has_method("cancel"):
+			stale_coordinator.call("cancel")
+		nodes.append(stale_coordinator)
+	var stale_getter: Node = _template_download.get("getter", null)
+	if stale_getter != null and is_instance_valid(stale_getter):
+		nodes.append(stale_getter)
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root != null:
+		for child in root.get_children():
+			if child is TemplatesHttpGetter or child is TemplatesParallelFetch:
+				nodes.append(child)
+	for node_value in nodes:
+		var stale: Node = node_value
+		if stale == null or not is_instance_valid(stale):
+			continue
+		if stale.is_inside_tree():
+			stale.get_parent().remove_child(stale)
+		stale.queue_free()
+
+func _on_templates_download_progress(bytes: int, total_bytes: int, source: Node = null) -> void:
+	if _template_download.is_empty():
+		return
+	# 丢弃陈旧尝试的迟到进度：source 绑定自启动时的协调器/getter；
+	# 当前尝试存在绑定来源而无 source 的，必为热重载前的旧连接。
+	if source == null and (_template_download.has("coordinator") or _template_download.has("getter")):
+		return
+	if source != null and source != _template_download.get("coordinator") \
+			and source != _template_download.get("getter"):
+		return
+	if String(_template_download.get("phase", "")) != "downloading":
+		return
+	_template_download["bytes"] = bytes
+	_template_download["total_bytes"] = total_bytes
+
+# 编辑器失焦/被遮挡/最小化时主循环可能停迭代：节点 _process 停摆会让
+# 下载器的裸 StreamPeer 永不推进（连 socket 都不建，探测 60s 空转超时）。
+# 下载期间临时开启 update_continuously 强制编辑器持续迭代；终态/取消恢复。
+const TEMPLATES_UPDATE_CONTINUOUSLY: String = "interface/editor/update_continuously"
+
+func _templates_begin_update_continuously() -> void:
+	if _template_download.has("_uc_prev"):
+		return
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return
+	var settings: EditorSettings = editor_interface.get_editor_settings()
+	if settings == null:
+		return
+	var prev: bool = false
+	if settings.has_setting(TEMPLATES_UPDATE_CONTINUOUSLY):
+		prev = bool(settings.get_setting(TEMPLATES_UPDATE_CONTINUOUSLY))
+	if not prev:
+		settings.set_setting(TEMPLATES_UPDATE_CONTINUOUSLY, true)
+		_template_download["_uc_prev"] = false
+
+func _templates_restore_update_continuously() -> void:
+	if not _template_download.has("_uc_prev"):
+		return
+	_template_download.erase("_uc_prev")
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return
+	var settings: EditorSettings = editor_interface.get_editor_settings()
+	if settings != null:
+		settings.set_setting(TEMPLATES_UPDATE_CONTINUOUSLY, false)
+
+func _templates_download_cancel() -> Dictionary:
+	if _template_download.is_empty():
+		return {"action": "download_cancel", "status": "idle",
+			"message": "No template download has been started."}
+	var coordinator: Node = _template_download.get("coordinator", null)
+	if coordinator != null and is_instance_valid(coordinator) and coordinator.has_method("cancel"):
+		# 并行路径：保留目标文件与 .download.json，重启后从断点续传。
+		coordinator.call("cancel")
+	var getter: Node = _template_download.get("getter", null)
+	if getter != null and is_instance_valid(getter) and getter.has_method("_fail"):
+		getter.call("_fail", "cancelled")
+	_templates_download_cleanup_getter(getter)
+	var part_abs: String = String(_template_download.get("part_abs", ""))
+	if not part_abs.is_empty():
+		DirAccess.remove_absolute(part_abs)
+	_templates_restore_update_continuously()
+	_template_download = {}
+	return {"action": "download_cancel", "status": "cancelled",
+		"message": "Template download cancelled; partial file removed."}
+
+func _on_templates_download_completed(outcome: Dictionary, source: Node = null) -> void:
+	if _template_download.is_empty():
+		return
+	# 丢弃陈旧尝试的迟到 completed 信号：旧协调器/getter 的失败会在新尝试
+	# 启动几十秒内到达，把正在进行的下载误标为 failed（跨尝试信号污染）。
+	if source == null and (_template_download.has("coordinator") or _template_download.has("getter")):
+		return
+	if source != null and source != _template_download.get("coordinator") \
+			and source != _template_download.get("getter"):
+		return
+	if String(_template_download.get("phase", "")) != "downloading":
+		return
+	if not bool(outcome.get("ok", false)):
+		var detail: String = String(outcome.get("error", "unknown failure"))
+		_templates_download_finish("failed",
+			"Download failed (%s). Retry, try another mirror, or check the proxy." % detail,
+			false)
+		return
+	_template_download["phase"] = "verifying"
+	await _templates_verify_and_install()
+
+func _templates_download_finish(status: String, message: String, keep_tpz: bool) -> void:
+	var state: Dictionary = _template_download
+	_templates_restore_update_continuously()
+	_templates_download_cleanup_getter(state.get("getter", null))
+	var tpz_abs: String = String(state.get("tpz_abs", ""))
+	var part_abs: String = String(state.get("part_abs", ""))
+	if FileAccess.file_exists(part_abs) and status != "done":
+		DirAccess.remove_absolute(part_abs)
+	# 并行路径（state_json 非空）失败/取消必须保留部分 tpz：删除它会让续传
+	# 状态指向一个不存在的文件，后续 worker 全部 "Cannot open destination"。
+	if status != "done" and not keep_tpz and FileAccess.file_exists(tpz_abs) \
+			and String(state.get("state_json", "")).is_empty():
+		DirAccess.remove_absolute(tpz_abs)
+	if status == "done" and not String(state.get("state_json", "")).is_empty():
+		# 成功后清除断点状态；失败/取消保留以便续传。
+		DirAccess.remove_absolute(String(state.get("state_json", "")))
+	# 终态保留 result/checksum 供 download_status 轮询读取；"completed" 与
+	# 工作流引擎的成功状态词表对齐。
+	var finished: Dictionary = {
+		"phase": "finished",
+		"report_status": "completed" if status == "done" else status,
+		"mirror": String(state.get("mirror", "")),
+		"url": String(state.get("url", "")),
+		"bytes": int(state.get("bytes", 0)),
+		"total_bytes": int(state.get("total_bytes", 0)),
+		"started_ms": int(state.get("started_ms", 0)),
+		"tpz_abs": tpz_abs,
+		"error": message if status != "done" else "",
+	}
+	for carry_key in ["result", "integrity"]:
+		if state.has(carry_key):
+			finished[carry_key] = state[carry_key]
+	_template_download = finished
+
+## 下载完成后：从 GitHub 发布 API 获取官方资产字节数做完整性交叉验证
+## （取不到时按 require_integrity 决策），通过后立即解压安装并回报结果。
+func _templates_verify_and_install() -> void:
+	var state: Dictionary = _template_download
+	var tpz_abs: String = String(state.get("tpz_abs", ""))
+	var part_abs: String = String(state.get("part_abs", ""))
+	var tpz_filename: String = String(state.get("tpz_filename", ""))
+	DirAccess.remove_absolute(tpz_abs)
+	var rename_error: Error = DirAccess.rename_absolute(part_abs, tpz_abs)
+	if rename_error != OK and not FileAccess.file_exists(tpz_abs):
+		_templates_download_finish("failed",
+			"Downloaded data could not be staged (%s)." % error_string(rename_error), false)
+		return
+
+	var expected_size: int = await _templates_fetch_expected_size(
+		String(state.get("version_meta", {}).get("version_tag", "")), tpz_filename)
+	var integrity_state: String = "unavailable"
+	if expected_size > 0:
+		var staged_file: FileAccess = FileAccess.open(tpz_abs, FileAccess.READ)
+		var actual_size: int = staged_file.get_length() if staged_file != null else -1
+		if staged_file != null:
+			staged_file.close()
+		if actual_size != expected_size:
+			_template_download["integrity"] = "size_mismatch"
+			_templates_download_finish("failed",
+				"Integrity check failed: official asset is %d bytes, download has %d; archive deleted." % [
+					expected_size, actual_size], false)
+			return
+		integrity_state = "size_verified:%d" % expected_size
+	elif bool(state.get("require_integrity", false)):
+		_template_download["result"] = {"integrity_error": "official asset size unavailable"}
+		_templates_download_finish("failed",
+			"The GitHub release API was not reachable for integrity metadata; retry, or pass require_integrity=false to accept allowlisted-HTTPS-only verification.",
+			true)
+		return
+	_template_download["integrity"] = integrity_state
+
+	_template_download["phase"] = "installing"
+	var install: Dictionary = _install_templates_from_tpz(
+		tpz_abs, String(state.get("templates_root", "")),
+		state.get("version_meta", {}), String(state.get("godot_version", "")))
+	if install.has("error"):
+		# 安装失败但档案有效：保留 .tpz 供人工处理，并给出路径。
+		_template_download["result"] = {"install_error": String(install["error"])}
+		_templates_download_finish("failed",
+			"Download %s but installation failed: %s (archive kept at %s)" % [
+				integrity_state, String(install["error"]), tpz_abs], true)
+		return
+	if not bool(state.get("keep_archive", false)):
+		DirAccess.remove_absolute(tpz_abs)
+	_template_download["result"] = install
+	_templates_download_finish("done", "", bool(state.get("keep_archive", false)))
+
+## 从官方发布 API 获取 .tpz 资产的精确字节数；不可达/缺失返回 -1。
+func _templates_fetch_expected_size(version_tag: String, tpz_filename: String) -> int:
+	var source_url: String = templates_integrity_source_url(version_tag)
+	if not is_trusted_templates_url(source_url):
+		return -1
+	var fetched: Array = await _templates_fetch_text(source_url)
+	if not bool(fetched[0]):
+		return -1
+	return templates_expected_size_from_release_json(String(fetched[1]), tpz_filename)
+
+## 小型 GET（内存态，不落盘）；返回 [ok, text]。直连失败且存在回环代理时自动
+## 经代理重试一次（完整性与下载共用同一客户端实现）。
+func _templates_fetch_text(url: String) -> Array:
+	var root: Node = (Engine.get_main_loop() as SceneTree).root if Engine.get_main_loop() is SceneTree else null
+	if root == null:
+		return [false, ""]
+	for proxy in ["", _templates_download_proxy({})]:
+		var getter: TemplatesHttpGetter = TemplatesHttpGetter.create(
+			url, "", proxy, 15000, true)
+		root.add_child(getter)
+		var outcome: Dictionary = await getter.completed
+		_templates_download_cleanup_getter(getter)
+		if bool(outcome.get("ok", false)):
+			return [true, String(outcome.get("text", ""))]
+	return [false, ""]
 
 func _remove_dir_recursive(path: String) -> int:
 	var count: int = 0

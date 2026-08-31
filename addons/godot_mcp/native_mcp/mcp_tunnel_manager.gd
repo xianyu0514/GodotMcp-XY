@@ -68,12 +68,114 @@ static func default_session_dir(project_root: String = "") -> String:
 		SESSION_COMPONENT_DIR
 	).path_join(project_key).simplify_path()
 
+## Normalizes a user/environment proxy value into an absolute proxy URL.
+## Plain `host:port` entries are assumed to be HTTP CONNECT proxies.
+static func normalize_proxy_url(raw: String) -> String:
+	var value: String = raw.strip_edges()
+	if value.is_empty():
+		return ""
+	if value.find("://") < 0:
+		value = "http://" + value
+	return value.trim_suffix("/")
+
+## Picks the first usable proxy from a process environment dictionary. Go-style
+## proxy tools honor several spellings, so all common variants are considered.
+static func proxy_from_environment(env: Dictionary) -> String:
+	for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]:
+		var value: String = String(env.get(key, "")).strip_edges()
+		if not value.is_empty():
+			return normalize_proxy_url(value)
+	return ""
+
+## Reads the proxy-related variables of the current OS process into a dictionary
+## and reuses the pure `proxy_from_environment` selection logic.
+static func proxy_from_os_environment() -> String:
+	var env: Dictionary = {}
+	for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]:
+		env[key] = OS.get_environment(key)
+	return proxy_from_environment(env)
+
+## Parses the Windows `ProxyServer` registry value. It is commonly either
+## `host:port` or `https=host:port;http=host:port;...`. HTTPS is preferred for
+## cloudflared's TLS edge connections, then HTTP, then SOCKS5.
+static func parse_windows_proxy_server(raw: String) -> String:
+	var value: String = raw.strip_edges()
+	if value.is_empty():
+		return ""
+	var parts: PackedStringArray = value.split(";", false)
+	for preferred_prefix in ["https=", "http=", "socks="]:
+		for part in parts:
+			var entry: String = part.strip_edges()
+			if entry.begins_with(preferred_prefix):
+				var address: String = entry.substr(preferred_prefix.length()).strip_edges()
+				if address.is_empty():
+					continue
+				if address.find("://") >= 0:
+					return normalize_proxy_url(address)
+				var scheme: String = "socks5" if preferred_prefix == "socks=" else preferred_prefix.substr(0, preferred_prefix.length() - 1)
+				return "%s://%s" % [scheme, address.trim_suffix("/")]
+	return normalize_proxy_url(value)
+
+## Resolves the proxy cloudflared should use, without network access:
+## explicit environment variables first, then the Windows system proxy.
+static func detect_system_proxy(os_name: String = "") -> String:
+	var platform: String = os_name.strip_edges()
+	if platform.is_empty():
+		platform = OS.get_name()
+	var from_env: String = proxy_from_os_environment()
+	if not from_env.is_empty():
+		return from_env
+	if platform == "Windows":
+		return windows_system_proxy()
+	return ""
+
+## Reads the Windows per-user system proxy from the registry. Returns "" when
+## disabled, missing, or unreadable.
+static func windows_system_proxy() -> String:
+	var enabled: String = _read_registry_value("ProxyEnable")
+	if enabled.strip_edges().to_lower() not in ["0x1", "1", "true"]:
+		return ""
+	var server: String = _read_registry_value("ProxyServer")
+	if server.strip_edges().is_empty():
+		return ""
+	return parse_windows_proxy_server(server)
+
+static func _read_registry_value(value_name: String) -> String:
+	var output: Array = []
+	var exit_code: int = OS.execute(
+		"reg.exe",
+		PackedStringArray([
+			"query",
+			"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+			"/v",
+			value_name,
+		]),
+		output,
+		true
+	)
+	if exit_code != 0 or output.is_empty():
+		return ""
+	for line in output:
+		var candidate: String = String(line).strip_edges()
+		if candidate.is_empty() or not candidate.contains(value_name):
+			continue
+		var remainder: String = candidate.substr(
+			candidate.find(value_name) + value_name.length()
+		).strip_edges()
+		for marker in ["REG_SZ", "REG_EXPAND_SZ", "REG_DWORD", "REG_QWORD"]:
+			var marker_index: int = remainder.find(marker)
+			if marker_index >= 0:
+				return remainder.substr(marker_index + marker.length()).strip_edges()
+		return remainder
+	return ""
+
 ## Starts a separate headless Godot main loop that owns cloudflared's pipes.
 ## Every value is passed as one user argument so paths with spaces are preserved
-## without shell quoting or platform-specific wrappers.
+## without shell quoting or platform-specific wrappers. `proxy` is forwarded so
+## the supervisor can export it to the cloudflared child before launch.
 static func build_supervisor_launch_args(project_root: String, supervisor_script: String,
 		binary_path: String, port: int, log_path: String, runtime_path: String,
-		stop_path: String, session_id: String) -> PackedStringArray:
+		stop_path: String, session_id: String, proxy: String = "") -> PackedStringArray:
 	var effective_port: int = port if port > 0 else DEFAULT_PORT
 	return PackedStringArray([
 		"--headless",
@@ -88,6 +190,7 @@ static func build_supervisor_launch_args(project_root: String, supervisor_script
 		"--mcp-tunnel-runtime=%s" % runtime_path,
 		"--mcp-tunnel-stop=%s" % stop_path,
 		"--mcp-tunnel-session=%s" % session_id,
+		"--mcp-tunnel-proxy=%s" % proxy.strip_edges(),
 	])
 
 ## Extracts the first trycloudflare.com URL from a cloudflared log chunk.
@@ -194,11 +297,17 @@ static func cloudflared_command_matches(command_line: String, binary_path: Strin
 		command.begins_with(expected_binary + " ")
 		or command.begins_with('"%s" ' % expected_binary)
 	)
+	# 兼容两种源站写法：新会话使用显式 127.0.0.1，历史持久化会话记录仍为
+	# localhost（旧 cloudflared 进程仍按旧命令行运行，必须继续被识别/收养）。
+	var origin_matches: bool = (
+		command.contains("http://127.0.0.1:%d" % port)
+		or command.contains("http://localhost:%d" % port)
+	)
 	return (
 		executable_matches
 		and command.contains("tunnel")
 		and command.contains("--url")
-		and command.contains("http://localhost:%d" % port)
+		and origin_matches
 	)
 
 func is_running() -> bool:
@@ -276,13 +385,20 @@ func restore() -> bool:
 
 ## Starts a detached headless supervisor which owns cloudflared's live pipes.
 ## Existing persisted sessions are adopted first, preventing duplicate tunnels.
-func start(binary_path: String, port: int) -> Error:
+## `proxy_override` wins when provided; otherwise the system/environment proxy is
+## detected automatically and forwarded to the supervisor.
+func start(binary_path: String, port: int, proxy_override: String = "") -> Error:
 	if is_running() or restore():
 		return ERR_ALREADY_IN_USE
 	var exe: String = binary_path.strip_edges()
 	if exe.is_empty():
 		return ERR_CANT_CREATE
 	var effective_port: int = port if port > 0 else DEFAULT_PORT
+	var proxy: String = proxy_override.strip_edges()
+	if proxy.is_empty():
+		proxy = detect_system_proxy()
+	else:
+		proxy = normalize_proxy_url(proxy)
 	if DirAccess.make_dir_recursive_absolute(_session_dir) != OK:
 		return ERR_CANT_CREATE
 	_remove_file_if_present(_log_path)
@@ -304,7 +420,8 @@ func start(binary_path: String, port: int) -> Error:
 		_log_path,
 		_runtime_path,
 		_stop_path,
-		_session_id
+		_session_id,
+		proxy
 	)
 	var process_id: int = _spawn_process(supervisor_executable, args)
 	if process_id <= 0:
@@ -328,6 +445,12 @@ func start(binary_path: String, port: int) -> Error:
 func poll() -> String:
 	if not _public_url.is_empty():
 		return ""
+	var runtime_url: String = _read_runtime_public_url()
+	if not runtime_url.is_empty():
+		_public_url = runtime_url
+		_line_buffer = ""
+		_save_state()
+		return runtime_url
 	var chunk: String = _read_log_chunk()
 	if chunk.is_empty():
 		return ""
@@ -503,6 +626,18 @@ func _load_runtime_state() -> Dictionary:
 	):
 		return {}
 	return runtime
+
+## Reads the public URL the supervisor persisted into runtime.json as soon as its
+## pipe captured it. This is a lock-free sidecar: the supervisor closes the file
+## after every write, so the editor can read it while cloudflared.log stays open.
+func _read_runtime_public_url() -> String:
+	var runtime: Dictionary = _load_runtime_state()
+	if runtime.is_empty():
+		return ""
+	var candidate: String = String(runtime.get("public_url", "")).strip_edges()
+	if candidate.is_empty():
+		return ""
+	return candidate if extract_tunnel_url(candidate) == candidate else ""
 
 func _write_stop_request() -> Error:
 	var file: FileAccess = FileAccess.open(_stop_path, FileAccess.WRITE)

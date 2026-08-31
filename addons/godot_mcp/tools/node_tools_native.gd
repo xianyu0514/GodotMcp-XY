@@ -6,6 +6,8 @@ extends RefCounted
 
 var _editor_interface: EditorInterface = null
 
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
+
 func initialize(editor_interface: EditorInterface) -> void:
 	_editor_interface = editor_interface
 
@@ -44,6 +46,7 @@ func _register_create_node(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified). Guards against cross-scene writes."},
 				"parent_path": {
 					"type": "string",
 					"description": "Path to the parent node where the new node will be created (e.g. '/root', '/root/MainScene')"
@@ -122,6 +125,10 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var parent: Node = _resolve_node_path(parent_path)
 	if not parent:
@@ -209,6 +216,7 @@ func _register_delete_node(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the node to delete (e.g. '/root/MainScene/Player')"
@@ -237,7 +245,11 @@ func _tool_delete_node(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
 	var node_to_delete: Node = _resolve_node_path(node_path)
 	
 	if not node_to_delete:
@@ -263,6 +275,7 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the target node (e.g. '/root/MainScene/Player')"
@@ -273,6 +286,11 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 				},
 				"property_value": {
 					"description": "New value for the property. Type conversion is handled automatically."
+				},
+				"require_verified": {
+					"type": "boolean",
+					"default": false,
+					"description": "When true, return an error instead of status='unverified' if the read-back value differs from the requested value."
 				}
 			},
 			"required": ["node_path", "property_name", "property_value"]
@@ -281,11 +299,14 @@ func _register_update_node_property(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
-				"status": {"type": "string"},
+				"status": {"type": "string", "description": "success when the read-back matches the requested value, otherwise unverified."},
 				"node_path": {"type": "string"},
 				"property_name": {"type": "string"},
 				"old_value": {"type": "string"},
-				"new_value": {"type": "string"}
+				"requested_value": {"type": "string"},
+				"new_value": {"type": "string"},
+				"verified": {"type": "boolean"},
+				"warning": {"type": "string"}
 			}
 		},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
@@ -307,12 +328,16 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
-	
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
 	var target_node: Node = _resolve_node_path(node_path)
-	
+
 	if not target_node:
 		return {"error": "Node not found: " + node_path}
-	
+
 	if not property_name in target_node:
 		return {"error": "Property '" + property_name + "' not found on node " + node_path}
 	
@@ -339,16 +364,58 @@ func _tool_update_node_property(params: Dictionary) -> Dictionary:
 		target_node.set(property_name, converted_value)
 	
 	var new_value: Variant = target_node.get(property_name)
-	
+	var verified: bool = _values_equivalent(converted_value, new_value)
+
 	editor_interface.mark_scene_as_unsaved()
-	
-	return {
-		"status": "success",
+
+	# 写入被 setter 夹紧/取整/忽略时必须说清楚。只返回 new_value 而不比较，
+	# 上层就会把"设置失败"当成"设置成功"。
+	var result: Dictionary = {
+		"status": "success" if verified else "unverified",
 		"node_path": node_path,
 		"property_name": property_name,
 		"old_value": str(old_value),
-		"new_value": str(new_value)
+		"requested_value": str(converted_value),
+		"new_value": str(new_value),
+		"verified": verified
 	}
+	if not verified:
+		result["warning"] = "Property write did not stick: read-back value differs from the requested value"
+		if bool(params.get("require_verified", false)):
+			return {
+				"error": result["warning"],
+				"node_path": node_path,
+				"property_name": property_name,
+				"requested_value": str(converted_value),
+				"actual_value": str(new_value)
+			}
+	return result
+
+
+## 写入后回读的等价判定。浮点/向量用近似比较，其余按值比较；
+## 无法可靠比较的容器类型返回 true（保持乐观，但至少标量/向量是确定的）。
+static func _values_equivalent(requested: Variant, actual: Variant) -> bool:
+	if typeof(requested) != typeof(actual):
+		return false
+	match typeof(requested):
+		TYPE_NIL:
+			return true
+		TYPE_BOOL, TYPE_INT, TYPE_STRING:
+			return requested == actual
+		TYPE_FLOAT:
+			return is_equal_approx(float(requested), float(actual))
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_QUATERNION, TYPE_PLANE:
+			return requested.is_equal_approx(actual)
+		TYPE_VECTOR2I, TYPE_VECTOR3I, TYPE_VECTOR4I:
+			return requested == actual
+		TYPE_RECT2, TYPE_RECT2I, TYPE_AABB:
+			return requested == actual
+		TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_BASIS, TYPE_PROJECTION:
+			return requested.is_equal_approx(actual)
+		TYPE_STRING_NAME, TYPE_NODE_PATH:
+			return String(requested) == String(actual)
+		_:
+			return true
 
 func _register_batch_update_node_properties(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -525,21 +592,32 @@ func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 				},
 				"operations": {
 					"type": "array",
-					"description": "Ordered create/delete operations to apply in one transaction.",
+					"description": "Ordered scene edits applied in one undoable transaction: create/delete/rename/move nodes, set_property, attach_script, connect_signal. Nodes created earlier in the same batch are addressable via their parent_path/node_name path.",
 					"items": {
 						"type": "object",
 						"properties": {
-							"type": {"type": "string"},
+							"type": {"type": "string", "enum": ["create", "delete", "rename", "move", "set_property", "attach_script", "connect_signal"]},
 							"parent_path": {"type": "string"},
 							"node_type": {"type": "string"},
 							"node_name": {"type": "string"},
 							"node_path": {"type": "string"},
 							"new_name": {"type": "string"},
 							"new_parent_path": {"type": "string"},
-							"keep_global_transform": {"type": "boolean"}
+							"keep_global_transform": {"type": "boolean"},
+							"property_name": {"type": "string"},
+							"property_value": {},
+							"script_path": {"type": "string"},
+							"signal_name": {"type": "string"},
+							"method_name": {"type": "string"},
+							"target_node_path": {"type": "string"}
 						},
 						"required": ["type"]
 					}
+				},
+				"save": {
+					"type": "boolean",
+					"description": "Save the edited scene after the transaction commits (skipped with a reason when the scene has no file path yet).",
+					"default": false
 				}
 			},
 			"required": ["operations"]
@@ -558,10 +636,76 @@ func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 		"supplementary", "Node-Advanced"
 	)
 
+# 批量场景编辑操作的形状校验：只检查字段存在性与基本格式，不触碰编辑器
+# 环境，保证 headless 单测可以覆盖参数错误路径。
+static func validate_batch_edit_operation(operation: Dictionary) -> String:
+	var operation_type: String = str(operation.get("type", "")).strip_edges().to_lower()
+	match operation_type:
+		"create":
+			if str(operation.get("parent_path", "")).is_empty() \
+					or str(operation.get("node_name", "")).is_empty():
+				return "Create operations require parent_path and node_name"
+		"delete":
+			if str(operation.get("node_path", "")).is_empty():
+				return "Delete operations require node_path"
+		"rename":
+			if str(operation.get("node_path", "")).is_empty() \
+					or str(operation.get("new_name", "")).strip_edges().is_empty():
+				return "Rename operations require node_path and new_name"
+		"move":
+			if str(operation.get("node_path", "")).is_empty() \
+					or str(operation.get("new_parent_path", "")).is_empty():
+				return "Move operations require node_path and new_parent_path"
+		"set_property":
+			if str(operation.get("node_path", "")).is_empty() \
+					or str(operation.get("property_name", "")).is_empty() \
+					or not operation.has("property_value"):
+				return "set_property operations require node_path, property_name, and property_value"
+		"attach_script":
+			if str(operation.get("node_path", "")).is_empty() \
+					or str(operation.get("script_path", "")).is_empty():
+				return "attach_script operations require node_path and script_path"
+		"connect_signal":
+			if str(operation.get("node_path", "")).is_empty() \
+					or str(operation.get("signal_name", "")).is_empty() \
+					or str(operation.get("method_name", "")).is_empty():
+				return "connect_signal operations require node_path, signal_name, and method_name"
+		_:
+			return "Unsupported operation type: " + operation_type
+	return ""
+
+# Script.has_script_method 在 4.6 不存在；get_script_method_list 各版本稳定。
+static func _script_declares_method(script: Script, method_name: String) -> bool:
+	for method in script.get_script_method_list():
+		if String(method.get("name", "")) == method_name:
+			return true
+	return false
+
+# 先按场景树解析；失败时回退到本批次新建节点的路径映射（节点尚未入树）。
+func _resolve_batch_edit_node(node_path: String, batch_created_nodes: Dictionary) -> Node:
+	var resolved: Node = _resolve_node_path(node_path)
+	if resolved:
+		return resolved
+	if batch_created_nodes.has(node_path):
+		return batch_created_nodes[node_path]
+	# 用户路径可能带 /root 前缀，而注册键是原始 parent_path 拼接形式。
+	for key in batch_created_nodes:
+		if str(key).trim_prefix("/root/") == node_path.trim_prefix("/root/"):
+			return batch_created_nodes[key]
+	return null
+
 func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 	var operations: Array = params.get("operations", [])
 	if operations.is_empty():
 		return {"error": "Missing required parameter: operations"}
+
+	# 形状校验先于环境检查：坏请求在无编辑器（如 headless 测试）时也能被拒绝。
+	for operation in operations:
+		if not (operation is Dictionary):
+			return {"error": "Each operation entry must be an object"}
+		var shape_error: String = validate_batch_edit_operation(operation)
+		if not shape_error.is_empty():
+			return {"error": shape_error}
 
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
@@ -572,6 +716,12 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 		return {"error": "No scene is currently open"}
 
 	var prepared_operations: Array = []
+	# 同批次内先建的节点：路径 -> 节点实例。后续 set_property/attach_script/
+	# connect_signal 可以直接作用于本批次新建的节点（例如 create Enemy 后立刻
+	# 挂脚本、连信号）。pending_scripts 记录批次内将挂载的脚本，供信号/方法
+	# 校验在脚本尚未 set 上的时刻使用。
+	var batch_created_nodes: Dictionary = {}
+	var batch_pending_scripts: Dictionary = {}
 	for operation in operations:
 		if not (operation is Dictionary):
 			return {"error": "Each operation entry must be an object"}
@@ -599,7 +749,10 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					return {"error": "Failed to instantiate node type '%s' as a Node." % node_type}
 				var new_node: Node = new_instance
 				new_node.name = node_name
-				new_node.owner = scene_root
+				var created_future_path: String = parent_path.trim_suffix("/").path_join(node_name)
+				batch_created_nodes[created_future_path] = new_node
+				batch_created_nodes[_append_child_path(
+					_make_friendly_path(parent_node, scene_root), node_name)] = new_node
 				prepared_operations.append({
 					"type": "create",
 					"parent": parent_node,
@@ -688,6 +841,131 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					"node_type": move_target.get_class(),
 					"old_index": move_target.get_index()
 				})
+			"set_property":
+				var prop_node_path: String = str(operation.get("node_path", ""))
+				var prop_target: Node = _resolve_batch_edit_node(prop_node_path, batch_created_nodes)
+				if not prop_target:
+					return {"error": "Node not found: " + prop_node_path}
+				var property_name: String = str(operation.get("property_name", ""))
+				# 属性可能在批次内将挂载的脚本上（do-method 到 commit 才真正 set）。
+				var pending_for_prop: Script = batch_pending_scripts.get(prop_target) as Script
+				var property_known: bool = property_name in prop_target
+				if not property_known and pending_for_prop != null:
+					for script_prop in pending_for_prop.get_script_property_list():
+						if String(script_prop.get("name", "")) == property_name:
+							property_known = true
+							break
+				if not property_known:
+					return {"error": "Property '" + property_name + "' not found on node " + prop_node_path}
+				var raw_value: Variant = operation.get("property_value")
+				if raw_value is String:
+					var parsed_value: Variant = JSON.parse_string(raw_value)
+					if parsed_value != null:
+						raw_value = parsed_value
+				if raw_value is String and (raw_value as String).begins_with("res://"):
+					if not ResourceLoader.exists(raw_value):
+						return {"error": "Resource path does not exist: " + raw_value
+							+ " for property " + property_name + " on node " + prop_node_path}
+				if raw_value is Dictionary:
+					# 常见数学类型的 JSON 字典形式转换（position/scale/modulate 等）。
+					var dict_value: Dictionary = raw_value
+					match typeof(prop_target.get(property_name)):
+						TYPE_VECTOR2:
+							if dict_value.has("x") and dict_value.has("y"):
+								raw_value = Vector2(float(dict_value["x"]), float(dict_value["y"]))
+						TYPE_VECTOR2I:
+							if dict_value.has("x") and dict_value.has("y"):
+								raw_value = Vector2i(int(dict_value["x"]), int(dict_value["y"]))
+						TYPE_COLOR:
+							if dict_value.has("r") and dict_value.has("g") and dict_value.has("b"):
+								raw_value = Color(float(dict_value["r"]), float(dict_value["g"]),
+									float(dict_value["b"]), float(dict_value.get("a", 1.0)))
+				var converted_value: Variant = _convert_value_for_property(prop_target, property_name, raw_value)
+				prepared_operations.append({
+					"type": "set_property",
+					"node_path": prop_node_path,
+					"node": prop_target,
+					"property_name": property_name,
+					# 脚本普通变量（非 @export）不在属性表里，add_do_property 不会生效，
+					# 需要走方法式 set；此类条目跳过单独 undo（建节点场景随节点整体撤销）。
+					"via_method": not (property_name in prop_target),
+					"old_value": prop_target.get(property_name),
+					"new_value": converted_value
+				})
+			"attach_script":
+				var attach_node_path: String = str(operation.get("node_path", ""))
+				var attach_target: Node = _resolve_batch_edit_node(attach_node_path, batch_created_nodes)
+				if not attach_target:
+					return {"error": "Node not found: " + attach_node_path}
+				var script_path: String = str(operation.get("script_path", ""))
+				var path_validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
+				if not bool(path_validation.get("valid", false)):
+					return {"error": "Invalid script path: " + String(path_validation.get("error", ""))}
+				script_path = String(path_validation.get("sanitized", script_path))
+				if not FileAccess.file_exists(script_path):
+					return {"error": "Script file not found: " + script_path}
+				var script_resource: Script = load(script_path)
+				if script_resource == null:
+					return {"error": "Failed to load script: " + script_path}
+				# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源
+				# （有源码但无成员）。现场编译等价脚本且不注册路径：路径资源会被
+				# 仍在进行的扫描反复失效，而内存脚本不受影响；保存场景时源码内联。
+				if not script_resource.can_instantiate():
+					var fresh_script: GDScript = GDScript.new()
+					fresh_script.source_code = FileAccess.get_file_as_string(script_path)
+					if fresh_script.reload() != OK:
+						return {"error": "Script did not compile: " + script_path}
+					script_resource = fresh_script
+				batch_pending_scripts[attach_target] = script_resource
+				prepared_operations.append({
+					"type": "attach_script",
+					"node_path": attach_node_path,
+					"node": attach_target,
+					"old_script": attach_target.get_script(),
+					"new_script": script_resource
+				})
+			"connect_signal":
+				var signal_node_path: String = str(operation.get("node_path", ""))
+				var signal_source: Node = _resolve_batch_edit_node(signal_node_path, batch_created_nodes)
+				if not signal_source:
+					return {"error": "Node not found: " + signal_node_path}
+				var signal_name: String = str(operation.get("signal_name", ""))
+				var method_name: String = str(operation.get("method_name", ""))
+				var target_node_path: String = str(operation.get("target_node_path", ""))
+				var signal_target: Node = signal_source
+				if not target_node_path.is_empty():
+					signal_target = _resolve_batch_edit_node(target_node_path, batch_created_nodes)
+					if not signal_target:
+						return {"error": "Target node not found: " + target_node_path}
+				# 信号可能来自节点类，也可能来自批次内即将挂载的脚本。
+				var pending_script: Script = batch_pending_scripts.get(signal_source) as Script
+				var has_the_signal: bool = signal_source.has_signal(signal_name) \
+					or (pending_script != null and pending_script.has_script_signal(signal_name))
+				if not has_the_signal:
+					return {"error": "Signal '" + signal_name + "' not found on node " + signal_node_path}
+				var has_the_method: bool = signal_target.has_method(method_name) \
+					or (pending_script != null and signal_target == signal_source \
+						and _script_declares_method(pending_script, method_name))
+				if not has_the_method:
+					return {"error": "Method '" + method_name + "' not found on target node "
+						+ (target_node_path if not target_node_path.is_empty() else signal_node_path)}
+				var callable: Callable = Callable(signal_target, method_name)
+				if signal_source.is_connected(signal_name, callable):
+					prepared_operations.append({
+						"type": "connect_signal", "node_path": signal_node_path,
+						"signal_name": signal_name, "method_name": method_name,
+						"already_connected": true
+					})
+				else:
+					prepared_operations.append({
+						"type": "connect_signal",
+						"node_path": signal_node_path,
+						"node": signal_source,
+						"target": signal_target,
+						"signal_name": signal_name,
+						"method_name": method_name,
+						"callable": callable
+					})
 			_:
 				return {"error": "Unsupported operation type: " + operation_type}
 
@@ -759,15 +1037,86 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"new_parent_path": friendly_new_parent_path,
 						"node_type": prepared["node_type"]
 					})
+				"set_property":
+					var property_node: Node = prepared["node"]
+					if bool(prepared.get("via_method", false)):
+						undo_redo.add_do_method(property_node, "set",
+							prepared["property_name"], prepared["new_value"])
+					else:
+						undo_redo.add_do_property(property_node, prepared["property_name"], prepared["new_value"])
+						undo_redo.add_undo_property(property_node, prepared["property_name"], prepared["old_value"])
+					# 编辑器中非 @export 脚本变量不绑定成员（占位实例）；诚实上报。
+					var bound_now: bool = String(prepared["property_name"]) in property_node
+					var prop_entry: Dictionary = {
+						"type": "set_property",
+						"node_path": prepared["node_path"],
+						"property_name": prepared["property_name"],
+						"old_value": _serialize_value(prepared["old_value"]),
+						# 此循环在 commit 前运行，读节点仍是旧值；报告已转换的待应用值。
+						"new_value": _serialize_value(prepared["new_value"]),
+						"bound": bound_now
+					}
+					if not bound_now:
+						prop_entry["note"] = "non-exported script variables do not bind on editor scene nodes; mark the variable @export"
+					result_operations.append(prop_entry)
+				"attach_script":
+					var attach_node: Node = prepared["node"]
+					undo_redo.add_do_method(attach_node, "set_script", prepared["new_script"])
+					undo_redo.add_undo_method(attach_node, "set_script", prepared["old_script"])
+					result_operations.append({
+						"type": "attach_script",
+						"node_path": prepared["node_path"]
+					})
+				"connect_signal":
+					if not bool(prepared.get("already_connected", false)):
+						var signal_source_node: Node = prepared["node"]
+						var signal_callable: Callable = prepared["callable"]
+						undo_redo.add_do_method(signal_source_node, "connect",
+							prepared["signal_name"], signal_callable)
+						undo_redo.add_undo_method(signal_source_node, "disconnect",
+							prepared["signal_name"], signal_callable)
+					result_operations.append({
+						"type": "connect_signal",
+						"node_path": prepared["node_path"],
+						"signal_name": prepared["signal_name"],
+						"method_name": prepared["method_name"],
+						"already_connected": bool(prepared.get("already_connected", false))
+					})
 	undo_redo.commit_action()
 	editor_interface.mark_scene_as_unsaved()
 
-	return {
+	var save_requested: bool = bool(params.get("save", false))
+	var scene_saved: bool = false
+	var save_note: String = ""
+	if save_requested:
+		if String(scene_root.scene_file_path).is_empty():
+			save_note = "scene has no file path yet; save it once via save_scene"
+		else:
+			var save_error: Error = editor_interface.save_scene()
+			scene_saved = save_error == OK
+			if not scene_saved:
+				save_note = "save_scene returned error %d" % save_error
+
+	# save_scene 会把节点脚本换回路径缓存资源（新写入文件时是未编译壳）；
+	# 保存后对挂载操作补一次直接 set，节点上最终是已编译、成员可绑定的实例。
+	for prepared in prepared_operations:
+		if String(prepared["type"]) == "attach_script" and is_instance_valid(prepared["node"]):
+			(prepared["node"] as Node).set_script(prepared["new_script"])
+
+	var response: Dictionary = {
 		"status": "success",
 		"label": label,
 		"operation_count": result_operations.size(),
 		"operations": result_operations
 	}
+	if save_requested:
+		response["save_requested"] = true
+		response["saved"] = scene_saved
+		if not save_note.is_empty():
+			response["save_note"] = save_note
+		if scene_saved:
+			response["scene_path"] = String(scene_root.scene_file_path)
+	return response
 
 func _register_audit_scene_node_persistence(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1881,6 +2230,7 @@ func _register_set_anchor_preset(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first (auto-activated; the previous scene is saved when modified)."},
 				"node_path": {
 					"type": "string",
 					"description": "Path to the Control node (e.g. '/root/MainScene/UI/Panel')"
@@ -1920,6 +2270,10 @@ func _tool_set_anchor_preset(params: Dictionary) -> Dictionary:
 	var editor_interface: EditorInterface = _get_editor_interface()
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
 
 	var target_node: Node = _resolve_node_path(node_path)
 	if not target_node:
@@ -2159,7 +2513,7 @@ func _register_connect_signal(server_core: RefCounted) -> void:
 				},
 				"flags": {
 					"type": "integer",
-					"description": "Connection flags: 0=DEFAULT, 1=DEFERRED, 2=ONE_SHOT, 4=PERSIST. Default is 0."
+					"description": "ConnectFlags bitmask: 1=DEFERRED, 2=PERSIST, 4=ONE_SHOT, 8=REFERENCE_COUNTED. 0/default = none."
 				}
 			},
 			"required": ["emitter_path", "signal_name", "receiver_path", "receiver_method"]

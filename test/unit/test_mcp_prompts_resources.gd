@@ -215,3 +215,51 @@ func test_prompt_get_via_server_core():
 	var list_resp: Dictionary = await _core._handle_prompts_list({"id": 2, "params": {}})
 	assert_true(list_resp.has("result"), "prompts/list should succeed")
 	assert_gte(list_resp["result"]["prompts"].size(), 6, "prompts/list should expose the registered prompts")
+
+func test_prompt_iterate_play_verify_messages():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("iterate_play_verify").call({
+		"target": "enemy wave spawner holds 55 fps",
+		"gates": "min_fps=55, no runtime errors"
+	})
+	assert_true(result.has("messages"), "Should return messages")
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("run_project"), "Template should reference run_project")
+	assert_true(text.contains("assert_no_runtime_errors"), "Template should reference assert_no_runtime_errors")
+	assert_true(text.contains("enemy wave spawner holds 55 fps"), "target should be embedded")
+	assert_true(text.contains("min_fps=55"), "gates should be embedded")
+	var missing: Dictionary = workflows.get_callable("iterate_play_verify").call({})
+	assert_true(missing.has("error"), "Missing required target must fail")
+
+func test_prompt_release_export_flow_messages():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("release_export_flow").call({
+		"platform": "Windows Desktop", "notes": "patch bump"
+	})
+	assert_true(result.has("messages"), "Should return messages")
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("manage_export_templates"), "Template should reference manage_export_templates")
+	assert_true(text.contains("smoke_test_export"), "Template should reference smoke_test_export")
+	assert_true(text.contains("Windows Desktop"), "platform should be embedded")
+	assert_true(text.contains("patch bump"), "notes should be embedded")
+	var defaulted: Dictionary = workflows.get_callable("release_export_flow").call({})
+	assert_true(defaulted.has("messages"), "No required args; defaults must render")
+	assert_true(str(defaulted["messages"][0]["content"]["text"]).contains("default export preset"),
+		"Empty platform falls back to the default preset wording")
+
+func test_prompt_keyword_matcher_bilingual():
+	var workflows: RefCounted = _new_workflows()
+	var export_hit: Dictionary = workflows.match_prompt("帮我导出 Windows 版本并跑冒烟测试")
+	assert_eq(String(export_hit.get("name", "")), "release_export_flow",
+		"Chinese export/release wording routes to release_export_flow")
+	var verify_hit: Dictionary = workflows.match_prompt("iterate the play loop and verify runtime errors stay zero")
+	assert_eq(String(verify_hit.get("name", "")), "iterate_play_verify",
+		"English iterate/verify wording routes to iterate_play_verify")
+	var none_hit: Dictionary = workflows.match_prompt("completely unrelated sentence about tea")
+	assert_true(none_hit.is_empty(), "Unrelated text matches no prompt")
+
+func test_longer_keyword_wins_over_generic():
+	var workflows: RefCounted = _new_workflows()
+	var hit: Dictionary = workflows.match_prompt("fix compile errors then verify runtime error gates")
+	assert_eq(String(hit.get("name", "")), "iterate_play_verify",
+		"The longer 'runtime error' phrase beats shorter 'compile' for mixed intents")

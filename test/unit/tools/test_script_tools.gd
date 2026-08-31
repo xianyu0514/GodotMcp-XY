@@ -1,5 +1,7 @@
 extends "res://addons/gut/test.gd"
 
+const ScriptToolsScript = preload("res://addons/godot_mcp/tools/script_tools_native.gd")
+
 func test_script_path_validation():
 	var valid_paths: Array = ["res://test.gd", "res://scripts/player.gd", "res://addons/my_addon/main.gd"]
 	for path in valid_paths:
@@ -408,3 +410,118 @@ func test_autoload_declarations_cached_returns_string():
 	assert_true(first is String, "Cached autoload declarations are a string")
 	assert_eq(first, second, "Cached declarations are stable across calls")
 	assert_eq(first, tool._build_autoload_declarations(), "Cache matches a fresh build")
+
+func test_script_writes_report_editor_buffer_sync():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = "res://test/unit/.tmp_buffer_sync.gd"
+	var created: Dictionary = tools._tool_create_script({
+		"script_path": temp_path, "content": "extends Node
+"})
+	assert_false(created.has("error"), str(created.get("error", "")))
+	assert_eq(String(created.get("buffers_synced", "")), "skipped",
+		"Headless has no editor interface; buffer sync degrades to skipped, never errors")
+	var modified: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path, "content": "extends Node2D
+"})
+	assert_false(modified.has("error"), str(modified.get("error", "")))
+	assert_eq(String(modified.get("buffers_synced", "")), "skipped")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_modify_script_inline_validation():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = "res://test/unit/.tmp_inline_validate.gd"
+	var created: Dictionary = tools._tool_create_script({
+		"script_path": temp_path, "content": "extends Node\n"})
+	assert_false(created.has("error"), str(created.get("error", "")))
+	var broken: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc broken(:\n"
+	})
+	# 引擎会把预期的解析错误打到控制台；标记已处理，避免 GUT 判为意外失败。
+	for e in get_errors():
+		e.handled = true
+	assert_false(broken.has("error"), str(broken.get("error", "")))
+	var broken_check: Dictionary = broken.get("validation", {})
+	assert_false(bool(broken_check.get("valid", true)),
+		"Broken .gd content must report validation.valid=false inline")
+	assert_gt(int(broken_check.get("error_count", 0)), 0, "Broken content reports at least one error")
+	var fixed: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc fixed() -> void:\n\tpass\n"
+	})
+	var fixed_check: Dictionary = fixed.get("validation", {})
+	assert_true(bool(fixed_check.get("valid", false)),
+		"Valid .gd content must report validation.valid=true inline")
+	var skipped: Dictionary = tools._tool_modify_script({
+		"script_path": temp_path,
+		"content": "extends Node\nfunc still_broken(:\n",
+		"validate": false
+	})
+	assert_false(skipped.has("validation"),
+		"validate:false must skip the inline check entirely")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_verify_scripts_repeat_uses_memo_and_content_change_invalidates():
+	# verify_scripts 的单文件编译按 (mtime, 环境签名, check_warnings) 记忆：
+	# 文件未变时二次调用应命中同一结果引用，内容变化后必须重算。
+	var memo: GDScript = load("res://addons/godot_mcp/utils/script_compile_memo.gd")
+	memo.clear()
+	var tmp: String = "user://tmp_verify_memo_probe.gd"
+	var write: Callable = func(source: String) -> void:
+		var f: FileAccess = FileAccess.open(tmp, FileAccess.WRITE)
+		f.store_string(source)
+		f.close()
+	write.call("extends Node\n")
+	var tool: RefCounted = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var first: Dictionary = tool._tool_verify_scripts({"script_paths": [tmp]})
+	assert_eq(first.get("total_checked", -1), 1, "first pass checks the temp script")
+	var first_result: Dictionary = (first.get("results", []) as Array)[0]
+	var second: Dictionary = tool._tool_verify_scripts({"script_paths": [tmp]})
+	var second_result: Dictionary = (second.get("results", []) as Array)[0]
+	assert_same(first_result, second_result, "unchanged file is served from the memo")
+	# 两份都合法但结果不同的内容（避免触发引擎真实解析错误的噪音）：
+	# 0 警告 vs 1 条未类型化 var 警告。
+	write.call("extends Node\nvar untyped = 1\n")
+	var third: Dictionary = tool._tool_verify_scripts({"script_paths": [tmp]})
+	var third_result: Dictionary = (third.get("results", []) as Array)[0]
+	assert_true(bool(third_result.get("valid", false)), "new content is still valid")
+	# 重算的证明用引用身份：命中记忆会返回同一 Dictionary 引用。
+	assert_not_same(first_result, third_result, "invalidated entry is a fresh result")
+	memo.clear()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+
+func test_detect_broken_scripts_default_skips_tooling():
+	# 默认口径 = 用户代码：本仓库根下没有非工具 .gd，默认扫描应为 0 个脚本；
+	# include_tooling=true 或显式 search_path 才编译 addons。
+	var tools: RefCounted = load("res://addons/godot_mcp/tools/project_resources_tools.gd").new()
+	var memo: GDScript = load("res://addons/godot_mcp/utils/script_compile_memo.gd")
+	memo.clear()
+	var default_scan: Dictionary = tools._tool_detect_broken_scripts({})
+	assert_false(default_scan.has("error"), str(default_scan.get("error", "")))
+	for issue_value in default_scan.get("issues", []):
+		var issue: Dictionary = issue_value
+		assert_false(String(issue.get("path", "")).begins_with("res://addons/"),
+			"default scan never compiles third-party addon internals")
+	var targeted: Dictionary = tools._tool_detect_broken_scripts({
+		"search_path": "res://addons/godot_mcp/utils"})
+	assert_gt(int(targeted.get("scanned_scripts", 0)), 0,
+		"explicit tooling search_path still scans plugin scripts")
+	memo.clear()
+
+func test_search_in_files_skips_generated_and_tooling_by_default():
+	# 统一收集器口径：默认搜索用户代码；生成域（.godot）永不搜索。
+	# 本仓库根下没有非工具 .gd——默认搜索不应读到任何 addons 文件。
+	var tool: RefCounted = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_search_in_files({"pattern": "func "})
+	assert_false(result.has("error"), str(result.get("error", "")))
+	for match_value in result.get("results", []):
+		var match: Dictionary = match_value
+		var path: String = String(match.get("file_path", match.get("path", "")))
+		assert_false(path.begins_with("res://addons/") or path.contains("/.godot/"),
+			"default search never reads addon internals or engine caches")
+	var tooling: Dictionary = tool._tool_search_in_files({
+		"pattern": "class_name", "include_tooling": true, "max_results": 5})
+	assert_gt(int(tooling.get("files_searched", 0)), 0,
+		"include_tooling=true searches addon sources")
+	assert_gt(int(tooling.get("total_matches", 0)), 0,
+		"plugin sources contain class_name declarations")

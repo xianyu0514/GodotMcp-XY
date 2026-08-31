@@ -4,6 +4,18 @@ const CAPTURE_PREFIX: StringName = &"mcp"
 var _capture_registered: bool = false
 var _probe_ready_sent: bool = false
 
+# --- 自描述类型编码 ---------------------------------------------------------
+#
+# JSON 只有 number/string/bool/array/object，无法表达 Vector2i / Color /
+# Transform3D 这类 Godot 内建类型。此前 call_node_method 把参数原样 callv 进去，
+# 于是 {"x":30,"y":10} 就是个 Dictionary，绝不会变成 Vector2i —— 方法收到错
+# 类型后要么静默出错，要么抛一个看不懂的类型错误。
+#
+# 解决办法是带标签的编码：{"__godot_type": "Vector2i", "x": 30, "y": 10}。
+# 本文件刻意保持自包含（不 preload 任何 addons 内文件），因为探针会被注册为
+# 目标项目的 Autoload，导出时 addons/ 通常不会被带走。
+const TYPE_TAG: String = "__godot_type"
+
 func _ready() -> void:
 	_ensure_debugger_capture_registered()
 	set_process(not _capture_registered)
@@ -262,11 +274,16 @@ func _handle_set_node_property(data: Array) -> bool:
 	var old_value: Variant = node.get(property_name)
 	var converted_value: Variant = _convert_value_for_property(node, property_name, data[2])
 	node.set(property_name, converted_value)
+	# 写后回读：setter 可能夹紧、取整、甚至忽略这个值。只把"请求了什么"报回去
+	# 而不报"实际变成什么"，会让上层把一次失败的写入当成成功。
+	var actual_value: Variant = node.get(property_name)
 	EngineDebugger.send_message("mcp:node_property_updated", [{
 		"node_path": str(node.get_path()),
 		"property_name": property_name,
 		"old_value": _serialize_value(old_value),
-		"new_value": _serialize_value(node.get(property_name))
+		"requested_value": _serialize_value(converted_value),
+		"new_value": _serialize_value(actual_value),
+		"verified": _values_equivalent(converted_value, actual_value)
 	}])
 	return true
 
@@ -352,7 +369,10 @@ func _handle_call_node_method(data: Array) -> bool:
 		return true
 	var arguments: Array = []
 	if data.size() >= 3 and data[2] is Array:
-		arguments = data[2]
+		# 逐个解码，让 {"__godot_type":"Vector2i",...} 真的变成 Vector2i，
+		# 而不是把一个 Dictionary 塞给需要向量的方法。
+		for item in data[2]:
+			arguments.append(_decode_tagged(item))
 	var result: Variant = node.callv(method_name, arguments)
 	EngineDebugger.send_message("mcp:node_method_result", [{
 		"node_path": str(node.get_path()),
@@ -1534,6 +1554,12 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 		if parsed != null:
 			value = parsed
 
+	# 自描述标签优先：调用方明确写了 {"__godot_type": "Vector2i", ...} 时，
+	# 不再靠属性类型去猜——猜不出来 Vector2i 和 Vector2 的区别。
+	var tagged: Variant = _decode_tagged(value)
+	if typeof(tagged) != typeof(value) or tagged != value:
+		return tagged
+
 	var property_type: int = TYPE_NIL
 	for property_info in node.get_property_list():
 		if property_info.get("name", "") == property_name:
@@ -1567,13 +1593,52 @@ func _serialize_value(value: Variant) -> Variant:
 		TYPE_NIL, TYPE_BOOL, TYPE_INT, TYPE_FLOAT, TYPE_STRING:
 			return value
 		TYPE_VECTOR2:
-			return {"x": value.x, "y": value.y}
+			return {"x": value.x, "y": value.y, TYPE_TAG: "Vector2"}
 		TYPE_VECTOR2I:
-			return {"x": value.x, "y": value.y}
+			return {"x": value.x, "y": value.y, TYPE_TAG: "Vector2i"}
 		TYPE_VECTOR3:
-			return {"x": value.x, "y": value.y, "z": value.z}
+			return {"x": value.x, "y": value.y, "z": value.z, TYPE_TAG: "Vector3"}
+		TYPE_VECTOR3I:
+			return {"x": value.x, "y": value.y, "z": value.z, TYPE_TAG: "Vector3i"}
+		TYPE_VECTOR4:
+			return {"x": value.x, "y": value.y, "z": value.z, "w": value.w, TYPE_TAG: "Vector4"}
+		TYPE_VECTOR4I:
+			return {"x": value.x, "y": value.y, "z": value.z, "w": value.w, TYPE_TAG: "Vector4i"}
 		TYPE_COLOR:
-			return {"r": value.r, "g": value.g, "b": value.b, "a": value.a}
+			return {"r": value.r, "g": value.g, "b": value.b, "a": value.a, TYPE_TAG: "Color"}
+		TYPE_RECT2:
+			return {"position": _serialize_value(value.position), "size": _serialize_value(value.size), TYPE_TAG: "Rect2"}
+		TYPE_RECT2I:
+			return {"position": _serialize_value(value.position), "size": _serialize_value(value.size), TYPE_TAG: "Rect2i"}
+		TYPE_QUATERNION:
+			return {"x": value.x, "y": value.y, "z": value.z, "w": value.w, TYPE_TAG: "Quaternion"}
+		TYPE_PLANE:
+			return {"normal": _serialize_value(value.normal), "d": value.d, TYPE_TAG: "Plane"}
+		TYPE_AABB:
+			return {"position": _serialize_value(value.position), "size": _serialize_value(value.size), TYPE_TAG: "AABB"}
+		TYPE_BASIS:
+			return {
+				"x": _serialize_value(value.x), "y": _serialize_value(value.y),
+				"z": _serialize_value(value.z), TYPE_TAG: "Basis"}
+		TYPE_TRANSFORM2D:
+			return {
+				"x": _serialize_value(value.x), "y": _serialize_value(value.y),
+				"origin": _serialize_value(value.origin), TYPE_TAG: "Transform2D"}
+		TYPE_TRANSFORM3D:
+			return {
+				"basis": _serialize_value(value.basis),
+				"origin": _serialize_value(value.origin), TYPE_TAG: "Transform3D"}
+		TYPE_PROJECTION:
+			return {
+				"x": _serialize_value(value.x), "y": _serialize_value(value.y),
+				"z": _serialize_value(value.z), "w": _serialize_value(value.w),
+				TYPE_TAG: "Projection"}
+		TYPE_NODE_PATH:
+			return {"value": String(value), TYPE_TAG: "NodePath"}
+		TYPE_STRING_NAME:
+			return {"value": String(value), TYPE_TAG: "StringName"}
+		TYPE_RID:
+			return {"id": value.get_id(), TYPE_TAG: "RID"}
 		TYPE_ARRAY:
 			var result: Array = []
 			for item in value:
@@ -1586,6 +1651,112 @@ func _serialize_value(value: Variant) -> Variant:
 			return result
 		_:
 			return str(value)
+
+
+## 把带 __godot_type 标签的 JSON 结构还原成真正的 Godot 类型。
+## 没有标签的值原样返回（递归处理数组与字典内部）。
+func _decode_tagged(value: Variant) -> Variant:
+	if value is Array:
+		var decoded_array: Array = []
+		for item in value:
+			decoded_array.append(_decode_tagged(item))
+		return decoded_array
+	if not (value is Dictionary):
+		return value
+	var dict: Dictionary = value
+	if not dict.has(TYPE_TAG):
+		var decoded_dict: Dictionary = {}
+		for key in dict.keys():
+			decoded_dict[key] = _decode_tagged(dict[key])
+		return decoded_dict
+
+	var type_name: String = String(dict.get(TYPE_TAG, ""))
+	match type_name:
+		"Vector2":
+			return Vector2(float(dict.get("x", 0.0)), float(dict.get("y", 0.0)))
+		"Vector2i":
+			return Vector2i(int(dict.get("x", 0)), int(dict.get("y", 0)))
+		"Vector3":
+			return Vector3(float(dict.get("x", 0.0)), float(dict.get("y", 0.0)), float(dict.get("z", 0.0)))
+		"Vector3i":
+			return Vector3i(int(dict.get("x", 0)), int(dict.get("y", 0)), int(dict.get("z", 0)))
+		"Vector4":
+			return Vector4(float(dict.get("x", 0.0)), float(dict.get("y", 0.0)),
+				float(dict.get("z", 0.0)), float(dict.get("w", 0.0)))
+		"Vector4i":
+			return Vector4i(int(dict.get("x", 0)), int(dict.get("y", 0)),
+				int(dict.get("z", 0)), int(dict.get("w", 0)))
+		"Color":
+			return Color(float(dict.get("r", 0.0)), float(dict.get("g", 0.0)),
+				float(dict.get("b", 0.0)), float(dict.get("a", 1.0)))
+		"Rect2":
+			return Rect2(_decode_tagged(dict.get("position", Vector2.ZERO)),
+				_decode_tagged(dict.get("size", Vector2.ZERO)))
+		"Rect2i":
+			return Rect2i(_decode_tagged(dict.get("position", Vector2i.ZERO)),
+				_decode_tagged(dict.get("size", Vector2i.ZERO)))
+		"Quaternion":
+			return Quaternion(float(dict.get("x", 0.0)), float(dict.get("y", 0.0)),
+				float(dict.get("z", 0.0)), float(dict.get("w", 1.0)))
+		"Plane":
+			return Plane(_decode_tagged(dict.get("normal", Vector3(0, 1, 0))),
+				float(dict.get("d", 0.0)))
+		"AABB":
+			return AABB(_decode_tagged(dict.get("position", Vector3.ZERO)),
+				_decode_tagged(dict.get("size", Vector3.ZERO)))
+		"Basis":
+			return Basis(_decode_tagged(dict.get("x", Vector3(1, 0, 0))),
+				_decode_tagged(dict.get("y", Vector3(0, 1, 0))),
+				_decode_tagged(dict.get("z", Vector3(0, 0, 1))))
+		"Transform2D":
+			return Transform2D(_decode_tagged(dict.get("x", Vector2(1, 0))),
+				_decode_tagged(dict.get("y", Vector2(0, 1))),
+				_decode_tagged(dict.get("origin", Vector2.ZERO)))
+		"Transform3D":
+			return Transform3D(_decode_tagged(dict.get("basis", Basis())),
+				_decode_tagged(dict.get("origin", Vector3.ZERO)))
+		"Projection":
+			var projection: Projection = Projection()
+			projection.x = _decode_tagged(dict.get("x", Vector4(1, 0, 0, 0)))
+			projection.y = _decode_tagged(dict.get("y", Vector4(0, 1, 0, 0)))
+			projection.z = _decode_tagged(dict.get("z", Vector4(0, 0, 1, 0)))
+			projection.w = _decode_tagged(dict.get("w", Vector4(0, 0, 0, 1)))
+			return projection
+		"NodePath":
+			return NodePath(String(dict.get("value", "")))
+		"StringName":
+			return StringName(String(dict.get("value", "")))
+		_:
+			# 未知标签：保留原字典，让上层看到完整的原始输入，而不是静默丢字段。
+			return dict
+
+
+## 写入后回读的等价判定。浮点/向量用近似比较，其余用值比较。
+## 容器类型无法可靠比较时返回 true（向量化比较代价高且语义模糊），
+## 但标量、向量、颜色这些高频场景必须给出确定结论。
+func _values_equivalent(requested: Variant, actual: Variant) -> bool:
+	if typeof(requested) != typeof(actual):
+		return false
+	match typeof(requested):
+		TYPE_NIL:
+			return true
+		TYPE_BOOL, TYPE_INT, TYPE_STRING:
+			return requested == actual
+		TYPE_FLOAT:
+			return is_equal_approx(float(requested), float(actual))
+		TYPE_VECTOR2, TYPE_VECTOR3, TYPE_VECTOR4, TYPE_COLOR, TYPE_QUATERNION, TYPE_PLANE:
+			return requested.is_equal_approx(actual)
+		TYPE_VECTOR2I, TYPE_VECTOR3I, TYPE_VECTOR4I:
+			return requested == actual
+		TYPE_RECT2, TYPE_RECT2I, TYPE_AABB:
+			return requested == actual
+		TYPE_TRANSFORM2D, TYPE_TRANSFORM3D, TYPE_BASIS, TYPE_PROJECTION:
+			return requested.is_equal_approx(actual)
+		TYPE_STRING_NAME, TYPE_NODE_PATH:
+			return String(requested) == String(actual)
+		_:
+			return true
+
 
 func _count_nodes(node: Node) -> int:
 	var count: int = 1

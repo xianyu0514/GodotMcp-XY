@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_batch_node_properties"
 TEMP_SCENE_PATH = "res://.tmp_batch_node_properties/temp_batch_scene.tscn"
 
@@ -68,8 +69,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -84,7 +84,7 @@ def main() -> int:
         # security downgrade; enable it explicitly for this flow.
         enable_result = tool_call(
             "enable_tools",
-            {"tools": ["execute_editor_script"], "enabled": True},
+            {"tools": ["batch_update_node_properties", "create_node", "create_scene", "enable_tools", "execute_editor_script", "get_node_properties", "open_scene"], "enabled": True},
             request_id=1,
         )
         if enable_result.get("status") != "success":
@@ -102,24 +102,24 @@ def main() -> int:
 
         create_scene = tool_call(
             "create_scene",
-            {"scene_path": TEMP_SCENE_PATH, "root_node_type": "Node2D"},
+            {"scene_path": TEMP_SCENE_PATH, "root_node_type": "Node2D", "allow_ui_focus": True},
             request_id=2,
         )
         if create_scene.get("status") != "success":
             raise AssertionError(f"create_scene failed: {create_scene}")
 
-        open_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH}, request_id=3)
+        open_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH, "allow_ui_focus": True}, request_id=3)
         if open_scene.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene}")
 
         mover = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Mover"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Mover", "scene_path": TEMP_SCENE_PATH},
             request_id=4,
         )
         pivot = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Pivot"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "Pivot", "scene_path": TEMP_SCENE_PATH},
             request_id=5,
         )
         if mover.get("status") != "success" or pivot.get("status") != "success":
@@ -139,8 +139,7 @@ def main() -> int:
                         "node_path": "/root/temp_batch_scene/Pivot",
                         "property_name": "visible",
                         "property_value": False,
-                    },
-                ],
+                    }],
             },
             request_id=6,
         )

@@ -42,6 +42,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_editor_logs(server_core)
 	_register_execute_script(server_core)
 	_register_get_performance_metrics(server_core)
+	_register_get_cache_diagnostics(server_core)
 	_register_debug_print(server_core)
 	_register_execute_editor_script(server_core)
 	_register_clear_output(server_core)
@@ -51,7 +52,7 @@ func _on_log_message(level: String, message: String) -> void:
 	_log_mutex.lock()
 	_log_buffer.append(log_entry)
 	if _log_buffer.size() > _max_log_lines:
-		_log_buffer = _log_buffer.slice(_log_buffer.size() - _max_log_lines)
+		_log_buffer.remove_at(0)
 	_log_mutex.unlock()
 
 # ============================================================================
@@ -305,26 +306,37 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 			"source": "mcp"
 		}
 
+	var total_available: int = _log_buffer.size()
+	var result_logs: Array = []
+	if types.is_empty():
+		# 快路径：无类型过滤时先切窗口再解析，只复制/解析 count 行
+		# （默认 desc+100 最多处理 100 行，而非整个 1000 行缓冲）。
+		var window_lines: Array[String] = []
+		var window_indexes: Array[int] = []
+		if order == "desc":
+			for i in range(total_available - 1, -1, -1):
+				window_indexes.append(i)
+		else:
+			for i in range(total_available):
+				window_indexes.append(i)
+		var start: int = mini(offset, window_indexes.size())
+		var end: int = mini(start + count, window_indexes.size())
+		for k in range(start, end):
+			window_lines.append(_log_buffer[window_indexes[k]])
+		_log_mutex.unlock()
+		for k in range(window_lines.size()):
+			var parsed_entry: Dictionary = _parse_mcp_log_line(window_indexes[start + k], window_lines[k])
+			result_logs.append(parsed_entry)
+		return {
+			"logs": result_logs,
+			"count": result_logs.size(),
+			"total_available": total_available,
+			"source": "mcp"
+		}
+
 	var all_entries: Array = []
 	for i in range(_log_buffer.size()):
-		var line: String = _log_buffer[i]
-		var log_type: String = "Info"
-		var message: String = line
-		if line.begins_with("[ERROR]"):
-			log_type = "Error"
-			message = line.substr(7).strip_edges()
-		elif line.begins_with("[WARNING]"):
-			log_type = "Warning"
-			message = line.substr(9).strip_edges()
-		elif line.begins_with("[INFO]"):
-			log_type = "Info"
-			message = line.substr(6).strip_edges()
-		elif line.begins_with("[DEBUG]"):
-			log_type = "Debug"
-			message = line.substr(7).strip_edges()
-		all_entries.append({"index": i, "type": log_type, "message": message})
-
-	var total_available: int = all_entries.size()
+		all_entries.append(_parse_mcp_log_line(i, _log_buffer[i]))
 	_log_mutex.unlock()
 
 	var filtered: Array = all_entries
@@ -337,9 +349,9 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 	if order == "desc":
 		filtered.reverse()
 
-	var start: int = mini(offset, filtered.size())
-	var end: int = mini(start + count, filtered.size())
-	var result_logs: Array = filtered.slice(start, end)
+	var start_all: int = mini(offset, filtered.size())
+	var end_all: int = mini(start_all + count, filtered.size())
+	result_logs = filtered.slice(start_all, end_all)
 
 	return {
 		"logs": result_logs,
@@ -347,6 +359,24 @@ func _get_mcp_logs(types: Array, count: int, offset: int, order: String) -> Dict
 		"total_available": total_available,
 		"source": "mcp"
 	}
+
+
+static func _parse_mcp_log_line(index: int, line: String) -> Dictionary:
+	var log_type: String = "Info"
+	var message: String = line
+	if line.begins_with("[ERROR]"):
+		log_type = "Error"
+		message = line.substr(7).strip_edges()
+	elif line.begins_with("[WARNING]"):
+		log_type = "Warning"
+		message = line.substr(9).strip_edges()
+	elif line.begins_with("[INFO]"):
+		log_type = "Info"
+		message = line.substr(6).strip_edges()
+	elif line.begins_with("[DEBUG]"):
+		log_type = "Debug"
+		message = line.substr(7).strip_edges()
+	return {"index": index, "type": log_type, "message": message}
 
 func _get_runtime_logs(types: Array, count: int, offset: int, order: String) -> Dictionary:
 	var log_path: String = "user://logs/godot.log"
@@ -571,16 +601,72 @@ func _tool_get_performance_metrics(params: Dictionary) -> Dictionary:
 	var object_count: int = Performance.get_monitor(Performance.OBJECT_COUNT)
 	var resource_count: int = Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT)
 	var memory_usage: int = Performance.get_monitor(Performance.MEMORY_STATIC)  # 静态内存
-	
+
 	# 转换为MB
 	var memory_mb: float = memory_usage / 1024.0 / 1024.0
-	
+
 	return {
 		"fps": fps,
 		"object_count": object_count,
 		"resource_count": resource_count,
 		"memory_usage_mb": memory_mb
 	}
+
+# ============================================================================
+# get_cache_diagnostics - 缓存命中率遥测
+# ============================================================================
+
+func _register_get_cache_diagnostics(server_core: RefCounted) -> void:
+	var tool_name: String = "get_cache_diagnostics"
+	var description: String = "Read shared tool-result cache telemetry: hit/reuse rates, entries vs capacity, byte pressure, single-flight merges, tool-list and read-snapshot caches, external-change invalidation and spill counters. Pure counters snapshot — deliberately NOT served from the result cache (the counters move on every call)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"result_cache": {
+				"type": "object",
+				"properties": {
+					"hits": {"type": "integer"},
+					"misses": {"type": "integer"},
+					"hit_rate": {"type": "number"},
+					"reuse_rate": {"type": "number"},
+					"entries": {"type": "integer"},
+					"capacity": {"type": "integer"},
+					"bytes": {"type": "integer"},
+					"capacity_bytes": {"type": "integer"}
+				},
+				"additionalProperties": true
+			},
+			"tool_list_cache": {"type": "object", "additionalProperties": true},
+			"read_snapshot_cache": {"type": "object", "additionalProperties": true},
+			"external_change_invalidation": {"type": "object", "additionalProperties": true},
+			"spill": {"type": "object", "additionalProperties": true}
+		},
+		"additionalProperties": true
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_get_cache_diagnostics"),
+						  output_schema, annotations, "supplementary", "Debug-Advanced")
+
+func _tool_get_cache_diagnostics(params: Dictionary) -> Dictionary:
+	if _server_core == null:
+		return {"error": "Server core is not available"}
+	if not _server_core.has_method("get_cache_diagnostics"):
+		return {"error": "Server core does not expose cache diagnostics"}
+	return _server_core.get_cache_diagnostics()
 
 # ============================================================================
 # debug_print - 输出调试信息
@@ -666,6 +752,11 @@ func _register_execute_editor_script(server_core: RefCounted) -> void:
 			"code": {
 				"type": "string",
 				"description": "Full GDScript code to execute. Can contain multiple statements, loops, conditionals, and await. Use _custom_print(value) to send output back to the tool response (standard print() goes to editor panel only)."
+			},
+			"expect_files": {
+				"type": "array",
+				"items": {"type": "string"},
+				"description": "Paths the script must create; any missing file fails the call (anti false-success)."
 			}
 		},
 		"required": ["code"]
@@ -690,6 +781,25 @@ func _register_execute_editor_script(server_core: RefCounted) -> void:
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_execute_editor_script"),
 						  output_schema, annotations, "supplementary", "Editor")
+
+## 声明式副作用验证：调用方约定“这次执行应产生这些文件”。工具返回 success
+## 但预期文件缺失即判定失败——堵住 workflow completed 而证据未生成的假成功。
+static func verify_expected_files(expect_files: Array) -> Dictionary:
+	var cleaned: Array = []
+	for path_value in expect_files:
+		var declared_path: String = String(path_value).strip_edges()
+		if not declared_path.is_empty():
+			cleaned.append(declared_path)
+	var missing: Array = []
+	for declared_path in cleaned:
+		if not FileAccess.file_exists(declared_path):
+			missing.append(declared_path)
+	return {
+		"declared_count": cleaned.size(),
+		"verified_count": cleaned.size() - missing.size(),
+		"missing_files": missing,
+		"ok": missing.is_empty(),
+	}
 
 func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 	var code: String = params.get("code", "")
@@ -776,10 +886,18 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 	if instance is RefCounted:
 		pass
 
-	return {
+	var result: Dictionary = {
 		"success": true,
 		"output": output
 	}
+	var expect_value: Variant = params.get("expect_files", [])
+	if expect_value is Array and not (expect_value as Array).is_empty():
+		var verification: Dictionary = verify_expected_files(expect_value as Array)
+		result["side_effects"] = verification
+		if not bool(verification.get("ok", true)):
+			result["success"] = false
+			result["error"] = "Execution finished but expected files were not created: " + ", ".join(verification.get("missing_files", []))
+	return result
 
 func _count_indent(line: String) -> int:
 	var count: int = 0

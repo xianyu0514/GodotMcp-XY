@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_scene_inheritance_audit"
 CHILD_SCENE_PATH = "res://.tmp_scene_inheritance_audit/child_scene.tscn"
 PARENT_SCENE_PATH = "res://.tmp_scene_inheritance_audit/parent_scene.tscn"
@@ -93,8 +94,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -104,6 +104,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["audit_scene_inheritance", "open_scene"], "enabled": True}, request_id=90)
 
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
@@ -112,7 +113,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected inheritance audit tools: {missing_tools}")
 
-        open_scene = tool_call("open_scene", {"scene_path": PARENT_SCENE_PATH}, request_id=2)
+        open_scene = tool_call("open_scene", {"scene_path": PARENT_SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_scene.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene}")
 

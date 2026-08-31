@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**61 tools** — 3 core, 58 advanced.
+**69 tools** — 3 core, 66 advanced.
 
 Inspect and maintain project-level state: settings, resources, input map, tests, autoloads, migration checks, rendering assets, TileSets, sprite sheets, glTF imports and task plans.
 
@@ -10,7 +10,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 
 1. Read project facts with `get_project_info`, `get_project_settings` and `list_project_resources`.
 2. Use advanced resource tools for imports, dependency analysis and usage audits.
-3. Run project tests through `list_project_tests`, `run_project_test` and `run_project_tests`.
+3. Bootstrap the test environment with `prepare_project_test_environment`, `ensure_project_directory` and `create_project_smoke_test`, then run tests through `list_project_tests`, `run_project_test` and `run_project_tests`.
 4. Enable production helpers such as `generate_asset`, `slice_sprite_sheet`, `inspect_gltf_asset`, `assert_visual_baseline` and `manage_task_plan` only for the workflows that need them.
 
 ## Tool list
@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (58 advanced)
+### Project-Advanced (61 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -33,6 +33,9 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `update_resource_properties` | advanced | Load an existing resource file, set/merge exported properties, and re-save it. Use to tweak data such as card cost or enemy HP. |
 | `read_resource_properties` | advanced | Read a resource file and return its exported properties as JSON-friendly values, optionally including built-in base Resource properties. |
 | `get_project_structure` | advanced | Get project structure and file organization. |
+| `prepare_project_test_environment` | advanced | Inspect and prepare the project's test environment without requiring GUT or Python. Checks res://test/, res://tests/ and res://.mcp_runtime_tests/ and returns ready/empty/unconfigured/blocked plus a recoverable flag and recommended action. |
+| `ensure_project_directory` | advanced | Ensure a directory exists under res://. Idempotent and safe: refuses the project root and rejects path escape. Returns 'created' or 'unchanged'. |
+| `create_project_smoke_test` | advanced | Generate a minimal framework-independent smoke test under res://test/. The native test checks main-scene load, project file presence and a clean headless run, so an empty project can pass QA without GUT or Python installed. |
 | `list_project_tests` | advanced | Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable. |
 | `run_project_test` | advanced | Run a single project test script without blocking the editor. The first call starts the run on a background thread and returns status 'pending'; call again with the same test_path to poll for the finished result. Python integration tests are executed with python. GUT unit tests are executed through Godot headless when addons/gut is available. |
 | `run_project_tests` | advanced | Discover and run multiple project tests from a directory without blocking the editor. The first call starts the batch on a background thread and returns status 'pending'; call again with the same arguments to poll for the aggregated result. Reuses the same framework filters as list_project_tests and aggregates pass/fail counts. |
@@ -51,9 +54,9 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_resource_uid_info` | advanced | Get resource UID information. |
 | `fix_resource_uid` | advanced | Fix resource UID issues. |
 | `get_resource_dependencies` | advanced | Get resource dependencies. |
-| `scan_missing_resource_dependencies` | advanced | Scan for missing resource dependencies. |
-| `scan_cyclic_resource_dependencies` | advanced | Scan for cyclic resource dependencies. |
-| `detect_broken_scripts` | advanced | Detect broken scripts in the project. |
+| `scan_missing_resource_dependencies` | advanced | Scan for missing resource dependencies. Per-file dependency parsing is memoized on mtime+size; default scope is user code (tooling only via `include_tooling=true` or a tooling `search_path`). |
+| `scan_cyclic_resource_dependencies` | advanced | Scan for cyclic resource dependencies. Per-file dependency parsing is memoized on mtime+size; default scope is user code (tooling only via `include_tooling=true` or a tooling `search_path`). |
+| `detect_broken_scripts` | advanced | Detect broken scripts in the project. Default scans user code only (skips `addons/`, `test/`, `docs/`); `include_tooling=true` or a tooling `search_path` audits third-party internals. Per-file results are memoized on mtime+size, so rescans recompile only changed scripts. |
 | `audit_project_health` | advanced | Audit project health and integrity. |
 | `find_resource_usages` | advanced | Find resources that reference a target, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
 | `list_unused_resources` | advanced | List unreferenced resources with lossless `limit`/`offset` pages backed by one revision-safe scan. |
@@ -84,4 +87,14 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `manage_task_plan` | advanced | Persistent task graph + Definition-of-Done (DoD) in JSON (default res://.mcp/task_plan.json). Actions: init, add_task, update_task, set_status (done needs DoD unless force), set_dod, get, next, remove_task. |
 | `generate_3d_asset` | advanced | Generate a 3D model (glTF/GLB) from a text prompt via an external provider into res://. Async: submit job, poll status, download, validate. API key from an OS env var (never logged). Returns 'unconfigured' when unset; reimports when possible. |
 | `bump_version` | advanced | Automate version + changelog for the ship loop: read the current version from `application/config/version`, compute the next one (semantic `bump` major/minor/patch or an explicit `version`), and unless `dry_run` write it back to project.godot. When `update_changelog` is on, prepend a dated entry to `changelog_path` (default res://CHANGELOG.md). Returns previous/new version and whether files were written. |
-| `manage_localization` | advanced | Localization workflow: 'extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title/hint_tooltip) and .gd tr()/atr() calls, merging new keys into a standard CSV (first column keys, one per locale) while preserving existing translations; 'import' builds one .translation per locale from the CSV and registers it in ProjectSettings; 'export' writes registered .translations back to CSV; 'list' shows registered locales. Write actions support dry_run. |
+| `manage_localization` | advanced | Localization workflow: 'extract' scans .tscn translatable properties (text/tooltip_text/placeholder_text/title/hint_tooltip) and .gd tr()/atr() calls, merging new keys into a standard CSV (first column keys, one per locale) while preserving existing translations; 'import' builds one .translation per locale from the CSV and registers it in ProjectSettings; 'export' writes registered .translations back to CSV; 'list' shows registered locales. Write actions support dry_run. Extraction walks the project once and skips tooling directories (addons/test/docs) so plugin strings never leak into the game CSV. |
+
+## Export preset management
+
+| Tool | Tier | Description |
+| --- | --- | --- |
+| `inspect_export_presets` | advanced | Read all presets from export_presets.cfg: platform, export path, filters, per-preset options, plus editor platform availability (unvalidated when the export API is unavailable). |
+| `create_export_preset` | advanced | Create an export preset (platform, name, export_path, filters, platform options; `if_exists="reuse"` makes duplicate names an idempotent success returning the existing preset). Re-reads the file afterwards and reports `verified`. |
+| `update_export_preset` | advanced | Update fields/options of an existing preset; only provided keys change. |
+| `duplicate_export_preset` | advanced | Duplicate a preset under a new name (options copied, export path suffixed). |
+| `remove_export_preset` | advanced | Remove a preset section (and its options) from export_presets.cfg. |

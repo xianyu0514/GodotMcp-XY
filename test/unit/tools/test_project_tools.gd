@@ -868,3 +868,14 @@ func test_draw_on_texture_blit_guarded():
 
 	DirAccess.remove_absolute(tex_path)
 	DirAccess.remove_absolute(src_path)
+
+func test_validate_test_path_accepts_default_root_without_trailing_slash():
+	var tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var verdict: Dictionary = tools._validate_test_path("res://test", true)
+	assert_false(verdict.has("error"),
+		"The tool's own default search path res://test must pass validation (regression: "
+		+ str(verdict.get("error", "")) + ")")
+	var nested: Dictionary = tools._validate_test_path("res://test/unit", true)
+	assert_false(nested.has("error"), "Nested res://test/... paths stay valid")
+	var outside: Dictionary = tools._validate_test_path("res://addons", true)
+	assert_true(outside.has("error"), "Paths outside res://test are still rejected")

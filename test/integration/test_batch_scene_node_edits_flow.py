@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -8,10 +9,12 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
-TEMP_DIR = REPO_ROOT / ".tmp_batch_scene_node_edits"
-TEMP_SCENE_PATH = "res://.tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_PORT = int(os.environ.get("MCP_PORT", "9080"))
+MCP_URL = f"http://127.0.0.1:{MCP_PORT}/mcp"
+TEMP_DIR = REPO_ROOT / "tmp_batch_scene_node_edits"
+TEMP_SCENE_PATH = "res://tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"
+TEMP_SCRIPT_PATH = "res://tmp_batch_scene_node_edits/enemy.gd"
 
 
 def rpc_call(method: str, params: dict | None = None, request_id: int = 1) -> dict:
@@ -68,8 +71,8 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}",
+        f"--mcp-port={MCP_PORT}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -84,7 +87,7 @@ def main() -> int:
         # security downgrade; enable it explicitly for this flow.
         enable_result = tool_call(
             "enable_tools",
-            {"tools": ["execute_editor_script"], "enabled": True},
+            {"tools": ["batch_scene_node_edits", "create_node", "create_scene", "create_script", "enable_tools", "execute_editor_script", "list_nodes", "open_scene"], "enabled": True},
             request_id=1,
         )
         if enable_result.get("status") != "success":
@@ -105,13 +108,17 @@ def main() -> int:
         if create_scene.get("status") != "success":
             raise AssertionError(f"create_scene failed: {create_scene}")
 
-        open_scene = tool_call("open_scene", {"scene_path": TEMP_SCENE_PATH}, request_id=3)
+        open_scene = tool_call(
+            "open_scene",
+            {"scene_path": TEMP_SCENE_PATH, "allow_ui_focus": True},
+            request_id=3,
+        )
         if open_scene.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene}")
 
         seed_node = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "OldNode"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "OldNode", "scene_path": "res://tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"},
             request_id=4,
         )
         if seed_node.get("status") != "success":
@@ -119,7 +126,7 @@ def main() -> int:
 
         move_target = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "MoveTarget"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "MoveTarget", "scene_path": "res://tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"},
             request_id=5,
         )
         if move_target.get("status") != "success":
@@ -127,7 +134,7 @@ def main() -> int:
 
         target_parent = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "TargetParent"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "TargetParent", "scene_path": "res://tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"},
             request_id=6,
         )
         if target_parent.get("status") != "success":
@@ -135,7 +142,7 @@ def main() -> int:
 
         delete_me = tool_call(
             "create_node",
-            {"parent_path": "/root", "node_type": "Node2D", "node_name": "DeleteMe"},
+            {"parent_path": "/root", "node_type": "Node2D", "node_name": "DeleteMe", "scene_path": "res://tmp_batch_scene_node_edits/temp_batch_nodes_scene.tscn"},
             request_id=7,
         )
         if delete_me.get("status") != "success":
@@ -165,8 +172,7 @@ def main() -> int:
                     {
                         "type": "delete",
                         "node_path": "/root/temp_batch_nodes_scene/DeleteMe",
-                    },
-                ],
+                    }],
             },
             request_id=8,
         )
@@ -232,6 +238,91 @@ _custom_print(JSON.stringify({
         }
         if undo_state != expected_undo_state:
             raise AssertionError(f"Expected undo to restore the original structure: {undo_state}")
+
+        # ---- One-transaction scripted-node assembly (new operation types) ----
+        create_script = tool_call(
+            "create_script",
+            {
+                "script_path": TEMP_SCRIPT_PATH,
+                "content": (
+                    "extends CharacterBody2D\n"
+                    "signal health_changed(new_health: int)\n"
+                    "@export var speed: float = 100.0\n"
+                    "\n"
+                    "func _on_health_changed(new_health: int) -> void:\n"
+                    "\tpass\n"
+                ),
+            },
+            request_id=11,
+        )
+        if create_script.get("status") != "success":
+            raise AssertionError(f"create_script failed: {create_script}")
+
+        assembly = tool_call(
+            "batch_scene_node_edits",
+            {
+                "label": "Scripted enemy assembly",
+                "save": True,
+                "operations": [
+                    {"type": "create", "parent_path": "/root", "node_type": "CharacterBody2D", "node_name": "Enemy"},
+                    {"type": "attach_script", "node_path": "/root/Enemy", "script_path": TEMP_SCRIPT_PATH},
+                    {"type": "set_property", "node_path": "/root/Enemy", "property_name": "position", "property_value": {"x": 120, "y": 40}},
+                    {"type": "set_property", "node_path": "/root/Enemy", "property_name": "speed", "property_value": 240.0},
+                    {"type": "connect_signal", "node_path": "/root/Enemy", "signal_name": "health_changed", "method_name": "_on_health_changed"}],
+            },
+            request_id=12,
+        )
+        if assembly.get("status") != "success":
+            raise AssertionError(f"scripted assembly batch failed: {assembly}")
+        if assembly.get("operation_count") != 5:
+            raise AssertionError(f"Expected five assembly operations: {assembly}")
+        if assembly.get("saved") is not True:
+            raise AssertionError(f"Expected the scene to be saved: {assembly}")
+
+        assembly_check = tool_call(
+            "execute_editor_script",
+            {
+                "code": """
+var plugin = Engine.get_meta("GodotMCPPlugin")
+var editor_interface = plugin.get_editor_interface()
+var scene_root = editor_interface.get_edited_scene_root()
+var enemy = scene_root.get_node_or_null("Enemy")
+var result = {"enemy_exists": enemy != null}
+if enemy != null:
+    var position_value = enemy.get("position")
+    result["position_x"] = position_value.x
+    result["position_y"] = position_value.y
+    result["speed"] = enemy.get("speed")
+    var script_resource = enemy.get_script()
+    result["has_script"] = script_resource != null
+    result["signal_connected"] = enemy.is_connected("health_changed", Callable(enemy, "_on_health_changed"))
+_custom_print(JSON.stringify(result))
+""",
+            },
+            request_id=13,
+        )
+        if assembly_check.get("success") is not True or not assembly_check.get("output"):
+            raise AssertionError(f"assembly verification failed: {assembly_check}")
+        assembly_state = json.loads(assembly_check["output"][-1])
+        expected_assembly_state = {
+            "enemy_exists": True,
+            "position_x": 120.0,
+            "position_y": 40.0,
+            "speed": 240.0,
+            "has_script": True,
+            "signal_connected": True,
+        }
+        if assembly_state != expected_assembly_state:
+            raise AssertionError(f"Expected the one-call assembly to land on the node: {assembly_state}")
+
+        saved_scene = TEMP_DIR / "temp_batch_nodes_scene.tscn"
+        if not saved_scene.exists():
+            raise AssertionError("Expected the saved scene file to exist")
+        saved_text = saved_scene.read_text(encoding="utf-8")
+        if "enemy.gd" not in saved_text and "var speed" not in saved_text:
+            raise AssertionError(f"Expected the saved scene to reference the attached script: {saved_text}")
+        if 'position = Vector2(120, 40)' not in saved_text and "position = Vector2(120, 40)" not in saved_text:
+            raise AssertionError(f"Expected the saved scene to contain the position: {saved_text}")
 
         print("batch scene node edits flow verified")
         return 0

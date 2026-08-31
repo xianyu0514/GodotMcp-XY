@@ -143,8 +143,8 @@ func test_download_target_uses_asset_name():
 	assert_eq(target.get_base_dir(), ProviderScript.install_dir("linux-amd64"), "Downloads should land in the shared cache")
 
 func test_path_binary_candidates_parse_and_deduplicate_unix_path():
-	var first: String = _tmp_root.path_join("first")
-	var second: String = _tmp_root.path_join("second")
+	var first: String = "/opt/cloudflared-first"
+	var second: String = "/opt/cloudflared-second"
 	var candidates: PackedStringArray = ProviderScript.path_binary_candidates(
 		"%s:%s:%s" % [first, second, first], "Linux"
 	)
@@ -182,11 +182,12 @@ func test_find_existing_user_binary_prefers_explicit_path_over_path_env():
 
 func test_find_existing_user_binary_falls_back_to_path_env():
 	var system_dir: String = _tmp_root.path_join("system")
-	var system_binary: String = system_dir.path_join("cloudflared")
+	var binary_filename: String = "cloudflared.exe" if OS.get_name() == "Windows" else "cloudflared"
+	var system_binary: String = system_dir.path_join(binary_filename)
 	_write_file(system_binary, "system")
 
 	var found: Dictionary = ProviderScript.find_existing_user_binary(
-		_tmp_root.path_join("missing/cloudflared"), system_dir, "Linux"
+		_tmp_root.path_join("missing"), system_dir, OS.get_name()
 	)
 	assert_eq(found.get("path", ""), system_binary)
 	assert_eq(found.get("source", ""), "system_path")

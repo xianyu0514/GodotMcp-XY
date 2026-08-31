@@ -22,8 +22,14 @@ var _latest_stack_variables: Dictionary = {}
 var _latest_evaluations: Dictionary = {}
 var _state_events: Array[Dictionary] = []
 var _output_events: Array[Dictionary] = []
+## 错误事件独立于 stdout 环：话多的游戏（每帧 print）会在不到一秒内把
+## 500 条环挤满，_ready 里的真实 stderr 错误被冲掉后，
+## assert_no_runtime_errors / play_and_verify 就再也看不到它——门禁带着
+## 活错误假绿。错误环容量独立且大得多，不受 stdout 音量影响。
+var _output_errors: Array[Dictionary] = []
 var _max_state_events: int = 200
 var _max_output_events: int = 500
+var _max_output_errors: int = 2000
 var _next_variables_reference: int = 1
 var _variable_references: Dictionary = {}
 var _scope_variables_references: Dictionary = {}
@@ -195,9 +201,26 @@ func get_state_events(count: int = 100, offset: int = 0, order: String = "desc")
 
 func get_output_events(count: int = 100, offset: int = 0, order: String = "desc", category: String = "") -> Dictionary:
 	var events: Array = []
-	for entry in _output_events:
-		if category.is_empty() or str(entry.get("category", "")) == category:
+	if category == "stderr":
+		for entry in _output_errors:
 			events.append(entry.duplicate(true))
+	elif category.is_empty():
+		# 全类别读 = 双环按 sequence 归并（两环各自升序）。
+		var i: int = 0
+		var j: int = 0
+		while i < _output_events.size() or j < _output_errors.size():
+			if j >= _output_errors.size() \
+					or (i < _output_events.size()
+						and int(_output_events[i].get("sequence", 0)) <= int(_output_errors[j].get("sequence", 0))):
+				events.append(_output_events[i].duplicate(true))
+				i += 1
+			else:
+				events.append(_output_errors[j].duplicate(true))
+				j += 1
+	else:
+		for entry in _output_events:
+			if str(entry.get("category", "")) == category:
+				events.append(entry.duplicate(true))
 	if order == "desc":
 		events.reverse()
 	var start: int = clampi(offset, 0, events.size())
@@ -300,16 +323,55 @@ func get_latest_message_payload(message: String, match_fields: Dictionary = {}) 
 			return payload
 	return null
 
+## 按消息名分桶的捕获索引：查找从 O(缓冲总量) 降为 O(名字数 x 桶内命中)。
+var _captured_by_name: Dictionary = {}
+
+
+func _no_active_sessions() -> bool:
+	for session_value in get_sessions():
+		var session: EditorDebuggerSession = session_value
+		if session != null and session.is_active():
+			return false
+	return true
+
+
 func get_captured_message_after_sequence(sequence: int, response_messages: Array, error_messages: Array = [], match_fields: Dictionary = {}) -> Dictionary:
-	for entry in _captured_messages:
+	return _earliest_captured_after(_captured_by_name, sequence, response_messages, error_messages, match_fields)
+
+
+## 按消息名索引的最早命中查找：每个名字的桶按序追加（序列单调），
+## 桶内首个 sequence > 基线（且字段匹配）的条目即该桶最早候选；
+## 跨桶取序列最小者。此前对整个捕获缓冲（最多 500 条）线性扫描，
+## request_runtime_message 每次轮询都扫一遍。
+## static 纯函数：无头单测可直接以构造索引验证语义。
+static func _earliest_captured_after(index: Dictionary, sequence: int,
+		response_messages: Array, error_messages: Array,
+		match_fields: Dictionary) -> Dictionary:
+	var best: Dictionary = {}
+	for name_value in response_messages:
+		var entry: Dictionary = _first_in_bucket_after(index, String(name_value), sequence, match_fields)
+		if not entry.is_empty() and (best.is_empty()
+				or int(entry.get("sequence", 0)) < int(best.get("sequence", 0))):
+			best = entry
+	# error 消息不做字段过滤（与原线性语义一致）。
+	for name_value in error_messages:
+		var entry: Dictionary = _first_in_bucket_after(index, String(name_value), sequence, {})
+		if not entry.is_empty() and (best.is_empty()
+				or int(entry.get("sequence", 0)) < int(best.get("sequence", 0))):
+			best = entry
+	return best
+
+
+static func _first_in_bucket_after(index: Dictionary, name: String,
+		sequence: int, match_fields: Dictionary) -> Dictionary:
+	var bucket: Array = index.get(name, [])
+	for entry_value in bucket:
+		var entry: Dictionary = entry_value
 		if int(entry.get("sequence", 0)) <= sequence:
-			continue
-		var message: String = str(entry.get("message", ""))
-		if not response_messages.has(message) and not error_messages.has(message):
 			continue
 		var captured_data: Array = entry.get("data", [])
 		var payload: Variant = captured_data[0] if not captured_data.is_empty() else null
-		if response_messages.has(message) and not _payload_matches(payload, match_fields):
+		if not match_fields.is_empty() and not _payload_matches(payload, match_fields):
 			continue
 		return entry
 	return {}
@@ -323,6 +385,8 @@ func request_runtime_message(message: String, data: Array = [], response_message
 		return send_result
 
 	var wait_until: int = Time.get_ticks_msec() + maxi(timeout_ms, 1)
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	var poll_index: int = 0
 	while Time.get_ticks_msec() <= wait_until:
 		var captured: Dictionary = _find_captured_message_after_sequence(baseline_sequence, response_messages, error_messages)
 		if not captured.is_empty():
@@ -343,12 +407,17 @@ func request_runtime_message(message: String, data: Array = [], response_message
 				"payload": payload,
 				"captured": captured
 			}
-		OS.delay_msec(10)
-		if DisplayServer.has_method("process_events"):
-			DisplayServer.process_events()
-		var tree: SceneTree = Engine.get_main_loop() as SceneTree
+		# 会话已全部停止则不会有回复（崩溃/正常退出后的常见路径）——
+		# 立即超时返回，不再拖满整个窗口。每 8 次轮询查一次即可。
+		poll_index += 1
+		if poll_index % 8 == 0 and _no_active_sessions():
+			break
+		# 非阻塞等待：SceneTree 定时器让帧继续跑（调试器轮询在帧内发生，
+		# 回复更快到达），替代此前阻塞主线程 10ms 的 OS.delay_msec。
 		if tree:
-			await tree.process_frame
+			await tree.create_timer(0.03).timeout
+		else:
+			OS.delay_msec(30)
 
 	return {
 		"error": "Timed out waiting for runtime response: " + message,
@@ -356,7 +425,38 @@ func request_runtime_message(message: String, data: Array = [], response_message
 		"response_messages": response_messages
 	}
 
+## 全树遍历的节流间隔：调试器窗口只在会话启动/停止时增删，2 秒内重复
+## 请求拿到同一批连接即可；新窗口由 node_added 钩子即时挂接，不受节流影响。
+const DEBUGGER_RESCAN_INTERVAL_MS: int = 2000
+
+var _last_debugger_walk_msec: int = -DEBUGGER_RESCAN_INTERVAL_MS
+var _node_added_hooked: bool = false
+# 弱引用代理的连接 Callable：脚本热重载/退出期间 node_added 若在实例半释放后
+# 触发，强引用 Callable 会在空实例上报 SCRIPT ERROR（4.7 导入门禁因此失败）。
+var _node_added_proxy: Callable = Callable()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE:
+		# 内联拆钩：脚本热重载期间 PREDELETE 派发时，调用自身方法会在
+		# 半释放实例上报 null-instance SCRIPT ERROR（Linux 导入门禁因此失败）。
+		var tree_at_delete: SceneTree = Engine.get_main_loop() as SceneTree
+		if tree_at_delete and _node_added_proxy.is_valid() 				and tree_at_delete.node_added.is_connected(_node_added_proxy):
+			tree_at_delete.node_added.disconnect(_node_added_proxy)
+		_node_added_hooked = false
+
+
+## 每个 get_runtime_* / assert_* 调用都会触发刷新：直接全树遍历编辑器 UI
+## 是 O(编辑器节点数) 的每调用开销。改为——node_added 钩子即时连接新的
+## ScriptEditorDebugger，周期性全树扫描仅作兜底（间隔内直接跳过）。
 func _refresh_script_debugger_connections() -> void:
+	_hook_node_added()
+	var now: int = Time.get_ticks_msec()
+	if now - _last_debugger_walk_msec < DEBUGGER_RESCAN_INTERVAL_MS:
+		_prune_freed_debuggers()
+		return
+	_last_debugger_walk_msec = now
+	_prune_freed_debuggers()
 	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if not tree:
 		return
@@ -370,6 +470,43 @@ func _refresh_script_debugger_connections() -> void:
 			_connect_script_debugger(node)
 		for child in node.get_children():
 			pending.append(child)
+
+
+func _hook_node_added() -> void:
+	if _node_added_hooked:
+		return
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if not tree:
+		return
+	var weak: WeakRef = weakref(self)
+	_node_added_proxy = func(node: Node) -> void:
+		var bridge: MCPDebuggerBridge = weak.get_ref() as MCPDebuggerBridge
+		if bridge != null:
+			bridge._on_tree_node_added(node)
+	if not tree.node_added.is_connected(_node_added_proxy):
+		tree.node_added.connect(_node_added_proxy)
+	_node_added_hooked = true
+
+
+func _unhook_node_added() -> void:
+	if not _node_added_hooked:
+		return
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if tree:
+		if _node_added_proxy.is_valid() and tree.node_added.is_connected(_node_added_proxy):
+			tree.node_added.disconnect(_node_added_proxy)
+	_node_added_hooked = false
+
+
+func _on_tree_node_added(node: Node) -> void:
+	if is_instance_valid(node) and node.get_class() == "ScriptEditorDebugger":
+		_connect_script_debugger(node)
+
+
+func _prune_freed_debuggers() -> void:
+	for index in range(_connected_script_debuggers.size() - 1, -1, -1):
+		if not is_instance_valid(_connected_script_debuggers[index]):
+			_connected_script_debuggers.remove_at(index)
 
 func _connect_script_debugger(debugger: Object) -> void:
 	if _connected_script_debuggers.has(debugger):
@@ -467,15 +604,27 @@ func _decode_stack_variable(data: Array) -> Dictionary:
 
 func _append_captured_message(session_id: int, message: String, data: Array) -> void:
 	_message_sequence += 1
-	_captured_messages.append({
+	var entry: Dictionary = {
 		"sequence": _message_sequence,
 		"session_id": session_id,
 		"message": message,
 		"data": data,
 		"timestamp": Time.get_unix_time_from_system()
-	})
+	}
+	_captured_messages.append(entry)
+	# 按名字建桶（追加序 = 序列序，桶内天然有序）。
+	var bucket: Array = _captured_by_name.get(message, [])
+	bucket.append(entry)
+	_captured_by_name[message] = bucket
 	if _captured_messages.size() > _max_messages:
-		_captured_messages = _captured_messages.slice(_captured_messages.size() - _max_messages)
+		# remove_at(0) 原位弹出：饱和后每条消息不再复制整个 n 元数组
+		var evicted: Dictionary = _captured_messages[0]
+		_captured_messages.remove_at(0)
+		var evicted_name: String = str(evicted.get("message", ""))
+		var evicted_bucket: Array = _captured_by_name.get(evicted_name, [])
+		evicted_bucket.erase(evicted)
+		if evicted_bucket.is_empty():
+			_captured_by_name.erase(evicted_name)
 
 func _append_state_event(event: Dictionary) -> void:
 	_message_sequence += 1
@@ -484,16 +633,21 @@ func _append_state_event(event: Dictionary) -> void:
 	entry["timestamp"] = Time.get_unix_time_from_system()
 	_state_events.append(entry)
 	if _state_events.size() > _max_state_events:
-		_state_events = _state_events.slice(_state_events.size() - _max_state_events)
+		_state_events.remove_at(0)
 
 func _append_output_event(event: Dictionary) -> void:
 	_message_sequence += 1
 	var entry: Dictionary = event.duplicate(true)
 	entry["sequence"] = _message_sequence
 	entry["timestamp"] = Time.get_unix_time_from_system()
+	if str(entry.get("category", "")) == "stderr":
+		_output_errors.append(entry)
+		if _output_errors.size() > _max_output_errors:
+			_output_errors.remove_at(0)
+		return
 	_output_events.append(entry)
 	if _output_events.size() > _max_output_events:
-		_output_events = _output_events.slice(_output_events.size() - _max_output_events)
+		_output_events.remove_at(0)
 
 func _map_output_category(type: int) -> String:
 	match type:
@@ -865,20 +1019,14 @@ func _serialize_debug_signal(value: Variant) -> Dictionary:
 	}
 
 func _find_captured_message_after_sequence(sequence: int, response_messages: Array, error_messages: Array) -> Dictionary:
-	for entry in _captured_messages:
-		if int(entry.get("sequence", 0)) <= sequence:
-			continue
-		var message: String = str(entry.get("message", ""))
-		if response_messages.has(message) or error_messages.has(message):
-			return entry
-	return {}
+	return _earliest_captured_after(_captured_by_name, sequence, response_messages, error_messages, {})
 
 func _extract_runtime_error(payload: Variant) -> String:
 	if payload is Dictionary:
 		return str(payload.get("message", payload))
 	return str(payload)
 
-func _payload_matches(payload: Variant, match_fields: Dictionary) -> bool:
+static func _payload_matches(payload: Variant, match_fields: Dictionary) -> bool:
 	if match_fields.is_empty():
 		return true
 	if not (payload is Dictionary):

@@ -36,6 +36,11 @@ const AUTH_SCHEME: String = "Bearer"
 ## 最大并发连接数（防止连接数过多导致资源耗尽）
 const MAX_CONNECTIONS: int = 64
 
+# 已派发到主线程但尚未收到响应的请求：编辑器主线程阻塞（导入/全量扫描/
+# reload_project）时这些请求会无限挂死。超过该时限后由服务器线程直接回 503，
+# 让客户端（尤其是隧道后的远程调用方）得到明确的可重试信号而不是黑洞。
+const DISPATCH_TIMEOUT: float = 30.0
+
 
 # ==============================================================================
 # 状态变量（带类型提示 - 根据 godot-dev-guide）
@@ -68,6 +73,11 @@ var _sessions: Dictionary = {}  # session_id -> session_data
 ## POST 请求按 peer 协商的响应格式（"json" 或 "sse"），主线程 send_response 据此选择。
 ## 与 _sse_connections 相同的既有跨线程访问模式（服务器线程写、主线程读）。
 var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
+# peer -> {"at": msec}：已 call_deferred 到主线程、等待响应的请求（仅服务器线程读写）。
+var _dispatched_requests: Dictionary = {}
+# 服务器线程每轮循环刷新；主线程据此检测"套接字活着但泵已死"的僵尸态
+# （热重载斩断回调链后线程与端口仍在，请求却派发进失效 Callable）。
+var last_heartbeat_msec: int = 0
 
 ## 尚未接收完整的 HTTP 请求状态。服务器线程按轮询增量组装每个 peer 的请求，
 ## 避免一个慢客户端在等待剩余正文时阻塞其他连接与 SSE 心跳。
@@ -239,8 +249,10 @@ func stop() -> void:
 		_tcp_server.stop()
 		_tcp_server = null
 	
-	# 等待线程结束（必须在线程退出后再修改共享数据）
-	if _thread and _thread.is_alive():
+	# 等待线程结束（必须在线程退出后再修改共享数据）。以 is_started() 判断：
+	# 线程函数可能恰好在 is_alive() 检查前自行退出，跳过 wait_to_finish()
+	# 会让 Thread 对象在"未实现完成"状态下被销毁（引擎警告 + 潜在未收割资源）。
+	if _thread and _thread.is_started():
 		_thread.wait_to_finish()
 	_thread = null
 	
@@ -274,9 +286,11 @@ func _http_server_loop() -> void:
 	
 	var last_keepalive: int = Time.get_ticks_msec()
 	
+	last_heartbeat_msec = Time.get_ticks_msec()
 	while _active:
 		if not _tcp_server:
 			break
+		last_heartbeat_msec = Time.get_ticks_msec()
 		
 		# 检查新连接
 		var peer: StreamPeerTCP = null
@@ -318,8 +332,24 @@ func _http_server_loop() -> void:
 			_send_sse_keepalive()
 			last_keepalive = current_time
 		
-		# 避免 CPU 占用过高
-		OS.delay_msec(2)
+		# 派发看门狗：主线程阻塞超时的请求回 503（连接随后被移除并清理登记）。
+		for dispatch_peer in _dispatched_requests.keys():
+			var entry: Dictionary = _dispatched_requests[dispatch_peer]
+			if current_time - int(entry.get("at", 0)) > DISPATCH_TIMEOUT * 1000:
+				_dispatched_requests.erase(dispatch_peer)
+				_send_http_error(dispatch_peer, 503,
+					"Editor main thread is busy (import/scan/reload). Retry shortly.")
+				if _log_callback.is_valid():
+					_log_callback.call("WARN", "Dispatch watchdog: request timed out after %.0fs; replied 503" % DISPATCH_TIMEOUT)
+		
+			# 自适应休眠：有已派发请求（等主线程回填）或有在途请求状态时保持
+			# 2ms 响应度；完全空闲（无连接字节、无 SSE、无派发）放宽到 20ms，
+			# 空闲时约 50 次/秒唤醒足以维持 keepalive/看门狗精度。
+			var idle: bool = _dispatched_requests.is_empty() \
+				and _request_states.is_empty() \
+				and _sse_connections.is_empty() \
+				and _connections.is_empty()
+			OS.delay_msec(20 if idle else 2)
 	
 	# 清理所有 SSE 连接
 	_cleanup_all_sse_connections()
@@ -333,6 +363,7 @@ func _remove_connection_at(index: int) -> void:
 	if index < 0 or index >= _connections.size():
 		return
 	var p: StreamPeerTCP = _connections[index]
+	_dispatched_requests.erase(p)
 	if _sse_connections.has(p):
 		_close_sse_connection(p)
 	if _post_response_formats.has(p):
@@ -623,6 +654,9 @@ func _handle_post_request(peer: StreamPeerTCP, parsed: Dictionary) -> void:
 	
 	if is_notification:
 		_send_http_accepted(peer)
+	else:
+		# 带 id 的请求等待主线程回包；登记时间戳供看门狗判定编辑器忙死。
+		_dispatched_requests[peer] = {"at": Time.get_ticks_msec()}
 
 ## 从插件配置文件读取版本号
 ## @returns: String - 插件版本号；读取失败时回退 "0.0.0"
@@ -820,13 +854,21 @@ func send_response(response: Dictionary, context: Variant) -> void:
 ## 构建并发送 HTTP 响应
 ## @param peer: StreamPeerTCP - 客户端连接
 ## @param data: Dictionary - 要发送的 JSON 数据
+## 构建成功响应头。每次响应后服务器都会断开连接，因此必须显式声明
+## Connection: close：否则 keep-alive 代理（如 cloudflared）会复用一条
+## 即将关闭的连接，把在途请求撞上 EOF/连接重置，表现为间歇性 502。
+static func json_response_header(body_size: int) -> String:
+	var header: String = "HTTP/1.1 200 OK\r\n"
+	header += "Content-Type: application/json; charset=utf-8\r\n"
+	header += "Content-Length: " + str(body_size) + "\r\n"
+	header += "Connection: close\r\n"
+	return header
+
 func _send_http_response(peer: StreamPeerTCP, data: Dictionary) -> void:
 	var json_string: String = JSON.stringify(data)
 	var json_bytes: PackedByteArray = json_string.to_utf8_buffer()
-	
-	var http_response: String = "HTTP/1.1 200 OK\r\n"
-	http_response += "Content-Type: application/json; charset=utf-8\r\n"
-	http_response += "Content-Length: " + str(json_bytes.size()) + "\r\n"
+
+	var http_response: String = json_response_header(json_bytes.size())
 	http_response += _cors_header()
 	http_response += _session_id_header()
 	http_response += "\r\n"
@@ -895,6 +937,15 @@ func _send_http_accepted(peer: StreamPeerTCP) -> void:
 	peer.put_data(response.to_utf8_buffer())
 	peer.disconnect_from_host()
 
+## 构建错误响应头。与成功响应同理：显式 Connection: close 与随后的
+## 主动断开保持一致，避免代理在复用连接上的在途请求收到连接重置。
+static func error_response_header(status_code: int, status_text: String, body_size: int) -> String:
+	var header: String = "HTTP/1.1 " + str(status_code) + " " + status_text + "\r\n"
+	header += "Content-Type: text/plain; charset=utf-8\r\n"
+	header += "Content-Length: " + str(body_size) + "\r\n"
+	header += "Connection: close\r\n"
+	return header
+
 func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) -> void:
 	var status_text: String = ""
 	match status_code:
@@ -906,16 +957,16 @@ func _send_http_error(peer: StreamPeerTCP, status_code: int, message: String) ->
 		413: status_text = "Request Too Large"
 		415: status_text = "Unsupported Media Type"
 		500: status_text = "Internal Server Error"
+		503: status_text = "Service Unavailable"
 		501: status_text = "Not Implemented"
 		_: status_text = "Error"
-	
-	var response_header: String = "HTTP/1.1 " + str(status_code) + " " + status_text + "\r\n"
-	response_header += "Content-Type: text/plain; charset=utf-8\r\n"
-	response_header += "Content-Length: " + str(message.to_utf8_buffer().size()) + "\r\n"
+
+	var response_header: String = error_response_header(
+		status_code, status_text, message.to_utf8_buffer().size())
 	response_header += _cors_header()
 	response_header += _session_id_header()
 	response_header += "\r\n"
-	
+
 	peer.put_data(response_header.to_utf8_buffer() + message.to_utf8_buffer())
 	peer.disconnect_from_host()
 	

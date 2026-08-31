@@ -2,7 +2,7 @@
 
 [中文说明](game-workflows.zh.md)
 
-`plan_game_workflow` and `run_game_workflow` are the compact server-side loop for goals that cannot be completed reliably by selecting one small tool set once. They do not replace the 217 atomic capabilities. They compose and execute those capabilities through a persistent, evidence-gated plan.
+`plan_game_workflow` and `run_game_workflow` are the compact server-side loop for goals that cannot be completed reliably by selecting one small tool set once. They do not replace the 226 atomic capabilities. They compose and execute those capabilities through a persistent, evidence-gated plan.
 
 ## Why the workflow can exceed eight tools
 
@@ -103,6 +103,18 @@ The following never count as completion:
 - a visual verdict without measured diff data;
 - a health audit in a failing state;
 - task fields manually changed to `done` without a matching passing receipt.
+
+## Autonomous reliability
+
+Several behaviors reduce avoidable stalls without weakening the evidence gates:
+
+- **Artifact registry.** Successful creation steps register what they produced (scene, script, theme, tileset, animation, test directory, smoke test). The runner resolves `$scene`-style argument references against this registry and auto-fills schema-required `script_path` / `scene_path` / `tileset_path` / `theme_path` / `animation_name` inputs, so chains such as `create_script → attach_script` no longer stop at `needs_input` asking for a path the workflow just created. Derived values are recorded on the step as `derived_inputs`; explicit `step_inputs` always win.
+- **Evidence tolerance.** A tool result carrying an explicit `success`/`passed`/`valid: true` is accepted even without a status vocabulary word, and mutation completions (`created`, `saved`, `written`, `unchanged`, `recovered`, …) count as success. Negative statuses (`failed`, `unconfigured`, `missing`, …) still fail, and verifier gates still require measured evidence.
+- **Negative gates.** The plan option `expect_fail` (for example `{"verify_scripts": true}`) inverts an objective gate's verdict: the step passes only when the detector *fails*. This enables fault-injection loops — inject a fault, prove the verifier catches it, repair, prove recovery — using existing tools, and receipts record `expected_failure: true`.
+- **Negated intent.** Platform selection and the glTF gate ignore mentions that carry a nearby negation (“Android 不适用”, “3D not applicable”, “without 3D”), so an exclusion requirement cannot add the excluded platform or gate.
+- **Runtime sessions.** `run_project` reuses a live session when the requested scene is already playing (or no scene is specified) and switches deterministically when a different scene is requested; plan-authorized `run_project`/`stop_project` pass `allow_window=true` automatically because the objective already authorized runtime verification.
+- **Scene-context guard.** Scene-scoped tools (`create_node`, `update_node_property`, `delete_node`, `set_anchor_preset`, `attach_script`, `save_scene`, `set_tilemap_layer_cells`) accept an optional `scene_path` that activates exactly that scene before the operation (saving the previous scene first when it has unsaved edits). The runner derives it from the creating profile's scene artifact, so multi-scene goals cannot silently write profile A's nodes into profile B's scene, and `open_scene` is idempotent (re-opening the active scene is a success no-op).
+- **Visual baselines.** `assert_visual_baseline` already captures the candidate as the golden baseline on first run and passes; the runner derives `candidate_path` from the latest runtime screenshot artifact and a deterministic `user://visual_baselines/` location, so the visual gate never stalls on missing paths. Subsequent runs compare against the stored golden image for real regression detection.
 
 ## Integrity and safety
 

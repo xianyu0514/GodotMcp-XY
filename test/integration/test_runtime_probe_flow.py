@@ -1,3 +1,4 @@
+import os
 import json
 import subprocess
 import sys
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 
 
 def rpc_call(method: str, params: dict | None = None, request_id: int = 1) -> dict:
@@ -110,7 +111,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -138,7 +139,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
             except AssertionError as exc:
                 last_error = exc
         try:
-            tool_call("stop_project", {}, request_id=request_id + 40)
+            tool_call("stop_project", {"allow_window": True}, request_id=request_id + 40)
         except Exception:
             pass
         time.sleep(1.0)
@@ -216,8 +217,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -227,6 +227,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["assert_runtime_condition", "await_runtime_condition", "call_runtime_node_method", "evaluate_runtime_expression", "get_current_scene", "get_debugger_messages", "get_debugger_sessions", "get_runtime_info", "get_runtime_scene_tree", "get_runtime_tilemap_cell", "inspect_runtime_node", "install_runtime_probe", "list_runtime_tilemap_layers", "open_scene", "remove_runtime_probe", "run_project", "save_scene", "set_runtime_tilemap_cell", "stop_project", "update_runtime_node_property"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
         tools_response = rpc_call("tools/list")
         tool_names = {tool["name"] for tool in tools_response["result"]["tools"]}
@@ -253,7 +254,7 @@ def main() -> int:
         if not main_scene:
             raise AssertionError("Project has no main scene configured")
 
-        open_scene_result = tool_call("open_scene", {"scene_path": main_scene}, request_id=3)
+        open_scene_result = tool_call("open_scene", {"scene_path": main_scene, "allow_ui_focus": True}, request_id=3)
         if open_scene_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_scene_result}")
         wait_for_current_scene(main_scene)
@@ -363,7 +364,7 @@ def main() -> int:
             start_request_id=1400,
         )
 
-        stop_result = tool_call("stop_project", {}, request_id=14)
+        stop_result = tool_call("stop_project", {"allow_window": True}, request_id=14)
         if stop_result.get("status") != "success":
             raise AssertionError(f"stop_project failed: {stop_result}")
 

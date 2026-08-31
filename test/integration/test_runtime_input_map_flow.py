@@ -1,3 +1,4 @@
+import os
 import json
 import shutil
 import subprocess
@@ -8,8 +9,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe")
-MCP_URL = "http://127.0.0.1:9080/mcp"
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+MCP_URL = f"http://127.0.0.1:{os.environ.get('MCP_PORT', '9080')}/mcp"
 TEMP_DIR = REPO_ROOT / ".tmp_runtime_input_map"
 SCENE_PATH = "res://.tmp_runtime_input_map/runtime_input_map_scene.tscn"
 SCENE_FILE = TEMP_DIR / "runtime_input_map_scene.tscn"
@@ -128,7 +129,7 @@ def run_project_until_debugger_active(scene_path: str, attempts: int = 3, start_
     last_error = None
     request_id = start_request_id
     for _attempt in range(attempts):
-        run_result = tool_call("run_project", {"scene_path": scene_path}, request_id=request_id)
+        run_result = tool_call("run_project", {"scene_path": scene_path, "allow_window": True}, request_id=request_id)
         if run_result.get("status") != "success":
             last_error = AssertionError(f"run_project failed: {run_result}")
         else:
@@ -231,8 +232,7 @@ def main() -> int:
         "--path",
         str(REPO_ROOT),
         "--",
-        "--mcp-server",
-    ]
+        "--mcp-server", f"--mcp-port={os.environ.get('MCP_PORT', '9080')}"]
     process = subprocess.Popen(
         args,
         stdout=subprocess.DEVNULL,
@@ -242,6 +242,7 @@ def main() -> int:
 
     try:
         wait_for_server()
+        tool_call("enable_tools", {"tools": ["get_current_scene", "get_debugger_messages", "get_debugger_sessions", "get_runtime_info", "install_runtime_probe", "list_runtime_input_actions", "open_scene", "remove_runtime_input_action", "run_project", "simulate_runtime_input_action", "stop_project", "upsert_runtime_input_action"], "enabled": True}, request_id=90)
         wait_for_editor_scene_state_to_stabilize()
 
         tools_response = rpc_call("tools/list")
@@ -256,7 +257,7 @@ def main() -> int:
         if missing_tools:
             raise AssertionError(f"Missing expected runtime input map tools: {missing_tools}")
 
-        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH}, request_id=2)
+        open_result = tool_call("open_scene", {"scene_path": SCENE_PATH, "allow_ui_focus": True}, request_id=2)
         if open_result.get("status") != "success":
             raise AssertionError(f"open_scene failed: {open_result}")
         wait_for_current_scene(SCENE_PATH)
@@ -275,8 +276,7 @@ def main() -> int:
                 "erase_existing": True,
                 "events": [
                     {"type": "key", "keycode": 65, "pressed": True},
-                    {"type": "mouse_button", "button_index": 1, "pressed": True},
-                ],
+                    {"type": "mouse_button", "button_index": 1, "pressed": True}],
                 "timeout_ms": 2000,
             },
             "mcp:input_action_updated",

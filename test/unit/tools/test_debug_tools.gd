@@ -1,5 +1,7 @@
 extends "res://addons/gut/test.gd"
 
+const DebugToolsScript = preload("res://addons/godot_mcp/tools/debug_tools_native.gd")
+
 class FakeRuntimeBridge:
 	extends RefCounted
 
@@ -640,3 +642,71 @@ func test_scan_godot_log_error_lines_finds_script_errors():
 	assert_true(str(lines[1].get("message", "")).contains("PARSE ERROR"), "Second entry should be the parse error")
 	DirAccess.remove_absolute(log_path)
 	DirAccess.remove_absolute(tmp_dir)
+
+func test_verify_expected_files_flags_missing_side_effects() -> void:
+	# 声明存在的文件 → 通过；缺失的文件 → 失败并点名（防假成功契约）。
+	var existing: String = "res://project.godot"
+	var verdict: Dictionary = DebugToolsScript.verify_expected_files([existing, ""])
+	assert_true(bool(verdict.get("ok", false)), "Declared existing file verifies")
+	assert_eq(int(verdict.get("declared_count", -1)), 1, "Blank entries are ignored")
+	var failed: Dictionary = DebugToolsScript.verify_expected_files(
+		["res://definitely_not_created_zz.gd"])
+	assert_false(bool(failed.get("ok", true)))
+	assert_true((failed.get("missing_files", []) as Array).has("res://definitely_not_created_zz.gd"),
+		"Missing evidence files are named for actionable repair")
+
+class FakeDiagnosticsCore:
+	extends RefCounted
+
+	var diagnostics: Dictionary = {
+		"result_cache": {"hits": 8, "misses": 2, "hit_rate": 0.8},
+		"tool_list_cache": {"hits": 1, "misses": 0},
+		"read_snapshot_cache": {"hits": 0, "misses": 0},
+		"external_change_invalidation": {"events": 0},
+		"spill": {"writes": 0, "reuses": 0}
+	}
+
+	func get_cache_diagnostics() -> Dictionary:
+		return diagnostics
+
+func test_get_cache_diagnostics_returns_core_telemetry() -> void:
+	var tools: RefCounted = DebugToolsScript.new()
+	tools._server_core = FakeDiagnosticsCore.new()
+	var result: Dictionary = tools._tool_get_cache_diagnostics({})
+	assert_false(result.has("error"), str(result.get("error", "")))
+	assert_true((result.get("result_cache", {}) as Dictionary).has("hit_rate"),
+		"result cache hit rate is exposed")
+	assert_true((result.get("spill", {}) as Dictionary).has("writes"),
+		"spill counters are exposed")
+
+func test_get_cache_diagnostics_fails_closed_without_core() -> void:
+	var tools: RefCounted = DebugToolsScript.new()
+	tools._server_core = null
+	assert_true(tools._tool_get_cache_diagnostics({}).has("error"),
+		"missing server core is an error, not an empty success")
+	tools._server_core = RefCounted.new()
+	assert_true(tools._tool_get_cache_diagnostics({}).has("error"),
+		"core without diagnostics support is an error")
+
+func test_get_cache_diagnostics_registered_with_read_only_annotations() -> void:
+	var reg_core: FakeRegisterCore = FakeRegisterCore.new()
+	var tools2: RefCounted = DebugToolsScript.new()
+	tools2.register_tools(reg_core)
+	var registered: Dictionary = reg_core.registered
+	assert_true(registered.has("get_cache_diagnostics"),
+		"get_cache_diagnostics is registered")
+	var entry: Dictionary = registered["get_cache_diagnostics"]
+	assert_true(bool(entry["annotations"].get("readOnlyHint", false)),
+		"diagnostics read carries readOnlyHint")
+	assert_eq(String(entry["category"]), "supplementary")
+	assert_eq(String(entry["group"]), "Debug-Advanced")
+
+class FakeRegisterCore:
+	extends RefCounted
+
+	var registered: Dictionary = {}
+
+	func register_tool(name: String, _description: String, _input_schema: Dictionary,
+			_callable: Callable, _output_schema: Dictionary = {}, annotations: Dictionary = {},
+			category: String = "core", group: String = "") -> void:
+		registered[name] = {"annotations": annotations, "category": category, "group": group}

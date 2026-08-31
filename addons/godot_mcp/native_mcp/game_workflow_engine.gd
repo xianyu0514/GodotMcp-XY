@@ -11,6 +11,7 @@ extends RefCounted
 
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const TokenEstimatorScript = preload("res://addons/godot_mcp/utils/token_estimator.gd")
+const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 
 const SCHEMA_VERSION: int = 1
 const DEFAULT_STEPS_PER_RUN: int = 4
@@ -56,7 +57,14 @@ const PROFILE_COMPOSITION_ORDER: Array[String] = [
 ]
 
 const PROFILE_KEYWORDS: Dictionary = {
-	"gameplay_feature": ["gameplay", "player", "movement", "controller", "mechanic", "collision", "玩家", "移动", "控制", "玩法", "游戏机制", "碰撞"],
+	# gameplay_feature 词表刻意收录 platformer/jump/coin/collect/victory 等动词：
+	# 插件自带 prompt 示例 "2D platformer vertical slice" 若只命中 ui_screen
+	# （"screen"），规划会漏掉玩家/金币/胜利逻辑——这正是本 profile 存在的意义。
+	# 注意避免误触：不用裸 "platform"（会命中 cross-platform export 类目标）。
+	"gameplay_feature": ["gameplay", "player", "movement", "controller", "mechanic", "collision",
+		"platformer", "jump", "coin", "collect", "collectible", "pickup", "playable",
+		"victory", "win screen", "win label", "win condition",
+		"玩家", "移动", "控制", "玩法", "游戏机制", "碰撞", "平台跳跃", "跳跃", "金币", "收集", "拾取", "胜利", "通关", "可玩"],
 	"ui_screen": [" ui ", "menu", "hud", "pause", "button", "interface", "screen", "界面", "菜单", "暂停", "按钮", "主题", "屏幕"],
 	"script_repair": ["script error", "fix script", "compile error", "gdscript", "c#", "脚本错误", "修复脚本", "编译错误", "代码错误"],
 	"asset_pipeline": ["asset", "import", "texture", "model", "sprite", "gltf", "资源", "导入", "贴图", "模型", "精灵"],
@@ -75,6 +83,7 @@ const STAGE_RANK: Dictionary = {
 	"build_create": 20,
 	"build_configure": 20,
 	"build_save": 20,
+	"qa_inspect": 25,
 	"static_verify": 30,
 	"runtime_probe": 40,
 	"runtime_run": 45,
@@ -100,7 +109,17 @@ const PENDING_STATUSES: Array[String] = [
 const NEGATIVE_STATUSES: Array[String] = [
 	"failed", "failing", "error", "invalid", "blocked", "cancelled",
 	"canceled", "timeout", "timed_out", "unconfigured", "partial",
-	"skipped", "stale", "aborted", "missing"
+	"skipped", "stale", "aborted", "missing", "unsupported"
+]
+
+# Mutation tools legitimately report these completion statuses; without them a
+# real success such as create_project_smoke_test's "created" falls through the
+# generic whitelist and is misjudged as a verification failure.
+const SUCCESS_STATUSES: Array[String] = [
+	"ok", "passed", "success", "completed", "healthy", "warning", "ready",
+	"created", "saved", "written", "extracted", "imported", "exported",
+	"recovered", "prepared", "updated", "removed", "deleted", "unchanged",
+	"no_changes", "reused", "repaired"
 ]
 
 const TRANSIENT_FAILURE_TERMS: Array[String] = [
@@ -111,15 +130,78 @@ const TRANSIENT_FAILURE_TERMS: Array[String] = [
 	"(502)", "(503)", "(504)"
 ]
 
+# Creation tools register their produced resources as workflow artifacts so
+# later steps can derive required inputs (script_path/scene_path/...) instead
+# of stalling on needs_input or making the caller repeat every path.
+const ARTIFACT_KIND_BY_TOOL: Dictionary = {
+	"create_scene": "scene",
+	"open_scene": "scene",
+	"save_scene": "scene",
+	"create_script": "script",
+	"create_theme": "theme",
+	"create_tileset": "tileset",
+	"create_animation": "animation",
+	"get_runtime_screenshot": "screenshot",
+	"generate_3d_asset": "model",
+	"run_export": "export_artifact",
+	"ensure_project_directory": "test_dir",
+	"create_project_smoke_test": "smoke_test"
+}
+
+const ARTIFACT_PATH_KEYS: Array[String] = [
+	"scene_path", "script_path", "theme_path", "tileset_path",
+	"animation_path", "test_path", "save_path", "saved_path",
+	"resource_path", "output_path", "path"
+]
+
 const VOLATILE_FAILURE_KEYS: Array[String] = [
 	"at", "last_at", "timestamp", "elapsed_ms", "duration_ms", "progress",
-	"request_id", "trace_id"
+	"request_id", "trace_id",
+	# 视觉门禁对活游戏重截图，diff 数值每轮必变：不剥离会让
+	# SAME_FAILURE_REPLAN_THRESHOLD 永不触发（每轮都是"新失败"），
+	# 修复循环在自适应模式下无界打转。
+	"diff_pixel_count", "diff_ratio", "rmse", "max_channel_delta"
 ]
 
 const FORBIDDEN_NESTED_CAPABILITIES: Array[String] = [
 	"plan_game_workflow", "run_game_workflow", "manage_task_plan",
 	"list_tool_catalog", "search_tools", "get_tool_details", "enable_tools"
 ]
+
+# Goals frequently name a capability only to exclude it ("Android 不适用" /
+# "3D not applicable"). Treating every literal mention as affirmative intent
+# selected wrong platforms and wrong gates, so intent detection must skip
+# occurrences that carry a nearby negation marker.
+const NEGATION_MARKERS: Array[String] = [
+	"不适用", "无需", "不要", "不需要", "不支持", "禁止", "排除", "不含",
+	"not ", "without", "unsupported", "unneeded", "no need", "exclude",
+	"except", "avoid", "don't", "doesn't", "n/a"
+]
+
+## True when `term` is mentioned in `text` at least once WITHOUT a nearby
+## negation marker. All-negated mentions mean the goal excludes the term.
+func has_affirmative_mention(text: String, term: String) -> bool:
+	var lower: String = text.to_lower()
+	var needle: String = term.to_lower()
+	if needle.is_empty():
+		return false
+	var search_from: int = 0
+	while true:
+		var hit: int = lower.find(needle, search_from)
+		if hit < 0:
+			return false
+		var window_start: int = maxi(0, hit - 16)
+		var window_end: int = mini(lower.length(), hit + needle.length() + 16)
+		var window: String = lower.substr(window_start, window_end - window_start)
+		var negated: bool = false
+		for marker in NEGATION_MARKERS:
+			if window.contains(marker):
+				negated = true
+				break
+		if not negated:
+			return true
+		search_from = hit + needle.length()
+	return false
 
 func compile(objective: String, options: Dictionary, available_tools: Array[String]) -> Dictionary:
 	var clean_objective: String = objective.strip_edges()
@@ -144,6 +226,10 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 	var platform: String = _normalize_platform(String(options.get("platform", "")), clean_objective)
 	var repair_attempts: int = maxi(
 		int(options.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS)), 0)
+	# expect_fail maps gate step keys (for example {"verify_scripts": true}) to
+	# inverted verdicts so fault-injection loops can prove detectors actually fail.
+	var expect_fail: Dictionary = options.get("expect_fail", {}) \
+		if options.get("expect_fail", {}) is Dictionary else {}
 	var protected_paths: Array[String] = DEFAULT_PROTECTED_PATHS.duplicate()
 	if options.get("protected_paths") is Array:
 		for path_value in options["protected_paths"]:
@@ -220,7 +306,8 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 		"required_capabilities": required_capabilities,
 		"platform": platform,
 		"max_repair_attempts": repair_attempts,
-		"protected_paths": protected_paths
+		"protected_paths": protected_paths,
+		"expect_fail": expect_fail.duplicate(true)
 	}
 	var plan: Dictionary = _build_plan(contract, specs)
 	return {
@@ -267,7 +354,7 @@ func _normalize_platform(platform: String, objective: String) -> String:
 		return normalized
 	var goal: String = objective.to_lower()
 	for candidate in ["android", "linux", "windows", "macos", "web", "ios"]:
-		if goal.contains(candidate):
+		if has_affirmative_mention(goal, candidate):
 			return candidate
 	return ""
 
@@ -282,11 +369,50 @@ func _spec(key: String, tool_name: String, stage: String, objective_gate: bool =
 		"repair_tool": repair_tool
 	}
 
+
+## 蓝图控制器用到的四个移动动作（方向键 + WASD 双绑定）。
+## upsert_project_input_action 的事件载荷直接使用引擎键码常量。
+func _movement_input_actions() -> Array[Dictionary]:
+	return [
+		{
+			"action_name": "move_left",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_LEFT},
+				{"type": "key", "keycode": KEY_A}
+			]
+		},
+		{
+			"action_name": "move_right",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_RIGHT},
+				{"type": "key", "keycode": KEY_D}
+			]
+		},
+		{
+			"action_name": "move_up",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_UP},
+				{"type": "key", "keycode": KEY_W}
+			]
+		},
+		{
+			"action_name": "move_down",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_DOWN},
+				{"type": "key", "keycode": KEY_S}
+			]
+		}
+	]
+
 func _profile_specs(profile_id: String, objective: String, platform: String) -> Array[Dictionary]:
 	var goal: String = objective.to_lower()
 	match profile_id:
 		"gameplay_feature":
-			return [
+			var gameplay_specs: Array[Dictionary] = [
 				_spec("project_info", "get_project_info", "offline_inspect"),
 				_spec("input_actions", "list_project_input_actions", "offline_inspect"),
 				_spec("create_scene", "create_scene", "build_create"),
@@ -298,6 +424,31 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("play_verify", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
 				_spec("runtime_errors", "assert_no_runtime_errors", "runtime_evidence", true, {}, "modify_script")
 			]
+			# 移动类目标：蓝图控制器读取 move_left/right/up/down 四个动作。
+			# 单个默认 upsert 只注册 move_up，get_vector 会因其余动作缺失而退化
+			# 为 ui_* 回退——这里按目标词表补全四个方向动作（方向键 + WASD）。
+			if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+				var index: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
+					return String(spec.get("key", "")) == "upsert_input")
+				if index >= 0:
+					gameplay_specs.remove_at(index)
+				for direction in _movement_input_actions():
+					gameplay_specs.insert(2, _spec(
+						"input_%s" % direction.get("action_name", "").replace("move_", ""),
+						"upsert_project_input_action", "build_configure", false, direction))
+			# 蓝图脚本永远 extends CharacterBody2D（金币/胜利蓝图同样依赖物理体），
+			# 根节点类型直接写进 create_scene 的 spec 参数——引擎直出的计划即
+			# 自包含，适配器无需再派生。
+			if GoalBlueprintsScript.has_any_verb(GoalBlueprintsScript.match_verbs(goal)):
+				for spec_value in gameplay_specs:
+					var spec: Dictionary = spec_value
+					if String(spec.get("tool_name", "")) == "create_scene":
+						var scene_args: Dictionary = spec.get("arguments", {})
+						if not scene_args.has("root_node_type"):
+							scene_args["root_node_type"] = "CharacterBody2D"
+							spec["arguments"] = scene_args
+						break
+			return gameplay_specs
 		"ui_screen":
 			return [
 				_spec("current_scene", "get_current_scene", "offline_inspect"),
@@ -325,13 +476,20 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("reimport", "reimport_resources", "build_configure"),
 				_spec("missing_dependencies", "scan_missing_resource_dependencies", "static_verify", true)
 			]
-			if goal.contains("gltf") or goal.contains("3d") or goal.contains("模型"):
+			if has_affirmative_mention(goal, "gltf") or has_affirmative_mention(goal, "3d") \
+					or has_affirmative_mention(goal, "模型"):
 				asset_specs.append(_spec("inspect_gltf", "inspect_gltf_asset", "static_verify", true))
 			return asset_specs
 		"animation_audio":
 			var media_specs: Array[Dictionary] = [
+				# 运行时链需要真实载体：自己的场景 + AnimationPlayer + 接线后的
+				# 保存，否则 list/play 动画步骤无目标可查。
+				_spec("media_scene", "create_scene", "build_create"),
+				_spec("anim_player", "create_node", "build_create", false,
+					{"parent_path": "/root", "node_type": "AnimationPlayer", "node_name": "AnimPlayer"}),
 				_spec("create_animation", "create_animation", "build_create"),
 				_spec("animation_keys", "insert_animation_keys", "build_configure"),
+				_spec("media_save", "save_scene", "build_save"),
 				_spec("runtime_animations", "list_runtime_animations", "runtime_inspect"),
 				_spec("play_animation", "play_runtime_animation", "runtime_action"),
 				_spec("animation_state", "get_runtime_animation_state", "runtime_evidence", true),
@@ -348,6 +506,10 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				_spec("level_scene", "create_scene", "build_create"),
 				_spec("tileset", "create_tileset", "build_create"),
 				_spec("tileset_layers", "configure_tileset_layers", "build_configure"),
+				# TileMapLayer 节点是 set_tilemap_layer_cells 的写入目标，
+				# 缺这一步整个 profile 在新场景上无从落笔。
+				_spec("map_node", "create_node", "build_create", false,
+					{"parent_path": "/root", "node_type": "TileMapLayer", "node_name": "LevelTiles"}),
 				_spec("tilemap_cells", "set_tilemap_layer_cells", "build_configure"),
 				_spec("level_save", "save_scene", "build_save"),
 				_spec("persistence_gate", "audit_scene_node_persistence", "static_verify", true),
@@ -385,7 +547,9 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 			return perf_specs
 		"quality_assurance":
 			return [
-				_spec("list_tests", "list_project_tests", "offline_inspect"),
+				_spec("test_env", "prepare_project_test_environment", "offline_inspect"),
+				_spec("test_dir", "ensure_project_directory", "build_configure", false, {"path": "res://test"}),
+				_spec("test_discovery", "list_project_tests", "qa_inspect", true, {}, "create_project_smoke_test"),
 				_spec("qa_1_verify_scripts", "verify_scripts", "static_verify", true, {}, "modify_script"),
 				_spec("qa_2_tests", "run_project_tests", "static_verify", true, {}, "modify_script")
 			]
@@ -408,17 +572,52 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				health_specs.append(_spec("health_audit_gate", "audit_project_health", "static_verify", true, {"include_warnings": true}))
 			return health_specs
 		"release_export":
+			# 预设按目标推断的平台生成（此前硬编码 Windows Desktop："export
+			# for web" 会静默产出 game.exe 且整链 completed）。validate/run/
+			# smoke 的派生与这里共用 export_preset_for_platform，保证同名同源。
+			var export_preset: Dictionary = export_preset_for_platform(platform)
 			var release_specs: Array[Dictionary] = [
 				_spec("export_presets", "list_export_presets", "release_inspect"),
-				_spec("export_templates", "inspect_export_templates", "release_inspect")
+				_spec("export_templates", "inspect_export_templates", "release_inspect"),
+				# 全新项目没有导出预设：先建目标平台的预设，validate/run_export
+				# 链才有目标。if_exists="reuse" 保证 replan 重放时已存在的预设是
+				# 幂等成功而非报错（否则无 repair_tool 的步骤会永久卡在
+				# replan_required）；重名但平台/产物路径不符时会被纠偏对齐。
+				_spec("release_preset", "create_export_preset", "release_prepare", false,
+					{"name": export_preset["name"], "platform": export_preset["platform"],
+					 "export_path": export_preset["export_path"], "if_exists": "reuse"})
 			]
 			if platform == "android":
-				release_specs.append(_spec("android_config", "configure_android_export", "release_prepare"))
+				release_specs.append(_spec("android_config", "configure_android_export",
+					"release_prepare", false, {"preset": export_preset["name"]}))
 			release_specs.append(_spec("validate_export", "validate_export_preset", "release_validate", true))
 			release_specs.append(_spec("run_export", "run_export", "release_build"))
 			release_specs.append(_spec("smoke_export", "smoke_test_export", "release_evidence", true))
 			return release_specs
 	return []
+
+## 平台 → 导出预设三要素（名称/平台/产物路径）。引擎与 runner 的派生共用
+## 此表，保证"建预设/校验/导出/冒烟"链上的预设名一源同出。
+const EXPORT_PLATFORM_PRESETS: Dictionary = {
+	"windows": {"name": "Windows Desktop", "platform": "Windows Desktop",
+		"export_path": "res://build/game.exe"},
+	"linux": {"name": "Linux/X11", "platform": "Linux/X11",
+		"export_path": "res://build/game.x86_64"},
+	"macos": {"name": "macOS", "platform": "macOS",
+		"export_path": "res://build/game.zip"},
+	"web": {"name": "Web", "platform": "Web",
+		"export_path": "res://build/web/index.html"},
+	"android": {"name": "Android", "platform": "Android",
+		"export_path": "res://build/game.apk"},
+	"ios": {"name": "iOS", "platform": "iOS",
+		"export_path": "res://build/game.ipa"},
+}
+
+static func export_preset_for_platform(platform: String) -> Dictionary:
+	var preset: Dictionary = EXPORT_PLATFORM_PRESETS.get(platform, {})
+	if preset.is_empty():
+		return EXPORT_PLATFORM_PRESETS["windows"].duplicate(true)
+	return preset.duplicate(true)
 
 func _goal_authorizes_fix(goal: String) -> bool:
 	for word in ["fix", "repair", "apply", "resolve", "修复", "处理", "应用"]:
@@ -476,6 +675,8 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 	var prior_ids: Array[String] = []
 	var blueprint_tasks: Array[Dictionary] = []
 	var max_attempts: int = int(contract.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS))
+	var expect_fail: Dictionary = contract.get("expect_fail", {}) \
+		if contract.get("expect_fail", {}) is Dictionary else {}
 	for index in range(specs.size()):
 		var spec: Dictionary = specs[index]
 		var step_id: String = "wf_%03d" % (index + 1)
@@ -505,6 +706,8 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 			"pending_polls": 0,
 			"receipt_digest": ""
 		}
+		if is_gate and bool(expect_fail.get(String(spec.get("key", "")), false)):
+			task["expect"] = "fail"
 		tasks.append(task)
 		if is_gate:
 			objective_gate_ids.append(step_id)
@@ -526,6 +729,7 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 		"blocked_reason": "",
 		"goal_contract": contract.duplicate(true),
 		"objective_gate_ids": objective_gate_ids,
+		"artifacts": {},
 		"receipts": [],
 		"metrics": {
 			"rounds": 0, "atomic_calls": 0, "yield_count": 0,
@@ -542,11 +746,34 @@ func _task_blueprint(task: Dictionary) -> Dictionary:
 		"step_key": String(task.get("step_key", "")),
 		"stage": String(task.get("stage", "")),
 		"depends_on": (task.get("depends_on", []) as Array).duplicate(),
-		"arguments": (task.get("arguments", {}) as Dictionary).duplicate(true),
+		"arguments": _canonical_numbers(task.get("arguments", {})),
 		"objective_gate": bool(task.get("objective_gate", false)),
 		"repair_tool": String(task.get("repair_tool", "")),
 		"max_repair_attempts": int(task.get("max_repair_attempts", 0))
 	}
+
+
+## JSON round-trips turn integer literals (keycodes, indexes) into floats
+## (4194322 -> 4194322.0). Canonicalize numeric leaf values so a persisted
+## plan's blueprint still equals the freshly compiled one; real fractional
+## values (deadzone 0.2) are preserved.
+static func _canonical_numbers(value: Variant) -> Variant:
+	if value is float:
+		var as_float: float = value
+		if is_equal_approx(as_float, roundf(as_float)) and absf(as_float) < 9007199254740992.0:
+			return int(roundf(as_float))
+		return value
+	if value is Dictionary:
+		var result_dict: Dictionary = {}
+		for key in value:
+			result_dict[key] = _canonical_numbers(value[key])
+		return result_dict
+	if value is Array:
+		var result_array: Array = []
+		for item in value:
+			result_array.append(_canonical_numbers(item))
+		return result_array
+	return value
 
 func validate_integrity(plan: Dictionary, available_tools: Array[String]) -> Dictionary:
 	if not (plan.get("workflow") is Dictionary):
@@ -672,7 +899,12 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
 		return false
 	var data: Dictionary = result
-	if data.has("error"):
+	# 工具有携带空 error 字段的习惯；空字符串不是失败。
+	if data.has("error") and not String(data["error"]).strip_edges().is_empty():
+		return false
+	# 探针超时回退会把缓存载荷包装成 status=success + stale/from_cache：
+	# 这是"上次观测"而不是"本次证据"，任何门禁都不得据此通过。
+	if bool(data.get("stale", false)) or bool(data.get("from_cache", false)):
 		return false
 	for verdict_key in ["passed", "success", "valid"]:
 		if data.has(verdict_key) and not bool(data[verdict_key]):
@@ -700,16 +932,37 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 			return status in ["healthy", "warning"] and data.get("summary") is Dictionary and not (data["summary"] as Dictionary).is_empty()
 		"play_and_verify":
 			return bool(data.get("passed", false)) and data.get("runtime_info") is Dictionary and not (data["runtime_info"] as Dictionary).is_empty()
+		"inspect_gltf_asset":
+			# 目标提到 gltf/3d/模型时，零网格的资产（生成失败/空壳）不算达成——
+			# 处理器对空资产仍回 status=success，泛化规则会放行（重言式）。
+			return String(data.get("status", "")) == "success" and int(data.get("mesh_count", 0)) > 0
+		"get_runtime_animation_state":
+			# 作为 objective gate 时必须证明动画真的在播：is_playing 缺席/false
+			# 或 current_animation 为空都算未达成——否则 play_runtime_animation
+			# 失败了这个门禁也照样通过（重言式）。
+			return bool(data.get("is_playing", false)) and not String(data.get("current_animation", "")).is_empty()
+		"list_project_tests":
+			return int(data.get("count", 0)) > 0 and not data.has("error") and status not in ["unconfigured", "missing", "blocked"]
 		"run_project_test", "run_project_tests":
 			return status == "passed" and int(data.get("total_count", 0)) > 0 and int(data.get("failed_count", 0)) == 0
 		"smoke_test_export":
 			return bool(data.get("success", false)) and bool(data.get("artifact_exists", false))
 		"validate_export_preset":
 			return bool(data.get("valid", false))
+		"modify_script":
+			# 修复成功的前提是修复产物能编译：validation.error_count>0 说明
+			# 修复本身引入/保留了语法错误，不能当证据。
+			if data.get("validation") is Dictionary:
+				return int((data["validation"] as Dictionary).get("error_count", 0)) == 0
+			return true
 		"validate_script", "validate_shader":
 			return bool(data.get("valid", false)) or (status == "passed" and bool(data.get("passed", true)))
 		"verify_scripts":
-			return int(data.get("total_checked", 0)) > 0 and int(data.get("failed", -1)) == 0 and (status.is_empty() or status in ["ok", "passed", "success", "completed"])
+			# truncated=true 表示超过 max_scripts 的脚本根本没被检查：
+			# 截断的验证不能当通过（第 101 个脚本可能就是坏的）。
+			return int(data.get("total_checked", 0)) > 0 and int(data.get("failed", -1)) == 0 \
+				and not bool(data.get("truncated", false)) \
+				and (status.is_empty() or status in ["ok", "passed", "success", "completed"])
 		"audit_scene_node_persistence":
 			return int(data.get("total_nodes", 0)) > 0 and int(data.get("issue_count", -1)) == 0
 		"scan_missing_resource_dependencies", "scan_cyclic_resource_dependencies":
@@ -719,6 +972,10 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 		"detect_broken_scripts":
 			return data.has("broken_count") and int(data.get("broken_count", -1)) == 0
 		"manage_localization":
+			# Tools may report success with only an explicit boolean and no status
+			# field; requiring the status vocabulary here misjudged real successes.
+			if bool(data.get("success", false)) and not data.has("error"):
+				return true
 			return status in ["ok", "success", "completed"] and (
 				data.has("written") or data.has("translations") or data.has("key_count"))
 	if data.has("passed"):
@@ -728,7 +985,7 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 	if data.has("valid"):
 		return bool(data["valid"])
 	if not status.is_empty():
-		return status in ["ok", "passed", "success", "completed", "healthy", "warning", "ready"]
+		return status in SUCCESS_STATUSES
 	# Inspection tools frequently return structured data without a status field.
 	# Non-empty, error-free evidence is sufficient for non-objective steps.
 	return data.size() > 0
@@ -761,17 +1018,47 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 
 	task["attempts"] = int(task.get("attempts", 0)) + 1
 	task["pending_polls"] = 0
-	var passed: bool = result_passed(String(task.get("tool_name", "")), result) if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
+	# 预创建巡检的良性空态：全新项目里 get_current_scene 在建场景步骤之前
+	# 运行，"No scene is currently open" 是正常状态而非失败证据。
+	if not bool(task.get("objective_gate", false)) \
+			and String(task.get("tool_name", "")) == "get_current_scene" \
+			and result is Dictionary and (result as Dictionary).has("error") \
+			and String((result as Dictionary).get("error", "")).contains("No scene is currently open"):
+		result = {
+			"status": "ok",
+			"open": false,
+			"note": "benign empty state before scene creation",
+		}
+	var expect_failure: bool = bool(task.get("objective_gate", false)) \
+		and String(task.get("expect", "pass")) == "fail"
+	var evidence_passed: bool = result_passed(String(task.get("tool_name", "")), result) \
+		if bool(task.get("objective_gate", false)) else _non_gate_result_usable(result)
+	# A negative gate passes when the detector FAILS: fault-injection loops are
+	# proving the guardrail fires, so the observed verdict is inverted.
+	# 基础设施错误（如 "Debugger bridge is not available"）不是探测器触发：
+	# 带非空 error 的负结果不得翻转成通过，否则故障注入循环会在探测器
+	# 从未运行的情况下"证明"它工作。
+	var passed: bool = evidence_passed
+	if expect_failure:
+		var well_formed_negative: bool = not evidence_passed
+		if result is Dictionary \
+				and not String((result as Dictionary).get("error", "")).strip_edges().is_empty():
+			well_formed_negative = false
+		passed = well_formed_negative
 	var receipt: Dictionary = append_receipt(plan, {
 		"step_id": step_id,
 		"tool_name": task.get("tool_name", ""),
 		"passed": passed,
 		"pending": false,
-		"summary": _compact_result_summary(result)
+		"expected_failure": expect_failure,
+		"summary": _compact_result_summary(result, String(task.get("tool_name", "")))
 	})
 	if passed:
 		task["status"] = "done"
 		task["receipt_digest"] = receipt.get("digest", "")
+		if not expect_failure and evidence_passed:
+			_record_artifacts(plan, String(task.get("tool_name", "")), result,
+				String(task.get("profile", "")))
 		_clear_failure_tracking(task, "verification")
 		_clear_failure_tracking(task, "transient")
 		if bool(task.get("objective_gate", false)):
@@ -846,7 +1133,8 @@ func _non_gate_result_usable(result: Variant) -> bool:
 	if not (result is Dictionary) or (result as Dictionary).is_empty():
 		return false
 	var data: Dictionary = result
-	if data.has("error"):
+	# 空字符串 error 字段不构成失败（部分工具习惯性携带）。
+	if data.has("error") and not String(data["error"]).strip_edges().is_empty():
 		return false
 	for verdict_key in ["passed", "success", "valid"]:
 		if data.has(verdict_key) and not bool(data[verdict_key]):
@@ -854,7 +1142,15 @@ func _non_gate_result_usable(result: Variant) -> bool:
 	var status: String = String(data.get("status", "")).strip_edges().to_lower()
 	if status in PENDING_STATUSES:
 		return false
-	return not status in ["error", "invalid", "blocked", "cancelled", "canceled", "timeout", "timed_out", "unconfigured", "stale", "aborted", "missing"]
+	if status == "unsupported":
+		# 工具明确表示无法执行被要求的操作（环境/平台不支持）：
+		# 不是可用证据，也不是可恢复缺口——需要的补救是换能力而非修复环境。
+		return false
+	if status in ["unconfigured", "missing"]:
+		# An inspection that reports a recoverable environment gap is usable
+		# evidence: the dedicated gate/repair steps then perform the recovery.
+		return bool(data.get("recoverable", false))
+	return not status in ["error", "invalid", "blocked", "cancelled", "canceled", "timeout", "timed_out", "stale", "aborted"]
 
 func record_repair_result(plan: Dictionary, step_id: String, result: Variant) -> Dictionary:
 	var task: Dictionary = get_task(plan, step_id)
@@ -870,7 +1166,7 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 		"tool_name": repair_tool,
 		"repair": true,
 		"passed": passed,
-		"summary": _compact_result_summary(result)
+		"summary": _compact_result_summary(result, repair_tool)
 	})
 	var workflow: Dictionary = plan.get("workflow", {})
 	if passed:
@@ -878,6 +1174,9 @@ func record_repair_result(plan: Dictionary, step_id: String, result: Variant) ->
 		task["repair_pending"] = false
 		_clear_failure_tracking(task, "repair")
 		_clear_failure_tracking(task, "repair_transient")
+		# Repairs can create resources too (for example the QA smoke test), so
+		# their outputs must feed the artifact registry like normal steps.
+		_record_artifacts(plan, repair_tool, result, String(task.get("profile", "")))
 		workflow["state"] = "running"
 		workflow["blocked_reason"] = ""
 		return {"status": "repaired", "step_id": step_id, "receipt": receipt, "workflow": summarize(plan)}
@@ -960,7 +1259,20 @@ func _clear_failure_tracking(task: Dictionary, prefix: String) -> void:
 	task.erase(prefix + "_failure_fingerprint")
 	task.erase(prefix + "_same_failure_count")
 
-func _compact_result_summary(result: Variant) -> Dictionary:
+# 门禁工具的定量证据字段：收据除状态外保留这些数值，重规划/审计时才能看出
+# "具体哪条指标过了/没过"，而不是只有一个 completed。
+const GATE_EVIDENCE_KEYS: Dictionary = {
+	"assert_performance_budget": ["fps", "avg_fps", "p1_fps", "p95_frame_time_ms", "frame_time_ms"],
+	"assert_visual_baseline": ["diff_pixel_count", "diff_ratio", "width", "height"],
+	"verify_scripts": ["verified", "broken_count"],
+	"run_project_tests": ["passed_count", "total_count"],
+	"run_project_test": ["passed", "total_count"],
+	"assert_no_runtime_errors": ["error_count"],
+	"smoke_test_export": ["exit_code"],
+	"play_and_verify": ["error_count"],
+}
+
+func _compact_result_summary(result: Variant, tool_name: String = "") -> Dictionary:
 	if not (result is Dictionary):
 		return {"type": typeof(result)}
 	var data: Dictionary = result
@@ -970,7 +1282,75 @@ func _compact_result_summary(result: Variant) -> Dictionary:
 			summary[key] = data[key]
 	if data.has("error"):
 		summary["error"] = String(data["error"]).substr(0, 512)
+	# 导出失败必须携带原因（首条错误行），否则证据只剩 success:false。
+	if tool_name == "run_export" and not bool(data.get("success", true)):
+		var export_errors: Array = data.get("errors", [])
+		if not export_errors.is_empty():
+			summary["first_error"] = String(export_errors[0]).substr(0, 200)
+		elif data.has("exit_code"):
+			summary["first_error"] = "exit_code=%s" % str(data["exit_code"])
+	var evidence_keys: Array = GATE_EVIDENCE_KEYS.get(tool_name, []) if tool_name != "" else []
+	if not evidence_keys.is_empty():
+		var evidence: Dictionary = {}
+		for evidence_key in evidence_keys:
+			var value: Variant = data.get(evidence_key, null)
+			if value != null and not (value is Dictionary) and not (value is Array):
+				evidence[evidence_key] = value
+		if not evidence.is_empty():
+			summary["evidence"] = evidence
 	return summary
+
+## Register paths a successful creation step produced into the workflow's
+## artifact registry (scene/script/theme/tileset/animation/screenshot +
+## last_path). Scene-scoped kinds also register a per-profile alias
+## ("scene:<profile>") so multi-scene workflows address the right scene.
+func _record_artifacts(plan: Dictionary, tool_name: String, result: Variant,
+		profile: String = "") -> void:
+	if not (result is Dictionary):
+		return
+	var data: Dictionary = result
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts_value: Variant = workflow.get("artifacts", {})
+	var artifacts: Dictionary = artifacts_value if artifacts_value is Dictionary else {}
+	var kind: String = String(ARTIFACT_KIND_BY_TOOL.get(tool_name, ""))
+	for key in ARTIFACT_PATH_KEYS:
+		if not data.has(key):
+			continue
+		var value: String = String(data[key]).strip_edges()
+		if not (value.begins_with("res://") or value.begins_with("user://")):
+			continue
+		if not kind.is_empty() and not artifacts.has(kind):
+			artifacts[kind] = value
+			if not profile.is_empty():
+				artifacts[kind + ":" + profile] = value
+		artifacts["last_path"] = value
+	if data.has("animation_name"):
+		var animation_name: String = String(data["animation_name"]).strip_edges()
+		if not animation_name.is_empty():
+			artifacts["animation_name"] = animation_name
+	workflow["artifacts"] = artifacts
+
+## Resolve "$artifact_key" string references inside step arguments against the
+## workflow's recorded artifacts (for example "$scene" -> last created scene).
+func resolve_argument_references(value: Variant, artifacts: Dictionary) -> Variant:
+	if value is String:
+		var text: String = value
+		if text.length() > 1 and text.begins_with("$"):
+			var reference: String = text.substr(1)
+			if artifacts.has(reference):
+				return artifacts[reference]
+		return value
+	if value is Dictionary:
+		var resolved_dictionary: Dictionary = {}
+		for key in value:
+			resolved_dictionary[key] = resolve_argument_references(value[key], artifacts)
+		return resolved_dictionary
+	if value is Array:
+		var resolved_array: Array = []
+		for item in value:
+			resolved_array.append(resolve_argument_references(item, artifacts))
+		return resolved_array
+	return value
 
 func append_receipt(plan: Dictionary, receipt_fields: Dictionary) -> Dictionary:
 	var workflow: Dictionary = plan.get("workflow", {})
