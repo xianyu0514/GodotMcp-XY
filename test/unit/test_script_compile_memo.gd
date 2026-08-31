@@ -113,3 +113,33 @@ func test_writer_side_invalidate_only_touches_that_path() -> void:
 	MemoScript.diagnostics_for(other, "v", _compute_log(calls, true))
 	assert_eq(calls.size(), 2, "other path stays memoized")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(other))
+
+func test_autoload_add_and_remove_clear_the_memo() -> void:
+	# autoload 增删翻转脚本的编译结论（autoload 感知重试/全局类解析），
+	# 工具侧整体清空 memo。persist=false 不写盘；remove 顺带清理内存设置。
+	var tools: RefCounted = load("res://addons/godot_mcp/tools/project_tools_native.gd").new()
+	var autoload_name: String = "TmpMemoProbe"
+	var setting_key: String = "autoload/" + autoload_name
+	MemoScript.clear()
+	# 预热一条 memo 条目
+	MemoScript.diagnostics_for(_tmp_path, "v", func() -> Dictionary:
+		return {"valid": true, "errors": []})
+	assert_eq(MemoScript.entry_count(), 1, "seed entry present")
+
+	var added: Dictionary = tools._tool_add_project_autoload({
+		"name": autoload_name,
+		"path": "res://addons/godot_mcp/utils/script_compile_memo.gd",
+		"persist": false})
+	assert_eq(String(added.get("status", "")), "success", str(added.get("error", "")))
+	assert_eq(MemoScript.entry_count(), 0, "autoload add clears the compile memo")
+
+	MemoScript.diagnostics_for(_tmp_path, "v", func() -> Dictionary:
+		return {"valid": true, "errors": []})
+	assert_eq(MemoScript.entry_count(), 1, "reseeded")
+
+	var removed: Dictionary = tools._tool_remove_project_autoload({
+		"name": autoload_name, "persist": false})
+	assert_eq(String(removed.get("status", "")), "success", str(removed.get("error", "")))
+	assert_eq(MemoScript.entry_count(), 0, "autoload remove clears the compile memo")
+	assert_false(ProjectSettings.has_setting(setting_key), "in-memory autoload cleaned up")
+	MemoScript.clear()

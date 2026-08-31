@@ -4,6 +4,8 @@
 class_name DebugBridgeTools
 extends RefCounted
 
+const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
+
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
 
@@ -1174,10 +1176,12 @@ func _tool_install_runtime_probe(params: Dictionary) -> Dictionary:
 	
 	if ProjectSettings.has_setting(autoload_key):
 		return {"status": "already_installed", "node_path": node_name}
-	
+
 	ProjectSettings.set_setting(autoload_key, autoload_path)
 	ProjectSettings.save()
-	
+	# 探针以 autoload 落地：autoload 变化改变脚本的编译结论，全清编译 memo。
+	ScriptCompileMemoScript.clear()
+
 	return {"status": "success", "node_path": node_name, "autoload": true}
 
 func _register_remove_runtime_probe(server_core: RefCounted) -> void:
@@ -1202,9 +1206,11 @@ func _tool_remove_runtime_probe(params: Dictionary) -> Dictionary:
 	
 	if not ProjectSettings.has_setting(autoload_key):
 		return {"status": "not_installed", "removed_node": ""}
-	
+
 	ProjectSettings.clear(autoload_key)
 	ProjectSettings.save()
+	# 同 install：autoload 移除翻转编译结论，全清编译 memo。
+	ScriptCompileMemoScript.clear()
 	return {"status": "success", "removed_node": node_name}
 
 func _register_request_debug_break(server_core: RefCounted) -> void:

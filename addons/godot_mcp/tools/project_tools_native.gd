@@ -8,6 +8,7 @@ const MAX_CONCURRENT_TEST_JOBS: int = 4
 
 const PathNormalizerScript = preload("res://addons/godot_mcp/utils/path_normalizer.gd")
 const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
 
 var _editor_interface: EditorInterface = null
 # 统一异步 job 框架（AsyncJobManager，基于 WorkerThreadPool）：单测与批次测试
@@ -2345,6 +2346,11 @@ func _tool_add_project_autoload(params: Dictionary) -> Dictionary:
 			return {"error": "Failed to save project settings: " + error_string(save_error)}
 		persisted = true
 
+	# Autoload 变化改变"什么能编译"（autoload 感知重试/全局类解析）：
+	# 整体清空编译 memo。Autoload 不是高频操作，全清的代价可忽略，
+	# 比在签名里精确追踪 autoload 表更简单可靠。
+	ScriptCompileMemoScript.clear()
+
 	return {
 		"status": "success",
 		"name": autoload_name,
@@ -2413,6 +2419,10 @@ func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
 		if save_error != OK:
 			return {"error": "Failed to save project settings: " + error_string(save_error)}
 		persisted = true
+
+	# 同 add：autoload 移除也会翻转脚本的编译结论（原依赖 autoload 的
+	# 脚本会变无效），全清 memo。
+	ScriptCompileMemoScript.clear()
 
 	return {
 		"status": "success",

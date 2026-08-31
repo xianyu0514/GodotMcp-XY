@@ -11,8 +11,14 @@
 # - mtime 或文件长度变化（磁盘真相）→ 重算。长度弥补文件系统时间戳
 #   粒度：同一秒内"改写后长度不同"的内容变化也能被识别。
 # - autoload / 全局脚本类注册表变化 → 重算（编译结果依赖它们：
-#   autoload 感知重试、class_name 引用解析）
+#   autoload 感知重试、class_name 引用解析）。autoload 增删另由工具侧
+#   整体 clear()（add/remove_project_autoload、install/remove_runtime_
+#   probe）——全清比在签名里精确追踪更简单，autoload 非高频操作。
 # - include_warnings / check_warnings 等变体 → 独立条目
+# - 残余窗口（已知且接受）：外部编辑器同一秒内的**等长**改写使
+#   mtime+长度都不变，memo 会继续供出旧结论直到该文件下次磁盘变化。
+#   MCP 自身写路径（create_script/modify_script）已显式失效不受影响；
+#   这是 mtime+长度方案的固有边界（与 make/编译器的时间戳判定一致）。
 
 class_name ScriptCompileMemo
 extends RefCounted
