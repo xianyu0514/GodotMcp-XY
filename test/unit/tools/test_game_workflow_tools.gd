@@ -704,3 +704,15 @@ func test_gate_repair_requeues_profile_screenshot_evidence() -> void:
 	_tools._requeue_profile_evidence(loaded, repaired_gate)
 	assert_eq(String(shot_task.get("status", "")), "pending",
 		"completed screenshot of the repaired profile is requeued for fresh evidence")
+
+func test_anchor_step_with_caller_node_path_derives_preset() -> void:
+	# preset 是 set_anchor_preset 的 schema 必填项：调用方只给 node_path 时
+	# 必须派生默认 CENTER(8)，否则该步永远停在 needs_input。
+	var task: Dictionary = {
+		"id": "wf_anchor", "profile": "ui_screen", "tool_name": "set_anchor_preset",
+		"arguments": {"node_path": "/root/Hud/Label"}}
+	var plan: Dictionary = {"goal": "polished pause menu", "workflow": {"artifacts": {}}}
+	var derived: Dictionary = _tools._derive_step_arguments(
+		plan, task, "set_anchor_preset", task.get("arguments", {}).duplicate(true))
+	assert_eq(int(derived.get("preset", -1)), 8,
+		"missing preset derives CENTER even when node_path is caller-supplied")

@@ -744,6 +744,13 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["preset"] = 8
 		task["derived_inputs"]["preset"] = 8
 		task["derived_inputs"]["node_path"] = "/root/WinLabel"
+	# preset 是 schema 必填项：调用方自带 node_path 而未给 preset 时同样
+	# 派生 CENTER(8)，否则该步仍会停在 needs_input。
+	elif tool_name == "set_anchor_preset" and not arguments.has("preset") \
+			and arguments.has("node_path"):
+		arguments["preset"] = 8
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["preset"] = 8
 	if tool_name in RUNTIME_WINDOW_TOOLS and not arguments.has("allow_window"):
 		arguments["allow_window"] = true
 	var focus_param: String = String(FOCUS_POLICY_TOOLS.get(tool_name, ""))

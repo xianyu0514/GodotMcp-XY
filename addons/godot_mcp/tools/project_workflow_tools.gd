@@ -590,7 +590,9 @@ func _register_insert_animation_keys(server_core: RefCounted) -> void:
 			"track_type": {"type": "string", "description": "Track type. Default 'value'.", "enum": ["value", "position_3d", "rotation_3d", "scale_3d"], "default": "value"},
 			"value_type": {"type": "string", "description": "Optional coercion for value-track key values.", "enum": ["int", "float", "bool", "string", "vector2", "vector3", "color"]},
 			"keys": {"type": "array", "description": "Keyframes as objects {time: number, value: <any>}.", "items": {"type": "object"}},
-			"reuse_track": {"type": "boolean", "description": "Reuse an existing track that matches path and type instead of adding a new one. Default true.", "default": true}
+			"reuse_track": {"type": "boolean", "description": "Reuse a matching existing track instead of adding one. Default true.", "default": true},
+			"attach_player_node": {"type": "string", "description": "AnimationPlayer node path in the edited scene; the animation is added to its default library."},
+			"animation_name": {"type": "string", "description": "Library name for attach_player_node. Defaults to the resource name."}
 		},
 		"required": ["animation_path", "track_path", "keys"]
 	}
