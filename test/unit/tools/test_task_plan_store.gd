@@ -13,6 +13,12 @@ func before_each():
 func after_each():
 	_store = null
 
+func _remove_checkpoint_files(path: String) -> void:
+	for suffix in ["", ".next", ".bak"]:
+		var absolute: String = ProjectSettings.globalize_path(path + suffix)
+		if FileAccess.file_exists(absolute):
+			DirAccess.remove_absolute(absolute)
+
 # --- construction -----------------------------------------------------------
 
 func test_new_plan_is_empty():
@@ -151,6 +157,7 @@ func test_progress_counts():
 
 func test_save_and_load_round_trip():
 	var path: String = "user://test_task_plan_%d.json" % (Time.get_ticks_usec())
+	_remove_checkpoint_files(path)
 	_store.init_plan("Goal X", true)
 	_store.add_task({"title": "A", "id": "a", "dod": ["x"]})
 	var saved: Dictionary = TaskPlanStore.save_plan(_store.plan, path)
@@ -160,7 +167,46 @@ func test_save_and_load_round_trip():
 	assert_true(loaded is Dictionary and not loaded.has("error"))
 	assert_eq(loaded.get("goal"), "Goal X")
 	assert_eq((loaded.get("tasks") as Array).size(), 1)
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	_remove_checkpoint_files(path)
+
+func test_save_keeps_previous_checkpoint_and_recovers_corrupt_primary():
+	var path: String = "user://test_task_plan_recovery_%d.json" % Time.get_ticks_usec()
+	_remove_checkpoint_files(path)
+	var first: Dictionary = TaskPlanStore.new_plan("first durable checkpoint")
+	assert_false(TaskPlanStore.save_plan(first, path).has("error"))
+	var second: Dictionary = TaskPlanStore.new_plan("second durable checkpoint")
+	assert_false(TaskPlanStore.save_plan(second, path).has("error"))
+	assert_true(FileAccess.file_exists(ProjectSettings.globalize_path(path + ".bak")),
+		"Replacing a checkpoint must retain the previous valid generation")
+	var damaged: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	damaged.store_string("{ interrupted checkpoint")
+	damaged.close()
+	var recovered: Dictionary = TaskPlanStore.load_plan(path)
+	assert_false(recovered.has("error"), str(recovered.get("error", "")))
+	assert_eq(recovered.get("goal", ""), "first durable checkpoint",
+		"A torn primary write must fall back to the last committed checkpoint")
+	_remove_checkpoint_files(path)
+
+func test_load_recovers_fully_written_staging_checkpoint_after_rename_window():
+	var path: String = "user://test_task_plan_staging_%d.json" % Time.get_ticks_usec()
+	_remove_checkpoint_files(path)
+	var original: Dictionary = TaskPlanStore.new_plan("original")
+	assert_false(TaskPlanStore.save_plan(original, path).has("error"))
+	var staged: Dictionary = TaskPlanStore.new_plan("newest staged checkpoint")
+	staged["checkpoint_revision"] = int(original.get("checkpoint_revision", 0)) + 1
+	var staging_file: FileAccess = FileAccess.open(path + ".next", FileAccess.WRITE)
+	staging_file.store_string(JSON.stringify(staged, "\t"))
+	staging_file.flush()
+	staging_file.close()
+	var primary_absolute: String = ProjectSettings.globalize_path(path)
+	var backup_absolute: String = ProjectSettings.globalize_path(path + ".bak")
+	assert_eq(DirAccess.rename_absolute(primary_absolute, backup_absolute), OK)
+	assert_true(TaskPlanStore.plan_exists(path),
+		"The crash window between the two renames must still count as a resumable plan")
+	var recovered: Dictionary = TaskPlanStore.load_plan(path)
+	assert_false(recovered.has("error"), str(recovered.get("error", "")))
+	assert_eq(recovered.get("goal", ""), "newest staged checkpoint")
+	_remove_checkpoint_files(path)
 
 func test_load_missing_plan_errors():
 	var loaded = TaskPlanStore.load_plan("user://does_not_exist_%d.json" % Time.get_ticks_usec())
