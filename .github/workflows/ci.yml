@@ -92,16 +92,45 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          timeout 900 "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" --headless --path .             -s addons/gut/gut_cmdln.gd             -gdir=res://test/unit/             -ginclude_subdirs             -gexit 2>&1 | tee gut.log
+          # -gdisable_colors 是本断言链的前提：GUT 默认彩色输出会把失败行
+          # 包成 ESC[31m...[Failed]，'^\s*\[Failed\]' 永远匹配不上（曾因此
+          # 整个作业对测试失败结构性假绿）。
+          timeout 900 "godot/Godot_v${GODOT_VERSION}-stable_win64.exe" --headless --path .             -s addons/gut/gut_cmdln.gd             -gdir=res://test/unit/             -ginclude_subdirs             -gexit             -gdisable_colors 2>&1 | tee gut.log
           gut_exit=${PIPESTATUS[0]}
           if [ "$gut_exit" = "124" ]; then
             echo "::error::smoke watchdog fired - suite hung. Last log lines:"
             tail -15 gut.log | while IFS= read -r line; do echo "::error::${line:0:300}"; done
             exit 1
           fi
+          # GUT 自身几乎总是 quit(0)：解析崩溃、零测试运行等任何非零退出
+          # 都必须显式变红，不能只靠下面的 grep。
+          if [ "$gut_exit" -ne 0 ]; then
+            echo "::error::GUT exited with ${gut_exit} (parse/toolchain failure)"
+            grep -nE "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" gut.log | head -10
+            exit 1
+          fi
           if grep -qE '^\s*\[Failed\]' gut.log; then
             echo "::error::smoke suite reported failing assertions"
             grep -E '^\s*\[Failed\]' gut.log | head -5
+            exit 1
+          fi
+          # 解析失败的测试文件会被 GUT 静默跳过（"Ignoring script ... does
+          # not extend GutTest"）——test_server_resurrection.gd 曾这样从
+          # 套件里消失而 CI 全绿。（注意：正常绿跑也包含约 16 个测试故意
+          # 制造的 SCRIPT ERROR，因此不能对 gut.log 全量 grep 脚本错误；
+          # 生产脚本解析问题由导入门禁负责。）
+          if grep -q "Ignoring script" gut.log; then
+            echo "::error::GUT silently ignored at least one test script (parse failure)"
+            grep "Ignoring script" gut.log | head -5
+            exit 1
+          fi
+          # 最小规模下限：防止"零测试运行也算过"。当前基线约 100 个脚本、
+          # 1828 个测试；留出下浮余量，只在大量脚本消失时报警。
+          scripts_run=$(grep -oE 'Scripts[^0-9]*[0-9]+' gut.log | grep -oE '[0-9]+' | head -1 || echo 0)
+          tests_run=$(grep -oE 'Tests[^0-9]*[0-9]+' gut.log | grep -oE '[0-9]+' | head -1 || echo 0)
+          if [ "${scripts_run:-0}" -lt 95 ] || [ "${tests_run:-0}" -lt 1700 ]; then
+            echo "::error::suite unexpectedly small: scripts=${scripts_run:-?} tests=${tests_run:-?} (expected >=95 scripts, >=1700 tests)"
+            tail -20 gut.log
             exit 1
           fi
 
@@ -133,7 +162,16 @@ jobs:
           GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
         run: |
           set -euo pipefail
-          "$GODOT_EXE" --headless --path . --import
+          "$GODOT_EXE" --headless --path . --import 2>&1 | tee warm_import.log
+          # 4.6.3 专属的解析错误只在这条腿上可见（单测作业跑 4.7）：
+          # --import 对脚本解析失败仍退出 0，必须靠日志判定。
+          if grep -nE "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" warm_import.log > warm_errors.txt; then
+            while IFS= read -r line; do
+              echo "::error::${line:0:400}"
+            done < warm_errors.txt | head -20
+            echo "::error::4.6.3 warm import reported script errors (see annotations)."
+            exit 1
+          fi
 
       - name: Run fast integration suite via the runner
         shell: bash
