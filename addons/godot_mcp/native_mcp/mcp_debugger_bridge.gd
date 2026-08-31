@@ -300,16 +300,55 @@ func get_latest_message_payload(message: String, match_fields: Dictionary = {}) 
 			return payload
 	return null
 
+## 按消息名分桶的捕获索引：查找从 O(缓冲总量) 降为 O(名字数 x 桶内命中)。
+var _captured_by_name: Dictionary = {}
+
+
+func _no_active_sessions() -> bool:
+	for session_value in get_sessions():
+		var session: EditorDebuggerSession = session_value
+		if session != null and session.is_active():
+			return false
+	return true
+
+
 func get_captured_message_after_sequence(sequence: int, response_messages: Array, error_messages: Array = [], match_fields: Dictionary = {}) -> Dictionary:
-	for entry in _captured_messages:
+	return _earliest_captured_after(_captured_by_name, sequence, response_messages, error_messages, match_fields)
+
+
+## 按消息名索引的最早命中查找：每个名字的桶按序追加（序列单调），
+## 桶内首个 sequence > 基线（且字段匹配）的条目即该桶最早候选；
+## 跨桶取序列最小者。此前对整个捕获缓冲（最多 500 条）线性扫描，
+## request_runtime_message 每次轮询都扫一遍。
+## static 纯函数：无头单测可直接以构造索引验证语义。
+static func _earliest_captured_after(index: Dictionary, sequence: int,
+		response_messages: Array, error_messages: Array,
+		match_fields: Dictionary) -> Dictionary:
+	var best: Dictionary = {}
+	for name_value in response_messages:
+		var entry: Dictionary = _first_in_bucket_after(index, String(name_value), sequence, match_fields)
+		if not entry.is_empty() and (best.is_empty()
+				or int(entry.get("sequence", 0)) < int(best.get("sequence", 0))):
+			best = entry
+	# error 消息不做字段过滤（与原线性语义一致）。
+	for name_value in error_messages:
+		var entry: Dictionary = _first_in_bucket_after(index, String(name_value), sequence, {})
+		if not entry.is_empty() and (best.is_empty()
+				or int(entry.get("sequence", 0)) < int(best.get("sequence", 0))):
+			best = entry
+	return best
+
+
+static func _first_in_bucket_after(index: Dictionary, name: String,
+		sequence: int, match_fields: Dictionary) -> Dictionary:
+	var bucket: Array = index.get(name, [])
+	for entry_value in bucket:
+		var entry: Dictionary = entry_value
 		if int(entry.get("sequence", 0)) <= sequence:
-			continue
-		var message: String = str(entry.get("message", ""))
-		if not response_messages.has(message) and not error_messages.has(message):
 			continue
 		var captured_data: Array = entry.get("data", [])
 		var payload: Variant = captured_data[0] if not captured_data.is_empty() else null
-		if response_messages.has(message) and not _payload_matches(payload, match_fields):
+		if not match_fields.is_empty() and not _payload_matches(payload, match_fields):
 			continue
 		return entry
 	return {}
@@ -323,6 +362,8 @@ func request_runtime_message(message: String, data: Array = [], response_message
 		return send_result
 
 	var wait_until: int = Time.get_ticks_msec() + maxi(timeout_ms, 1)
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	var poll_index: int = 0
 	while Time.get_ticks_msec() <= wait_until:
 		var captured: Dictionary = _find_captured_message_after_sequence(baseline_sequence, response_messages, error_messages)
 		if not captured.is_empty():
@@ -343,12 +384,17 @@ func request_runtime_message(message: String, data: Array = [], response_message
 				"payload": payload,
 				"captured": captured
 			}
-		OS.delay_msec(10)
-		if DisplayServer.has_method("process_events"):
-			DisplayServer.process_events()
-		var tree: SceneTree = Engine.get_main_loop() as SceneTree
+		# 会话已全部停止则不会有回复（崩溃/正常退出后的常见路径）——
+		# 立即超时返回，不再拖满整个窗口。每 8 次轮询查一次即可。
+		poll_index += 1
+		if poll_index % 8 == 0 and _no_active_sessions():
+			break
+		# 非阻塞等待：SceneTree 定时器让帧继续跑（调试器轮询在帧内发生，
+		# 回复更快到达），替代此前阻塞主线程 10ms 的 OS.delay_msec。
 		if tree:
-			await tree.process_frame
+			await tree.create_timer(0.03).timeout
+		else:
+			OS.delay_msec(30)
 
 	return {
 		"error": "Timed out waiting for runtime response: " + message,
@@ -535,16 +581,27 @@ func _decode_stack_variable(data: Array) -> Dictionary:
 
 func _append_captured_message(session_id: int, message: String, data: Array) -> void:
 	_message_sequence += 1
-	_captured_messages.append({
+	var entry: Dictionary = {
 		"sequence": _message_sequence,
 		"session_id": session_id,
 		"message": message,
 		"data": data,
 		"timestamp": Time.get_unix_time_from_system()
-	})
+	}
+	_captured_messages.append(entry)
+	# 按名字建桶（追加序 = 序列序，桶内天然有序）。
+	var bucket: Array = _captured_by_name.get(message, [])
+	bucket.append(entry)
+	_captured_by_name[message] = bucket
 	if _captured_messages.size() > _max_messages:
 		# remove_at(0) 原位弹出：饱和后每条消息不再复制整个 n 元数组
+		var evicted: Dictionary = _captured_messages[0]
 		_captured_messages.remove_at(0)
+		var evicted_name: String = str(evicted.get("message", ""))
+		var evicted_bucket: Array = _captured_by_name.get(evicted_name, [])
+		evicted_bucket.erase(evicted)
+		if evicted_bucket.is_empty():
+			_captured_by_name.erase(evicted_name)
 
 func _append_state_event(event: Dictionary) -> void:
 	_message_sequence += 1
@@ -934,20 +991,14 @@ func _serialize_debug_signal(value: Variant) -> Dictionary:
 	}
 
 func _find_captured_message_after_sequence(sequence: int, response_messages: Array, error_messages: Array) -> Dictionary:
-	for entry in _captured_messages:
-		if int(entry.get("sequence", 0)) <= sequence:
-			continue
-		var message: String = str(entry.get("message", ""))
-		if response_messages.has(message) or error_messages.has(message):
-			return entry
-	return {}
+	return _earliest_captured_after(_captured_by_name, sequence, response_messages, error_messages, {})
 
 func _extract_runtime_error(payload: Variant) -> String:
 	if payload is Dictionary:
 		return str(payload.get("message", payload))
 	return str(payload)
 
-func _payload_matches(payload: Variant, match_fields: Dictionary) -> bool:
+static func _payload_matches(payload: Variant, match_fields: Dictionary) -> bool:
 	if match_fields.is_empty():
 		return true
 	if not (payload is Dictionary):
