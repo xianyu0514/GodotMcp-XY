@@ -534,3 +534,31 @@ func test_animation_state_gate_requires_playing_animation() -> void:
 	assert_true(_engine.result_passed("get_runtime_animation_state",
 		{"status": "success", "is_playing": true, "current_animation": "idle"}),
 		"genuinely playing animation passes")
+
+func test_inspect_gltf_gate_requires_meshes() -> void:
+	# 零网格的 gltf（生成失败/空壳）处理器仍回 success——泛化规则会放行；
+	# 目标是"3d 模型"的门禁必须要求真的有网格。
+	assert_false(_engine.result_passed("inspect_gltf_asset",
+		{"status": "success", "mesh_count": 0, "warnings": ["no meshes"]}),
+		"zero-mesh asset fails the gate")
+	assert_true(_engine.result_passed("inspect_gltf_asset",
+		{"status": "success", "mesh_count": 3, "warnings": []}),
+		"mesh-bearing asset passes")
+
+func test_generated_model_registers_artifact() -> void:
+	# generate_3d_asset 的 resource_path 记为 model 工件，inspect_gltf_asset
+	# 的必填 path 才能从工件推导（此前该链永远卡在 needs_input）。
+	# generate_3d_asset 以显式能力进入计划（调用方 step_inputs 提供密钥参数），
+	# 其 resource_path 结果注册为 model 工件。
+	var plan: Dictionary = _compile("Import a gltf 3d model", ["asset_pipeline"],
+		{"required_capabilities": ["generate_3d_asset"]})["plan"]
+	var generate_task: Dictionary = _task_for_tool(plan, "generate_3d_asset")
+	assert_false(generate_task.is_empty(), "explicit capability schedules generate_3d_asset")
+	var inspect_task: Dictionary = _task_for_tool(plan, "inspect_gltf_asset")
+	assert_false(inspect_task.is_empty(), "gltf goal schedules the inspect gate")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(generate_task.get("id", "")), {
+		"status": "success", "resource_path": "res://models/hero.glb"})
+	assert_false(verdict.has("error"), str(verdict.get("error", "")))
+	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
+	assert_eq(String(artifacts.get("model", "")), "res://models/hero.glb",
+		"generate_3d_asset result registers the model artifact via resource_path")

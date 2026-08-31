@@ -142,13 +142,15 @@ const ARTIFACT_KIND_BY_TOOL: Dictionary = {
 	"create_tileset": "tileset",
 	"create_animation": "animation",
 	"get_runtime_screenshot": "screenshot",
+	"generate_3d_asset": "model",
 	"ensure_project_directory": "test_dir",
 	"create_project_smoke_test": "smoke_test"
 }
 
 const ARTIFACT_PATH_KEYS: Array[String] = [
 	"scene_path", "script_path", "theme_path", "tileset_path",
-	"animation_path", "test_path", "save_path", "saved_path", "path"
+	"animation_path", "test_path", "save_path", "saved_path",
+	"resource_path", "path"
 ]
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
@@ -893,6 +895,10 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 			return status in ["healthy", "warning"] and data.get("summary") is Dictionary and not (data["summary"] as Dictionary).is_empty()
 		"play_and_verify":
 			return bool(data.get("passed", false)) and data.get("runtime_info") is Dictionary and not (data["runtime_info"] as Dictionary).is_empty()
+		"inspect_gltf_asset":
+			# 目标提到 gltf/3d/模型时，零网格的资产（生成失败/空壳）不算达成——
+			# 处理器对空资产仍回 status=success，泛化规则会放行（重言式）。
+			return String(data.get("status", "")) == "success" and int(data.get("mesh_count", 0)) > 0
 		"get_runtime_animation_state":
 			# 作为 objective gate 时必须证明动画真的在播：is_playing 缺席/false
 			# 或 current_animation 为空都算未达成——否则 play_runtime_animation

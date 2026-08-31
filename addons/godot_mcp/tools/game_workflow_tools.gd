@@ -47,7 +47,8 @@ const DERIVED_INPUT_ARTIFACTS: Dictionary = {
 	"test_path": "smoke_test",
 	"search_path": "test_dir",
 	"test_dir": "test_dir",
-	"candidate_path": "screenshot"
+	"candidate_path": "screenshot",
+	"path": "model"
 }
 
 var _server_core: RefCounted = null
@@ -710,6 +711,12 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			arguments["steps"] = _movement_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "movement-exercise"
+		else:
+			# 非移动目标也给一个启动等待窗口：零 steps 时编排立即返回，游戏
+			# 启动期的脚本错误还没到达调试桥——门禁只证明了"发起过运行"。
+			arguments["steps"] = [{"wait_ms": 600}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "boot-settle"
 	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
 	if tool_name == "create_theme" and not arguments.has("theme_path") \
 			and not artifacts.has("theme"):

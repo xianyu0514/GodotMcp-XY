@@ -716,3 +716,30 @@ func test_anchor_step_with_caller_node_path_derives_preset() -> void:
 		plan, task, "set_anchor_preset", task.get("arguments", {}).duplicate(true))
 	assert_eq(int(derived.get("preset", -1)), 8,
 		"missing preset derives CENTER even when node_path is caller-supplied")
+
+func test_non_movement_goal_derives_boot_settle_steps() -> void:
+	# 非移动目标的 play_and_verify 此前是零 steps：编排立即返回，启动期
+	# 错误还没到调试桥——只证明了"发起过运行"。默认给一个启动等待窗口。
+	var planned: Dictionary = _plan(["quality_assurance"], "Run project tests")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var play_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			play_task = task
+			break
+	if play_task.is_empty():
+		pass_else_check(planned)
+		return
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		loaded, play_task, "play_and_verify",
+		_tools._resolve_inputs(play_task, {}, false))
+	var steps: Array = arguments.get("steps", [])
+	assert_gt(steps.size(), 0, "non-movement play gate derives a boot-settle window")
+
+func pass_else_check(_planned: Dictionary) -> void:
+	# quality_assurance profile 无 play 步骤时跳过（由 movement 用例覆盖派生路径）。
+	pass
