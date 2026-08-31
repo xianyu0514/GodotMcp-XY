@@ -177,6 +177,9 @@ jobs:
         shell: bash
         env:
           GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          # 临时 runner 上只有本套件的 Godot 进程：允许 runner 按映像名
+          # 整体清扫孤儿进程（本地默认走精确匹配仓库路径的清扫）。
+          MCP_RUNNER_KILL_ALL_GODOT: "1"
         run: python test/integration/run_integration.py --timeout 420
 
       - name: Upload artifacts on failure

@@ -41,6 +41,18 @@ def kill_repo_godots() -> None:
     """
     if platform.system() != "Windows":
         return
+    # CI（临时 runner）上只有本套件的 Godot 进程：按映像名整体击杀最可靠，
+    # 不依赖可能慢/失败的 CIM 查询。本地保持精确匹配仓库路径的清扫，
+    # 绝不碰用户自己打开的编辑器。
+    if os.environ.get("MCP_RUNNER_KILL_ALL_GODOT"):
+        result = subprocess.run(
+            ["taskkill", "/IM", "Godot_v4.6.3-stable_win64.exe", "/T", "/F"],
+            capture_output=True, text=True, timeout=30,
+        )
+        terminated = result.stdout.count("SUCCESS")
+        if terminated:
+            print(f"    [sweep] kill-all terminated {terminated} process tree(s)", flush=True)
+        return
     query = (
         "Get-CimInstance Win32_Process -Filter \"Name like 'Godot%'\" | "
         "Where-Object { $_.CommandLine -like '*Godot-MCP-Native*' } | "
@@ -52,12 +64,18 @@ def kill_repo_godots() -> None:
             capture_output=True, text=True, timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired):
+        print("    [sweep] WARNING: process listing failed; leaked processes may slow later tests", flush=True)
         return
+    terminated = 0
     for pid_text in listing.stdout.split():
-        subprocess.run(
+        kill = subprocess.run(
             ["taskkill", "/PID", pid_text, "/T", "/F"],
-            capture_output=True, timeout=30,
+            capture_output=True, text=True, timeout=30,
         )
+        if "SUCCESS" in kill.stdout:
+            terminated += 1
+    if terminated:
+        print(f"    [sweep] terminated {terminated} leaked process tree(s)", flush=True)
 
 
 
