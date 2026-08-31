@@ -227,24 +227,35 @@ static func mutation_tags(tool_name: String, group: String, arguments: Dictionar
 		"rename_script_symbol", "save_all_scripts", "reload_open_scripts":
 			return [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE]
 		"attach_script":
-			return [TAG_SCENE_CONTENT]
+			# 场景从此引用该脚本：未使用资源/反向依赖读必须看到。
+			return [TAG_SCENE_CONTENT, TAG_RESOURCE_AGGREGATE]
 		"create_scene":
+			# RESOURCE_AGGREGATE：新 .tscn 的 ext_resource 集合参与
+			# scan_missing/scan_cyclic/audit/search_in_files(.tscn)。
 			return [TAG_SCENE_CONTENT, TAG_SCENE_CATALOG, TAG_SCENE_TABS,
-				TAG_RESOURCE_CATALOG, TAG_PROJECT_TREE]
+				TAG_RESOURCE_CATALOG, TAG_RESOURCE_AGGREGATE, TAG_PROJECT_TREE]
 		"open_scene", "close_scene_tab":
 			return [TAG_SCENE_CONTENT, TAG_SCENE_TABS]
 		"save_scene":
-			return [TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG, TAG_PROJECT_TREE]
+			return [TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG, TAG_RESOURCE_AGGREGATE,
+				TAG_PROJECT_TREE]
 		"save_branch_as_scene":
 			return [TAG_SCENE_CONTENT, TAG_SCENE_CATALOG, TAG_RESOURCE_CATALOG,
-				TAG_PROJECT_TREE]
+				TAG_RESOURCE_AGGREGATE, TAG_PROJECT_TREE]
 		"install_runtime_probe", "remove_runtime_probe":
 			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE, TAG_RESOURCE_CATALOG,
 				TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE, TAG_SCRIPT_CATALOG]
 		"reimport_resources":
 			return [TAG_IMPORT_STATE, TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE]
 		"configure_android_export":
-			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE]
+			# 直接改写 export_presets.cfg（config_path 默认值）：
+			# 预设读（list/inspect/validate_export_preset）依赖
+			# resource:<该文件> + RESOURCE_AGGREGATE，缺了会读到旧配置。
+			var android_tags: Array[String] = [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE,
+				TAG_RESOURCE_AGGREGATE]
+			_append_path_tag(android_tags, "resource",
+				arguments.get("config_path", "res://export_presets.cfg"))
+			return _deduplicated_sorted(android_tags)
 		"bump_version":
 			return [TAG_PROJECT_SETTINGS, TAG_PROJECT_TREE]
 		"manage_localization":

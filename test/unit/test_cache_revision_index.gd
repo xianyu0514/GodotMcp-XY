@@ -205,3 +205,30 @@ func test_unused_resources_depend_on_script_owners() -> void:
 	# 脚本里的 preload/load 决定资源是否被使用：modify_script 后必须重算。
 	var tags: Array[String] = INDEX_SCRIPT.read_tags("list_unused_resources", {})
 	assert_has(tags, INDEX_SCRIPT.TAG_SCRIPT_AGGREGATE)
+
+func test_android_export_config_invalidates_preset_reads() -> void:
+	# configure_android_export 改写 export_presets.cfg：预设读必须看到新配置。
+	var index = INDEX_SCRIPT.new()
+	var snapshot: Dictionary = index.snapshot(
+		INDEX_SCRIPT.read_tags("inspect_export_presets", {}))
+	index.advance(INDEX_SCRIPT.mutation_tags("configure_android_export", "Editor-Advanced", {}))
+	assert_false(index.is_current(snapshot),
+		"android config write must invalidate the preset-read cache")
+
+func test_scene_writes_invalidate_resource_aggregate_reads() -> void:
+	# 存盘 .tscn 改变 ext_resource 集合：scan_missing/audit/search(.tscn) 必须重扫。
+	for tool_name in ["create_scene", "save_scene", "save_branch_as_scene"]:
+		var index = INDEX_SCRIPT.new()
+		var snapshot: Dictionary = index.snapshot(
+			INDEX_SCRIPT.read_tags("scan_missing_resource_dependencies", {}))
+		index.advance(INDEX_SCRIPT.mutation_tags(tool_name, "Scene-Basic", {}))
+		assert_false(index.is_current(snapshot),
+			"%s must invalidate dependency-scan reads" % tool_name)
+
+func test_attach_script_invalidates_unused_resource_reads() -> void:
+	var index = INDEX_SCRIPT.new()
+	var snapshot: Dictionary = index.snapshot(
+		INDEX_SCRIPT.read_tags("list_unused_resources", {}))
+	index.advance(INDEX_SCRIPT.mutation_tags("attach_script", "Script-Basic", {}))
+	assert_false(index.is_current(snapshot),
+		"a newly referenced script is no longer unused")

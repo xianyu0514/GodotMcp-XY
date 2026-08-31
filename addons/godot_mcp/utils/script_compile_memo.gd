@@ -53,6 +53,17 @@ static func result_for(path: String, domain: String, compute: Callable) -> Varia
 	return result
 
 
+## 写侧失效：插件自身改写脚本后调用（modify_script/create_script/...）。
+## mtime 只有秒级精度，同秒内的等长改写（== ↔ !=、等长重命名）会让
+## memo 供出改写前的结论且无 TTL 上界——修复循环里这是热路径。
+## 外部编辑器改写仍靠 mtime+长度兜底。
+static func invalidate(path: String) -> void:
+	var prefix: String = path + "|"
+	for key_value in _entries.keys():
+		if String(key_value).begins_with(prefix):
+			_entries.erase(key_value)
+
+
 static func clear() -> void:
 	_entries.clear()
 

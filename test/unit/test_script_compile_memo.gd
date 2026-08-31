@@ -88,3 +88,28 @@ func test_result_for_domains_are_independent() -> void:
 		return ["res://b.tres"])
 	assert_eq(calls.size(), 2, "repeat in the same domain is memoized")
 	assert_eq((first as Array)[0], "res://a.tres", "memoized value is served")
+
+func test_writer_side_invalidate_forces_recompute() -> void:
+	# 同秒等长改写（mtime+长度都不变）是写侧失效存在的理由：
+	# invalidate 后必须重算，不受磁盘签名不变的影响。
+	# 注意 invalidate 必须用与 diagnostics_for 相同的路径形式（键前缀匹配）。
+	var calls: Array = []
+	MemoScript.diagnostics_for(_tmp_path, "v", _compute_log(calls, true))
+	MemoScript.invalidate(_tmp_path)
+	var recomputed: Dictionary = MemoScript.diagnostics_for(_tmp_path, "v", _compute_log(calls, false))
+	assert_eq(calls.size(), 2, "invalidate forces recompute despite identical signature")
+	assert_false(bool(recomputed["valid"]), "the post-invalidate compute result is served")
+
+func test_writer_side_invalidate_only_touches_that_path() -> void:
+	var other: String = "user://test_memo_other_probe.gd"
+	var f: FileAccess = FileAccess.open(other, FileAccess.WRITE)
+	f.store_string("extends Node
+")
+	f.close()
+	var calls: Array = []
+	MemoScript.diagnostics_for(_tmp_path, "v", _compute_log(calls, true))
+	MemoScript.diagnostics_for(other, "v", _compute_log(calls, true))
+	MemoScript.invalidate(_tmp_path)
+	MemoScript.diagnostics_for(other, "v", _compute_log(calls, true))
+	assert_eq(calls.size(), 2, "other path stays memoized")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(other))

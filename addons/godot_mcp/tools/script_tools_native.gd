@@ -1525,6 +1525,8 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 
 	file.store_string(content)
 	file.close()
+	# 写侧失效编译 memo：mtime 秒级 + 等长改写会让 memo 无限供出旧结论。
+	ScriptCompileMemoScript.invalidate(script_path)
 
 	var line_count: int = content.split("\n").size()
 	var result: Dictionary = {
@@ -1798,7 +1800,10 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	
 	file.store_string(final_content)
 	file.close()
-	
+	# 写侧失效编译 memo：修复循环里同秒等长改写（== ↔ != 等）必须立即
+	# 重编译，否则 verify_scripts 拿到修复前的结论且无 TTL 上界。
+	ScriptCompileMemoScript.invalidate(script_path)
+
 	# 计算行数
 	var line_count: int = final_content.split("\n").size()
 
