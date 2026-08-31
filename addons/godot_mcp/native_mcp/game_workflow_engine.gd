@@ -14,6 +14,7 @@ const TokenEstimatorScript = preload("res://addons/godot_mcp/utils/token_estimat
 const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 
 const SCHEMA_VERSION: int = 1
+const RECEIPT_INTEGRITY_VERSION: int = 1
 const DEFAULT_STEPS_PER_RUN: int = 4
 # Zero is the adaptive default: repairs may continue while their evidence changes.
 # A positive value is an explicit caller policy, not a server-wide ceiling.
@@ -723,6 +724,7 @@ func _build_plan(contract: Dictionary, specs: Array[Dictionary]) -> Dictionary:
 	plan["tasks"] = tasks
 	plan["workflow"] = {
 		"schema_version": SCHEMA_VERSION,
+		"receipt_integrity_version": RECEIPT_INTEGRITY_VERSION,
 		"workflow_id": workflow_id,
 		"blueprint_hash": blueprint_hash,
 		"state": "planned",
@@ -815,6 +817,9 @@ func validate_integrity(plan: Dictionary, available_tools: Array[String]) -> Dic
 			return {"error": "workflow step '%s' no longer matches the authorized blueprint" % expected_task.get("id", index)}
 		if not String(actual_task.get("tool_name", "")) in available_tools:
 			return {"error": "workflow capability is no longer registered: %s" % actual_task.get("tool_name", "")}
+	var receipt_integrity: Dictionary = _validate_receipt_integrity(plan)
+	if receipt_integrity.has("error"):
+		return receipt_integrity
 	return {"status": "ok", "blueprint_hash": workflow.get("blueprint_hash", "")}
 
 func get_task(plan: Dictionary, step_id: String) -> Dictionary:
@@ -1356,8 +1361,13 @@ func append_receipt(plan: Dictionary, receipt_fields: Dictionary) -> Dictionary:
 	var workflow: Dictionary = plan.get("workflow", {})
 	if not (workflow.get("receipts") is Array):
 		workflow["receipts"] = []
+	if not workflow.has("receipt_integrity_version") and (workflow["receipts"] as Array).is_empty():
+		# A legacy plan with no evidence can be upgraded without trusting or
+		# rewriting any historical receipt. Plans that already contain legacy
+		# receipts remain readable under their original contract.
+		workflow["receipt_integrity_version"] = RECEIPT_INTEGRITY_VERSION
 	var semantic_receipt: Dictionary = receipt_fields.duplicate(true)
-	var digest: String = _sha256(TokenEstimatorScript.canonical_json(semantic_receipt))
+	var digest: String = _receipt_digest(semantic_receipt)
 	var receipts: Array = workflow["receipts"]
 	for existing_value in receipts:
 		var existing: Dictionary = existing_value
@@ -1373,8 +1383,58 @@ func append_receipt(plan: Dictionary, receipt_fields: Dictionary) -> Dictionary:
 	receipts.append(receipt)
 	return receipt
 
+func _validate_receipt_integrity(plan: Dictionary) -> Dictionary:
+	var workflow: Dictionary = plan.get("workflow", {})
+	var integrity_version: int = int(workflow.get("receipt_integrity_version", 0))
+	if integrity_version == 0:
+		return {"status": "legacy"}
+	if integrity_version != RECEIPT_INTEGRITY_VERSION:
+		return {"error": "unsupported workflow receipt integrity version"}
+	var receipts_value = workflow.get("receipts", [])
+	if not (receipts_value is Array):
+		return {"error": "workflow receipts are not an array"}
+	var receipts_by_digest: Dictionary = {}
+	for receipt_value in receipts_value:
+		if not (receipt_value is Dictionary):
+			return {"error": "workflow receipt is not an object"}
+		var receipt: Dictionary = receipt_value
+		var digest: String = String(receipt.get("digest", ""))
+		if digest.is_empty():
+			return {"error": "workflow receipt is missing its digest"}
+		if digest != _receipt_digest(receipt):
+			return {"error": "workflow receipt digest mismatch: %s" % digest}
+		if receipts_by_digest.has(digest):
+			return {"error": "duplicate workflow receipt digest: %s" % digest}
+		receipts_by_digest[digest] = receipt
+
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("status", "")) != "done":
+			continue
+		var task_digest: String = String(task.get("receipt_digest", ""))
+		if task_digest.is_empty() or not receipts_by_digest.has(task_digest):
+			return {"error": "done workflow step '%s' has no matching receipt" % task.get("id", "")}
+		var task_receipt: Dictionary = receipts_by_digest[task_digest]
+		if String(task_receipt.get("step_id", "")) != String(task.get("id", "")):
+			return {"error": "done workflow step '%s' points to another step's receipt" % task.get("id", "")}
+		if String(task_receipt.get("tool_name", "")) != String(task.get("tool_name", "")):
+			return {"error": "done workflow step '%s' points to another capability's receipt" % task.get("id", "")}
+		if not bool(task_receipt.get("passed", false)) \
+				or bool(task_receipt.get("pending", false)) \
+				or bool(task_receipt.get("repair", false)):
+			return {"error": "done workflow step '%s' does not have final passing evidence" % task.get("id", "")}
+	return {"status": "ok"}
+
+static func _receipt_digest(receipt: Dictionary) -> String:
+	var semantic_receipt: Dictionary = receipt.duplicate(true)
+	for metadata_key in ["digest", "at", "last_at", "occurrences"]:
+		semantic_receipt.erase(metadata_key)
+	return _sha256(TokenEstimatorScript.canonical_json(_canonical_numbers(semantic_receipt)))
+
 func workflow_completed(plan: Dictionary) -> bool:
 	var workflow: Dictionary = plan.get("workflow", {})
+	if _validate_receipt_integrity(plan).has("error"):
+		return false
 	var receipts = workflow.get("receipts", [])
 	if not (receipts is Array):
 		return false

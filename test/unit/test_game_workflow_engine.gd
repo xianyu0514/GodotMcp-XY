@@ -75,6 +75,45 @@ func test_large_supported_goals_are_not_capped_by_tool_or_task_count() -> void:
 			"A supported goal must retain every required capability")
 		assert_eq(_engine.validate_integrity(result["plan"], _available).get("status", ""), "ok")
 
+func test_integrity_recomputes_receipts_and_requires_one_for_every_done_step() -> void:
+	var plan: Dictionary = _compile("get_project_info", [], {
+		"required_capabilities": ["get_project_info"]
+	})["plan"]
+	assert_eq(int((plan["workflow"] as Dictionary).get("receipt_integrity_version", 0)), 1)
+	var task: Dictionary = _task_for_tool(plan, "get_project_info")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), {
+		"status": "ok", "project_name": "ReceiptProof"
+	})
+	assert_eq(verdict.get("status", ""), "completed")
+	assert_eq(_engine.validate_integrity(plan, _available).get("status", ""), "ok")
+	var receipt: Dictionary = ((plan["workflow"]["receipts"] as Array)[0] as Dictionary)
+	var original_passed: bool = bool(receipt.get("passed", false))
+	receipt["passed"] = not original_passed
+	var tampered_receipt: Dictionary = _engine.validate_integrity(plan, _available)
+	assert_true(tampered_receipt.has("error"),
+		"Changing receipt evidence without recomputing its digest must fail closed")
+	receipt["passed"] = original_passed
+	task["receipt_digest"] = "forged-or-missing"
+	var missing_receipt: Dictionary = _engine.validate_integrity(plan, _available)
+	assert_true(missing_receipt.has("error"),
+		"A done step cannot survive recovery without its matching passing receipt")
+
+func test_receipt_digest_survives_json_numeric_round_trip() -> void:
+	var plan: Dictionary = _compile("get_project_info", [], {
+		"required_capabilities": ["get_project_info"]
+	})["plan"]
+	var task: Dictionary = _task_for_tool(plan, "get_project_info")
+	_engine.append_receipt(plan, {
+		"step_id": task.get("id", ""),
+		"tool_name": "get_project_info",
+		"passed": false,
+		"pending": true,
+		"summary": {"total_count": 3, "ratio": 0.5}
+	})
+	var persisted: Dictionary = JSON.parse_string(JSON.stringify(plan))
+	assert_eq(_engine.validate_integrity(persisted, _available).get("status", ""), "ok",
+		"Receipt hashing must canonicalize integers changed to floats by JSON persistence")
+
 func test_ready_step_limit_is_a_caller_slice_not_a_four_step_ceiling() -> void:
 	var plan: Dictionary = {"tasks": []}
 	for index in range(100):
