@@ -146,6 +146,10 @@ static func _write_server_running_state(running: bool) -> void:
 	if file:
 		file.store_string(JSON.stringify({"running": running}))
 		file.close()
+	# 写入方直接刷新解析缓存：文件系统时间戳粒度可能粗于连续两次写入
+	# （同秒且长度相同的 true/false 翻转），只靠 mtime 会让读侧拿到陈旧值。
+	_server_state_cached = running
+	_server_state_mtime = FileAccess.get_modified_time(SERVER_STATE_FILE)
 
 # 自愈看门狗：reload_project 只重载资源与脚本（插件实例不重建、_enter_tree
 # 不再触发，热重载还会重置成员并掐断服务器线程），因此复活必须由常驻
@@ -200,10 +204,12 @@ func _process(_delta: float) -> void:
 
 # 状态文件解析缓存：看门狗每 2 秒轮询，但文件只在启停时变化——
 # 按 mtime 判断，未变化时直接复用上次结论，免去常驻的打开+JSON 解析。
-var _server_state_cached: bool = false
-var _server_state_mtime: int = -1
+# static：插件实例在热重载中会重建，而该缓存属于进程级磁盘事实；
+# 同时保留 test_server_resurrection 的静态调用契约（类级读写标记位）。
+static var _server_state_cached: bool = false
+static var _server_state_mtime: int = -1
 
-func _read_server_running_state() -> bool:
+static func _read_server_running_state() -> bool:
 	if not FileAccess.file_exists(SERVER_STATE_FILE):
 		_server_state_mtime = -1
 		return false

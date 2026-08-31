@@ -6,6 +6,7 @@ class_name ScriptToolsNative
 extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
+const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
 const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 var _editor_interface: EditorInterface = null
@@ -2362,6 +2363,9 @@ func _collect_validation_error(test_script: GDScript, content: String) -> Dictio
 	}
 
 func _strip_class_names(source: String) -> String:
+	# 廉价守卫：无 class_name 声明时无需整段 split/join。
+	if not source.contains("class_name "):
+		return source
 	var lines: PackedStringArray = source.split("\n")
 	var result: PackedStringArray = []
 	for line in lines:
@@ -2428,6 +2432,9 @@ func _insert_autoload_decls_after_extends(content: String, autoload_decls: Strin
 	return "\n".join(result_lines)
 
 func _spaces_to_tabs(code: String) -> String:
+	# 廉价守卫：没有任何以 4 空格开头的行时跳过整段 split/join。
+	if not (code.begins_with("    ") or code.contains("\n    ")):
+		return code
 	var lines: PackedStringArray = code.split("\n")
 	var result_lines: PackedStringArray = []
 	for line in lines:
@@ -2580,28 +2587,33 @@ func _verify_single_script(script_path: String, check_warnings: bool) -> Diction
 			"error_count": 1,
 			"warning_count": 0
 		}
-	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
-	if not file:
-		return {
-			"path": script_path,
-			"valid": false,
-			"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
-			"warnings": [],
-			"error_count": 1,
-			"warning_count": 0
-		}
-	var content: String = file.get_as_text()
-	file.close()
+	# 按路径记忆编译结果：依赖标签推进后的全量重扫只重编译真正变化的文件。
+	return ScriptCompileMemoScript.diagnostics_for(script_path,
+		"verify|%s" % str(check_warnings),
+		func() -> Dictionary:
+			var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+			if not file:
+				return {
+					"path": script_path,
+					"valid": false,
+					"errors": [{"line": 0, "column": 0, "message": "Failed to open file: " + script_path}],
+					"warnings": [],
+					"error_count": 1,
+					"warning_count": 0
+				}
+			var content: String = file.get_as_text()
+			file.close()
 
-	var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
-	return {
-		"path": script_path,
-		"valid": bool(vr.get("valid", false)),
-		"errors": vr.get("errors", []),
-		"warnings": vr.get("warnings", []),
-		"error_count": int(vr.get("error_count", 0)),
-		"warning_count": int(vr.get("warning_count", 0))
-	}
+			var vr: Dictionary = _tool_validate_script({"content": content, "check_warnings": check_warnings})
+			return {
+				"path": script_path,
+				"valid": bool(vr.get("valid", false)),
+				"errors": vr.get("errors", []),
+				"warnings": vr.get("warnings", []),
+				"error_count": int(vr.get("error_count", 0)),
+				"warning_count": int(vr.get("warning_count", 0))
+			}
+	)
 
 # 递归收集 .gd 脚本，跳过指定名称的子目录（如 addons/test/.godot）。
 func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_dir_names: Array) -> void:
