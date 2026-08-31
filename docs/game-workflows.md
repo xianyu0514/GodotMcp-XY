@@ -42,7 +42,17 @@ Runtime steps automatically receive `install_runtime_probe` and `run_project` pr
 
 ## Basic use
 
-Plan a complete objective:
+The shortest path is one repeatable command:
+
+```json
+{
+  "command": "Create a playable 2D controller with a pause menu, run project tests, and export a smoke-tested Linux build"
+}
+```
+
+If no checkpoint exists, `run_game_workflow` compiles and saves the goal before executing its first adaptive slice. Send the same command again after a yield, transient failure, client disconnect or editor restart; whitespace/case-equivalent commands attach to the same workflow and completed steps are not dispatched again. A different command returns `conflict` and leaves the checkpoint unchanged.
+
+For explicit two-phase control, plan the objective first:
 
 ```json
 {
@@ -53,7 +63,7 @@ Plan a complete objective:
 
 The planner either returns `planned`, requests clarification, or reports the exact missing capabilities. Exact atomic names are always retained as objective evidence. For an unfamiliar composite objective, the local schema-free router may merge more than ten capabilities across semantic clauses. If any clause remains uncovered, planning returns `needs_clarification` with `uncovered_requirements`; it never persists the matched subset as the whole goal.
 
-Advance the plan:
+Then advance the plan:
 
 ```json
 {
@@ -120,9 +130,13 @@ Several behaviors reduce avoidable stalls without weakening the evidence gates:
 
 Before every runner round, the engine recompiles the expected blueprint from the persisted goal contract and compares the exact step order, tools, arguments, dependencies, repair declarations and objective gate set. A changed blueprint stops before any atomic handler runs.
 
+Each plan save writes and validates a complete `.next` generation before rotating the committed file to `.bak` and atomically promoting the new checkpoint. Recovery reads all three generations and selects the newest valid revision, so a torn JSON write or interruption between renames does not erase the last trustworthy state.
+
+New workflows use versioned receipt integrity. Every receipt digest is recomputed after load, and every task marked `done` must reference its own final, passing, non-repair receipt. Changing receipt evidence, inventing a digest or toggling a task status therefore blocks the workflow before execution.
+
 The default protected roots are `res://addons/godot_mcp` and `res://.mcp`. Candidate paths are resolved and simplified before comparison, so a path such as `res://scenes/../addons/godot_mcp/...` cannot bypass protection. Additional protected paths may be declared while planning. Meta/control tools cannot be nested inside a workflow, and the runner has no arbitrary `tool_name` parameter.
 
-`expected_workflow_id` provides compare-and-swap protection for run, replan and cancel operations. This prevents an agent with a stale response from advancing a newer plan.
+`expected_workflow_id` provides compare-and-swap protection for run, replan and cancel operations. The one-command entry point additionally compares the normalized command with the persisted objective. Together these prevent an agent with a stale or different request from advancing a newer plan.
 
 Default responses are projections: at most four ready step IDs/names/stages plus progress and counters. They omit the durable DAG, arguments, receipts and atomic schemas unless `include_plan=true` or the current step actually needs inputs. This keeps long workflows cheap to resume. Identical pending receipts aggregate an occurrence counter; distinct completion evidence is never discarded.
 
