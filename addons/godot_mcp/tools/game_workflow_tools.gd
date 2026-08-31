@@ -115,10 +115,14 @@ func _register_plan_tool(server_core: RefCounted) -> void:
 func _register_run_tool(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"run_game_workflow",
-		"Advance an adaptive authorized DAG slice. Budgets yield but never drop work; async waits, safe restart recovery, caches, protected paths, integrity and objective evidence remain enforced.",
+		"Create or resume a durable workflow from one natural-language command, then advance an adaptive authorized DAG slice. Repeating the same command after a yield, retry or restart attaches to the checkpoint without duplicating completed work.",
 		{
 			"type": "object",
 			"properties": {
+				"command": {
+					"type": "string",
+					"description": "Natural-language objective. Creates the plan when absent and resumes it when equivalent; a different command conflicts instead of replacing durable work."
+				},
 				"plan_path": {"type": "string", "default": DEFAULT_PLAN_PATH},
 				"expected_workflow_id": {"type": "string"},
 				"max_steps": {"type": "integer", "default": 0, "description": "0 chooses an adaptive slice; a positive value controls only this call and never truncates the persisted goal."},
@@ -132,6 +136,9 @@ func _register_run_tool(server_core: RefCounted) -> void:
 				"status": {"type": "string"},
 				"workflow_id": {"type": "string"},
 				"state": {"type": "string"},
+				"objective": {"type": "string"},
+				"requested_command": {"type": "string"},
+				"plan_path": {"type": "string"},
 				"executed": {"type": "array"},
 				"progress": {"type": "object"},
 				"ready": {"type": "array"},
@@ -277,6 +284,13 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 	if path_result.has("error"):
 		return path_result
 	var plan_path: String = path_result["path"]
+	var command: String = String(params.get("command", "")).strip_edges()
+	if not TaskPlanStoreScript.plan_exists(plan_path) and not command.is_empty():
+		var planned: Dictionary = _tool_plan_game_workflow({
+			"action": "plan", "objective": command, "plan_path": plan_path
+		})
+		if planned.has("error"):
+			return planned
 	var plan: Dictionary = _load_plan(plan_path)
 	if plan.has("error"):
 		return plan
@@ -286,6 +300,15 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		integrity["status"] = "blocked"
 		integrity["plan_path"] = plan_path
 		return integrity
+	if not command.is_empty() and _normalize_command(command) != _normalize_command(String(plan.get("goal", ""))):
+		return {
+			"error": "A different command is already checkpointed at '%s'; use plan_game_workflow action=replan with the current workflow id to replace it" % plan_path,
+			"status": "conflict",
+			"workflow_id": (plan["workflow"] as Dictionary).get("workflow_id", ""),
+			"objective": plan.get("goal", ""),
+			"requested_command": command,
+			"plan_path": plan_path
+		}
 	var cas: Dictionary = _check_expected_workflow(plan, params)
 	if cas.has("error"):
 		return cas
@@ -888,6 +911,12 @@ func _normalize_plan_path(raw_path: String) -> Dictionary:
 	if absolute == plugin_root or absolute.begins_with(plugin_root + "/"):
 		return {"error": "plan_path cannot be inside the plugin source tree"}
 	return {"path": plan_path}
+
+static func _normalize_command(command: String) -> String:
+	var normalized: String = command.strip_edges().to_lower()
+	for separator in ["\t", "\r", "\n"]:
+		normalized = normalized.replace(separator, " ")
+	return " ".join(normalized.split(" ", false))
 
 func _load_plan(plan_path: String) -> Dictionary:
 	var loaded: Dictionary = TaskPlanStoreScript.load_plan(plan_path)
