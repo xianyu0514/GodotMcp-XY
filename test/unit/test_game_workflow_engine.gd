@@ -562,3 +562,11 @@ func test_generated_model_registers_artifact() -> void:
 	var artifacts: Dictionary = ((plan.get("workflow", {}) as Dictionary).get("artifacts", {}) as Dictionary)
 	assert_eq(String(artifacts.get("model", "")), "res://models/hero.glb",
 		"generate_3d_asset result registers the model artifact via resource_path")
+
+func test_unsupported_status_is_negative_evidence() -> void:
+	# 工具回 "unsupported" = 无法执行被要求的操作：既不能过门禁，
+	# 也不能当非门禁步骤的可用证据（此前两者都放行）。
+	assert_false(_engine.result_passed("update_node_property", {"status": "unsupported"}),
+		"unsupported never passes a gate")
+	assert_false(_engine._non_gate_result_usable({"status": "unsupported"}),
+		"unsupported is not usable non-gate evidence")

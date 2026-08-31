@@ -109,7 +109,7 @@ const PENDING_STATUSES: Array[String] = [
 const NEGATIVE_STATUSES: Array[String] = [
 	"failed", "failing", "error", "invalid", "blocked", "cancelled",
 	"canceled", "timeout", "timed_out", "unconfigured", "partial",
-	"skipped", "stale", "aborted", "missing"
+	"skipped", "stale", "aborted", "missing", "unsupported"
 ]
 
 # Mutation tools legitimately report these completion statuses; without them a
@@ -1085,6 +1085,10 @@ func _non_gate_result_usable(result: Variant) -> bool:
 			return false
 	var status: String = String(data.get("status", "")).strip_edges().to_lower()
 	if status in PENDING_STATUSES:
+		return false
+	if status == "unsupported":
+		# 工具明确表示无法执行被要求的操作（环境/平台不支持）：
+		# 不是可用证据，也不是可恢复缺口——需要的补救是换能力而非修复环境。
 		return false
 	if status in ["unconfigured", "missing"]:
 		# An inspection that reports a recoverable environment gap is usable

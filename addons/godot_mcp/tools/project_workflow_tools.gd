@@ -1065,6 +1065,10 @@ func _i18n_list(_params: Dictionary) -> Dictionary:
 		"count": entries.size()
 	}
 
+## 工具目录（addons/test/docs）不属于游戏本地化文案的提取范围——
+## 第三方插件的字符串混进游戏 CSV 只会制造噪音。
+const I18N_SKIP_DIRS: Array[String] = ["addons", "test", "tests", "docs"]
+
 func _i18n_collect_files(root: String, extensions: PackedStringArray) -> PackedStringArray:
 	var results: PackedStringArray = PackedStringArray()
 	var stack: Array = [root]
@@ -1081,6 +1085,9 @@ func _i18n_collect_files(root: String, extensions: PackedStringArray) -> PackedS
 				continue
 			var full: String = current.path_join(name)
 			if dir.current_is_dir():
+				if name.to_lower() in I18N_SKIP_DIRS:
+					name = dir.get_next()
+					continue
 				stack.append(full)
 			else:
 				for ext in extensions:
@@ -1139,7 +1146,19 @@ func _i18n_extract(params: Dictionary) -> Dictionary:
 	var prop_re: RegEx = RegEx.new()
 	# 匹配 .tscn 中形如  text = "..."  的可翻译属性赋值。
 	prop_re.compile("^\\s*(%s)\\s*=\\s*\"((?:[^\"\\\\]|\\\\.)*)\"" % "|".join(PackedStringArray(_I18N_TRANSLATABLE_PROPERTIES)))
-	var scenes: PackedStringArray = _i18n_collect_files(scan_dir, PackedStringArray([".tscn"]))
+	# 单次遍历收集 .tscn 与 .gd（include_scripts=false 时只走场景扩展名），
+	# 此前两轮全项目遍历各扫一遍目录树。
+	var collect_extensions: PackedStringArray = PackedStringArray([".tscn"])
+	if include_scripts:
+		collect_extensions.append(".gd")
+	var collected_files: PackedStringArray = _i18n_collect_files(scan_dir, collect_extensions)
+	var scenes: PackedStringArray = PackedStringArray()
+	var scripts: PackedStringArray = PackedStringArray()
+	for file_path in collected_files:
+		if file_path.ends_with(".tscn"):
+			scenes.append(file_path)
+		else:
+			scripts.append(file_path)
 	for scene_path in scenes:
 		var f: FileAccess = FileAccess.open(scene_path, FileAccess.READ)
 		if f == null:
@@ -1157,7 +1176,6 @@ func _i18n_extract(params: Dictionary) -> Dictionary:
 		var tr_re: RegEx = RegEx.new()
 		# 匹配 tr("...") / atr("...")（含转义引号）。
 		tr_re.compile("\\b(?:tr|atr)\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
-		var scripts: PackedStringArray = _i18n_collect_files(scan_dir, PackedStringArray([".gd"]))
 		for script_path in scripts:
 			var sf: FileAccess = FileAccess.open(script_path, FileAccess.READ)
 			if sf == null:
