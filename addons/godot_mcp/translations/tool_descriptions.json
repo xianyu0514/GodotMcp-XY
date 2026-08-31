@@ -229,5 +229,6 @@
   "create_export_preset": "Create an export preset in export_presets.cfg (platform, name, export_path, filters, options). Atomic, validated and undoable via source control.",
   "update_export_preset": "Update fields/options of an existing export preset. Only provided keys change.",
   "remove_export_preset": "Remove an export preset section (and its options) from export_presets.cfg.",
-  "duplicate_export_preset": "Duplicate an existing export preset under a new name (options copied, export_path suffix adjusted)."
+  "duplicate_export_preset": "Duplicate an existing export preset under a new name (options copied, export_path suffix adjusted).",
+  "get_cache_diagnostics": "Read shared tool-result cache telemetry: hit/reuse rates, entries vs capacity, byte pressure, single-flight merges, tool-list and read-snapshot caches, external-change invalidation and spill counters."
 }

@@ -42,6 +42,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_editor_logs(server_core)
 	_register_execute_script(server_core)
 	_register_get_performance_metrics(server_core)
+	_register_get_cache_diagnostics(server_core)
 	_register_debug_print(server_core)
 	_register_execute_editor_script(server_core)
 	_register_clear_output(server_core)
@@ -600,16 +601,72 @@ func _tool_get_performance_metrics(params: Dictionary) -> Dictionary:
 	var object_count: int = Performance.get_monitor(Performance.OBJECT_COUNT)
 	var resource_count: int = Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT)
 	var memory_usage: int = Performance.get_monitor(Performance.MEMORY_STATIC)  # 静态内存
-	
+
 	# 转换为MB
 	var memory_mb: float = memory_usage / 1024.0 / 1024.0
-	
+
 	return {
 		"fps": fps,
 		"object_count": object_count,
 		"resource_count": resource_count,
 		"memory_usage_mb": memory_mb
 	}
+
+# ============================================================================
+# get_cache_diagnostics - 缓存命中率遥测
+# ============================================================================
+
+func _register_get_cache_diagnostics(server_core: RefCounted) -> void:
+	var tool_name: String = "get_cache_diagnostics"
+	var description: String = "Read shared tool-result cache telemetry: hit/reuse rates, entries vs capacity, byte pressure, single-flight merges, tool-list and read-snapshot caches, external-change invalidation and spill counters. Pure counters snapshot — deliberately NOT served from the result cache (the counters move on every call)."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {}
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"result_cache": {
+				"type": "object",
+				"properties": {
+					"hits": {"type": "integer"},
+					"misses": {"type": "integer"},
+					"hit_rate": {"type": "number"},
+					"reuse_rate": {"type": "number"},
+					"entries": {"type": "integer"},
+					"capacity": {"type": "integer"},
+					"bytes": {"type": "integer"},
+					"capacity_bytes": {"type": "integer"}
+				},
+				"additionalProperties": true
+			},
+			"tool_list_cache": {"type": "object", "additionalProperties": true},
+			"read_snapshot_cache": {"type": "object", "additionalProperties": true},
+			"external_change_invalidation": {"type": "object", "additionalProperties": true},
+			"spill": {"type": "object", "additionalProperties": true}
+		},
+		"additionalProperties": true
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": false,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_get_cache_diagnostics"),
+						  output_schema, annotations, "supplementary", "Debug-Advanced")
+
+func _tool_get_cache_diagnostics(params: Dictionary) -> Dictionary:
+	if _server_core == null:
+		return {"error": "Server core is not available"}
+	if not _server_core.has_method("get_cache_diagnostics"):
+		return {"error": "Server core does not expose cache diagnostics"}
+	return _server_core.get_cache_diagnostics()
 
 # ============================================================================
 # debug_print - 输出调试信息

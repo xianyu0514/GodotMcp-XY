@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**73 tools** — 3 core, 70 advanced.
+**74 tools** — 3 core, 71 advanced.
 
 Debug edit-time logs and debugger sessions, then inspect and control a running game through the runtime probe. This is the largest category and includes deterministic play verification, performance budgets and runtime error gates.
 
@@ -28,6 +28,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_performance_metrics` | advanced | Get performance metrics from the editor or running game. |
+| `get_cache_diagnostics` | advanced | Read shared tool-result cache telemetry: hit/reuse rates, capacity/byte pressure, single-flight merges, invalidation and spill counters. |
 | `get_debugger_sessions` | advanced | List Godot editor debugger sessions and their active/break state. |
 | `set_debugger_breakpoint` | advanced | Enable or disable a breakpoint in active Godot debugger sessions. |
 | `send_debugger_message` | advanced | Send a custom debugger message to active Godot debugger sessions. |

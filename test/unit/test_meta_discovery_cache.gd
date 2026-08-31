@@ -2,7 +2,7 @@ extends "res://addons/gut/test.gd"
 
 # 元工具发现链路的结果缓存回归测试：
 #   - list_tool_catalog / search_tools / get_tool_details 属于只读发现工具，
-#     应进入通用结果缓存（重复查询不重复扫描 231 个注册条目）
+#     应进入通用结果缓存（重复查询不重复扫描 232 个注册条目）
 #   - 工具启用状态 / 注册表变化必须使这些缓存失效，避免 catalog 返回过期 enabled
 
 const CORE_SCRIPT = preload("res://addons/godot_mcp/native_mcp/mcp_server_core.gd")
