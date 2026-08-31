@@ -622,6 +622,12 @@ static func save_plan(target_plan: Dictionary, path: String) -> Dictionary:
 			var err: Error = DirAccess.make_dir_recursive_absolute(abs_dir)
 			if err != OK and not DirAccess.dir_exists_absolute(abs_dir):
 				return {"error": "could not create directory '%s': %s" % [base_dir, error_string(err)]}
+	# A previous crash may have left the newest committed generation in .next.
+	# Promote it before reusing that filename, otherwise another interruption
+	# during the retry could fall back past work that was already recovered.
+	var recovery_result: Dictionary = _preserve_newest_staging(path)
+	if recovery_result.has("error"):
+		return recovery_result
 	# Write and validate a complete staging generation before touching the
 	# committed checkpoint.  The previous primary is retained as a backup so a
 	# process/editor crash in either rename window always leaves a readable plan.
@@ -724,6 +730,63 @@ static func _highest_checkpoint_revision(path: String) -> int:
 		var candidate_plan: Dictionary = loaded["plan"]
 		highest = max(highest, int(candidate_plan.get(CHECKPOINT_REVISION_KEY, 0)))
 	return highest
+
+static func _preserve_newest_staging(path: String) -> Dictionary:
+	var staging_path: String = path + CHECKPOINT_STAGING_SUFFIX
+	if not FileAccess.file_exists(staging_path):
+		return {"status": "unchanged"}
+	var staged_result: Dictionary = _read_checkpoint(staging_path)
+	if staged_result.has("error"):
+		return {"status": "unchanged"}
+	var staged_plan: Dictionary = staged_result["plan"]
+	var staged_revision: int = max(0, int(staged_plan.get(CHECKPOINT_REVISION_KEY, 0)))
+
+	var primary_valid: bool = false
+	var primary_revision: int = -1
+	if FileAccess.file_exists(path):
+		var primary_result: Dictionary = _read_checkpoint(path)
+		if not primary_result.has("error"):
+			primary_valid = true
+			primary_revision = max(0, int((primary_result["plan"] as Dictionary).get(CHECKPOINT_REVISION_KEY, 0)))
+	if primary_valid and primary_revision >= staged_revision:
+		return {"status": "unchanged"}
+
+	var backup_path: String = path + CHECKPOINT_BACKUP_SUFFIX
+	var backup_valid: bool = false
+	var backup_revision: int = -1
+	if FileAccess.file_exists(backup_path):
+		var backup_result: Dictionary = _read_checkpoint(backup_path)
+		if not backup_result.has("error"):
+			backup_valid = true
+			backup_revision = max(0, int((backup_result["plan"] as Dictionary).get(CHECKPOINT_REVISION_KEY, 0)))
+	if backup_valid and backup_revision > staged_revision:
+		return {"status": "unchanged"}
+
+	var primary_absolute: String = ProjectSettings.globalize_path(path)
+	var staging_absolute: String = ProjectSettings.globalize_path(staging_path)
+	var backup_absolute: String = ProjectSettings.globalize_path(backup_path)
+	var rotated_primary: bool = false
+	if FileAccess.file_exists(path):
+		if primary_valid:
+			if FileAccess.file_exists(backup_path):
+				var backup_remove_error: Error = DirAccess.remove_absolute(backup_absolute)
+				if backup_remove_error != OK:
+					return {"error": "could not replace checkpoint backup '%s': %s" % [backup_path, error_string(backup_remove_error)]}
+			var rotate_error: Error = DirAccess.rename_absolute(primary_absolute, backup_absolute)
+			if rotate_error != OK:
+				return {"error": "could not preserve previous task plan '%s': %s" % [path, error_string(rotate_error)]}
+			rotated_primary = true
+		else:
+			var corrupt_remove_error: Error = DirAccess.remove_absolute(primary_absolute)
+			if corrupt_remove_error != OK:
+				return {"error": "could not remove invalid task plan '%s': %s" % [path, error_string(corrupt_remove_error)]}
+
+	var promote_error: Error = DirAccess.rename_absolute(staging_absolute, primary_absolute)
+	if promote_error != OK:
+		if rotated_primary and not FileAccess.file_exists(path) and FileAccess.file_exists(backup_path):
+			DirAccess.rename_absolute(backup_absolute, primary_absolute)
+		return {"error": "could not preserve recovered task plan '%s': %s" % [staging_path, error_string(promote_error)]}
+	return {"status": "recovered"}
 
 static func plan_exists(path: String) -> bool:
 	return (

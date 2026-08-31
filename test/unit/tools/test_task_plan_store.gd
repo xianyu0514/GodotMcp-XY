@@ -208,6 +208,32 @@ func test_load_recovers_fully_written_staging_checkpoint_after_rename_window():
 	assert_eq(recovered.get("goal", ""), "newest staged checkpoint")
 	_remove_checkpoint_files(path)
 
+func test_retry_after_staging_recovery_preserves_recovered_generation():
+	var path: String = "user://test_task_plan_repeated_crash_%d.json" % Time.get_ticks_usec()
+	_remove_checkpoint_files(path)
+	var original: Dictionary = TaskPlanStore.new_plan("original")
+	assert_false(TaskPlanStore.save_plan(original, path).has("error"))
+	var staged: Dictionary = TaskPlanStore.new_plan("recovered progress")
+	staged["checkpoint_revision"] = int(original.get("checkpoint_revision", 0)) + 1
+	var staging_file: FileAccess = FileAccess.open(path + ".next", FileAccess.WRITE)
+	staging_file.store_string(JSON.stringify(staged, "\t"))
+	staging_file.flush()
+	staging_file.close()
+	assert_eq(DirAccess.rename_absolute(
+		ProjectSettings.globalize_path(path),
+		ProjectSettings.globalize_path(path + ".bak")), OK)
+	var recovered: Dictionary = TaskPlanStore.load_plan(path)
+	assert_eq(recovered.get("goal", ""), "recovered progress")
+	assert_false(TaskPlanStore.save_plan(recovered, path).has("error"),
+		"Retrying from a staging checkpoint should first preserve that generation")
+	var damaged: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	damaged.store_string("{ another interrupted checkpoint")
+	damaged.close()
+	var recovered_again: Dictionary = TaskPlanStore.load_plan(path)
+	assert_eq(recovered_again.get("goal", ""), "recovered progress",
+		"A second crash during recovery must not fall back past already recovered work")
+	_remove_checkpoint_files(path)
+
 func test_load_missing_plan_errors():
 	var loaded = TaskPlanStore.load_plan("user://does_not_exist_%d.json" % Time.get_ticks_usec())
 	assert_has(loaded, "error", "Loading a missing plan should error")
