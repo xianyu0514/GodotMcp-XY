@@ -4,6 +4,14 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # 手动触发：可选附带四个 durable-workflow E2E（goal/resume/crash×2，
+  # 约 25 分钟）。按需在 Actions 页勾选 slow_suite，不进常规 PR CI。
+  workflow_dispatch:
+    inputs:
+      slow_suite:
+        description: "Also run the four durable-workflow E2E flows (goal/resume/crash/non-idempotent) — ~25 extra minutes"
+        type: boolean
+        default: true
 
 # Minimal ship-loop CI (⑦): headless project import gate + GUT unit tests.
 # Pinned to the same Godot version the addon targets (project.godot ->
@@ -18,6 +26,7 @@ on:
 # suite is green under the target engine. Headless-only cases use GUT
 # pending_test() and source-introspection cases are risky/no-assert; neither
 # counts as a failure, so CI stays a trustworthy gate.
+
 env:
   GODOT_VERSION: "4.7"
   GUT_VERSION: "9.7.1"
@@ -187,4 +196,47 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: integration-failure-logs
+          path: test/integration/
+
+  # 四个 durable-workflow E2E（完整 goal / 崩溃恢复 / 断点续跑 / 非幂等
+  # 崩溃语义）是本插件的核心卖点，但单个就要数分钟——只在工作流被手动
+  # 触发且勾选 slow_suite 时运行，不占常规 PR CI。合并前请手动跑一次。
+  integration-slow:
+    name: Durable workflow E2E (manual, slow set)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch' && inputs.slow_suite
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.6.3 (Windows build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p godot
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_win64.exe.zip
+          unzip -o godot.zip -d godot
+          rm godot.zip
+
+      - name: Warm the import cache (cold checkout imports on first boot)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+        run: |
+          set -euo pipefail
+          "$GODOT_EXE" --headless --path . --import
+
+      - name: Run durable-workflow E2E suite
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          MCP_RUNNER_KILL_ALL_GODOT: "1"
+        run: python test/integration/run_integration.py --filter goal --slow --timeout 900
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-slow-failure-logs
           path: test/integration/
