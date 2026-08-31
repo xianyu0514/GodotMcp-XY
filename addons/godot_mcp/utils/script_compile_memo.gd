@@ -26,14 +26,26 @@ static var _entries: Dictionary = {}
 ## 返回 path 的编译诊断；无有效条目时调用 compute 计算并记忆。
 ## mtime 不可得（文件不存在等）时不记忆，直接计算。
 static func diagnostics_for(path: String, variant: String, compute: Callable) -> Dictionary:
-	var signature: String = _file_signature(path)
+	var result: Variant = result_for(path, "compile|" + variant, compute)
+	return result if result is Dictionary else {}
+
+
+## 通用文件级结果记忆：与编译诊断同一套失效语义（mtime+长度、环境签名、
+## 有界 FIFO），供依赖解析等"每文件一次昂贵解析"的场景复用。
+## 环境签名对依赖解析同样成立——ResourceUID 解析依赖全局注册表。
+static func result_for(path: String, domain: String, compute: Callable) -> Variant:
+	var signature: String = file_signature(path)
 	if signature.is_empty():
 		return compute.call()
-	var key: String = "%s|%s|%s|%s" % [path, signature, _environment_signature(), variant]
+	var key: String = "%s|%s|%s|%s" % [path, signature, _environment_signature(), domain]
 	if _entries.has(key):
 		return _entries[key]
-	var result: Dictionary = compute.call()
-	if result.is_empty():
+	var result: Variant = compute.call()
+	if result == null:
+		return null
+	if result is Dictionary and (result as Dictionary).is_empty():
+		return result
+	if result is Array and (result as Array).is_empty():
 		return result
 	if _entries.size() >= MAX_ENTRIES:
 		_evict_oldest()
@@ -51,7 +63,7 @@ static func entry_count() -> int:
 
 ## "mtime:length" 磁盘签名；打开失败/不可得返回空串（跳过记忆）。
 ## get_length() 不读内容，开销远低于全文件读取 + 编译。
-static func _file_signature(path: String) -> String:
+static func file_signature(path: String) -> String:
 	var mtime: int = FileAccess.get_modified_time(path)
 	if mtime <= 0:
 		return ""

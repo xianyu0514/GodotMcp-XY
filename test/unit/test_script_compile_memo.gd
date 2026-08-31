@@ -72,3 +72,19 @@ func test_missing_file_bypasses_memo() -> void:
 	assert_eq(calls.size(), 1, "compute always runs for a path without mtime")
 	assert_eq(MemoScript.entry_count(), 0, "nothing is memoized for missing files")
 	assert_true(bool(result["valid"]))
+
+func test_result_for_domains_are_independent() -> void:
+	# 依赖解析与编译诊断共用记忆机制但域独立：同文件两个域各算一次。
+	var calls: Array = []
+	MemoScript.result_for(_tmp_path, "deps", func() -> Array:
+		calls.append("deps")
+		return ["res://a.tres"])
+	MemoScript.result_for(_tmp_path, "compile|verify|true", func() -> Array:
+		calls.append("compile")
+		return [])
+	assert_eq(calls.size(), 2, "distinct domains compute independently")
+	var first: Variant = MemoScript.result_for(_tmp_path, "deps", func() -> Array:
+		calls.append("deps-again")
+		return ["res://b.tres"])
+	assert_eq(calls.size(), 2, "repeat in the same domain is memoized")
+	assert_eq((first as Array)[0], "res://a.tres", "memoized value is served")

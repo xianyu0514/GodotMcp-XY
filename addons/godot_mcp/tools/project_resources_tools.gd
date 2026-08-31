@@ -1330,7 +1330,11 @@ func _tool_scan_missing_resource_dependencies(params: Dictionary) -> Dictionary:
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
 	var resources: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources)
+	# 与 detect_broken_scripts / verify_scripts 同口径：默认审计用户代码，
+	# 显式 include_tooling 或工具目录 search_path 才含 addons/。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources, false, include_tooling)
 	resources.sort()
 
 	var issues: Array = []
@@ -1415,7 +1419,9 @@ func _tool_scan_cyclic_resource_dependencies(params: Dictionary) -> Dictionary:
 		".tscn", ".scn", ".tres", ".res", ".gd", ".cs", ".gdshader", ".material"
 	]
 	var resources: Array[String] = []
-	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources)
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	ProjectToolsNative._collect_resources(search_path, dependency_extensions, resources, false, include_tooling)
 	resources.sort()
 
 	var graph: Dictionary = {}
@@ -1452,7 +1458,15 @@ func _tool_scan_cyclic_resource_dependencies(params: Dictionary) -> Dictionary:
 		"truncated": false
 	}
 
+## 依赖解析按 (mtime+长度, 环境签名) 记忆：同一文件在一次审计内被
+## scan_missing 与 scan_cyclic 各解析一次、跨审计重扫时也不再重复
+## ResourceLoader.get_dependencies 的文件读取。
 func _parse_resource_dependencies(resource_path: String) -> Array:
+	var result: Variant = ScriptCompileMemoScript.result_for(resource_path, "deps",
+		func() -> Array: return _parse_resource_dependencies_uncached(resource_path))
+	return result if result is Array else []
+
+func _parse_resource_dependencies_uncached(resource_path: String) -> Array:
 	var dependencies: Array = []
 	for raw_dependency in ResourceLoader.get_dependencies(resource_path):
 		var raw_text: String = str(raw_dependency)

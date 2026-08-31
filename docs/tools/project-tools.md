@@ -54,8 +54,8 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_resource_uid_info` | advanced | Get resource UID information. |
 | `fix_resource_uid` | advanced | Fix resource UID issues. |
 | `get_resource_dependencies` | advanced | Get resource dependencies. |
-| `scan_missing_resource_dependencies` | advanced | Scan for missing resource dependencies. |
-| `scan_cyclic_resource_dependencies` | advanced | Scan for cyclic resource dependencies. |
+| `scan_missing_resource_dependencies` | advanced | Scan for missing resource dependencies. Per-file dependency parsing is memoized on mtime+size; default scope is user code (tooling only via `include_tooling=true` or a tooling `search_path`). |
+| `scan_cyclic_resource_dependencies` | advanced | Scan for cyclic resource dependencies. Per-file dependency parsing is memoized on mtime+size; default scope is user code (tooling only via `include_tooling=true` or a tooling `search_path`). |
 | `detect_broken_scripts` | advanced | Detect broken scripts in the project. Default scans user code only (skips `addons/`, `test/`, `docs/`); `include_tooling=true` or a tooling `search_path` audits third-party internals. Per-file results are memoized on mtime+size, so rescans recompile only changed scripts. |
 | `audit_project_health` | advanced | Audit project health and integrity. |
 | `find_resource_usages` | advanced | Find resources that reference a target, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
