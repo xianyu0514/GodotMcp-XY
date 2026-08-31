@@ -619,11 +619,17 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["track_path"] = ".:position"
 		task["derived_inputs"]["keys"] = "default-two-key-position"
-	# 导出预设验证/执行步骤默认指向 profile 建的 Windows Desktop 预设。
-	if tool_name in ["validate_export_preset", "run_export"] and not arguments.has("preset"):
-		arguments["preset"] = "Windows Desktop"
+	# 导出链步骤默认指向目标平台映射出的预设（与引擎 release_preset 步骤
+	# 同源：export_preset_for_platform）。此前硬编码 "Windows Desktop"，
+	# "export for web" 目标会校验/导出/冒烟一个 Windows .exe 并 completed。
+	if tool_name in ["validate_export_preset", "run_export", "smoke_test_export"] \
+			and not arguments.has("preset"):
+		var contract_platform: String = String(
+			plan.get("workflow", {}).get("goal_contract", {}).get("platform", ""))
+		var export_preset: Dictionary = EngineScript.export_preset_for_platform(contract_platform)
+		arguments["preset"] = export_preset["name"]
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-		task["derived_inputs"]["preset"] = "Windows Desktop"
+		task["derived_inputs"]["preset"] = export_preset["name"]
 	# 重导入步骤缺路径时：重导入本目标已产出的主题/瓦片/动画资源（磁盘真相）。
 	if tool_name == "reimport_resources" and not arguments.has("resource_paths"):
 		var produced: Array = []

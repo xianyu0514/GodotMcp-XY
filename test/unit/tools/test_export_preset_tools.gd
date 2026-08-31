@@ -81,3 +81,27 @@ func test_create_export_preset_if_exists_modes() -> void:
 	assert_true(bool(reuse.get("existing", false)), "reuse response marks the preset as existing")
 	assert_eq(_tools._tool_inspect_export_presets({}).get("presets", []).size(), 1,
 		"reuse must not append a second preset")
+
+func test_create_export_preset_reuse_reconciles_mismatched_platform() -> void:
+	# reuse 曾原样返回陈旧错配预设（重名但平台/路径错），目标平台的导出链
+	# 会一直用错预设。请求方参数是权威值，必须纠偏。
+	var first: Dictionary = _tools._tool_create_export_preset({
+		"name": "Web", "platform": "Windows Desktop", "export_path": "res://build/game.exe"})
+	assert_eq(String(first.get("status", "")), "created", str(first.get("error", "")))
+	var reuse: Dictionary = _tools._tool_create_export_preset({
+		"name": "Web", "platform": "Web",
+		"export_path": "res://build/web/index.html", "if_exists": "reuse"})
+	assert_eq(String(reuse.get("status", "")), "reused")
+	var reconciled: Dictionary = reuse.get("reconciled", {})
+	assert_true(reconciled.has("platform") and reconciled.has("export_path"),
+		"mismatched fields are reported as reconciled: " + str(reconciled))
+	var presets: Array = _tools._tool_inspect_export_presets({}).get("presets", [])
+	assert_eq(String(presets[0].get("platform", "")), "Web",
+		"the stored preset now targets the requested platform")
+	assert_eq(String(presets[0].get("export_path", "")), "res://build/web/index.html")
+	# 一致后再次 reuse 不再报 reconciled（幂等稳定）。
+	var stable: Dictionary = _tools._tool_create_export_preset({
+		"name": "Web", "platform": "Web",
+		"export_path": "res://build/web/index.html", "if_exists": "reuse"})
+	assert_false(stable.get("reconciled", {}).has("platform"),
+		"matching reuse is a pure no-op")

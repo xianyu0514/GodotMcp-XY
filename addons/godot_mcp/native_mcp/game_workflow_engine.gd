@@ -143,6 +143,7 @@ const ARTIFACT_KIND_BY_TOOL: Dictionary = {
 	"create_animation": "animation",
 	"get_runtime_screenshot": "screenshot",
 	"generate_3d_asset": "model",
+	"run_export": "export_artifact",
 	"ensure_project_directory": "test_dir",
 	"create_project_smoke_test": "smoke_test"
 }
@@ -150,7 +151,7 @@ const ARTIFACT_KIND_BY_TOOL: Dictionary = {
 const ARTIFACT_PATH_KEYS: Array[String] = [
 	"scene_path", "script_path", "theme_path", "tileset_path",
 	"animation_path", "test_path", "save_path", "saved_path",
-	"resource_path", "path"
+	"resource_path", "output_path", "path"
 ]
 
 const VOLATILE_FAILURE_KEYS: Array[String] = [
@@ -571,24 +572,52 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				health_specs.append(_spec("health_audit_gate", "audit_project_health", "static_verify", true, {"include_warnings": true}))
 			return health_specs
 		"release_export":
+			# 预设按目标推断的平台生成（此前硬编码 Windows Desktop："export
+			# for web" 会静默产出 game.exe 且整链 completed）。validate/run/
+			# smoke 的派生与这里共用 export_preset_for_platform，保证同名同源。
+			var export_preset: Dictionary = export_preset_for_platform(platform)
 			var release_specs: Array[Dictionary] = [
 				_spec("export_presets", "list_export_presets", "release_inspect"),
 				_spec("export_templates", "inspect_export_templates", "release_inspect"),
-				# 全新项目没有导出预设：先建一个 Windows Desktop 预设，
-				# validate/run_export 链才有目标。if_exists="reuse" 保证 replan
-				# 重放时已存在的预设是幂等成功而非报错（否则无 repair_tool 的
-				# 步骤会永久卡在 replan_required）。
+				# 全新项目没有导出预设：先建目标平台的预设，validate/run_export
+				# 链才有目标。if_exists="reuse" 保证 replan 重放时已存在的预设是
+				# 幂等成功而非报错（否则无 repair_tool 的步骤会永久卡在
+				# replan_required）；重名但平台/产物路径不符时会被纠偏对齐。
 				_spec("release_preset", "create_export_preset", "release_prepare", false,
-					{"name": "Windows Desktop", "platform": "Windows Desktop",
-					 "export_path": "res://build/game.exe", "if_exists": "reuse"})
+					{"name": export_preset["name"], "platform": export_preset["platform"],
+					 "export_path": export_preset["export_path"], "if_exists": "reuse"})
 			]
 			if platform == "android":
-				release_specs.append(_spec("android_config", "configure_android_export", "release_prepare"))
+				release_specs.append(_spec("android_config", "configure_android_export",
+					"release_prepare", false, {"preset": export_preset["name"]}))
 			release_specs.append(_spec("validate_export", "validate_export_preset", "release_validate", true))
 			release_specs.append(_spec("run_export", "run_export", "release_build"))
 			release_specs.append(_spec("smoke_export", "smoke_test_export", "release_evidence", true))
 			return release_specs
 	return []
+
+## 平台 → 导出预设三要素（名称/平台/产物路径）。引擎与 runner 的派生共用
+## 此表，保证"建预设/校验/导出/冒烟"链上的预设名一源同出。
+const EXPORT_PLATFORM_PRESETS: Dictionary = {
+	"windows": {"name": "Windows Desktop", "platform": "Windows Desktop",
+		"export_path": "res://build/game.exe"},
+	"linux": {"name": "Linux/X11", "platform": "Linux/X11",
+		"export_path": "res://build/game.x86_64"},
+	"macos": {"name": "macOS", "platform": "macOS",
+		"export_path": "res://build/game.zip"},
+	"web": {"name": "Web", "platform": "Web",
+		"export_path": "res://build/web/index.html"},
+	"android": {"name": "Android", "platform": "Android",
+		"export_path": "res://build/game.apk"},
+	"ios": {"name": "iOS", "platform": "iOS",
+		"export_path": "res://build/game.ipa"},
+}
+
+static func export_preset_for_platform(platform: String) -> Dictionary:
+	var preset: Dictionary = EXPORT_PLATFORM_PRESETS.get(platform, {})
+	if preset.is_empty():
+		return EXPORT_PLATFORM_PRESETS["windows"].duplicate(true)
+	return preset.duplicate(true)
 
 func _goal_authorizes_fix(goal: String) -> bool:
 	for word in ["fix", "repair", "apply", "resolve", "修复", "处理", "应用"]:

@@ -475,12 +475,27 @@ func _tool_create_export_preset(params: Dictionary) -> Dictionary:
 		# 引擎 replan 重放使用；默认 "error" 保持显式创建的严格语义。
 		if String(params.get("if_exists", "error")) != "reuse":
 			return {"error": "An export preset named '%s' already exists" % name}
+		var existing: Dictionary = presets[existing_index]
+		# 重名但平台/产物路径不符必须纠偏：reuse 曾原样返回陈旧错配的预设
+		# （如 name="Windows Desktop" platform="Web"），目标平台的导出链会
+		# 一直用错误的预设且永不修复。请求方参数是权威值。
+		var reconciled: Dictionary = {}
+		if not platform.is_empty() and String(existing.get("platform", "")) != platform:
+			existing["platform"] = platform
+			reconciled["platform"] = platform
+		if not export_path.is_empty() and String(existing.get("export_path", "")) != export_path:
+			existing["export_path"] = export_path
+			reconciled["export_path"] = export_path
+		if not reconciled.is_empty():
+			presets[existing_index] = existing
+			var reconcile_save: Dictionary = write_presets(presets)
+			if not bool(reconcile_save.get("saved", false)):
+				return {"error": String(reconcile_save.get("error", "Failed to reconcile existing preset"))}
 		var platforms_reuse: Array[String] = []
 		for value in (loaded.get("platforms", []) as Array):
 			platforms_reuse.append(String(value))
-		var existing: Dictionary = presets[existing_index]
 		var reuse_validation: Dictionary = validate_preset(existing, platforms_reuse)
-		return {
+		var reuse_result: Dictionary = {
 			"status": "reused",
 			"index": int(existing.get("index", existing_index)),
 			"name": name,
@@ -490,6 +505,9 @@ func _tool_create_export_preset(params: Dictionary) -> Dictionary:
 			"preset_count": presets.size(),
 			"existing": true
 		}
+		if not reconciled.is_empty():
+			reuse_result["reconciled"] = reconciled
+		return reuse_result
 
 	var index: int = _next_index(presets)
 	var options: Dictionary = params.get("options", {}) if params.get("options", {}) is Dictionary else {}

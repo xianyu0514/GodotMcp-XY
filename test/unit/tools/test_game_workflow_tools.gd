@@ -769,3 +769,28 @@ func test_visual_baseline_is_scoped_per_workflow() -> void:
 		"baseline path carries the workflow id (got %s)" % baseline)
 	assert_eq(String(arguments.get("candidate_path", "")), "user://mcp_runtime_capture.jpg",
 		"candidate still derives from the screenshot artifact")
+
+func test_export_chain_derives_the_goal_platform_preset() -> void:
+	# validate/run/smoke 三步的预设名必须来自目标平台（此前硬编码
+	# "Windows Desktop"：web 目标校验/导出/冒烟一个 Windows exe）。
+	var planned: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "plan", "objective": "Export the game for web",
+		"profiles": ["release_export"], "platform": "web", "plan_path": _plan_path})
+	assert_eq(planned.get("status", ""), "planned", str(planned.get("error", "")))
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	for expected_tool in ["validate_export_preset", "run_export", "smoke_test_export"]:
+		var chain_task: Dictionary = {}
+		for task_value in loaded.get("tasks", []):
+			var task: Dictionary = task_value
+			if String(task.get("tool_name", "")) == expected_tool:
+				chain_task = task
+				break
+		assert_false(chain_task.is_empty(), "%s present in release plan" % expected_tool)
+		var derived_args: Dictionary = _tools._derive_step_arguments(
+			loaded, chain_task, expected_tool,
+			_tools._resolve_inputs(chain_task, {}, false))
+		assert_eq(String(derived_args.get("preset", "")), "Web",
+			"%s derives the goal-platform preset (got %s)" % [expected_tool, derived_args.get("preset", "")])
