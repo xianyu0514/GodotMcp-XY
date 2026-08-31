@@ -7,6 +7,7 @@ extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
 const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
+const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
 const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 
 var _editor_interface: EditorInterface = null
@@ -431,7 +432,8 @@ func _tool_find_script_symbol_references(params: Dictionary) -> Dictionary:
 	var max_results: int = max(1, int(params.get("max_results", 100)))
 
 	var file_paths: Array = []
-	_collect_script_reference_files(search_path, include_extensions, file_paths)
+	_collect_script_reference_files(search_path, include_extensions, file_paths,
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
 	file_paths.sort()
 	if not preferred_script_path.is_empty():
 		file_paths.sort_custom(Callable(self, "_compare_script_paths_for_preference").bind(preferred_script_path))
@@ -1104,28 +1106,22 @@ func _compare_script_paths_for_preference(left: String, right: String, preferred
 		return left_preferred
 	return left < right
 
-func _collect_script_reference_files(directory_path: String, extensions: Array, result: Array) -> void:
-	var dir: DirAccess = DirAccess.open(directory_path)
-	if not dir:
-		return
-
-	dir.list_dir_begin()
-	var file_name: String = dir.get_next()
-	while not file_name.is_empty():
-		if file_name != "." and file_name != "..":
-			var full_path: String = directory_path
-			if not full_path.ends_with("/"):
-				full_path += "/"
-			full_path += file_name
-
-			if dir.current_is_dir():
-				_collect_script_reference_files(full_path, extensions, result)
-			else:
-				var extension: String = "." + file_name.get_extension().to_lower()
-				if extensions.has(extension):
-					result.append(full_path)
-		file_name = dir.get_next()
-	dir.list_dir_end()
+## 引用文件收集走统一收集器：跳过 .godot/.import 生成域（此前裸 DirAccess
+## 会下探引擎缓存目录）。工具目录按调用方推断包含。
+func _collect_script_reference_files(directory_path: String, extensions: Array, result: Array,
+		include_tooling: bool = true) -> void:
+	var normalized: Array[String] = []
+	for ext_value in extensions:
+		var ext: String = String(ext_value).strip_edges().to_lower()
+		if not ext.begins_with("."):
+			ext = "." + ext
+		if not ext.is_empty() and not normalized.has(ext):
+			normalized.append(ext)
+	var collected: Array[String] = []
+	ProjectToolsNative._collect_resources(directory_path, normalized, collected, false, include_tooling)
+	collected.sort()
+	for path_value in collected:
+		result.append(path_value)
 
 func _collect_definition_lines_by_path(file_paths: Array, symbol_name: String, case_sensitive: bool) -> Dictionary:
 	var definitions_by_path: Dictionary = {}
@@ -2763,7 +2759,17 @@ func _register_search_in_files(server_core: RefCounted) -> void:
 			"max_results": {
 				"type": "integer",
 				"description": "Maximum number of results to return. Default is 50."
-			}
+			},
+				"max_files": {
+					"type": "integer",
+					"description": "Maximum number of files to open. Default 2000; bounds zero-match scans over projects with many matching extensions.",
+					"default": 2000
+				},
+				"include_tooling": {
+					"type": "boolean",
+					"description": "Include tooling directories (addons/, test/, docs/). Default false unless search_path itself is inside one.",
+					"default": false
+				}
 		},
 		"required": ["pattern"]
 	}
@@ -2797,6 +2803,7 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 	var use_regex: bool = params.get("use_regex", false)
 	var case_sensitive: bool = params.get("case_sensitive", true)
 	var max_results: int = params.get("max_results", 50)
+	var max_files: int = maxi(1, int(params.get("max_files", 2000)))
 
 	if pattern.is_empty():
 		return {"error": "Missing required parameter: pattern"}
@@ -2813,21 +2820,41 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		if compile_err != OK:
 			return {"error": "Invalid regex pattern: " + pattern}
 
+	# 文件发现走统一收集器：跳过 .godot/.import 等生成域（此前裸 DirAccess
+	# 会下探引擎缓存与 __pycache__，零匹配也要读完所有文件）。工具目录
+	# （addons/test/docs）默认排除，显式 include_tooling 或指向工具目录的
+	# search_path 仍可搜索。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	var normalized_extensions: Array[String] = []
+	for ext_value in file_extensions:
+		var ext: String = String(ext_value).strip_edges().to_lower()
+		if not ext.begins_with("."):
+			ext = "." + ext
+		if not ext.is_empty() and not normalized_extensions.has(ext):
+			normalized_extensions.append(ext)
+	var files: Array[String] = []
+	ProjectToolsNative._collect_resources(search_path, normalized_extensions, files, false, include_tooling)
+	files.sort()
+
 	var state: Dictionary = {
 		"results": [],
 		"files_searched": 0,
 		"total_matches": 0,
 		"max_results": max_results
 	}
-
-	_search_recursive(search_path, pattern, file_extensions, use_regex,
-		case_sensitive, regex, state)
+	for file_path in files:
+		if state["total_matches"] >= state["max_results"] or state["files_searched"] >= max_files:
+			break
+		state["files_searched"] = int(state["files_searched"]) + 1
+		_search_file(file_path, pattern, use_regex, case_sensitive, regex, state)
 
 	return {
 		"pattern": pattern,
 		"results": state["results"],
 		"total_matches": state["total_matches"],
-		"files_searched": state["files_searched"]
+		"files_searched": state["files_searched"],
+		"files_available": files.size()
 	}
 
 func _search_recursive(

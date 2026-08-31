@@ -507,3 +507,21 @@ func test_detect_broken_scripts_default_skips_tooling():
 	assert_gt(int(targeted.get("scanned_scripts", 0)), 0,
 		"explicit tooling search_path still scans plugin scripts")
 	memo.clear()
+
+func test_search_in_files_skips_generated_and_tooling_by_default():
+	# 统一收集器口径：默认搜索用户代码；生成域（.godot）永不搜索。
+	# 本仓库根下没有非工具 .gd——默认搜索不应读到任何 addons 文件。
+	var tool: RefCounted = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_search_in_files({"pattern": "func "})
+	assert_false(result.has("error"), str(result.get("error", "")))
+	for match_value in result.get("results", []):
+		var match: Dictionary = match_value
+		var path: String = String(match.get("file_path", match.get("path", "")))
+		assert_false(path.begins_with("res://addons/") or path.contains("/.godot/"),
+			"default search never reads addon internals or engine caches")
+	var tooling: Dictionary = tool._tool_search_in_files({
+		"pattern": "class_name", "include_tooling": true, "max_results": 5})
+	assert_gt(int(tooling.get("files_searched", 0)), 0,
+		"include_tooling=true searches addon sources")
+	assert_gt(int(tooling.get("total_matches", 0)), 0,
+		"plugin sources contain class_name declarations")
