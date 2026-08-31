@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -29,6 +30,37 @@ SLOW_TESTS = {
 }
 
 DEFAULT_TIMEOUT = 600
+def kill_repo_godots() -> None:
+    """Kill any Godot process still referencing this repository (process tree).
+
+    Godot games spawn as children of the editor with --remote-debug/--editor-pid.
+    stop_project uses the engine API, which does not guarantee the OS process
+    dies; a hard editor terminate orphans the game, and on a CI runner leaked
+    games accumulate until later editors cannot boot inside the test wait
+    window (observed: everything after test #26 timing out).
+    """
+    if platform.system() != "Windows":
+        return
+    query = (
+        "Get-CimInstance Win32_Process -Filter \"Name like 'Godot%'\" | "
+        "Where-Object { $_.CommandLine -like '*Godot-MCP-Native*' } | "
+        "Select-Object -ExpandProperty ProcessId"
+    )
+    try:
+        listing = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", query],
+            capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    for pid_text in listing.stdout.split():
+        subprocess.run(
+            ["taskkill", "/PID", pid_text, "/T", "/F"],
+            capture_output=True, timeout=30,
+        )
+
+
+
 
 
 def main() -> int:
@@ -36,9 +68,15 @@ def main() -> int:
     parser.add_argument("--filter", default="", help="regex matched against the file name")
     parser.add_argument("--slow", action="store_true", help="include the slow goal-level flows")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="per-test timeout seconds")
-    parser.add_argument("--port-base", type=int, default=9200, help="first MCP port to assign")
+    parser.add_argument("--port-base", type=int, default=0,
+                        help="first MCP port to assign (default: 9200 + jitter so consecutive runs never reuse recent ports)")
     args = parser.parse_args()
 
+    if args.port_base <= 0:
+        # 连续两次运行若复用同一批端口，上一轮被硬杀的监听套接字可能仍在
+        # TIME_WAIT，新编辑器绑定失败后进入 30s 复活退避，恰好击穿测试的
+        # 30s 等待窗。基址抖动让每轮使用不同端口段。
+        args.port_base = 9200 + ((int(time.time()) // 60 * 7) % 500)
     godot = os.environ.get("GODOT_EXE", "").strip()
     if not godot:
         print("ERROR: set GODOT_EXE to a Godot console/editor executable", file=sys.stderr)
@@ -82,6 +120,7 @@ def main() -> int:
         elapsed = time.time() - started
         results.append((name, verdict, elapsed))
         print(f"    -> {verdict} in {elapsed:.1f}s", flush=True)
+        kill_repo_godots()
         if verdict != "PASS":
             tail = "\n".join(output.strip().splitlines()[-12:])
             print("    " + tail.replace("\n", "\n    "), flush=True)

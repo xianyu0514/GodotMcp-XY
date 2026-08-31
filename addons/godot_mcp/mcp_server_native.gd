@@ -427,11 +427,20 @@ func _apply_persisted_settings() -> void:
 ## Apply command-line overrides on top of persisted/exported settings. The
 ## command line wins, letting multiple MCP instances run with distinct ports
 ## (--mcp-port=N) regardless of the persisted config.
+## 命令行覆盖只作用于本次进程：覆盖值不得写回 mcp_settings.cfg（面板
+## 同步会把覆盖值带进 UI，任何 debounce 保存都会把它持久化——测试的
+## --mcp-port=92xx 会永久污染用户配置，并让下次编辑器在陈旧端口上复活）。
+var _cmdline_overrides_active: bool = false
+
+func is_port_overridden_by_cmdline() -> bool:
+	return _cmdline_overrides_active
+
 func _apply_cmdline_overrides() -> void:
 	var o: Dictionary = parse_mcp_overrides(OS.get_cmdline_user_args())
 	var port_override: int = int(o["http_port"])
 	var transport_override: String = o["transport_mode"]
 	if port_override >= 0:
+		_cmdline_overrides_active = true
 		http_port = port_override
 		_log_info("MCP port overridden via command line: " + str(http_port))
 	if transport_override != "":
