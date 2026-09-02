@@ -71,7 +71,7 @@ const PROFILE_KEYWORDS: Dictionary = {
 	"ui_screen": [" ui ", "menu", "hud", "pause", "button", "interface", "screen", "界面", "菜单", "暂停", "按钮", "主题", "屏幕"],
 	"script_repair": ["script error", "fix script", "compile error", "gdscript", "c#", "脚本错误", "修复脚本", "编译错误", "代码错误"],
 	"asset_pipeline": ["asset", "import", "texture", "model", "sprite", "gltf", "资源", "导入", "贴图", "模型", "精灵"],
-	"animation_audio": ["animation", "audio", "sound", "music", "动画", "音频", "音效", "音乐"],
+	"animation_audio": ["animation", "animate", "animated", "audio", "sound", "music", "动画", "音频", "音效", "音乐"],
 	"level_design": ["level", "tilemap", "tileset", "map", "关卡", "地图", "瓦片", "场景布局"],
 	"runtime_debug": ["debug", "runtime", "crash", "stack trace", "调试", "运行时", "崩溃", "异常"],
 	"localization": ["localization", "translation", "language", "locale", "本地化", "翻译", "多语言", "语言"],

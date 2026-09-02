@@ -49,6 +49,10 @@
 | `release_export_flow` | 模板→预设→版本→导出→冒烟→报告 |
 | `onboard_new_project` | 新项目上手与工具启用 |
 
+## 目标覆盖回归（维护者）
+
+`test/unit/test_goal_coverage_corpus.gd` + `fixtures/goal_coverage_tasks.json` 是首过规划成功率的回归门禁（40 条中英真实目标、12 个 profile 全覆盖、组合目标不断言澄清）。改动 PROFILE_KEYWORDS 或分类逻辑后必须跑它；发现真实用户目标进了 `needs_clarification`，先把目标加进语料（复现），再补词表让它转绿——词表永远跟着真实目标走。
+
 ## 已知引擎语义（不是 bug，按此设计调用）
 
 - **非 `@export` 脚本变量在编辑器场景节点上不绑定**：批量 `set_property` 会如实回报 `bound:false` 并提示改 `@export`；游戏运行时正常。
