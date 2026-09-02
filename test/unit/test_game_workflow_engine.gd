@@ -639,3 +639,38 @@ func test_expect_fail_rejects_infrastructure_errors() -> void:
 		{"error": "Debugger bridge is not available"})
 	assert_ne(String(verdict.get("status", "")), "completed",
 		"infrastructure errors are not inverted into detector proof")
+
+func test_blueprint_goals_gain_semantic_evidence_gate() -> void:
+	# 命中动词的 gameplay 目标：DAG 必须包含语义测试生成步骤与 run_game_tests
+	# 目标门禁，且生成步骤排在 save_scene 之后（排序后索引更大）。
+	var plan: Dictionary = _compile("arrow-key movement, collect a coin, show a win label", ["gameplay_feature"])["plan"]
+	var semantic_create_index: int = -1
+	var semantic_gate_index: int = -1
+	var save_index: int = -1
+	for index in range(plan.get("tasks", []).size()):
+		var task: Dictionary = (plan.get("tasks", []) as Array)[index]
+		var key: String = String(task.get("step_key", ""))
+		if key == "semantic_test":
+			semantic_create_index = index
+			assert_eq(String(task.get("tool_name", "")), "create_script",
+				"Semantic evidence suite is created via create_script")
+		elif key == "game_semantics":
+			semantic_gate_index = index
+			assert_eq(String(task.get("tool_name", "")), "run_game_tests",
+				"Semantic gate runs the generated suite")
+			assert_true(bool(task.get("objective_gate", false)),
+				"Semantic evidence is an objective gate")
+			assert_eq(String(task.get("repair_tool", "")), "modify_script",
+				"Semantic gate repairs through the controller script")
+		elif key == "save_scene":
+			save_index = index
+	assert_gt(semantic_create_index, -1, "Blueprint goal plans a semantic suite step")
+	assert_gt(semantic_gate_index, -1, "Blueprint goal plans a semantic evidence gate")
+	assert_gt(save_index, -1, "Blueprint goal saves its scene")
+	assert_gt(semantic_create_index, save_index, "Semantic suite is created after the scene is saved")
+	assert_gt(semantic_gate_index, semantic_create_index, "Semantic gate runs after the suite exists")
+	# 未命中动词的目标不生成语义步骤。
+	var plain: Dictionary = _compile("Import a texture and validate it", ["asset_pipeline"])["plan"]
+	for task_value in plain.get("tasks", []):
+		assert_ne(String((task_value as Dictionary).get("step_key", "")), "game_semantics",
+			"Non-blueprint goals gain no semantic gate")

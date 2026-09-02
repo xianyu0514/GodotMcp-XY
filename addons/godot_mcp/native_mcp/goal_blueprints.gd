@@ -62,6 +62,7 @@ static func controller_script(objective: String) -> String:
 	if not has_any_verb(verbs):
 		return ""
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+	var wants_jump: bool = bool(verbs.get("jump", false))
 
 	var source: String = "# Goal blueprint: minimal playable controller.\n"
 	source += "extends CharacterBody2D\n\n"
@@ -69,21 +70,49 @@ static func controller_script(objective: String) -> String:
 	source += "const SPEED: float = 260.0\n"
 	if needs_pickup:
 		source += "const COINS_TO_WIN: int = 1\n"
+	if wants_jump:
+		source += "const JUMP_SPEED: float = 420.0\n"
+		source += "var _gravity: float = ProjectSettings.get_setting(\"physics/2d/default_gravity\", 980.0) as float\n"
 	source += "\nvar coins_collected: int = 0\n"
 	if needs_pickup:
 		source += "var _coin_area: Area2D\nvar _win_label: Label\n"
 	source += "\nfunc _ready() -> void:\n"
+	# 玩家碰撞形状：没有它，拾取区 body_entered 永远不会触发（无形状的物理体
+	# 不参与 Area2D 检测）——金币在旧蓝图里事实上不可被收集。
 	if needs_pickup:
+		source += "\tvar body_collision := CollisionShape2D.new()\n"
+		source += "\tvar body_shape := RectangleShape2D.new()\n"
+		source += "\tbody_shape.size = Vector2(32, 32)\n"
+		source += "\tbody_collision.shape = body_shape\n"
+		source += "\tadd_child(body_collision)\n"
+	# 横版目标补一块地面（挂到世界父节点，不能挂玩家身上否则随人移动）。
+	if wants_jump:
+		source += "\tvar floor_parent: Node = get_parent() if get_parent() != null else self\n"
+		source += "\tvar floor_body := StaticBody2D.new()\n"
+		source += "\tfloor_body.name = \"Floor\"\n"
+		source += "\tfloor_body.position = Vector2(0, 240)\n"
+		source += "\tvar floor_collision := CollisionShape2D.new()\n"
+		source += "\tvar floor_shape := RectangleShape2D.new()\n"
+		source += "\tfloor_shape.size = Vector2(2000, 20)\n"
+		source += "\tfloor_collision.shape = floor_shape\n"
+		source += "\tfloor_body.add_child(floor_collision)\n"
+		source += "\tfloor_parent.add_child(floor_body)\n"
+	if needs_pickup:
+		# 俯视金币放在测试的右下对角线上（走直线就能碰到）；横版金币贴近地面
+		# 高度（沿地面走可碰）。金币必须挂世界父节点：挂玩家身上会随人同步
+		# 移动，相对距离永不变，拾取永远不可能触发（语义测试抓出的旧缺陷）。
+		var coin_pos: String = "180, 196" if wants_jump else "150, 150"
+		source += "\tvar world_parent: Node = get_parent() if get_parent() != null else self\n"
 		source += "\t# 运行期生成拾取体与胜利标签，保持编辑场景最小。\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
-		source += "\t_coin_area.position = Vector2(180, 120)\n"
+		source += "\t_coin_area.position = Vector2(%s)\n" % coin_pos
 		source += "\tvar coin_collision := CollisionShape2D.new()\n"
 		source += "\tvar coin_shape := CircleShape2D.new()\n"
 		source += "\tcoin_shape.radius = 14\n"
 		source += "\tcoin_collision.shape = coin_shape\n"
 		source += "\t_coin_area.add_child(coin_collision)\n"
-		source += "\tadd_child(_coin_area)\n"
+		source += "\tworld_parent.add_child(_coin_area)\n"
 		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
 		source += "\tvar canvas := CanvasLayer.new()\n"
 		source += "\tcanvas.name = \"WinCanvas\"\n"
@@ -93,13 +122,12 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
-	var wants_movement: bool = bool(verbs.get("movement", false)) or bool(verbs.get("jump", false))
+	var wants_movement: bool = bool(verbs.get("movement", false)) or wants_jump
 	if wants_movement:
-		if bool(verbs.get("jump", false)):
+		if wants_jump:
 			# 横版跳跃：水平移动 + 重力 + 地面检测 + 跳跃（jump 动作存在则用，
 			# 否则回退 ui_accept——Space/Enter 内建可用，未 upsert 也能跳）。
-			source += "const JUMP_SPEED: float = 420.0\n"
-			source += "var _gravity: float = ProjectSettings.get_setting(\"physics/2d/default_gravity\", 980.0) as float\n"
+			# JUMP_SPEED/_gravity 声明已挪到头部（含 win-only 跳跃目标）。
 			source += "\nfunc _physics_process(delta: float) -> void:\n"
 			source += "\tvar direction := Input.get_axis(\"move_left\", \"move_right\")\n"
 			source += "\tif absf(direction) < 0.1:\n"
@@ -107,9 +135,7 @@ static func controller_script(objective: String) -> String:
 			source += "\tvelocity.x = direction * SPEED\n"
 			source += "\tif not is_on_floor():\n"
 			source += "\t\tvelocity.y += _gravity * delta\n"
-			source += "\tvar jump_requested: bool = InputMap.has_action(\"jump\") and Input.is_action_just_pressed(\"jump\")\n"
-			source += "\tif not jump_requested:\n"
-			source += "\t\tjump_requested = Input.is_action_just_pressed(\"ui_accept\")\n"
+			source += "\tvar jump_requested: bool = (InputMap.has_action(\"jump\") and Input.is_action_pressed(\"jump\")) or Input.is_action_pressed(\"ui_accept\")\n"
 			source += "\tif jump_requested and is_on_floor():\n"
 			source += "\t\tvelocity.y = -JUMP_SPEED\n"
 			source += "\tmove_and_slide()\n"
@@ -131,4 +157,89 @@ static func controller_script(objective: String) -> String:
 		source += "\t_coin_area.queue_free()\n"
 		source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 		source += "\t\t_win_label.text = \"You Win!\"\n"
+	return source
+
+## 目标语义测试：把目标文字编译成可执行的 McpGameTestSuite —— completed 的
+## 证据从"没有报错"升级为"目标描述的行为真的发生了"（移动会位移、跳跃会
+## 升起、金币被走到并吃到、胜利标签随后出现）。未命中动词返回空串。
+## 用路径形式 extends：不依赖项目的全局类缓存，冷启动子进程也能解析。
+static func semantic_test_script(objective: String, scene_path: String) -> String:
+	var verbs: Dictionary = match_verbs(objective)
+	if not has_any_verb(verbs) or scene_path.is_empty():
+		return ""
+	var wants_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+	# 只有能移动的目标才断言"走到并吃到"；纯收集目标只断言拾取体与标签存在。
+	var wants_collection: bool = wants_pickup \
+		and (bool(verbs.get("movement", false)) or bool(verbs.get("jump", false)))
+	var needs_actions: bool = bool(verbs.get("movement", false)) or bool(verbs.get("jump", false))
+
+	var source: String = "# Goal semantic test generated from the objective; run via run_game_tests.\n"
+	source += "extends \"res://addons/godot_mcp/game_tests/game_test_suite.gd\"\n\n"
+	source += "const SCENE_PATH: String = \"%s\"\n\n" % scene_path
+	if needs_actions:
+		# 子进程 InputMap 可能没有工作流 upsert 的动作（例如套件被单独运行）：
+		# 运行期补注册缺失动作，只影响本进程，不写 project.godot。
+		source += "func before_all() -> void:\n"
+		source += "\t_ensure_input_actions()\n\n"
+		source += "func _ensure_input_actions() -> void:\n"
+		source += "\tvar fallbacks: Dictionary = {\"move_left\": KEY_LEFT, \"move_right\": KEY_RIGHT, \"move_up\": KEY_UP, \"move_down\": KEY_DOWN, \"jump\": KEY_SPACE}\n"
+		source += "\tfor action_name in fallbacks:\n"
+		source += "\t\tif InputMap.has_action(action_name):\n"
+		source += "\t\t\tcontinue\n"
+		source += "\t\tInputMap.add_action(action_name)\n"
+		source += "\t\tvar event := InputEventKey.new()\n"
+		source += "\t\tevent.physical_keycode = fallbacks[action_name]\n"
+		source += "\t\tInputMap.action_add_event(action_name, event)\n\n"
+	source += "func test_goal_semantics() -> void:\n"
+	source += "\tvar game: Node = load_scene(SCENE_PATH)\n"
+	source += "\tcheck_not_null(game, \"goal scene loads and instantiates\")\n"
+	source += "\tif game == null or not (game is CharacterBody2D):\n"
+	source += "\t\treturn\n"
+	source += "\tvar body: CharacterBody2D = game as CharacterBody2D\n"
+	source += "\tvar start_position: Vector2 = body.global_position\n"
+	if bool(verbs.get("jump", false)):
+		source += "\tpress_action(\"move_right\")\n"
+		source += "\tvar moved_right: bool = await wait_until(func() -> bool: return body.global_position.x > start_position.x + 8.0, 4000)\n"
+		source += "\trelease_action(\"move_right\")\n"
+		source += "\tcheck(moved_right, \"horizontal input moves the character\")\n"
+		source += "\tpress_action(\"jump\")\n"
+		source += "\tvar rose: bool = await wait_until(func() -> bool: return body.velocity.y < -20.0, 4000)\n"
+		source += "\trelease_action(\"jump\")\n"
+		source += "\tcheck(rose, \"jump input launches the character upward\")\n"
+		# 落地稳定后再进入收集阶段：跳跃检查结束时玩家在空中带前向漂移，
+		# 会从金币上方飞过并落到其右侧，收集断言就永远等不到。
+		source += "\tawait wait_until(func() -> bool: return body.is_on_floor(), 4000)\n"
+	elif bool(verbs.get("movement", false)):
+		source += "\tpress_action(\"move_right\")\n"
+		source += "\tvar moved: bool = await wait_until(func() -> bool: return body.global_position.distance_to(start_position) > 8.0, 4000)\n"
+		source += "\trelease_action(\"move_right\")\n"
+		source += "\tcheck(moved, \"movement input displaces the character\")\n"
+	if wants_pickup:
+		# 金币挂世界父节点（与玩家同级）：先查兄弟，再回查自身子树。
+		source += "\tvar coin: Node = _find_coin(body)\n"
+		source += "\tcheck_not_null(coin, \"goal scene contains the collectible\")\n"
+		source += "\tvar label: Label = _find_win_label(body)\n"
+		source += "\tcheck_not_null(label, \"goal scene contains the win label\")\n"
+	if wants_collection:
+		source += "\tif coin != null and label != null:\n"
+		source += "\t\tpress_action(\"move_right\")\n"
+		source += "\t\tpress_action(\"move_down\")\n"
+		source += "\t\tvar collected: bool = await wait_until(func() -> bool: return not is_instance_valid(coin), 8000, 10)\n"
+		source += "\t\trelease_action(\"move_right\")\n"
+		source += "\t\trelease_action(\"move_down\")\n"
+		source += "\t\tcheck(collected, \"player reaches and collects the coin\")\n"
+		source += "\t\tcheck(label.text != \"\", \"win label appears after collection\")\n"
+	if wants_pickup:
+		source += "\n\nfunc _find_coin(body: CharacterBody2D) -> Node:\n"
+		source += "\tvar parent: Node = body.get_parent()\n"
+		source += "\tif parent != null:\n"
+		source += "\t\tvar coin: Node = parent.get_node_or_null(\"Coin\")\n"
+		source += "\t\tif coin != null:\n"
+		source += "\t\t\treturn coin\n"
+		source += "\treturn body.get_node_or_null(\"Coin\")\n"
+		source += "\n\nfunc _find_win_label(root: Node) -> Label:\n"
+		source += "\tfor child in root.get_children():\n"
+		source += "\t\tif child is CanvasLayer:\n"
+		source += "\t\t\treturn (child as CanvasLayer).get_node_or_null(\"WinLabel\") as Label\n"
+		source += "\treturn null\n"
 	return source

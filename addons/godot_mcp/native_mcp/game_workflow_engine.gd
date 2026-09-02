@@ -483,6 +483,16 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 							scene_args["root_node_type"] = "CharacterBody2D"
 							spec["arguments"] = scene_args
 						break
+				# 目标语义证据：命中动词的目标额外生成一个 McpGameTestSuite
+				# （内容在适配器按目标与场景工件派生），并作为 objective gate
+				# 执行——completed 从"没有报错"升级为"目标行为真的发生"。
+				# 置于 static_verify 而非 runtime_* 阶段：子进程自起 headless
+				# 引擎，不需要探针/运行中项目的自动前置。
+				gameplay_specs.append(_spec("semantic_test", "create_script", "build_save", false,
+					{"script_path": "res://tests/game/gameplay_semantic.gd"}))
+				gameplay_specs.append(_spec("game_semantics", "run_game_tests", "static_verify", true,
+					{"test_paths": ["res://tests/game/gameplay_semantic.gd"], "timeout_ms": 240000},
+					"modify_script"))
 			return gameplay_specs
 		"ui_screen":
 			return [

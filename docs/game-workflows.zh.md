@@ -26,7 +26,7 @@
 | Profile | 完整闭环 |
 | --- | --- |
 | `gameplay_feature` | 检查项目/输入 → 创建场景、脚本与输入 → 保存 → 编译 → 游玩 → 运行时错误门禁 |
-| `ui_screen` | 检查场景 → 创建主题/UI/布局 → 保存 → 运行时截图 → 视觉基线 |
+| `gameplay_feature`（语义门禁） | 命中移动/跳跃/收集/胜利动词的目标额外生成 McpGameTestSuite 并经 `run_game_tests` 在 headless 子进程执行：断言输入位移、跳跃升起、金币被吃到、胜利标签出现——`completed` 证明目标行为真的发生 || `ui_screen` | 检查场景 → 创建主题/UI/布局 → 保存 → 运行时截图 → 视觉基线 |
 | `script_repair` | 发现坏脚本 → 读取/修改 → 编译 → 项目测试 |
 | `asset_pipeline` | 检查资源/导入 → 重导入 → 依赖与可选 glTF 校验 |
 | `animation_audio` | 制作动画/关键帧 → 检查运行时动画和音频 → 应用状态 → 运行时证据 |

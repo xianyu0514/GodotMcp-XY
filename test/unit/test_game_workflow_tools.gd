@@ -78,3 +78,39 @@ func test_collectible_only_controller_extends_character_body():
 	var source: String = BlueprintsScript.controller_script("collect a coin and show a win label")
 	assert_true(source.contains("extends CharacterBody2D"),
 		"Collectible-only controller still extends CharacterBody2D")
+
+func test_goal_semantic_test_script_compiles_and_targets_verbs():
+	# 移动+收集目标：断言位移与"走到并吃到 + 胜利标签"。
+	var source: String = BlueprintsScript.semantic_test_script(
+		"arrow-key movement, collect a coin, show a win label",
+		"res://scenes/gameplay-feature.tscn")
+	assert_true(source.contains("test_goal_semantics"), "Semantic suite has a test method")
+	assert_true(source.contains("collects the coin"), "Collection is asserted for collectible goals")
+	assert_true(source.contains("win label appears"), "Win label is asserted")
+	var script: GDScript = GDScript.new()
+	script.source_code = source
+	assert_eq(script.reload(), OK, "Semantic suite must compile cleanly")
+
+func test_goal_semantic_test_jump_variant_asserts_upward_launch():
+	var source: String = BlueprintsScript.semantic_test_script(
+		"2D platformer with jumping and coins", "res://scenes/gameplay-feature.tscn")
+	assert_true(source.contains("jump input launches"), "Jump goals assert upward motion")
+	assert_true(source.contains("horizontal input moves"), "Jump goals assert horizontal movement")
+	var script: GDScript = GDScript.new()
+	script.source_code = source
+	assert_eq(script.reload(), OK, "Jump semantic suite must compile cleanly")
+
+func test_goal_semantic_test_collect_only_skips_reach_assertion():
+	# 纯收集目标（无移动动词）不能断言"走到并吃到"——玩家不会动，只能断言
+	# 拾取体与标签存在。
+	var source: String = BlueprintsScript.semantic_test_script(
+		"a win label after collecting", "res://scenes/gameplay-feature.tscn")
+	assert_false(source.contains("reaches and collects"),
+		"Collect-only goals must not assert unreachable collection")
+	assert_true(source.contains("contains the collectible"), "Existence checks remain")
+
+func test_goal_semantic_test_empty_for_unrelated_objectives():
+	assert_eq(BlueprintsScript.semantic_test_script("a story about tea", "res://scenes/x.tscn"),
+		"", "Unrelated goals generate no semantic suite")
+	assert_eq(BlueprintsScript.semantic_test_script("arrow-key movement", ""),
+		"", "Missing scene path generates no semantic suite")

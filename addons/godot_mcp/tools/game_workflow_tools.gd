@@ -580,6 +580,17 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			arguments["content"] = blueprint_source
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["content"] = "goal-blueprint"
+	# 语义测试套件：引擎只定路径，内容按目标动词与本目标创建的场景工件派生。
+	if tool_name == "create_script" and String(task.get("step_key", "")) == "semantic_test" \
+			and not arguments.has("content"):
+		var semantic_objective: String = String(plan.get("goal", ""))
+		var semantic_scene: String = String(artifacts.get("scene", ""))
+		var semantic_source: String = GoalBlueprintsScript.semantic_test_script(
+			semantic_objective, semantic_scene)
+		if not semantic_source.is_empty():
+			arguments["content"] = semantic_source
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["content"] = "goal-semantic-test"
 	# 读取脚本步骤无工件可引用时，回退到磁盘上项目脚本目录的第一个脚本。
 	if tool_name == "read_script" and not arguments.has("script_path") 			and not artifacts.has("script"):
 		var scripts_dir: String = ProjectSettings.globalize_path("res://scripts")
