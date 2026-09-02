@@ -28,7 +28,7 @@
 
 - `running` / 空 → 继续调用
 - `waiting`（无 `needs_input`）→ 异步步骤进行中，稍后再调
-- `needs_input` → 响应里有步骤 id、缺失字段和 input_schema；创作性内容（如脚本逻辑）用 `step_inputs` 提供：`{"<step_id>": {"content": "..."}}`
+- `needs_input` → 响应里有步骤 id、缺失字段和 input_schema；创作性字段（content/patches 等）额外附带 `content_brief`：目标原文、目标文件、被改文件现状（锚点编辑而非盲写）、已产出工件、下游门禁清单——按简报生成再提交，一次写对。内容用 `step_inputs` 提供：`{"<step_id>": {"content": "..."}}`
 - `repairing` / `repair_required` → 引擎正在用步骤声明的修复工具自愈，继续调用即可
 - `replan_required` / `blocked` → 看 `blocked_reason`；输入或能力缺失是显式阻塞，不是静默跳过
 - `completed` → 每个门禁都有回执摘要与工件路径

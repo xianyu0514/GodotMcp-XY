@@ -63,7 +63,7 @@ Advance the plan:
 
 Omit `max_steps` (or pass `0`) for adaptive execution. A positive value is useful when a client deliberately wants a smaller or larger current slice, but it cannot delete or complete remaining work.
 
-When a current atomic step has required parameters, the runner returns `needs_input` with `step_id`, `tool_name`, and `missing_inputs`. Supply only that step's arguments:
+When a current atomic step has required parameters, the runner returns `needs_input` with `step_id`, `tool_name`, and `missing_inputs`. Creative parameters (script `content`, `patches`, …) additionally receive a `content_brief`: the goal text, the target file, the existing content for edits (bounded, for anchored changes), artifacts produced so far, and the downstream gates that will verify the submission — the client generates against evidence instead of guessing. Supply only that step's arguments:
 
 ```json
 {

@@ -139,6 +139,10 @@ func _register_run_tool(server_core: RefCounted) -> void:
 				"tool_name": {"type": "string"},
 				"missing_inputs": {"type": "array"},
 				"input_schema": {"type": "object"},
+				"content_brief": {
+					"type": "object",
+					"description": "Present only when a missing input is creative (content/patches/...): goal text, target file, existing content for edits, artifacts produced so far, and the downstream gates that will verify the supplied content."
+				},
 				"blocked_reason": {"type": "string"}
 			}
 		},
@@ -379,10 +383,14 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			var input_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 			if input_save.has("error"):
 				return input_save
-			return _runner_response(plan, plan_path, "needs_input", executed, {
+			var input_extra: Dictionary = {
 				"step_id": task.get("id", ""), "tool_name": tool_name,
 				"missing_inputs": missing, "input_schema": _tool_input_schema(tool_name)
-			})
+			}
+			var input_brief: Dictionary = _content_brief(plan, task, tool_name, arguments, missing)
+			if not input_brief.is_empty():
+				input_extra["content_brief"] = input_brief
+			return _runner_response(plan, plan_path, "needs_input", executed, input_extra)
 		var allowed: Dictionary = _engine.arguments_allowed(plan, arguments)
 		if allowed.has("error"):
 			task["status"] = "blocked"
@@ -451,11 +459,17 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 		var missing_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
 		if missing_save.has("error"):
 			return {"stop": true, "status": "blocked", "error": missing_save["error"]}
-		return {
-			"stop": true, "status": "needs_input", "step_id": task.get("id", ""),
+		var repair_extra: Dictionary = {
+			"step_id": task.get("id", ""),
 			"tool_name": repair_tool, "repair": true, "missing_inputs": missing,
 			"input_schema": _tool_input_schema(repair_tool)
 		}
+		var repair_brief: Dictionary = _content_brief(plan, task, repair_tool, arguments, missing)
+		if not repair_brief.is_empty():
+			repair_extra["content_brief"] = repair_brief
+		repair_extra["stop"] = true
+		repair_extra["status"] = "needs_input"
+		return repair_extra
 	var allowed: Dictionary = _engine.arguments_allowed(plan, arguments)
 	if allowed.has("error"):
 		task["status"] = "blocked"
@@ -860,6 +874,74 @@ func _missing_required_inputs(tool_name: String, arguments: Dictionary) -> Array
 		elif arguments[required_name] is String and String(arguments[required_name]).strip_edges().is_empty():
 			missing.append(required_name)
 	return missing
+
+# 创作性参数：客户端要为此生成内容——简报提供"一次写对"所需的全部上下文。
+# 纯路径/数值参数保持裸 schema（简报反而增加噪音）。
+const BRIEF_CREATIVE_PARAMS: Array[String] = ["content", "patches", "new_text", "old_text"]
+const BRIEF_MAX_EXISTING_CHARS: int = 4000
+const BRIEF_TARGET_PATH_KEYS: Array[String] = [
+	"script_path", "scene_path", "theme_path", "tileset_path", "animation_path"]
+const BRIEF_CONTENT_TOOLS: Array[String] = ["modify_script", "patch_script", "create_script"]
+
+## needs_input 内容简报：采样已弃用，客户端模型就是代码生成器，服务器的职责
+## 是让它第一稿就对——目标原文、目标文件、被改文件的现状（锚点编辑而非盲写）、
+## 已产出工件、下游哪些门禁会验证这份内容。非创作性参数返回空字典。
+func _content_brief(plan: Dictionary, task: Dictionary, tool_name: String,
+		arguments: Dictionary, missing: Array[String]) -> Dictionary:
+	var creative: bool = false
+	for param in missing:
+		if param in BRIEF_CREATIVE_PARAMS:
+			creative = true
+			break
+	if not creative:
+		return {}
+	var workflow: Dictionary = plan.get("workflow", {}) if plan.get("workflow", {}) is Dictionary else {}
+	var brief: Dictionary = {
+		"goal": String(plan.get("goal", "")),
+		"step_key": String(task.get("step_key", "")),
+		"profile": String(task.get("profile", "")),
+	}
+	for path_key in BRIEF_TARGET_PATH_KEYS:
+		var value: String = String(arguments.get(path_key, ""))
+		if not value.is_empty():
+			brief["target_file"] = value
+			break
+	# 被改/被建文件现状：修改类工具带上现有内容（有界），客户端可锚点编辑；
+	# 新建文件不存在现状，自然跳过。
+	if brief.has("target_file") and tool_name in BRIEF_CONTENT_TOOLS:
+		var target: String = String(brief["target_file"])
+		if FileAccess.file_exists(target):
+			var text: String = FileAccess.get_file_as_string(target)
+			if text.length() > BRIEF_MAX_EXISTING_CHARS:
+				brief["existing_content_head"] = text.substr(0, BRIEF_MAX_EXISTING_CHARS)
+				brief["existing_content_truncated"] = true
+				brief["existing_content_lines"] = text.split("\n").size()
+			elif not text.is_empty():
+				brief["existing_content"] = text
+	var artifacts_value: Variant = workflow.get("artifacts", {})
+	if artifacts_value is Dictionary and not (artifacts_value as Dictionary).is_empty():
+		brief["artifacts"] = (artifacts_value as Dictionary).duplicate()
+	# 下游门禁：这份内容将被什么验证（verify_scripts / game_semantics /
+	# play_and_verify / run_project_tests …），客户端据此自校验再提交。
+	var gates: Array[String] = []
+	var current_id: String = String(task.get("id", ""))
+	var seen_current: bool = false
+	for task_value in plan.get("tasks", []):
+		var candidate: Dictionary = task_value
+		var candidate_id: String = String(candidate.get("id", ""))
+		if candidate_id == current_id:
+			seen_current = true
+			continue
+		if not seen_current:
+			continue
+		if bool(candidate.get("objective_gate", false)) \
+				and String(candidate.get("status", "")) != "done":
+			var gate_name: String = String(candidate.get("tool_name", ""))
+			if gate_name not in gates:
+				gates.append(gate_name)
+	if not gates.is_empty():
+		brief["downstream_gates"] = gates
+	return brief
 
 func _tool_input_schema(tool_name: String) -> Dictionary:
 	var schema: Dictionary = {}

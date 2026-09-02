@@ -114,3 +114,93 @@ func test_goal_semantic_test_empty_for_unrelated_objectives():
 		"", "Unrelated goals generate no semantic suite")
 	assert_eq(BlueprintsScript.semantic_test_script("arrow-key movement", ""),
 		"", "Missing scene path generates no semantic suite")
+
+# ---------------------------------------------------------------------------
+# needs_input 内容简报
+# ---------------------------------------------------------------------------
+
+
+func _typed(values: Array) -> Array[String]:
+	var typed: Array[String] = []
+	for value in values:
+		typed.append(String(value))
+	return typed
+
+func _brief_plan() -> Dictionary:
+	return {
+		"goal": "Create an enemy AI patrol script",
+		"workflow": {
+			"artifacts": {"scene": "res://scenes/gameplay-feature.tscn"},
+		},
+		"tasks": [
+			{"id": "wf_001", "tool_name": "get_project_info", "objective_gate": false, "status": "done"},
+			{"id": "wf_002", "tool_name": "create_scene", "objective_gate": false, "status": "done"},
+			{"id": "wf_003", "tool_name": "create_script", "objective_gate": false, "status": "pending"},
+			{"id": "wf_004", "tool_name": "verify_scripts", "objective_gate": true, "status": "pending"},
+			{"id": "wf_005", "tool_name": "game_semantics", "objective_gate": true, "status": "done"},
+			{"id": "wf_006", "tool_name": "play_and_verify", "objective_gate": true, "status": "pending"},
+		],
+	}
+
+func test_content_brief_covers_creative_params_with_goal_and_gates():
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var plan: Dictionary = _brief_plan()
+	var task: Dictionary = (plan["tasks"] as Array)[2]
+	task["profile"] = "gameplay_feature"
+	task["step_key"] = "create_script"
+	var brief: Dictionary = tools._content_brief(plan, task, "create_script",
+		{"script_path": "res://scripts/enemy.gd"}, _typed(["content"]))
+	assert_eq(String(brief.get("goal", "")), "Create an enemy AI patrol script",
+		"The brief carries the original goal text")
+	assert_eq(String(brief.get("target_file", "")), "res://scripts/enemy.gd",
+		"The brief names the target file")
+	assert_true((brief.get("artifacts", {}) as Dictionary).has("scene"),
+		"Produced artifacts are included as reference context")
+	var gates: Array = brief.get("downstream_gates", [])
+	assert_has(gates, "verify_scripts", "Pending gates after this step are listed")
+	assert_has(gates, "play_and_verify", "All pending gates are listed")
+	assert_does_not_have(gates, "game_semantics",
+		"Already-done gates are excluded from the brief")
+
+func test_content_brief_includes_existing_content_for_edits():
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var temp_path: String = "res://test/unit/.tmp_brief_edit.gd"
+	var file: FileAccess = FileAccess.open(
+		ProjectSettings.globalize_path(temp_path), FileAccess.WRITE)
+	file.store_string("extends Node\n\nfunc patrol() -> void:\n\tpass\n")
+	file.close()
+	var plan: Dictionary = _brief_plan()
+	var task: Dictionary = (plan["tasks"] as Array)[2]
+	var brief: Dictionary = tools._content_brief(plan, task, "modify_script",
+		{"script_path": temp_path}, _typed(["content"]))
+	assert_true(String(brief.get("existing_content", "")).contains("func patrol"),
+		"Edits include the current file content for anchored changes")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_content_brief_truncates_oversized_files():
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var temp_path: String = "res://test/unit/.tmp_brief_big.gd"
+	var file: FileAccess = FileAccess.open(
+		ProjectSettings.globalize_path(temp_path), FileAccess.WRITE)
+	var filler: String = "# line\n".repeat(1200)
+	file.store_string(filler)
+	file.close()
+	var plan: Dictionary = _brief_plan()
+	var task: Dictionary = (plan["tasks"] as Array)[2]
+	var brief: Dictionary = tools._content_brief(plan, task, "modify_script",
+		{"script_path": temp_path}, _typed(["content"]))
+	assert_true(bool(brief.get("existing_content_truncated", false)),
+		"Oversized content is flagged as truncated")
+	assert_lt(String(brief.get("existing_content_head", "")).length(), 4200,
+		"The head stays bounded")
+	assert_gt(int(brief.get("existing_content_lines", 0)), 1000,
+		"Total line count is reported for orientation")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_content_brief_skips_non_creative_params():
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var plan: Dictionary = _brief_plan()
+	var task: Dictionary = (plan["tasks"] as Array)[2]
+	assert_true(tools._content_brief(plan, task, "create_scene",
+		{}, _typed(["scene_name", "root_type"])).is_empty(),
+		"Path/number inputs keep the bare schema without a brief")
