@@ -53,6 +53,7 @@ var _local_endpoint_label: Label = null
 var _local_endpoint_edit: LineEdit = null
 var _local_endpoint_copy_button: Button = null
 var _client_config_label: Label = null
+var _detected_clients_label: Label = null
 var _public_endpoint_card: PanelContainer = null
 var _public_endpoint_title_label: Label = null
 var _public_endpoint_hint_label: Label = null
@@ -357,6 +358,16 @@ func _current_auth_token() -> String:
 		return _auth_token_edit.text
 	return ""
 
+## 已安装客户端提示：注册表检测本机配置文件落点，提示用户可粘贴的位置。
+func _update_detected_clients_hint() -> void:
+	if not _detected_clients_label:
+		return
+	var names: String = MCPClientConfig.detected_clients_summary()
+	if names.is_empty():
+		_detected_clients_label.text = ""
+		return
+	_detected_clients_label.text = _tr("ui.detected_clients") + ": " + names
+
 func _on_copy_config_id_pressed(id: int) -> void:
 	var text: String = ""
 	if id == 1:
@@ -477,6 +488,13 @@ func _build_connection_card(content: VBoxContainer) -> void:
 	config_popup.add_item(_tr("ui.copy_config_stdio"), 1)
 	config_popup.id_pressed.connect(_on_copy_config_id_pressed)
 	_settings_row(body, _client_config_label, _copy_config_button, false)
+
+	_detected_clients_label = Label.new()
+	_detected_clients_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detected_clients_label.add_theme_font_size_override("font_size", int(_s(11)))
+	_detected_clients_label.add_theme_color_override("font_color", Color(0.62, 0.66, 0.72))
+	body.add_child(_detected_clients_label)
+	_update_detected_clients_hint()
 
 	_update_local_endpoint()
 

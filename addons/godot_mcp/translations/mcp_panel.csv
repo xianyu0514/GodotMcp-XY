@@ -217,3 +217,5 @@ ui.asset_key_env,API key env var:,API key env var:,API 密钥环境变量：
 ui.asset_key_env_placeholder,e.g. OPENAI_API_KEY (defaults to the preset's variable),e.g. OPENAI_API_KEY (defaults to the preset's variable),如 OPENAI_API_KEY（留空则用预设默认变量）
 ui.asset_endpoint,Endpoint override:,Endpoint override:,接口地址覆盖：
 ui.asset_endpoint_placeholder,Optional — overrides the preset endpoint,Optional — overrides the preset endpoint,可选——覆盖预设的接口地址
+
+ui.detected_clients,Detected clients,Detected clients,检测到的客户端

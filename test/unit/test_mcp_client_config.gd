@@ -119,3 +119,62 @@ func test_cloudflared_command_uses_port():
 func test_cloudflared_command_falls_back_to_default_port():
 	var cmd: String = MCPClientConfigScript.cloudflared_command(0)
 	assert_eq(cmd, "cloudflared tunnel --url http://localhost:9080", "Non-positive port should fall back to default 9080")
+
+# ---------------------------------------------------------------------------
+# 客户端注册表
+# ---------------------------------------------------------------------------
+
+func test_client_registry_is_well_formed():
+	var clients: Array = MCPClientConfigScript.CLIENTS
+	assert_gt(clients.size(), 6, "Registry covers the common clients")
+	var seen: Dictionary = {}
+	for client in clients:
+		var id: String = String(client.get("id", ""))
+		assert_false(id.is_empty(), "Every client has an id")
+		assert_false(seen.has(id), "Client ids are unique: " + id)
+		seen[id] = true
+		assert_false(String(client.get("name", "")).is_empty(), "Every client has a name")
+		assert_true(["url", "command", "manual"].has(String(client.get("transport", ""))),
+			"Transport is one of url/command/manual: " + id)
+		var paths: Dictionary = client.get("paths", {})
+		assert_true(paths.has("windows") and paths.has("macos") and paths.has("linux"),
+			"Every client documents all three OS paths: " + id)
+
+func test_client_config_path_expands_current_os():
+	for client in MCPClientConfigScript.CLIENTS:
+		var path: String = MCPClientConfigScript.client_config_path(String(client.get("id", "")))
+		assert_false(path.is_empty(), "Path resolves on this OS: " + String(client.get("id", "")))
+		assert_false(path.contains("{APPDATA}") or path.contains("{USERPROFILE}"),
+			"Placeholders are expanded: " + path)
+		assert_false(path.begins_with("~/"), "Home shorthand is expanded: " + path)
+	assert_eq(MCPClientConfigScript.client_config_path("not-a-client"), "",
+		"Unknown client resolves to an empty path")
+
+func test_config_snippet_matches_transport_shape():
+	var http_client: Dictionary = MCPClientConfigScript.config_snippet_for_client("cursor", 9080)
+	assert_false(http_client.has("error"), str(http_client.get("error", "")))
+	assert_eq(String(http_client.get("transport", "")), "url")
+	assert_true(String(http_client.get("snippet", "")).contains("http://127.0.0.1:9080/mcp"),
+		"URL clients get the HTTP endpoint snippet")
+	assert_false(String(http_client.get("config_path", "")).is_empty(),
+		"The snippet names the config file to edit")
+	var command_client: Dictionary = MCPClientConfigScript.config_snippet_for_client(
+		"claude-desktop", 9080, "", "godot", "res://")
+	assert_eq(String(command_client.get("transport", "")), "command")
+	assert_true(String(command_client.get("snippet", "")).contains("--mcp-transport=stdio"),
+		"Command clients get the stdio launch snippet")
+	var manual_client: Dictionary = MCPClientConfigScript.config_snippet_for_client("zed", 9080)
+	assert_true(manual_client.has("note"),
+		"Manual-shape clients carry a paste-location note")
+	assert_true(MCPClientConfigScript.config_snippet_for_client("ghost", 9080).has("error"),
+		"Unknown client ids error instead of guessing")
+
+func test_detected_clients_only_reports_existing_locations():
+	# 纯读检测：返回条目都必须指向本机真实存在的路径（文件或父目录）。
+	for entry in MCPClientConfigScript.detected_clients():
+		var config_path: String = String(entry.get("config_path", ""))
+		var parent: String = config_path.get_base_dir()
+		assert_true(FileAccess.file_exists(config_path) or DirAccess.dir_exists_absolute(parent),
+			"Detected entries point at real locations: " + config_path)
+		assert_eq(bool(entry.get("ready", false)), FileAccess.file_exists(config_path),
+			"ready means the config file itself exists")
