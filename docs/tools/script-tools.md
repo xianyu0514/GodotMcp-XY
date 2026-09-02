@@ -27,11 +27,12 @@ Read, create, modify, validate and search project scripts. The category supports
 | `attach_script` | core | Attach a script to a node. |
 | `execute_script` | advanced | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
 
-### Script-Advanced (12 advanced)
+### Script-Advanced (13 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `batch_read_scripts` | advanced | Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts. |
+| `patch_script` | advanced | Patch a GDScript (.gd) or C# (.cs) file with anchored text replacements instead of rewriting the whole file. Every patch must match exactly once unless `allow_multiple`; the file is written only after all patches match, and a failing `.gd` compile check restores the original content. |
 | `analyze_script` | advanced | Analyze a GDScript file and report code quality issues. |
 | `validate_script` | advanced | Validate a script file for syntax errors. Returns structured compile errors with line numbers. |
 | `verify_scripts` | advanced | Batch-verify the compilation status of project scripts, returning per-script structured errors and warnings with line numbers. With no script_paths it scans the whole project for .gd scripts (skipping res://addons/ and res://test/ by default to avoid false positives from the plugin itself and the test suite), capped by max_scripts. Use after editing code as a verification step, complementing validate_script (single script) and execute_editor_script (full reload). |

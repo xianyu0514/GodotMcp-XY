@@ -2,7 +2,7 @@
 
 [中文说明](game-workflows.zh.md)
 
-`plan_game_workflow` and `run_game_workflow` are the compact server-side loop for goals that cannot be completed reliably by selecting one small tool set once. They do not replace the 226 atomic capabilities. They compose and execute those capabilities through a persistent, evidence-gated plan.
+`plan_game_workflow` and `run_game_workflow` are the compact server-side loop for goals that cannot be completed reliably by selecting one small tool set once. They do not replace the 227 atomic capabilities. They compose and execute those capabilities through a persistent, evidence-gated plan.
 
 ## Why the workflow can exceed eight tools
 

@@ -51,6 +51,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_batch_read_scripts(server_core)
 	_register_create_script(server_core)
 	_register_modify_script(server_core)
+	_register_patch_script(server_core)
 	_register_analyze_script(server_core)
 	_register_get_current_script(server_core)
 	_register_open_script_at_line(server_core)
@@ -1827,6 +1828,186 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 				"valid": bool(check.get("valid", true)),
 				"error_count": int(check.get("error_count", errors.size())),
 				"errors": errors.slice(0, 5)
+			}
+	return response
+
+# ============================================================================
+# patch_script - 锚点文本补丁（最小编辑，LLM 友好）
+# ============================================================================
+
+func _register_patch_script(server_core: RefCounted) -> void:
+	var tool_name: String = "patch_script"
+	var description: String = "Patch a GDScript (.gd) or C# (.cs) file with anchored text replacements instead of rewriting the whole file. All patches are matched against the evolving buffer before anything is written: each old_text must occur exactly once unless allow_multiple is set. For .gd files the patched result is compile-checked and the original content is restored when compilation fails."
+
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"script_path": {
+				"type": "string",
+				"description": "Path to the script file to patch (e.g. 'res://scripts/player.gd')"
+			},
+			"patches": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"old_text": {
+							"type": "string",
+							"description": "Exact, whitespace-sensitive text to find in the current buffer"
+						},
+						"new_text": {
+							"type": "string",
+							"description": "Replacement text; an empty string deletes old_text"
+						},
+						"allow_multiple": {
+							"type": "boolean",
+							"description": "Replace every occurrence instead of requiring exactly one match (default false)",
+							"default": false
+						}
+					},
+					"required": ["old_text", "new_text"],
+					"additionalProperties": false
+				},
+				"description": "Ordered edits; a later patch may match text produced by an earlier one. Must not be empty."
+			},
+			"validate": {
+				"type": "boolean",
+				"description": "Inline-validate .gd after writing and restore the original content when compilation fails (default true).",
+				"default": true
+			}
+		},
+		"required": ["script_path", "patches"]
+	}
+
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"script_path": {"type": "string"},
+			"patches_applied": {"type": "integer"},
+			"replacements": {"type": "integer"},
+			"line_count": {"type": "integer"}
+		}
+	}
+
+	var annotations: Dictionary = {
+		"readOnlyHint": false,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+
+	server_core.register_tool(tool_name, description, input_schema,
+			Callable(self, "_tool_patch_script"),
+			output_schema, annotations,
+			"supplementary", "Script-Advanced")
+
+func _tool_patch_script(params: Dictionary) -> Dictionary:
+	var script_path: String = String(params.get("script_path", ""))
+	if script_path.is_empty():
+		return {"error": "Missing required parameter: script_path"}
+	var patches_value: Variant = params.get("patches", [])
+	if not (patches_value is Array):
+		return {"error": "Missing required parameter: patches (array of {old_text, new_text})"}
+	var patches: Array = patches_value
+	if patches.is_empty():
+		return {"error": "patches must contain at least one edit"}
+	for index in patches.size():
+		if not (patches[index] is Dictionary):
+			return {"error": "Patch %d must be an object with old_text/new_text" % index}
+		var candidate: Dictionary = patches[index]
+		if String(candidate.get("old_text", "")).is_empty():
+			return {"error": "Patch %d has an empty old_text; anchors must be exact non-empty text" % index}
+		if not candidate.has("new_text"):
+			return {"error": "Patch %d is missing new_text (use an empty string to delete)" % index}
+
+	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
+	if not validation["valid"]:
+		return {"error": "Invalid path: " + validation["error"]}
+	script_path = validation["sanitized"]
+	if not FileAccess.file_exists(script_path):
+		return {"error": "File not found: " + script_path}
+
+	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
+	if not file:
+		return {"error": "Failed to open file for reading: " + script_path}
+	var original_content: String = file.get_as_text()
+	file.close()
+
+	# 先全部匹配、后一次性写入：任何一处锚点失败都不落盘（原子性）。
+	var buffer: String = original_content
+	var replacements: int = 0
+	for index in patches.size():
+		var patch: Dictionary = patches[index]
+		var old_text: String = String(patch.get("old_text", ""))
+		var new_text: String = String(patch.get("new_text", ""))
+		var allow_multiple: bool = bool(patch.get("allow_multiple", false))
+		var occurrences: int = buffer.count(old_text)
+		if occurrences == 0:
+			return {
+				"error": "Patch %d old_text was not found in the current buffer" % index,
+				"patch_index": index,
+				"old_text_head": old_text.substr(0, 80),
+				"patches_applied": 0
+			}
+		if occurrences > 1 and not allow_multiple:
+			return {
+				"error": "Patch %d old_text matches %d locations; extend the anchor or set allow_multiple=true" % [index, occurrences],
+				"patch_index": index,
+				"occurrences": occurrences,
+				"patches_applied": 0
+			}
+		buffer = buffer.replace(old_text, new_text)
+		replacements += occurrences
+
+	var write: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+	if not write:
+		return {"error": "Failed to open file for writing: " + script_path}
+	write.store_string(buffer)
+	write.close()
+	ScriptCompileMemoScript.invalidate(script_path)
+	EditorToolsNative.sync_script_buffer_after_write(_get_editor_interface(), script_path)
+
+	var response: Dictionary = {
+		"status": "success",
+		"script_path": script_path,
+		"patches_applied": patches.size(),
+		"replacements": replacements,
+		"line_count": buffer.split("\n").size()
+	}
+
+	# 补丁后编译门禁：.gd 编译失败则恢复原文件——调用方拿到明确错误而不是
+	# 一个坏在磁盘上的脚本（修复循环的下一步才有干净起点）。
+	if script_path.ends_with(".gd") and bool(params.get("validate", true)):
+		var check: Dictionary = _tool_validate_script({"script_path": script_path, "check_warnings": false})
+		var valid: bool = true
+		var errors: Array = []
+		if check.has("error"):
+			response["validation"] = {"valid": true, "note": String(check["error"])}
+		else:
+			valid = bool(check.get("valid", true))
+			errors = check.get("errors", [])
+			response["validation"] = {
+				"valid": valid,
+				"error_count": int(check.get("error_count", errors.size())),
+				"errors": errors.slice(0, 5)
+			}
+		if not valid:
+			var restore: FileAccess = FileAccess.open(script_path, FileAccess.WRITE)
+			if restore:
+				restore.store_string(original_content)
+				restore.close()
+			ScriptCompileMemoScript.invalidate(script_path)
+			EditorToolsNative.sync_script_buffer_after_write(_get_editor_interface(), script_path)
+			return {
+				"error": "Patched .gd failed GDScript validation; the original content was restored",
+				"script_path": script_path,
+				"patches_applied": 0,
+				"validation": {
+					"valid": false,
+					"error_count": errors.size(),
+					"errors": errors.slice(0, 5)
+				}
 			}
 	return response
 

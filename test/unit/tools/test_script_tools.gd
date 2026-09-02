@@ -525,3 +525,130 @@ func test_search_in_files_skips_generated_and_tooling_by_default():
 		"include_tooling=true searches addon sources")
 	assert_gt(int(tooling.get("total_matches", 0)), 0,
 		"plugin sources contain class_name declarations")
+
+# ============================================================================
+# patch_script - 锚点文本补丁
+# ============================================================================
+
+func _write_patch_fixture(content: String) -> String:
+	var temp_path: String = "res://test/unit/.tmp_patch_script.gd"
+	var tools: RefCounted = ScriptToolsScript.new()
+	var created: Dictionary = tools._tool_create_script({
+		"script_path": temp_path, "content": content})
+	assert_false(created.has("error"), str(created.get("error", "")))
+	return temp_path
+
+func _read_text(path: String) -> String:
+	return FileAccess.get_file_as_string(path)
+
+func test_patch_script_applies_anchored_replacements():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = _write_patch_fixture(
+		"extends Node\n\nvar speed: float = 100.0\n\nfunc boost() -> void:\n\tspeed = speed * 2.0\n")
+	var patched: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [
+			{"old_text": "var speed: float = 100.0", "new_text": "var speed: float = 200.0"},
+			{"old_text": "speed = speed * 2.0", "new_text": "speed = speed * 3.0"}
+		]})
+	assert_false(patched.has("error"), str(patched.get("error", "")))
+	assert_eq(int(patched.get("patches_applied", 0)), 2, "Both patches applied")
+	assert_eq(int(patched.get("replacements", 0)), 2, "Two occurrences replaced")
+	var final_text: String = _read_text(temp_path)
+	assert_true(final_text.contains("200.0"), "First anchor replaced on disk")
+	assert_true(final_text.contains("* 3.0"), "Second anchor replaced on disk")
+	assert_false(final_text.contains("100.0"), "Old value gone")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_is_atomic_when_an_anchor_is_missing():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var original: String = "extends Node\n\nvar speed: float = 100.0\n"
+	var temp_path: String = _write_patch_fixture(original)
+	var result: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [
+			{"old_text": "var speed: float = 100.0", "new_text": "var speed: float = 300.0"},
+			{"old_text": "this anchor does not exist", "new_text": "anything"}
+		]})
+	assert_true(result.has("error"), "A missing anchor must fail the whole call")
+	assert_eq(int(result.get("patch_index", -1)), 1, "Failure reports the failing patch index")
+	assert_eq(int(result.get("patches_applied", -1)), 0, "Nothing is reported as applied")
+	assert_eq(_read_text(temp_path), original, "File must stay unchanged when any anchor fails")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_ambiguous_anchor_needs_allow_multiple():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = _write_patch_fixture(
+		"extends Node\n\nfunc a() -> void:\n\tprint(\"hit\")\n\nfunc b() -> void:\n\tprint(\"hit\")\n")
+	var refused: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [{"old_text": "print(\"hit\")", "new_text": "print(\"miss\")"}]})
+	assert_true(refused.has("error"), "An anchor matching twice must be refused by default")
+	assert_eq(int(refused.get("occurrences", 0)), 2, "The refusal reports the match count")
+	assert_true(_read_text(temp_path).contains("print(\"hit\")"), "File untouched after refusal")
+	var replaced: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [{"old_text": "print(\"hit\")", "new_text": "print(\"miss\")", "allow_multiple": true}]})
+	assert_false(replaced.has("error"), str(replaced.get("error", "")))
+	assert_eq(int(replaced.get("replacements", 0)), 2, "allow_multiple replaces every occurrence")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_restores_original_when_compilation_fails():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var original: String = "extends Node\n\nfunc ready() -> void:\n\tpass\n"
+	var temp_path: String = _write_patch_fixture(original)
+	var result: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [
+			{"old_text": "func ready() -> void:", "new_text": "func broken(:"}
+		]})
+	for e in get_errors():
+		e.handled = true
+	assert_true(result.has("error"), "A patch that breaks compilation must fail")
+	assert_true(String(result.get("error", "")).contains("restored"),
+		"The error must state the original content was restored")
+	assert_eq(_read_text(temp_path), original, "Original content restored on disk")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_empty_new_text_deletes_the_anchor():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = _write_patch_fixture(
+		"extends Node\n\nvar legacy: int = 1\n\nfunc go() -> void:\n\tpass\n")
+	var result: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [{"old_text": "var legacy: int = 1\n\n", "new_text": ""}]})
+	assert_false(result.has("error"), str(result.get("error", "")))
+	var final_text: String = _read_text(temp_path)
+	assert_false(final_text.contains("legacy"), "Empty new_text deletes the anchor text")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_chained_patches_see_earlier_results():
+	var tools: RefCounted = ScriptToolsScript.new()
+	var temp_path: String = _write_patch_fixture("extends Node\n\nvar hp: int = 10\n")
+	var result: Dictionary = tools._tool_patch_script({
+		"script_path": temp_path,
+		"patches": [
+			{"old_text": "var hp: int = 10", "new_text": "var health: int = 10"},
+			{"old_text": "var health: int = 10", "new_text": "var health: int = 99"}
+		]})
+	assert_false(result.has("error"), str(result.get("error", "")))
+	assert_true(_read_text(temp_path).contains("var health: int = 99"),
+		"A later patch can match text produced by an earlier one")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(temp_path))
+
+func test_patch_script_rejects_invalid_parameters():
+	var tools: RefCounted = ScriptToolsScript.new()
+	assert_true(tools._tool_patch_script({"patches": [
+		{"old_text": "a", "new_text": "b"}]}).has("error"),
+		"Missing script_path must error")
+	assert_true(tools._tool_patch_script({"script_path": "res://test/unit/.tmp_none.gd",
+		"patches": []}).has("error"), "Empty patches must error")
+	assert_true(tools._tool_patch_script({"script_path": "res://test/unit/.tmp_none.gd",
+		"patches": [{"old_text": "", "new_text": "b"}]}).has("error"),
+		"Empty old_text must error")
+	assert_true(tools._tool_patch_script({"script_path": "res://test/unit/.tmp_none.gd",
+		"patches": [{"old_text": "a"}]}).has("error"),
+		"Missing new_text must error (explicit deletion uses an empty string)")
+	assert_true(tools._tool_patch_script({"script_path": "res://test/unit/.tmp_patch_missing.gd",
+		"patches": [{"old_text": "a", "new_text": "b"}]}).has("error"),
+		"Nonexistent file must error")
