@@ -204,3 +204,60 @@ func test_content_brief_skips_non_creative_params():
 	assert_true(tools._content_brief(plan, task, "create_scene",
 		{}, _typed(["scene_name", "root_type"])).is_empty(),
 		"Path/number inputs keep the bare schema without a brief")
+
+func test_enemy_and_score_verbs_bilingual_and_compose():
+	var verbs: Dictionary = BlueprintsScript.match_verbs("an enemy chases the player and coins award score")
+	assert_true(bool(verbs.get("enemy", false)), "English enemy verb matched")
+	assert_true(bool(verbs.get("score", false)), "English score verb matched")
+	var zh: Dictionary = BlueprintsScript.match_verbs("敌人追击玩家，金币计分")
+	assert_true(bool(zh.get("enemy", false)), "Chinese enemy verb matched")
+	assert_true(bool(zh.get("score", false)), "Chinese score verb matched")
+	assert_true(bool(zh.get("collectible", false)), "Chinese score goal still collects coins")
+	# score 蕴含收集：score-only 目标也要生成可玩的拾取循环。
+	var score_only: Dictionary = BlueprintsScript.match_verbs("add a scoring system")
+	assert_true(BlueprintsScript.has_any_verb(score_only), "Score-only activates a blueprint")
+	var controller: String = BlueprintsScript.controller_script("add a scoring system")
+	assert_true(controller.contains("_on_coin_touched"), "Score implies a collectible loop")
+	assert_true(controller.contains("ScoreLabel"), "Score controller renders a score label")
+
+func test_enemy_controller_and_semantics_compile():
+	var controller: String = BlueprintsScript.controller_script(
+		"an enemy chases the arrow-key player who collects coins")
+	assert_true(controller.contains("_enemy"), "Enemy block present")
+	assert_true(controller.contains("ENEMY_SPEED"), "Chase speed constant present")
+	assert_true(controller.contains("direction_to"), "Chase uses direction_to toward the player")
+	var test_script: GDScript = GDScript.new()
+	test_script.source_code = controller
+	assert_eq(test_script.reload(), OK, "Enemy controller must compile cleanly")
+	var semantic: String = BlueprintsScript.semantic_test_script(
+		"an enemy chases the arrow-key player who collects coins", "res://scenes/g.tscn")
+	assert_true(semantic.contains("the enemy chases the player"), "Chase behavior is asserted")
+	var semantic_script: GDScript = GDScript.new()
+	semantic_script.source_code = semantic
+	assert_eq(semantic_script.reload(), OK, "Enemy semantic suite must compile cleanly")
+
+func test_enemy_only_goal_gets_physics_loop_without_movement():
+	var controller: String = BlueprintsScript.controller_script("spawn a monster that chases")
+	assert_true(controller.contains("_physics_process"),
+		"Enemy-only goals still get a physics loop to drive the chase")
+	assert_false(controller.contains("get_vector("),
+		"Enemy-only goals add no top-down movement")
+
+func test_score_semantic_asserts_score_updates():
+	var semantic: String = BlueprintsScript.semantic_test_script(
+		"arrow-key movement with coins and a score counter", "res://scenes/g.tscn")
+	assert_true(semantic.contains("score updates after collection"),
+		"Score goals assert the label updates")
+
+func test_shoot_verbs_classify_but_delegate_content():
+	# 射击类只做分类与语义基线：不硬造弹道蓝图，走客户端创作 + 内容简报。
+	var verbs: Dictionary = BlueprintsScript.match_verbs("a space shooter that fires bullets")
+	assert_true(bool(verbs.get("shoot", false)), "English shoot verb matched")
+	var zh: Dictionary = BlueprintsScript.match_verbs("太空射击游戏，发射子弹")
+	assert_true(bool(zh.get("shoot", false)), "Chinese shoot verb matched")
+	assert_true(bool(zh.get("movement", false)) or BlueprintsScript.has_any_verb(zh),
+		"Shoot goals still activate the blueprint family")
+	var controller: String = BlueprintsScript.controller_script("a space shooter that fires bullets")
+	var test_script: GDScript = GDScript.new()
+	test_script.source_code = controller
+	assert_eq(test_script.reload(), OK, "Shoot-goal controller compiles (movement base)")

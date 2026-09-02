@@ -31,6 +31,20 @@ const WIN_KEYWORDS: Array[String] = [
 	"win", "victory", "goal reached", "success screen", "win label", "win text",
 	"胜利", "获胜", "通关",
 ]
+# 敌人：追逐者块。射击类只做分类（客户端凭内容简报创作，服务端蓝图不硬造
+# 弹道/朝向逻辑）；计分蕴含收集（没有可收集物就没有可计的分）。
+const ENEMY_KEYWORDS: Array[String] = [
+	"enemy", "enemies", "monster", "foe", "chase", "patrol",
+	"敌人", "怪物", "追击", "追逐", "巡逻",
+]
+const SHOOT_KEYWORDS: Array[String] = [
+	"shoot", "shooter", "fire", "bullet", "projectile", "laser",
+	"射击", "子弹", "发射", "激光",
+]
+const SCORE_KEYWORDS: Array[String] = [
+	"score", "scoring", "points",
+	"计分", "得分", "分数",
+]
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -46,6 +60,9 @@ static func match_verbs(objective: String) -> Dictionary:
 		"jump": _mentions(objective, JUMP_KEYWORDS),
 		"collectible": _mentions(objective, COLLECTIBLE_KEYWORDS),
 		"win": _mentions(objective, WIN_KEYWORDS),
+		"enemy": _mentions(objective, ENEMY_KEYWORDS),
+		"shoot": _mentions(objective, SHOOT_KEYWORDS),
+		"score": _mentions(objective, SCORE_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -54,20 +71,28 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 	return bool(verbs.get("movement", false)) \
 		or bool(verbs.get("jump", false)) \
 		or bool(verbs.get("collectible", false)) \
-		or bool(verbs.get("win", false))
+		or bool(verbs.get("win", false)) \
+		or bool(verbs.get("enemy", false)) \
+		or bool(verbs.get("shoot", false)) \
+		or bool(verbs.get("score", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs):
 		return ""
-	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+	var needs_pickup: bool = bool(verbs.get("collectible", false)) \
+		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
 	var wants_jump: bool = bool(verbs.get("jump", false))
+	var wants_enemy: bool = bool(verbs.get("enemy", false))
+	var wants_score: bool = bool(verbs.get("score", false))
 
 	var source: String = "# Goal blueprint: minimal playable controller.\n"
 	source += "extends CharacterBody2D\n\n"
 	source += "signal coins_changed(collected: int)\n\n"
 	source += "const SPEED: float = 260.0\n"
+	if wants_enemy:
+		source += "const ENEMY_SPEED: float = 120.0\n"
 	if needs_pickup:
 		source += "const COINS_TO_WIN: int = 1\n"
 	if wants_jump:
@@ -76,6 +101,10 @@ static func controller_script(objective: String) -> String:
 	source += "\nvar coins_collected: int = 0\n"
 	if needs_pickup:
 		source += "var _coin_area: Area2D\nvar _win_label: Label\n"
+	if wants_score:
+		source += "var _score_label: Label\n"
+	if wants_enemy:
+		source += "var _enemy: CharacterBody2D\n"
 	source += "\nfunc _ready() -> void:\n"
 	# 玩家碰撞形状：没有它，拾取区 body_entered 永远不会触发（无形状的物理体
 	# 不参与 Area2D 检测）——金币在旧蓝图里事实上不可被收集。
@@ -122,8 +151,36 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
-	var wants_movement: bool = bool(verbs.get("movement", false)) or wants_jump
-	if wants_movement:
+	# 计分标签：score 蕴含收集（needs_pickup 恒真），复用胜利画布，随
+	# coins_changed 实时更新。
+	if wants_score:
+		source += "\t_score_label = Label.new()\n"
+		source += "\t_score_label.name = \"ScoreLabel\"\n"
+		source += "\t_score_label.text = \"Score: 0\"\n"
+		source += "\t_score_label.position = Vector2(40, 60)\n"
+		source += "\tcanvas.add_child(_score_label)\n"
+		source += "\tcoins_changed.connect(_on_score_changed)\n"
+	# 追逐者敌人：世界父节点生成（与金币同理不能挂玩家），每物理帧向玩家移动。
+	if wants_enemy:
+		source += "\tvar enemy_parent: Node = get_parent() if get_parent() != null else self\n"
+		source += "\t_enemy = CharacterBody2D.new()\n"
+		source += "\t_enemy.name = \"Enemy\"\n"
+		source += "\t_enemy.position = Vector2(260, -60)\n"
+		source += "\tvar enemy_collision := CollisionShape2D.new()\n"
+		source += "\tvar enemy_shape := RectangleShape2D.new()\n"
+		source += "\tenemy_shape.size = Vector2(24, 24)\n"
+		source += "\tenemy_collision.shape = enemy_shape\n"
+		source += "\t_enemy.add_child(enemy_collision)\n"
+		source += "\tenemy_parent.add_child(_enemy)\n"
+	# 兜底：没有任何 _ready 块时补 pass，避免空函数体解析错误。
+	if not needs_pickup and not wants_jump and not wants_score and not wants_enemy:
+		source += "\tpass\n"
+	# shoot 蕴含 movement：射击游戏必然要能移动（弹道/发射逻辑由客户端经
+	# 内容简报创作，服务端给可移动载体）。
+	var wants_movement: bool = bool(verbs.get("movement", false)) or wants_jump \
+		or bool(verbs.get("shoot", false))
+	var needs_physics: bool = wants_movement or wants_enemy
+	if needs_physics:
 		if wants_jump:
 			# 横版跳跃：水平移动 + 重力 + 地面检测 + 跳跃（jump 动作存在则用，
 			# 否则回退 ui_accept——Space/Enter 内建可用，未 upsert 也能跳）。
@@ -139,7 +196,7 @@ static func controller_script(objective: String) -> String:
 			source += "\tif jump_requested and is_on_floor():\n"
 			source += "\t\tvelocity.y = -JUMP_SPEED\n"
 			source += "\tmove_and_slide()\n"
-		else:
+		elif wants_movement:
 			source += "\nfunc _physics_process(_delta: float) -> void:\n"
 			source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_up\", \"move_down\")\n"
 			source += "\tif direction == Vector2.ZERO:\n"
@@ -148,6 +205,13 @@ static func controller_script(objective: String) -> String:
 			source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
 			source += "\tvelocity = direction * SPEED\n"
 			source += "\tmove_and_slide()\n"
+		else:
+			# 纯敌人目标（无移动动词）也要有物理循环驱动追逐。
+			source += "\nfunc _physics_process(_delta: float) -> void:\n"
+		if wants_enemy:
+			source += "\tif _enemy != null:\n"
+			source += "\t\t_enemy.velocity = _enemy.global_position.direction_to(global_position) * ENEMY_SPEED\n"
+			source += "\t\t_enemy.move_and_slide()\n"
 	if needs_pickup:
 		source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
 		source += "\tif body != self:\n"
@@ -157,6 +221,10 @@ static func controller_script(objective: String) -> String:
 		source += "\t_coin_area.queue_free()\n"
 		source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 		source += "\t\t_win_label.text = \"You Win!\"\n"
+	if wants_score:
+		source += "\nfunc _on_score_changed(collected: int) -> void:\n"
+		source += "\tif _score_label != null:\n"
+		source += "\t\t_score_label.text = \"Score: %d\" % collected\n"
 	return source
 
 ## 目标语义测试：把目标文字编译成可执行的 McpGameTestSuite —— completed 的
@@ -167,11 +235,16 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs) or scene_path.is_empty():
 		return ""
-	var wants_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+	var wants_pickup: bool = bool(verbs.get("collectible", false)) \
+		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
+	var wants_enemy: bool = bool(verbs.get("enemy", false))
+	var wants_score: bool = bool(verbs.get("score", false))
 	# 只有能移动的目标才断言"走到并吃到"；纯收集目标只断言拾取体与标签存在。
 	var wants_collection: bool = wants_pickup \
-		and (bool(verbs.get("movement", false)) or bool(verbs.get("jump", false)))
-	var needs_actions: bool = bool(verbs.get("movement", false)) or bool(verbs.get("jump", false))
+		and (bool(verbs.get("movement", false)) or bool(verbs.get("jump", false)) \
+			or bool(verbs.get("shoot", false)))
+	var needs_actions: bool = bool(verbs.get("movement", false)) \
+		or bool(verbs.get("jump", false)) or bool(verbs.get("shoot", false))
 
 	var source: String = "# Goal semantic test generated from the objective; run via run_game_tests.\n"
 	source += "extends \"res://addons/godot_mcp/game_tests/game_test_suite.gd\"\n\n"
@@ -209,7 +282,7 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 		# 落地稳定后再进入收集阶段：跳跃检查结束时玩家在空中带前向漂移，
 		# 会从金币上方飞过并落到其右侧，收集断言就永远等不到。
 		source += "\tawait wait_until(func() -> bool: return body.is_on_floor(), 4000)\n"
-	elif bool(verbs.get("movement", false)):
+	elif bool(verbs.get("movement", false)) or bool(verbs.get("shoot", false)):
 		source += "\tpress_action(\"move_right\")\n"
 		source += "\tvar moved: bool = await wait_until(func() -> bool: return body.global_position.distance_to(start_position) > 8.0, 4000)\n"
 		source += "\trelease_action(\"move_right\")\n"
@@ -229,6 +302,18 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 		source += "\t\trelease_action(\"move_down\")\n"
 		source += "\t\tcheck(collected, \"player reaches and collects the coin\")\n"
 		source += "\t\tcheck(label.text != \"\", \"win label appears after collection\")\n"
+		if wants_score:
+			source += "\t\tvar score_label: Label = _find_score_label(body)\n"
+			source += "\t\tcheck_not_null(score_label, \"goal scene contains the score label\")\n"
+			source += "\t\tif score_label != null:\n"
+			source += "\t\t\tcheck(score_label.text != \"Score: 0\", \"score updates after collection\")\n"
+	if wants_enemy:
+		source += "\tvar enemy: Node = _find_enemy(body)\n"
+		source += "\tcheck_not_null(enemy, \"goal scene contains the enemy\")\n"
+		source += "\tif enemy != null:\n"
+		source += "\t\tvar enemy_gap: float = (enemy as Node2D).global_position.distance_to(body.global_position)\n"
+		source += "\t\tvar closed_in: bool = await wait_until(func() -> bool: return (enemy as Node2D).global_position.distance_to(body.global_position) < enemy_gap - 8.0, 4000)\n"
+		source += "\t\tcheck(closed_in, \"the enemy chases the player\")\n"
 	if wants_pickup:
 		source += "\n\nfunc _find_coin(body: CharacterBody2D) -> Node:\n"
 		source += "\tvar parent: Node = body.get_parent()\n"
@@ -242,4 +327,18 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 		source += "\t\tif child is CanvasLayer:\n"
 		source += "\t\t\treturn (child as CanvasLayer).get_node_or_null(\"WinLabel\") as Label\n"
 		source += "\treturn null\n"
+	if wants_score:
+		source += "\n\nfunc _find_score_label(root: Node) -> Label:\n"
+		source += "\tfor child in root.get_children():\n"
+		source += "\t\tif child is CanvasLayer:\n"
+		source += "\t\t\treturn (child as CanvasLayer).get_node_or_null(\"ScoreLabel\") as Label\n"
+		source += "\treturn null\n"
+	if wants_enemy:
+		source += "\n\nfunc _find_enemy(body: CharacterBody2D) -> Node:\n"
+		source += "\tvar parent: Node = body.get_parent()\n"
+		source += "\tif parent != null:\n"
+		source += "\t\tvar enemy: Node = parent.get_node_or_null(\"Enemy\")\n"
+		source += "\t\tif enemy != null:\n"
+		source += "\t\t\treturn enemy\n"
+		source += "\treturn body.get_node_or_null(\"Enemy\")\n"
 	return source
