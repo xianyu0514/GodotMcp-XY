@@ -2,6 +2,26 @@
 
 Use the lightest test that proves the change, then run broader suites before merging code changes.
 
+## Game behavior tests (McpGameTestSuite)
+
+The plugin ships a zero-dependency in-editor test framework for the **user's game**:
+`addons/godot_mcp/game_tests/game_test_suite.gd` (base class `McpGameTestSuite`) and a
+headless runner. Suites live under `res://tests/` by default; each `test_*` method may
+`await` frame steps, instance real scenes with `load_scene()`, simulate input with
+`press_action()`/`hold_action()` and assert node state with `check*()` helpers.
+
+Run them with the `run_game_tests` tool (pending → poll like the other test tools) or
+directly:
+
+```bash
+godot --headless --path . -s addons/godot_mcp/game_tests/game_test_runner.gd -- res://tests/
+```
+
+Semantics: zero discovered suites and any failing check report `failed` — never a silent
+pass. Per-test results, failure messages and totals cross the subprocess boundary via a
+JSON file handoff (the runner also prints a `GAME_TESTS_RESULT` line as fallback), so a
+`completed` gate built on `run_game_tests` carries real behavioral evidence.
+
 ## Unit tests (GUT)
 
 Unit tests live under `test/unit/`. Tool-specific tests usually live under `test/unit/tools/`.

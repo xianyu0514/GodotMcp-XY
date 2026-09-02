@@ -54,6 +54,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_create_project_smoke_test(server_core)
 	_register_run_project_test(server_core)
 	_register_run_project_tests(server_core)
+	_register_run_game_tests(server_core)
 	_register_inspect_csharp_project_support(server_core)
 	_register_get_project_structure(server_core)
 	_register_set_project_setting(server_core)
@@ -1621,6 +1622,260 @@ func _run_gut_project_test(test_path: String) -> Dictionary:
 		"command": [executable_path] + args,
 		"output": output
 	}
+
+
+# ============================================================================
+# run_game_tests - 运行游戏行为测试（插件自带 McpGameTestSuite 框架）
+# ============================================================================
+
+const GAME_TEST_RUNNER_PATH: String = "res://addons/godot_mcp/game_tests/game_test_runner.gd"
+const GAME_TEST_SUITE_MARKERS: Array[String] = [
+	"extends McpGameTestSuite",
+	"extends \"res://addons/godot_mcp/game_tests/game_test_suite.gd\"",
+	"extends 'res://addons/godot_mcp/game_tests/game_test_suite.gd'",
+]
+const GAME_TEST_DEFAULT_SEARCH_PATH: String = "res://tests"
+const GAME_TEST_RESULT_MARKER: String = "GAME_TESTS_RESULT "
+const GAME_TEST_MAX_OUTPUT_LINES: int = 80
+const GAME_TEST_MAX_RESULTS: int = 20
+
+func _register_run_game_tests(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"run_game_tests",
+		"Discover and run McpGameTestSuite behavior suites for the user's game in a headless engine subprocess. Suites live under res://tests by default and can instantiate scenes, step physics frames, simulate input and assert node state. The first call starts the run on a background thread and returns status 'pending'; call again with the same arguments to poll. Zero discovered suites or any failing check reports 'failed' — never a silent pass.",
+		{
+			"type": "object",
+			"properties": {
+				"search_path": {
+					"type": "string",
+					"description": "Optional res:// directory to discover suites. Default is res://tests."
+				},
+				"test_paths": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Explicit suite .gd paths; overrides search_path discovery."
+				},
+				"timeout_ms": {
+					"type": "integer",
+					"description": "Subprocess budget enforced by an in-runner watchdog (default 180000).",
+					"default": 180000
+				}
+			}
+		},
+		Callable(self, "_tool_run_game_tests"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string", "description": "'pending' while running, then 'passed' or 'failed'."},
+				"framework": {"type": "string"},
+				"search_path": {"type": "string"},
+				"total_count": {"type": "integer"},
+				"passed_count": {"type": "integer"},
+				"failed_count": {"type": "integer"},
+				"results": {"type": "array"},
+				"output": {"type": "array"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_run_game_tests(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", GAME_TEST_DEFAULT_SEARCH_PATH)).strip_edges()
+	if search_path.is_empty():
+		search_path = GAME_TEST_DEFAULT_SEARCH_PATH
+	var explicit_paths: Array = []
+	if params.get("test_paths") is Array:
+		explicit_paths = params["test_paths"]
+	var timeout_ms: int = int(params.get("timeout_ms", 180000))
+	if timeout_ms < 1000:
+		timeout_ms = 1000
+
+	var suite_paths: Array[String] = []
+	if not explicit_paths.is_empty():
+		for path_value in explicit_paths:
+			var path: String = str(path_value).strip_edges()
+			if path.is_empty():
+				continue
+			if path.get_extension().to_lower() != "gd":
+				return {"error": "Game test suites must be .gd files: " + path}
+			if not FileAccess.file_exists(path):
+				return {"error": "Game test suite not found: " + path}
+			if not _is_game_test_suite_source(path):
+				return {"error": "Not a McpGameTestSuite file (must extend the plugin suite base): " + path}
+			suite_paths.append(path)
+	else:
+		suite_paths = _discover_game_test_suites(search_path)
+		# 零测试不是通过（与 run_project_tests 的诚实语义一致）。
+		if suite_paths.is_empty():
+			return {
+				"status": "failed",
+				"framework": "game",
+				"search_path": search_path,
+				"total_count": 0,
+				"passed_count": 0,
+				"failed_count": 0,
+				"results": [],
+				"reason": "No McpGameTestSuite files discovered under %s" % search_path
+			}
+
+	var job_id: String = "game_tests:" + "+".join(suite_paths)
+	if _tool_cancelled():
+		if _test_runner.has_job(job_id):
+			_test_runner.cancel_job(job_id)
+		return {"status": "cancelled", "job_id": job_id, "error": "cancelled by client"}
+	if _test_runner.has_job(job_id):
+		var polled: Dictionary = _test_runner.poll_job(job_id)
+		var poll_status: String = str(polled.get("status", ""))
+		if poll_status == "pending":
+			return {
+				"status": "pending",
+				"job_id": job_id,
+				"elapsed_ms": polled.get("elapsed_ms", 0),
+				"message": "Game tests are still running; call run_game_tests again with the same arguments to poll."
+			}
+		if poll_status != "missing":
+			return polled.get("result", {})
+	if _active_test_job_count() >= MAX_CONCURRENT_TEST_JOBS:
+		return {"error": "Too many test runs in progress; poll the pending runs before starting another."}
+
+	_test_runner.start_job(job_id, Callable(self, "_execute_game_tests_blocking").bind(suite_paths, timeout_ms))
+	return {
+		"status": "pending",
+		"job_id": job_id,
+		"total_count": suite_paths.size(),
+		"message": "Game test run started on a background thread; call run_game_tests again with the same arguments to poll."
+	}
+
+func _execute_game_tests_blocking(suite_paths: Array[String], timeout_ms: int) -> Dictionary:
+	var executable_path: String = _cli_godot_executable()
+	var project_path: String = ProjectSettings.globalize_path("res://")
+	# Windows 上 Godot 父进程经管道捕获 Godot 子进程 print 输出会丢失（只剩
+	# banner）——结果经 user:// 临时文件传递，stdout 解析只作回退。命令行只传
+	# 无空格 result-id，路径双方各自推导（含空格绝对路径会被参数拆分）。
+	var result_id: String = "%d_%06d" % [Time.get_ticks_msec(), randi() % 1000000]
+	var result_file: String = ProjectSettings.globalize_path(
+		"user://.mcp_game_tests/%s.json" % result_id)
+	# 运行器选项必须放在 "--" 之后：OS.get_cmdline_user_args() 只收集分隔符
+	# 之后的参数，放在前面会被引擎当未知启动参数吞掉。
+	var args: Array[String] = [
+		"--headless",
+		"--path", project_path,
+		"-s", ProjectSettings.globalize_path(GAME_TEST_RUNNER_PATH),
+		"--"
+	]
+	args.append("--timeout-ms=%d" % timeout_ms)
+	args.append("--result-id=" + result_id)
+	for suite_path in suite_paths:
+		args.append(suite_path)
+	var logs: Array = []
+	var started_at_ms: int = Time.get_ticks_msec()
+	var exit_code: int = OS.execute(executable_path, args, logs, true)
+	var duration_ms: int = Time.get_ticks_msec() - started_at_ms
+	var output: Array = []
+	for line in logs:
+		output.append(_sanitize_cli_output(str(line)))
+	var summary: Dictionary = _read_game_tests_result_file(result_file)
+	if summary.is_empty():
+		summary = _parse_game_tests_summary(logs)
+	summary["framework"] = "game"
+	summary["exit_code"] = exit_code
+	summary["duration_ms"] = duration_ms
+	summary["command"] = [executable_path] + args
+	if not summary.has("status"):
+		# 运行器没有产出结果行（崩溃/超时被杀）：输出是唯一证据，不能猜通过。
+		summary["status"] = "failed"
+		summary["reason"] = "Runner did not emit a GAME_TESTS_RESULT line"
+	summary["output"] = output.slice(maxi(0, output.size() - GAME_TEST_MAX_OUTPUT_LINES), output.size())
+	var results_value: Variant = summary.get("results", [])
+	if results_value is Array and (results_value as Array).size() > GAME_TEST_MAX_RESULTS:
+		summary["results"] = (results_value as Array).slice(0, GAME_TEST_MAX_RESULTS)
+	return summary
+
+## Windows 上非 console 版引擎在 stdout 被重定向（OS.execute 管道）时可能丢输出
+## 甚至提前退出；存在同目录 *_console.exe 时优先使用（官方 CLI 建议）。
+func _cli_godot_executable() -> String:
+	var executable_path: String = OS.get_executable_path()
+	if executable_path.get_file().contains("_console"):
+		return executable_path
+	if OS.has_feature("windows"):
+		var console_candidate: String = executable_path.get_base_dir().path_join(
+			executable_path.get_file().get_basename() + "_console.exe")
+		if FileAccess.file_exists(console_candidate):
+			return console_candidate
+	return executable_path
+
+
+## 读取运行器落盘的结果 JSON（跨进程文件传递，规避 Windows 管道丢输出）。
+func _read_game_tests_result_file(absolute_path: String) -> Dictionary:
+	if not FileAccess.file_exists(absolute_path):
+		return {}
+	var text: String = FileAccess.get_file_as_string(absolute_path)
+	DirAccess.remove_absolute(absolute_path)
+	if text.strip_edges().is_empty():
+		return {}
+	var parsed: Variant = JSON.parse_string(text)
+	if not (parsed is Dictionary) or not (parsed as Dictionary).has("status"):
+		return {}
+	return parsed
+
+
+## 从运行器控制台输出解析最后一行 GAME_TESTS_RESULT JSON。
+func _parse_game_tests_summary(log_lines: Array) -> Dictionary:
+	for index in range(log_lines.size() - 1, -1, -1):
+		var line: String = str(log_lines[index]).strip_edges()
+		if not line.begins_with(GAME_TEST_RESULT_MARKER):
+			continue
+		var payload_text: String = line.substr(GAME_TEST_RESULT_MARKER.length()).strip_edges()
+		var parsed: Variant = JSON.parse_string(payload_text)
+		if parsed is Dictionary:
+			var payload: Dictionary = parsed
+			if not payload.has("status"):
+				payload["status"] = "failed"
+			return payload
+		return {"status": "failed", "reason": "Malformed GAME_TESTS_RESULT line"}
+	return {}
+
+## 源码级套件识别：避免在编辑器进程里 load 用户脚本（污染全局类/副作用）。
+func _is_game_test_suite_source(path: String) -> bool:
+	if path.get_extension().to_lower() != "gd":
+		return false
+	if not FileAccess.file_exists(path):
+		return false
+	var text: String = FileAccess.get_file_as_string(path)
+	if text.is_empty():
+		return false
+	for marker in GAME_TEST_SUITE_MARKERS:
+		if text.contains(marker):
+			return true
+	return false
+
+func _discover_game_test_suites(search_path: String) -> Array[String]:
+	var absolute_root: String = ProjectSettings.globalize_path(search_path)
+	if not DirAccess.dir_exists_absolute(absolute_root):
+		return []
+	var found: Array[String] = []
+	_discover_game_test_suites_recursive(search_path, found)
+	found.sort()
+	return found
+
+func _discover_game_test_suites_recursive(dir_res_path: String, out_paths: Array[String]) -> void:
+	var dir: DirAccess = DirAccess.open(dir_res_path)
+	if dir == null:
+		return
+	dir.list_dir_begin()
+	while true:
+		var entry: String = dir.get_next()
+		if entry.is_empty():
+			break
+		if entry.begins_with(".") or entry == "addons":
+			continue
+		var child: String = dir_res_path.path_join(entry)
+		if dir.current_is_dir():
+			_discover_game_test_suites_recursive(child, out_paths)
+		elif entry.get_extension().to_lower() == "gd" and _is_game_test_suite_source(child):
+			out_paths.append(child)
+	dir.list_dir_end()
 
 
 # ============================================================================

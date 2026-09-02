@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **233 个工具**（28 核心 + 199 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **234 个工具**（28 核心 + 200 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.1.0
@@ -53,7 +53,7 @@ addons/godot_mcp/
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── mcp_tool_domains.gd     # 面向用户任务的工具域分类（2D/3D/UI 等，与 category/group 正交）
 │   ├── mcp_tool_preset_manager.gd # 工具预设（分组一键启用/切换）管理
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：233 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：234 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
 │   ├── prompt_workflows.gd     # 7 个可执行工作流 MCP prompts（plan_game_feature/debug_runtime_error 等）
@@ -107,7 +107,7 @@ addons/godot_mcp/
     └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 233 = 28 core + 199 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
+> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 234 = 28 core + 200 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
 
 ## 规范
 

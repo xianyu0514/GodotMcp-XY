@@ -4,7 +4,7 @@
 
 **6 tools** — always-on meta tools.
 
-Always-on discovery and orchestration tools. They keep the default tool list small while preserving all 227 atomic capabilities and complete multi-phase goals.
+Always-on discovery and orchestration tools. They keep the default tool list small while preserving all 228 atomic capabilities and complete multi-phase goals.
 
 ## Recommended workflow
 
@@ -15,7 +15,7 @@ Always-on discovery and orchestration tools. They keep the default tool list sma
 5. The server applies all visibility changes as one catalog revision and emits `notifications/tools/list_changed` only when something changed. Use the refreshed schemas directly; call `get_tool_details` only when the client cannot refresh.
 6. Use `list_tool_catalog({"summary_only": true})` only to browse group counts and the compact `workflow_coverage` report. Reuse its `catalog_revision` as `known_revision` to avoid retransmitting an unchanged catalog.
 
-The immutable workflow index includes every non-meta atomic tool (227/227). Tool metadata is normalized once per definition-only registry revision; enable/disable changes do not rebuild it. Canonical schema-token cost is also estimated once when each tool is registered. Selection maximizes newly covered intent terms first, then uses semantic value per incremental token for equal-coverage candidates; exact atomic names and complete descriptions always win regardless of cost. Normalized `(goal, budget)` results live in a bounded 64-entry LRU, so repeated task activation and whitespace/case variants avoid recomputation without unbounded memory growth. Eleven pre-normalized workflow seeds improve common gameplay, UI, asset, animation/audio, level, debugging, performance, QA, localization, release and project-health goals; any long-tail capability falls back to the same deterministic atomic index instead of adding another permanent workflow or model call.
+The immutable workflow index includes every non-meta atomic tool (228/228). Tool metadata is normalized once per definition-only registry revision; enable/disable changes do not rebuild it. Canonical schema-token cost is also estimated once when each tool is registered. Selection maximizes newly covered intent terms first, then uses semantic value per incremental token for equal-coverage candidates; exact atomic names and complete descriptions always win regardless of cost. Normalized `(goal, budget)` results live in a bounded 64-entry LRU, so repeated task activation and whitespace/case variants avoid recomputation without unbounded memory growth. Eleven pre-normalized workflow seeds improve common gameplay, UI, asset, animation/audio, level, debugging, performance, QA, localization, release and project-health goals; any long-tail capability falls back to the same deterministic atomic index instead of adding another permanent workflow or model call.
 
 Workflow-route results include `estimated_added_schema_tokens`, `estimated_full_load_schema_tokens` and `estimated_token_savings_ratio`. Costs describe supplementary definitions only because core/meta schemas are already visible. They are deterministic routing estimates, not billing measurements.
 

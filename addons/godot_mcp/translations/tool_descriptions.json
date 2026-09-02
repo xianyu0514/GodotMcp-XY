@@ -179,6 +179,7 @@
   "rename_script_symbol": "Rename a script symbol across project files using identifier-boundary text replacements. Supports dry-run previews before applying changes.",
   "request_debug_break": "Request the debugger to break at the current execution point.",
   "run_export": "Run a Godot CLI export for a configured preset.",
+  "run_game_tests": "Discover and run McpGameTestSuite behavior suites for the user's game in a headless engine subprocess: instantiate scenes, step physics frames, simulate input and assert node state. Zero discovered suites or any failing check reports failed — never a silent pass.",
   "run_game_workflow": "Advance an adaptive authorized DAG slice. Budgets yield but never drop work; async waits, safe restart recovery, caches, protected paths, integrity and objective evidence remain enforced.",
   "run_project": "Run the current project or a specific scene. Launches the game in play mode.",
   "run_project_test": "Run a single project test script without blocking the editor. The first call starts the run on a background thread and returns status 'pending'; call again with the same test_path to poll for the finished result. Python integration tests are executed with python. GUT unit tests are executed through Godot headless when addons/gut is available.",
