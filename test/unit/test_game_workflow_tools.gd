@@ -41,6 +41,37 @@ func test_platformer_objective_matches_movement_blueprint():
 	var zh: Dictionary = BlueprintsScript.match_verbs("平台跳跃小游戏")
 	assert_true(bool(zh.get("movement", false)), "Chinese platformer verb matched")
 
+func test_platformer_goal_gets_sideview_jump_blueprint_not_topdown():
+	# 语义修复回归：platformer/jump 目标此前拿到俯视 8 方向蓝图——能编译能跑
+	# 但跳不起来，门禁全绿却没达成目标。现在必须生成带重力与跳跃的横版控制器。
+	var source: String = BlueprintsScript.controller_script("2D platformer with jumping and coins")
+	assert_true(source.contains("JUMP_SPEED"), "Side-view blueprint has a jump impulse")
+	assert_true(source.contains("is_on_floor()"), "Side-view blueprint has a ground check")
+	assert_true(source.contains("_gravity"), "Side-view blueprint applies gravity")
+	assert_false(source.contains("get_vector("), "Side-view blueprint must not be top-down")
+	var test_script: GDScript = GDScript.new()
+	test_script.source_code = source
+	assert_eq(test_script.reload(), OK, "Side-view blueprint must compile cleanly")
+
+func test_jump_verbs_bilingual_and_jump_only_still_activates_blueprint():
+	var zh: Dictionary = BlueprintsScript.match_verbs("横版平台跳跃，按空格跳")
+	assert_true(bool(zh.get("jump", false)), "Chinese jump verb matched")
+	assert_true(bool(zh.get("movement", false)), "Chinese jump implies movement")
+	var top_down: Dictionary = BlueprintsScript.match_verbs("arrow-key movement only")
+	assert_false(bool(top_down.get("jump", false)), "Top-down goal has no jump verb")
+	# side-scroll/gravity 只在 JUMP 词表：不能因此漏掉蓝图（jump 蕴含 movement）。
+	var jump_only: Dictionary = BlueprintsScript.match_verbs("side-scrolling gravity game")
+	assert_true(BlueprintsScript.has_any_verb(jump_only),
+		"Jump-only keywords still activate a blueprint")
+	var jump_only_source: String = BlueprintsScript.controller_script("side-scrolling gravity game")
+	assert_true(jump_only_source.contains("is_on_floor()"),
+		"Jump-only objective gets the side-view controller")
+
+func test_topdown_goal_keeps_eight_direction_blueprint():
+	var source: String = BlueprintsScript.controller_script("arrow-key movement, collect coins")
+	assert_true(source.contains("get_vector("), "Top-down blueprint keeps 8-direction movement")
+	assert_false(source.contains("JUMP_SPEED"), "Top-down blueprint has no jump impulse")
+
 func test_collectible_only_controller_extends_character_body():
 	# 金币/胜利蓝图同样依赖物理体：任意动词命中的控制器都必须 extends CharacterBody2D，
 	# 根节点派生条件（game_workflow_tools.gd）与这里保持一致。

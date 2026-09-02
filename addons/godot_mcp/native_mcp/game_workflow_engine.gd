@@ -408,6 +408,36 @@ func _movement_input_actions() -> Array[Dictionary]:
 		}
 	]
 
+## 横版跳跃目标的输入动作：只有左右移动 + 跳跃（Space/上方向键）。
+## 俯视四方向里 upsert move_up/move_down 对跳跃蓝图是无意义动作。
+func _sideview_input_actions() -> Array[Dictionary]:
+	return [
+		{
+			"action_name": "move_left",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_LEFT},
+				{"type": "key", "keycode": KEY_A}
+			]
+		},
+		{
+			"action_name": "move_right",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_RIGHT},
+				{"type": "key", "keycode": KEY_D}
+			]
+		},
+		{
+			"action_name": "jump",
+			"deadzone": 0.2,
+			"events": [
+				{"type": "key", "keycode": KEY_SPACE},
+				{"type": "key", "keycode": KEY_UP}
+			]
+		}
+	]
+
 func _profile_specs(profile_id: String, objective: String, platform: String) -> Array[Dictionary]:
 	var goal: String = objective.to_lower()
 	match profile_id:
@@ -427,12 +457,17 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 			# 移动类目标：蓝图控制器读取 move_left/right/up/down 四个动作。
 			# 单个默认 upsert 只注册 move_up，get_vector 会因其余动作缺失而退化
 			# 为 ui_* 回退——这里按目标词表补全四个方向动作（方向键 + WASD）。
+			# 跳跃目标例外：横版蓝图只读左右轴 + jump（见 _sideview_input_actions），
+			# 注册 move_up/move_down 反而制造与跳跃语义冲突的无用动作。
 			if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
 				var index: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
 					return String(spec.get("key", "")) == "upsert_input")
 				if index >= 0:
 					gameplay_specs.remove_at(index)
-				for direction in _movement_input_actions():
+				var movement_actions: Array[Dictionary] = _movement_input_actions()
+				if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.JUMP_KEYWORDS):
+					movement_actions = _sideview_input_actions()
+				for direction in movement_actions:
 					gameplay_specs.insert(2, _spec(
 						"input_%s" % direction.get("action_name", "").replace("move_", ""),
 						"upsert_project_input_action", "build_configure", false, direction))

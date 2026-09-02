@@ -95,6 +95,29 @@ func test_adaptive_metrics_upgrade_an_existing_schema_v1_plan_in_place() -> void
 		"Lazy metrics must remain attached so the next checkpoint persists them")
 	assert_gt(_engine.recommended_step_budget(plan), 0)
 
+func test_jump_goal_upserts_sideview_actions_without_vertical_move() -> void:
+	# 横版跳跃目标：输入动作集合必须是 左/右/jump——upsert move_up/move_down
+	# 会制造与跳跃语义冲突的无用动作；俯视目标保持四方向不变。
+	var jump_plan: Dictionary = _compile("2D platformer with jumping", ["gameplay_feature"])["plan"]
+	var jump_actions: Array[String] = []
+	for task_value in jump_plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "upsert_project_input_action":
+			jump_actions.append(String((task.get("arguments", {}) as Dictionary).get("action_name", "")))
+	assert_has(jump_actions, "jump", "Jump goal registers a jump action")
+	assert_has(jump_actions, "move_left", "Jump goal registers move_left")
+	assert_has(jump_actions, "move_right", "Jump goal registers move_right")
+	assert_does_not_have(jump_actions, "move_up", "Jump goal must not register move_up")
+	assert_does_not_have(jump_actions, "move_down", "Jump goal must not register move_down")
+	var topdown_plan: Dictionary = _compile("arrow-key movement controller", ["gameplay_feature"])["plan"]
+	var topdown_actions: Array[String] = []
+	for task_value in topdown_plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "upsert_project_input_action":
+			topdown_actions.append(String((task.get("arguments", {}) as Dictionary).get("action_name", "")))
+	assert_has(topdown_actions, "move_up", "Top-down goal keeps move_up")
+	assert_has(topdown_actions, "move_down", "Top-down goal keeps move_down")
+
 func test_unknown_objective_requests_clarification_instead_of_guessing() -> void:
 	var result: Dictionary = _compile("Make the mysterious thing exactly right")
 	assert_true(result.has("error"), "An unclassified objective must not silently become gameplay")
@@ -471,9 +494,10 @@ func test_platformer_goal_selects_gameplay_profile() -> void:
 
 func test_movement_goal_expands_directional_input_actions() -> void:
 	# 蓝图控制器读取 move_left/right/up/down；单个默认 upsert 只注册 move_up，
-	# get_vector 会退化到 ui_* 回退。移动目标必须展开四个方向动作步骤。
+	# get_vector 会退化到 ui_* 回退。俯视移动目标必须展开四个方向动作步骤
+	# （跳跃目标路由到横版三动作集，由 sideview 测试单独覆盖）。
 	var plan: Dictionary = _compile(
-		"Arrow-key platformer movement with jumping", ["gameplay_feature"])["plan"]
+		"Arrow-key top-down movement controller", ["gameplay_feature"])["plan"]
 	var upserts: Array[Dictionary] = []
 	for task_value in plan.get("tasks", []):
 		var task: Dictionary = task_value

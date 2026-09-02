@@ -714,7 +714,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
 	if tool_name == "play_and_verify" and not arguments.has("steps"):
 		var play_objective: String = String(plan.get("goal", ""))
-		if GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+		if GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.JUMP_KEYWORDS):
+			# 横版跳跃目标：演练水平移动 + 跳跃。跳跃后多等一会儿让重力/落地
+			# 代码路径真实执行——只按方向键时 _physics_process 的跳跃分支
+			# 永远不会跑到，脚本错误就漏掉了。jump 与 ui_accept 都按：蓝图优先
+			# 读 jump 动作、缺失时回退 ui_accept，两条路径都值得练到。
+			arguments["steps"] = _sideview_play_steps()
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "sideview-exercise"
+		elif GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
 			arguments["steps"] = _movement_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "movement-exercise"
@@ -782,6 +790,17 @@ func _movement_play_steps() -> Array:
 	var steps: Array = []
 	for action_name in ["move_left", "move_right", "move_up", "move_down"]:
 		steps.append({"action": action_name, "pressed": true, "wait_ms": 250})
+		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
+	return steps
+
+## 横版跳跃演练：左右移动 + 跳跃（含起跳后的滞空等待，重力与落地分支才会执行）。
+func _sideview_play_steps() -> Array:
+	var steps: Array = [
+		{"action": "move_right", "pressed": true, "wait_ms": 250},
+		{"action": "move_right", "pressed": false, "wait_ms": 60},
+	]
+	for action_name in ["jump", "ui_accept"]:
+		steps.append({"action": action_name, "pressed": true, "wait_ms": 400})
 		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
 	return steps
 
