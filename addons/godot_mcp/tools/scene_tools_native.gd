@@ -819,6 +819,10 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		var open_scene_paths: PackedStringArray = editor_interface.get_open_scenes()
 		if not open_scene_paths.has(scene_path):
 			return {"error": "Scene is not currently open: " + scene_path}
+		# 同 open_scene：先登记再打开，防文件系统缓存未收录时静默失败。
+		var close_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+		if close_fs != null:
+			close_fs.update_file(scene_path)
 		editor_interface.open_scene_from_path(scene_path)
 		# 打开是延迟生效的：等切换完成再 close，否则关掉的是旧场景。
 		for _frame in range(60):
