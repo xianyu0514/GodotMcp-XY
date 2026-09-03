@@ -710,3 +710,18 @@ class FakeRegisterCore:
 			_callable: Callable, _output_schema: Dictionary = {}, annotations: Dictionary = {},
 			category: String = "core", group: String = "") -> void:
 		registered[name] = {"annotations": annotations, "category": category, "group": group}
+
+func test_script_execution_verdict_detects_runtime_abort() -> void:
+	# execute() 包装约定始终返回数组：null = 运行时中止。中止绝不能
+	# 伪装成 success=true + 空输出（曾把真实错误吞成不可诊断的间歇失败）。
+	var aborted: Dictionary = DebugToolsNative._script_execution_verdict(null, ["partial line"])
+	assert_true(bool(aborted["aborted"]), "null return is a runtime abort")
+	assert_eq((aborted["output"] as Array).size(), 1, "partial _output is preserved for diagnosis")
+
+	var normal: Dictionary = DebugToolsNative._script_execution_verdict(["line1"], ["line1", "line2"])
+	assert_false(bool(normal["aborted"]), "array return is a normal completion")
+	assert_eq((normal["output"] as Array).size(), 2, "instance _output merges without duplicates")
+
+	var scalar: Dictionary = DebugToolsNative._script_execution_verdict("raw value", [])
+	assert_false(bool(scalar["aborted"]))
+	assert_eq((scalar["output"] as Array)[0], "raw value", "non-array returns are stringified")
