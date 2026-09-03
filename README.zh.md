@@ -4,15 +4,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](docs/changelog.md)
 [![Tools](https://img.shields.io/badge/MCP%20tools-232-blue.svg)](docs/tools/README.md)
+[![CI](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml)
 
 > English documentation: [README.md](README.md)。
 
-**让 AI 直接驱动 Godot。** Godot MCP Native 是一个 Godot 4.7 编辑器插件，会在 Godot 编辑器内部运行 [Model Context Protocol](https://modelcontextprotocol.io)（MCP）服务器。Claude、Cursor、Cline、Trae、OpenCode、Codex 等 MCP 客户端可以通过标准协议读取和修改场景、脚本、节点、资源，甚至检查正在运行的游戏。
+**不只是驱动 Godot，而是把目标做完。** Godot MCP Native 是一个 Godot 4.7 编辑器插件，在编辑器进程内原生运行 [Model Context Protocol](https://modelcontextprotocol.io)（MCP）服务器——无 Node.js 桥接、无 Python 守护进程、无外部服务器，协议层由 GDScript 实现并直接调用 Godot 编辑器/运行时 API。Claude、Cursor、Cline、Trae、OpenCode、Codex 等客户端均可接入。
 
-插件不需要 Node.js 桥接、不需要 Python 守护进程，也不需要维护外部服务器。协议层由 GDScript 实现，并直接调用 Godot 编辑器和运行时 API。
+常见 Godot MCP 停在"工具调用"，这里闭环到"目标完成"：`plan_game_workflow` 把中英文自然语言目标编译成持久化、证据门禁的任务 DAG，`run_game_workflow` 分片推进到**可验证的完成**——编辑器中途崩溃，重启后从检查点续跑。完成从来不是"工具没报错"：动画门禁验证真的在播放、导出链产出目标平台的产物、运行时错误走防冲刷通道。
 
 ## 亮点
 
+- **持久化目标编排：** 12 个生产 profile 组合成持久目标 DAG，带客观证据门禁、自适应检查点分片、崩溃后续跑与非幂等步骤的 fail-closed 语义——专用端到端测试会在目标执行中途硬杀编辑器并断言恢复到完成。
+- **诚实的完成证据：** 完成需要引擎签发的回执——真实脚本编译（截断的验证不算通过）、动画确实在播、按工作流隔离的视觉基线、平台正确的导出链，以及话多的游戏也冲不掉的独立错误通道。
+- **缓存正确性是特性：** 依赖标签失效、single-flight 去重、按文件的编译/依赖 memo 与 `get_cache_diagnostics` 遥测工具；CI 回归断言"重复读必命中、真实变更必失效"。
 - **原生服务器：** MCP 服务运行在 Godot 编辑器进程内，随插件一起发布。
 - **双传输模式：** 默认 HTTP/SSE（`http://localhost:9080/mcp`），也支持面向本地进程客户端的 stdio。
 - **232 个工具且默认面精简：** 28 个核心工具默认启用，198 个高级工具按需启用，另有 6 个常驻元工具负责发现、启用和完整游戏闭环。

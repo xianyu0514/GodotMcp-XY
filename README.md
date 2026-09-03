@@ -4,20 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](docs/changelog.md)
 [![Tools](https://img.shields.io/badge/MCP%20tools-232-blue.svg)](docs/tools/README.md)
+[![CI](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
 
-**Drive Godot from your AI assistant.** Godot MCP Native is a Godot 4.7 editor plugin that runs a [Model Context Protocol](https://modelcontextprotocol.io) server inside the editor. AI clients such as Claude, Cursor, Cline, Trae, OpenCode and Codex can inspect and edit scenes, scripts, nodes, resources and the running game through standard MCP calls.
+**Don't just drive Godot — finish goals in it.** Godot MCP Native is a Godot 4.7 editor plugin that runs a [Model Context Protocol](https://modelcontextprotocol.io) server natively inside the editor process — no Node.js bridge, no Python daemon, no separate server. The protocol layer is implemented in GDScript and talks directly to Godot editor/runtime APIs.
 
-No Node.js bridge, no Python daemon and no separate server process are required. The protocol layer is implemented in GDScript and talks directly to Godot editor/runtime APIs.
+Where typical Godot MCP servers stop at tool calls, this one closes the loop. `plan_game_workflow` compiles a plain-language goal (English or 中文) into a persistent, evidence-gated task DAG; `run_game_workflow` advances it in bounded slices to a *verified* completion — and if the editor crashes mid-goal, restart resumes the plan from its checkpoint. Completion is never "the tool didn't error": the animation gate checks that an animation is actually playing, the export chain builds the goal's actual platform, and runtime errors are captured on a flush-proof channel.
 
 ## Highlights
 
-- **Native server:** the MCP server lives in the editor process and ships with the plugin.
-- **Two transports:** HTTP/SSE on `http://localhost:9080/mcp` by default, plus stdio for local-process clients.
-- **232 tools with a small default surface:** 28 core tools are enabled immediately, 198 advanced tools remain on demand, and 6 meta tools cover discovery plus durable complete-game workflows.
-- **Runtime-aware automation:** the runtime probe can inspect live scene trees, evaluate expressions, inject input, control animation/audio/shader/tilemap state, capture screenshots and collect performance metrics.
+- **Durable goal orchestration:** 12 production profiles compose into a persistent goal DAG with objective-evidence gates, adaptive checkpoint slices, crash-and-resume execution and fail-closed semantics for non-idempotent steps — proven by dedicated end-to-end tests that kill the editor mid-goal and resume to completion.
+- **Honest evidence gates:** completion requires engine-issued receipts — real script compilation (truncated verifies rejected), genuinely-playing animation checks, per-workflow visual baselines, platform-correct export chains and a durable stderr ring that chatty games cannot flush.
+- **Native server:** the MCP server lives in the editor process and ships with the plugin; HTTP/SSE on `http://localhost:9080/mcp` plus stdio for local-process clients.
+- **232 tools with a small default surface:** 28 core tools are enabled immediately, 198 advanced tools remain on demand, and 6 meta tools cover discovery plus goal orchestration. One `enable_tools` call routes a bilingual task to at most 8 atomic tools — measured ~97% schema-token savings.
+- **Cache correctness as a feature:** dependency-tagged result invalidation, single-flight dedupe, per-file compile/dependency memos and a `get_cache_diagnostics` telemetry tool; a CI regression asserts that repeat reads hit and real mutations invalidate.
+- **Runtime-aware automation:** the runtime probe inspects live scene trees, evaluates expressions, injects input, controls animation/audio/shader/tilemap state, captures screenshots and gates on performance/error/visual budgets.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
+- **Engineering rigor:** 1841+ unit tests and 42 real-editor integration tests (including four durable-workflow E2E flows) run on every PR, behind CI assertions that cannot pass on an empty or silently-broken suite.
 
 ## Install
 
