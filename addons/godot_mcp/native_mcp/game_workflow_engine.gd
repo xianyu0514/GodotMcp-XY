@@ -69,14 +69,14 @@ const PROFILE_KEYWORDS: Dictionary = {
 		"玩家", "移动", "控制", "玩法", "游戏机制", "碰撞", "平台跳跃", "跳跃", "金币", "收集", "拾取", "胜利", "通关", "可玩",
 		"敌人", "怪物", "追击", "巡逻", "射击", "子弹", "计分", "得分"],
 	"ui_screen": [" ui ", "menu", "hud", "pause", "button", "interface", "screen", "界面", "菜单", "暂停", "按钮", "主题", "屏幕"],
-	"script_repair": ["script error", "fix script", "compile error", "gdscript", "c#", "脚本错误", "修复脚本", "编译错误", "代码错误"],
+	"script_repair": ["script error", "fix script", "fix the script", "compile error", "gdscript", "c#", "脚本错误", "修复脚本", "编译错误", "代码错误"],
 	"asset_pipeline": ["asset", "import", "texture", "model", "sprite", "gltf", "资源", "导入", "贴图", "模型", "精灵"],
 	"animation_audio": ["animation", "animate", "animated", "audio", "sound", "music", "动画", "音频", "音效", "音乐"],
 	"level_design": ["level", "tilemap", "tileset", "map", "关卡", "地图", "瓦片", "场景布局"],
 	"runtime_debug": ["debug", "runtime", "crash", "stack trace", "调试", "运行时", "崩溃", "异常"],
-	"localization": ["localization", "translation", "language", "locale", "本地化", "翻译", "多语言", "语言"],
+	"localization": ["localization", "localize", "translation", "translate", "language", "locale", "本地化", "翻译", "多语言", "语言"],
 	"performance": ["performance", "optimize", "fps", "frame time", "memory", "性能", "优化", "帧率", "内存"],
-	"quality_assurance": ["project test", "run tests", "test suite", "quality assurance", "regression", "项目测试", "运行测试", "测试套件", "质量回归", "回归测试"],
+	"quality_assurance": ["project test", "run tests", "run the tests", "rerun", "test suite", "quality assurance", "regression", "项目测试", "运行测试", "测试套件", "质量回归", "回归测试", "跑测试", "测试"],
 	"project_health": ["audit", "migration", "dependency audit", "cyclic dependency", "deprecated", "project health", "审计", "迁移", "依赖审计", "循环依赖", "废弃", "项目健康"],
 	"release_export": ["export", "release", "ship", "release build", "export build", "android", "linux", "windows", "导出", "发布", "出货", "发布构建", "导出构建", "打包"]
 }
@@ -227,6 +227,11 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 		for profile_value in profile_result.get("profiles", []):
 			profiles.append(String(profile_value))
 	var platform: String = _normalize_platform(String(options.get("platform", "")), clean_objective)
+	# 迭代上下文：来自项目状态账本的既有工件（场景/脚本/语义套件）。
+	# 引擎保持纯函数——由适配器读账本传入；进入 contract 保证蓝图哈希与
+	# 完整性校验覆盖它（账本变化会被视为目标契约变化）。
+	var existing_artifacts: Dictionary = options.get("existing_artifacts", {}) \
+		if options.get("existing_artifacts", {}) is Dictionary else {}
 	var repair_attempts: int = maxi(
 		int(options.get("max_repair_attempts", DEFAULT_REPAIR_ATTEMPTS)), 0)
 	# expect_fail maps gate step keys (for example {"verify_scripts": true}) to
@@ -247,7 +252,7 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 		if known_profile in profiles:
 			ordered_profiles.append(known_profile)
 	for profile_id in ordered_profiles:
-		for spec_value in _profile_specs(profile_id, clean_objective, platform):
+		for spec_value in _profile_specs(profile_id, clean_objective, platform, existing_artifacts):
 			var profile_spec: Dictionary = (spec_value as Dictionary).duplicate(true)
 			profile_spec["profile"] = profile_id
 			specs.append(profile_spec)
@@ -310,7 +315,8 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 		"platform": platform,
 		"max_repair_attempts": repair_attempts,
 		"protected_paths": protected_paths,
-		"expect_fail": expect_fail.duplicate(true)
+		"expect_fail": expect_fail.duplicate(true),
+		"existing_artifacts": existing_artifacts.duplicate(true)
 	}
 	var plan: Dictionary = _build_plan(contract, specs)
 	return {
@@ -375,6 +381,29 @@ func _spec(key: String, tool_name: String, stage: String, objective_gate: bool =
 
 ## 蓝图控制器用到的四个移动动作（方向键 + WASD 双绑定）。
 ## upsert_project_input_action 的事件载荷直接使用引擎键码常量。
+## 迭代模式 gameplay specs：目标工件已存在（项目状态账本），打开 → 读取 →
+## 客户端按内容简报修改（简报会携带现有脚本内容与下游门禁）→ 编译 → 语义 →
+## 运行验证。上一目标留下的语义套件是迭代的回归资产：改完重跑一次，证明
+## 原目标行为没有被改坏——这正是跨目标记忆的价值。
+func _gameplay_iteration_specs(scene_path: String, script_path: String,
+		semantic_suite: String) -> Array[Dictionary]:
+	var specs: Array[Dictionary] = [
+		_spec("project_info", "get_project_info", "offline_inspect"),
+		_spec("read_game_script", "read_script", "offline_inspect", false,
+			{"script_path": script_path}),
+		_spec("existing_scene", "open_scene", "build_create", false,
+			{"scene_path": scene_path}),
+		_spec("modify_game_script", "modify_script", "build_configure"),
+		_spec("verify_scripts", "verify_scripts", "static_verify", true, {}, "modify_script"),
+		_spec("play_verify", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
+		_spec("runtime_errors", "assert_no_runtime_errors", "runtime_evidence", true, {}, "modify_script"),
+	]
+	if not semantic_suite.is_empty():
+		specs.append(_spec("game_semantics", "run_game_tests", "static_verify", true,
+			{"test_paths": [semantic_suite]}, "modify_script"))
+	return specs
+
+
 func _movement_input_actions() -> Array[Dictionary]:
 	return [
 		{
@@ -441,10 +470,18 @@ func _sideview_input_actions() -> Array[Dictionary]:
 		}
 	]
 
-func _profile_specs(profile_id: String, objective: String, platform: String) -> Array[Dictionary]:
+func _profile_specs(profile_id: String, objective: String, platform: String,
+		existing_artifacts: Dictionary = {}) -> Array[Dictionary]:
 	var goal: String = objective.to_lower()
 	match profile_id:
 		"gameplay_feature":
+			# 迭代模式：账本已有场景 + 脚本 → 打开/读取/修改既有产物，而不是
+			# 建平行新文件（"给玩家加个二段跳"复用既有玩家控制器）。
+			var iteration_scene: String = String(existing_artifacts.get("scene", ""))
+			var iteration_script: String = String(existing_artifacts.get("script", ""))
+			if not iteration_scene.is_empty() and not iteration_script.is_empty():
+				return _gameplay_iteration_specs(iteration_scene, iteration_script,
+					String(existing_artifacts.get("semantic_suite", "")))
 			var gameplay_specs: Array[Dictionary] = [
 				_spec("project_info", "get_project_info", "offline_inspect"),
 				_spec("input_actions", "list_project_input_actions", "offline_inspect"),

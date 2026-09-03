@@ -1,43 +1,702 @@
 [
-  {"goal": "Create a 2D platformer with jumping and coins", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "做一个平台跳跃小游戏，金币收集后显示胜利", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "Arrow-key player movement controller with a win label", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "方向键移动的角色控制器", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "An enemy chases the player around a top-down level", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "敌人追击玩家的玩法", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "Space shooter that fires bullets at enemies", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "太空射击游戏，发射子弹消灭敌人", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "Coins award score and a victory screen shows at ten points", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "金币计分玩法", "expect_profiles": ["gameplay_feature"]},
-  {"goal": "Build a responsive pause menu with a theme", "expect_profiles": ["ui_screen"]},
-  {"goal": "创建带主题的暂停菜单界面", "expect_profiles": ["ui_screen"]},
-  {"goal": "Restyle the settings HUD and verify it renders", "expect_profiles": ["ui_screen"]},
-  {"goal": "设置界面的 HUD 样式", "expect_profiles": ["ui_screen"]},
-  {"goal": "Fix the script errors in my project and run tests", "expect_profiles": ["script_repair", "quality_assurance"]},
-  {"goal": "修复脚本编译错误", "expect_profiles": ["script_repair"]},
-  {"goal": "Import the glTF model and reimport textures", "expect_profiles": ["asset_pipeline"]},
-  {"goal": "导入模型贴图资源", "expect_profiles": ["asset_pipeline"]},
-  {"goal": "Animate the door opening and play a sound when it finishes", "expect_profiles": ["animation_audio"]},
-  {"goal": "创建动画并播放音效", "expect_profiles": ["animation_audio"]},
-  {"goal": "Build a tilemap level with a physics tileset", "expect_profiles": ["level_design"]},
-  {"goal": "瓦片地图关卡与物理图层", "expect_profiles": ["level_design"]},
-  {"goal": "Debug the crash and inspect the runtime scene tree", "expect_profiles": ["runtime_debug"]},
-  {"goal": "调试运行时崩溃与异常", "expect_profiles": ["runtime_debug"]},
-  {"goal": "Extract translatable strings and import the Chinese translation", "expect_profiles": ["localization"]},
-  {"goal": "提取字符串并导入中文翻译", "expect_profiles": ["localization"]},
-  {"goal": "Verify the game holds 60 fps with no runtime errors", "expect_profiles": ["performance"]},
-  {"goal": "性能优化到 60 帧且无运行错误", "expect_profiles": ["performance"]},
-  {"goal": "Run the project test suite and turn it green", "expect_profiles": ["quality_assurance"]},
-  {"goal": "运行项目测试套件", "expect_profiles": ["quality_assurance"]},
-  {"goal": "Audit project health for deprecated APIs and cyclic dependencies", "expect_profiles": ["project_health"]},
-  {"goal": "审计项目健康与循环依赖", "expect_profiles": ["project_health"]},
-  {"goal": "Prepare a Windows release build and validate the export preset", "expect_profiles": ["release_export"]},
-  {"goal": "导出 Windows 发布构建并校验预设", "expect_profiles": ["release_export"]},
-  {"goal": "Android export with a smoke test", "expect_profiles": ["release_export"]},
-  {"goal": "安卓平台导出打包", "expect_profiles": ["release_export"]},
-  {"goal": "A playable movement controller, a pause menu, and a smoke-tested export", "expect_profiles": ["gameplay_feature", "ui_screen", "release_export"]},
-  {"goal": "移动控制器加金币计分，运行测试确认无错误", "expect_profiles": ["gameplay_feature", "quality_assurance"]},
-  {"goal": "Tilemap level with an animated background and performance budget", "expect_profiles": ["level_design", "animation_audio", "performance"]},
-  {"goal": "修复脚本错误后导出 Linux 构建", "expect_profiles": ["script_repair", "release_export"]},
-  {"goal": "本地化提取翻译并做项目健康审计", "expect_profiles": ["localization", "project_health"]}
+  {
+    "goal": "Create a 2D platformer with jumping and coins",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "做一个平台跳跃小游戏，金币收集后显示胜利",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Arrow-key player movement controller with a win label",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "方向键移动的角色控制器",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "An enemy chases the player around a top-down level",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "敌人追击玩家的玩法",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Space shooter that fires bullets at enemies",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "太空射击游戏，发射子弹消灭敌人",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Coins award score and a victory screen shows at ten points",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "金币计分玩法",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Build a responsive pause menu with a theme",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "创建带主题的暂停菜单界面",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "Restyle the settings HUD and verify it renders",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "设置界面的 HUD 样式",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "Fix the script errors in my project and run tests",
+    "expect_profiles": [
+      "script_repair",
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "修复脚本编译错误",
+    "expect_profiles": [
+      "script_repair"
+    ]
+  },
+  {
+    "goal": "Import the glTF model and reimport textures",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "导入模型贴图资源",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "Animate the door opening and play a sound when it finishes",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "创建动画并播放音效",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "Build a tilemap level with a physics tileset",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "瓦片地图关卡与物理图层",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "Debug the crash and inspect the runtime scene tree",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "调试运行时崩溃与异常",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "Extract translatable strings and import the Chinese translation",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "提取字符串并导入中文翻译",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "Verify the game holds 60 fps with no runtime errors",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "性能优化到 60 帧且无运行错误",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "Run the project test suite and turn it green",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "运行项目测试套件",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "Audit project health for deprecated APIs and cyclic dependencies",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "审计项目健康与循环依赖",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "Prepare a Windows release build and validate the export preset",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "导出 Windows 发布构建并校验预设",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Android export with a smoke test",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "安卓平台导出打包",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "A playable movement controller, a pause menu, and a smoke-tested export",
+    "expect_profiles": [
+      "gameplay_feature",
+      "ui_screen",
+      "release_export"
+    ]
+  },
+  {
+    "goal": "移动控制器加金币计分，运行测试确认无错误",
+    "expect_profiles": [
+      "gameplay_feature",
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "Tilemap level with an animated background and performance budget",
+    "expect_profiles": [
+      "level_design",
+      "animation_audio",
+      "performance"
+    ]
+  },
+  {
+    "goal": "修复脚本错误后导出 Linux 构建",
+    "expect_profiles": [
+      "script_repair",
+      "release_export"
+    ]
+  },
+  {
+    "goal": "本地化提取翻译并做项目健康审计",
+    "expect_profiles": [
+      "localization",
+      "project_health"
+    ]
+  },
+  {
+    "goal": "Side-scrolling gravity game where the hero jumps between platforms",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "横版过关，角色在平台间跳跃",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "A monster patrols the dungeon corridor",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "怪物在走廊里巡逻的机制",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Twin-stick shooter with waves of enemies and score",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "弹幕射击，击落敌人得分",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Collect every pickup to open the victory screen",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "收集所有道具后通关",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "WASD movement with an 8-direction controller",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "wasd 移动控制的角色",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Playable character that moves and wins on collection",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "可玩的角色控制器与胜利条件",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "A coin-collecting platformer with a jump button",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "按空格跳跃收集金币的小游戏",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Add a double jump to my existing player controller",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "给现有玩家加个二段跳",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Make the enemies faster and rerun the tests",
+    "expect_profiles": [
+      "gameplay_feature",
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "把金币改成计分显示并验证",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "Main menu with buttons and a matching theme",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "主菜单按钮界面",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "HUD overlay showing score on the game screen",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "游戏内 HUD 界面",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "Redesign the pause screen and check it visually",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "重做暂停界面并截图确认",
+    "expect_profiles": [
+      "ui_screen"
+    ]
+  },
+  {
+    "goal": "The game does not compile, find and fix every script error",
+    "expect_profiles": [
+      "script_repair"
+    ]
+  },
+  {
+    "goal": "游戏编译不过，修复所有脚本错误",
+    "expect_profiles": [
+      "script_repair"
+    ]
+  },
+  {
+    "goal": "Refactor the player GDScript and verify it still compiles",
+    "expect_profiles": [
+      "script_repair"
+    ]
+  },
+  {
+    "goal": "修复 C# 脚本的编译错误",
+    "expect_profiles": [
+      "script_repair"
+    ]
+  },
+  {
+    "goal": "Import sprites and check for missing dependencies",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "导入精灵资源并检查缺失依赖",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "Reimport every texture after changing import options",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "检查 3D 模型的导入状态",
+    "expect_profiles": [
+      "asset_pipeline"
+    ]
+  },
+  {
+    "goal": "Animated sprite walk cycle with footsteps sound",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "走路动画循环加脚步音效",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "Play music on the menu and animate the logo",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "背景音乐与入场动画",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "Animate the boss health bar draining",
+    "expect_profiles": [
+      "animation_audio"
+    ]
+  },
+  {
+    "goal": "Paint a grass tileset into the level tilemap",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "草地瓦片铺进关卡地图",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "Design three levels with tilemaps and save each scene",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "用地图编辑三个关卡场景",
+    "expect_profiles": [
+      "level_design"
+    ]
+  },
+  {
+    "goal": "The game crashes on start, debug it and get a stack trace",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "启动崩溃，抓运行时堆栈排查",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "Watch the live scene tree while the game runs",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "运行时观察场景树调试",
+    "expect_profiles": [
+      "runtime_debug"
+    ]
+  },
+  {
+    "goal": "Translate the UI into Japanese and French",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "界面翻译成日语和法语",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "Extract strings, translate, import and list locales",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "多语言支持：提取、翻译、导入",
+    "expect_profiles": [
+      "localization"
+    ]
+  },
+  {
+    "goal": "Profile the frame time and optimize the hot script",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "分析帧耗时并优化热点脚本",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "Check memory does not grow during gameplay",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "游戏内内存不增长的验证",
+    "expect_profiles": [
+      "performance"
+    ]
+  },
+  {
+    "goal": "Discover and run every unit test in the project",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "发现并运行项目全部单元测试",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "Compile all project scripts as a regression check",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "全项目脚本编译回归",
+    "expect_profiles": [
+      "quality_assurance"
+    ]
+  },
+  {
+    "goal": "Scan for deprecated engine APIs and unused resources",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "扫描废弃 API 与未使用资源",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "Audit dependencies and fix cyclic references",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "依赖审计并修复循环引用",
+    "expect_profiles": [
+      "project_health"
+    ]
+  },
+  {
+    "goal": "Ship a macOS release build from the existing presets",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "macOS 发布构建",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Validate export presets and templates for web",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Web 导出的模板与预设校验",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Linux export then smoke test the binary",
+    "expect_profiles": [
+      "release_export"
+    ]
+  },
+  {
+    "goal": "A full vertical slice: movement, coins, a menu, and a tested export",
+    "expect_profiles": [
+      "gameplay_feature",
+      "ui_screen",
+      "release_export"
+    ]
+  },
+  {
+    "goal": "完整切片：移动、计分、界面、测试与导出",
+    "expect_profiles": [
+      "gameplay_feature",
+      "ui_screen",
+      "quality_assurance",
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Debug the crash, fix the scripts, and verify performance",
+    "expect_profiles": [
+      "runtime_debug",
+      "script_repair",
+      "performance"
+    ]
+  },
+  {
+    "goal": "本地化后跑测试再导出",
+    "expect_profiles": [
+      "localization",
+      "quality_assurance",
+      "release_export"
+    ]
+  },
+  {
+    "goal": "Animate the intro, localize the text, and audit health",
+    "expect_profiles": [
+      "animation_audio",
+      "localization",
+      "project_health"
+    ]
+  },
+  {
+    "goal": "敌人 AI 加音效，跑性能预算",
+    "expect_profiles": [
+      "gameplay_feature",
+      "animation_audio",
+      "performance"
+    ]
+  }
 ]

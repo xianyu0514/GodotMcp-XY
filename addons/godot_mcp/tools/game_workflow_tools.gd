@@ -13,6 +13,7 @@ const EngineScript = preload("res://addons/godot_mcp/native_mcp/game_workflow_en
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
+const ProjectStateLedgerScript = preload("res://addons/godot_mcp/native_mcp/project_state_ledger.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -240,6 +241,14 @@ func _tool_plan_game_workflow(params: Dictionary) -> Dictionary:
 				compile_options[key] = old_contract[key]
 	var exact_mentions: Array[String] = _exact_atomic_mentions(objective, available_tools)
 	_merge_required_capabilities(compile_options, exact_mentions)
+	# 迭代上下文：账本里已有 gameplay 工件（场景+脚本）时传给引擎，第二个
+	# 目标走"打开/读取/修改"而不是建平行新文件。replace=true 是用户明确要
+	# 从零开始，跳过账本。
+	if action == "plan" and not bool(params.get("replace", false)):
+		var ledger: Dictionary = ProjectStateLedgerScript.load_ledger()
+		var iteration: Dictionary = ProjectStateLedgerScript.gameplay_iteration_context(ledger)
+		if not iteration.is_empty():
+			compile_options["existing_artifacts"] = iteration
 	# Audit each semantic clause that is not already owned by one of the twelve
 	# profiles. This catches mixed goals such as “create player movement; do an
 	# unknown operation” instead of allowing the known first clause to hide the
@@ -434,6 +443,9 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 
 	var final_state: String = String((plan.get("workflow", {}) as Dictionary).get("state", "running"))
 	var final_status: String = "completed" if final_state == "completed" else final_state
+	# 目标完成：工件与语义套件落账本，供下一个目标迭代复用（跨目标记忆）。
+	if final_status == "completed":
+		ProjectStateLedgerScript.record_completed_goal(plan)
 	if final_status in ["planned", ""]:
 		final_status = "running"
 	var final_extra: Dictionary = {}

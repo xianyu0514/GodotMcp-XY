@@ -674,3 +674,51 @@ func test_blueprint_goals_gain_semantic_evidence_gate() -> void:
 	for task_value in plain.get("tasks", []):
 		assert_ne(String((task_value as Dictionary).get("step_key", "")), "game_semantics",
 			"Non-blueprint goals gain no semantic gate")
+
+func test_gameplay_goal_iterates_on_ledger_artifacts_instead_of_recreating() -> void:
+	# 账本已有场景+脚本：第二个 gameplay 目标必须走 打开/读取/修改 既有产物，
+	# 不得再排 create_scene/create_script 建平行文件；语义套件作为回归门禁保留。
+	var existing: Dictionary = {
+		"scene": "res://scenes/gameplay-feature.tscn",
+		"script": "res://scripts/gameplay-feature-wf_002.gd",
+		"semantic_suite": "res://tests/game/gameplay_semantic.gd",
+	}
+	var plan: Dictionary = _compile("Add a double jump to the player", ["gameplay_feature"],
+		{"existing_artifacts": existing})["plan"]
+	var tools: Array[String] = _tool_names(plan)
+	assert_has(tools, "open_scene", "Iteration opens the existing scene")
+	assert_has(tools, "read_script", "Iteration reads the existing controller first")
+	assert_has(tools, "modify_script", "Iteration modifies the existing controller")
+	assert_does_not_have(tools, "create_scene", "Iteration must not create a parallel scene")
+	assert_does_not_have(tools, "create_script", "Iteration must not create a parallel script")
+	assert_has(tools, "run_game_tests", "The previous goal's semantic suite is the regression gate")
+	assert_has(tools, "verify_scripts", "Compile verification stays a gate")
+	assert_has(tools, "play_and_verify", "Runtime verification stays a gate")
+	# 门禁与参数：语义套件指向账本登记的路径。
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("step_key", "")) == "game_semantics":
+			assert_true(bool(task.get("objective_gate", false)), "Iteration semantics is an objective gate")
+			var paths: Array = (task.get("arguments", {}) as Dictionary).get("test_paths", [])
+			assert_eq(String(paths[0] if not paths.is_empty() else ""),
+				"res://tests/game/gameplay_semantic.gd", "Semantic gate targets the ledger suite")
+		if String(task.get("tool_name", "")) == "open_scene":
+			assert_eq(String((task.get("arguments", {}) as Dictionary).get("scene_path", "")),
+				"res://scenes/gameplay-feature.tscn", "Open targets the ledger scene")
+	# 契约持久化：existing_artifacts 进 goal_contract（蓝图哈希覆盖账本上下文）。
+	var contract: Dictionary = (plan.get("workflow", {}) as Dictionary).get("goal_contract", {})
+	assert_eq(String((contract.get("existing_artifacts", {}) as Dictionary).get("script", "")),
+		"res://scripts/gameplay-feature-wf_002.gd", "Ledger context persists in the contract")
+
+func test_gameplay_goal_without_ledger_keeps_creation_mode() -> void:
+	var plan: Dictionary = _compile("arrow-key movement with coins", ["gameplay_feature"])["plan"]
+	var tools: Array[String] = _tool_names(plan)
+	assert_has(tools, "create_scene", "Fresh projects still create the scene")
+	assert_has(tools, "create_script", "Fresh projects still create the controller")
+	assert_does_not_have(tools, "open_scene", "No ledger means no open step")
+
+func test_partial_ledger_context_falls_back_to_creation() -> void:
+	# 只有脚本没有场景（或反之）：迭代上下文不完整就回到创建模式，宁建勿改错。
+	var plan: Dictionary = _compile("arrow-key movement", ["gameplay_feature"],
+		{"existing_artifacts": {"script": "res://scripts/x.gd"}})["plan"]
+	assert_has(_tool_names(plan), "create_scene", "Partial context falls back to creation")

@@ -49,6 +49,10 @@
 | `release_export_flow` | 模板→预设→版本→导出→冒烟→报告 |
 | `onboard_new_project` | 新项目上手与工具启用 |
 
+## 迭代目标与项目记忆
+
+第一个目标 `completed` 后，工件与语义测试套件会记入 `res://.mcp/project_state.json`（项目状态账本，有界历史 50 条）。第二个 gameplay 目标默认进入**迭代模式**：打开既有场景 → 读取既有控制器 → 按 `content_brief`（含现有脚本内容与下游门禁）修改 → 编译/语义/运行验证——上一目标留下的语义套件会重跑一遍，证明原行为没被改坏。`replace=true` 明确从零开始；账本损坏时静默降级为首次使用（读侧永不报错）。只有场景+脚本齐备才进迭代模式，残缺上下文宁可新建。
+
 ## 目标覆盖回归（维护者）
 
 `test/unit/test_goal_coverage_corpus.gd` + `fixtures/goal_coverage_tasks.json` 是首过规划成功率的回归门禁（40 条中英真实目标、12 个 profile 全覆盖、组合目标不断言澄清）。改动 PROFILE_KEYWORDS 或分类逻辑后必须跑它；发现真实用户目标进了 `needs_clarification`，先把目标加进语料（复现），再补词表让它转绿——词表永远跟着真实目标走。
