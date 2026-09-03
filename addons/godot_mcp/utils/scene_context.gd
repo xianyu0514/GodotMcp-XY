@@ -29,6 +29,12 @@ static func ensure_scene_active(editor_interface: EditorInterface,
 			and scene_is_modified(editor_interface, active_root):
 		editor_interface.save_scene()
 		saved_previous = true
+	# 与 open_scene 工具同因修复：刚创建/保存的场景可能尚未进入
+	# EditorFileSystem 缓存，open_scene_from_path 会静默失败——update_file
+	# 幂等，先登记再打开（CI 上曾以 "Failed to activate scene" 形式抖动）。
+	var editor_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if editor_fs != null:
+		editor_fs.update_file(target)
 	editor_interface.open_scene_from_path(target)
 	var switched_path: String = ""
 	for _frame in range(120):
