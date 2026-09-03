@@ -261,3 +261,32 @@ func test_shoot_verbs_classify_but_delegate_content():
 	var test_script: GDScript = GDScript.new()
 	test_script.source_code = controller
 	assert_eq(test_script.reload(), OK, "Shoot-goal controller compiles (movement base)")
+
+func test_three_d_goal_gets_3d_blueprint_and_semantics():
+	var verbs: Dictionary = BlueprintsScript.match_verbs("3D game where the player moves and jumps")
+	assert_true(bool(verbs.get("three_d", false)), "English 3D keyword matched")
+	var zh: Dictionary = BlueprintsScript.match_verbs("三维小游戏，角色移动跳跃")
+	assert_true(bool(zh.get("three_d", false)), "Chinese 3D keyword matched")
+	var controller: String = BlueprintsScript.controller_script("3D game where the player moves and jumps")
+	assert_true(controller.contains("extends CharacterBody3D"), "3D goals get a 3D controller")
+	assert_true(controller.contains("WorldBoundaryShape3D"), "3D controller generates the ground plane")
+	assert_true(controller.contains("Camera3D"), "3D controller spawns a camera")
+	assert_true(controller.contains("DirectionalLight3D"), "3D controller spawns a light")
+	assert_false(controller.contains("CharacterBody2D"), "No 2D physics in the 3D blueprint")
+	var test_script: GDScript = GDScript.new()
+	test_script.source_code = controller
+	assert_eq(test_script.reload(), OK, "3D controller must compile cleanly")
+	var semantic: String = BlueprintsScript.semantic_test_script(
+		"3D game where the player moves and jumps", "res://scenes/g.tscn")
+	assert_true(semantic.contains("CharacterBody3D"), "3D semantic suite casts the 3D body")
+	assert_true(semantic.contains("jump input launches"), "3D jump semantics asserted")
+	assert_true(semantic.contains("settle"), "3D suite waits for grounding first")
+	var semantic_script: GDScript = GDScript.new()
+	semantic_script.source_code = semantic
+	assert_eq(semantic_script.reload(), OK, "3D semantic suite must compile cleanly")
+
+func test_2d_goals_unchanged_by_3d_blueprint():
+	var controller: String = BlueprintsScript.controller_script("arrow-key movement with coins")
+	assert_true(controller.contains("extends CharacterBody2D"),
+		"2D goals still get the 2D controller")
+	assert_false(controller.contains("CharacterBody3D"), "No 3D leakage into 2D goals")

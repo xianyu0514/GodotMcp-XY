@@ -45,6 +45,12 @@ const SCORE_KEYWORDS: Array[String] = [
 	"score", "scoring", "points",
 	"计分", "得分", "分数",
 ]
+# 3D 目标：根类型与蓝图全部换 3D 形态（CharacterBody3D + 地面 + 相机 + 灯光）。
+# 注意与否定处理协同："3D 不适用" 类目标由引擎的 has_affirmative_mention 排除，
+# 这里只做字面命中。
+const THREE_D_KEYWORDS: Array[String] = [
+	"3d", "3-d", "three-d", "三维", "3 维", "立体",
+]
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -63,6 +69,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"enemy": _mentions(objective, ENEMY_KEYWORDS),
 		"shoot": _mentions(objective, SHOOT_KEYWORDS),
 		"score": _mentions(objective, SCORE_KEYWORDS),
+		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -74,13 +81,15 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("win", false)) \
 		or bool(verbs.get("enemy", false)) \
 		or bool(verbs.get("shoot", false)) \
-		or bool(verbs.get("score", false))
+		or bool(verbs.get("score", false)) 		or bool(verbs.get("three_d", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs):
 		return ""
+	if bool(verbs.get("three_d", false)):
+		return controller_script_3d(verbs)
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) \
 		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
 	var wants_jump: bool = bool(verbs.get("jump", false))
@@ -235,6 +244,8 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs) or scene_path.is_empty():
 		return ""
+	if bool(verbs.get("three_d", false)):
+		return semantic_test_script_3d(verbs, scene_path)
 	var wants_pickup: bool = bool(verbs.get("collectible", false)) \
 		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
 	var wants_enemy: bool = bool(verbs.get("enemy", false))
@@ -342,3 +353,157 @@ static func semantic_test_script(objective: String, scene_path: String) -> Strin
 		source += "\t\t\treturn enemy\n"
 		source += "\treturn body.get_node_or_null(\"Enemy\")\n"
 	return source
+
+## 3D 控制器蓝图：CharacterBody3D + 无限地面 + 运行期相机/灯光 + 可选跳跃
+## 与金币（Area3D）。WASD/方向键映射 X/Z 平面移动；跳跃用 jump/ui_accept。
+## 相机与灯光运行期生成：编辑场景保持最小（一个带脚本的根节点）。
+static func controller_script_3d(verbs: Dictionary) -> String:
+	var wants_jump: bool = bool(verbs.get("jump", false)) or bool(verbs.get("movement", false)) or bool(verbs.get("shoot", false))
+	var needs_pickup: bool = bool(verbs.get("collectible", false)) \
+		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
+
+	var source: String = "# Goal blueprint: minimal playable 3D controller.\n"
+	source += "extends CharacterBody3D\n\n"
+	source += "signal coins_changed(collected: int)\n\n"
+	source += "const SPEED: float = 5.0\n"
+	source += "const JUMP_SPEED: float = 6.0\n"
+	source += "var _gravity: float = ProjectSettings.get_setting(\"physics/3d/default_gravity\", 9.8) as float\n"
+	source += "\nvar coins_collected: int = 0\n"
+	if needs_pickup:
+		source += "var _coin_area: Area3D\nvar _win_label: Label\n"
+	source += "\nfunc _ready() -> void:\n"
+	source += "\tvar body_collision := CollisionShape3D.new()\n"
+	source += "\tvar body_shape := BoxShape3D.new()\n"
+	source += "\tbody_shape.size = Vector3(0.8, 1.6, 0.8)\n"
+	source += "\tbody_collision.shape = body_shape\n"
+	source += "\tadd_child(body_collision)\n"
+	source += "\tvar world: Node = get_parent() if get_parent() != null else self\n"
+	source += "\tvar floor_body := StaticBody3D.new()\n"
+	source += "\tfloor_body.name = \"Floor\"\n"
+	source += "\tvar floor_shape := WorldBoundaryShape3D.new()\n"
+	source += "\tvar floor_collision := CollisionShape3D.new()\n"
+	source += "\tfloor_collision.shape = floor_shape\n"
+	source += "\tfloor_body.add_child(floor_collision)\n"
+	source += "\tworld.add_child(floor_body)\n"
+	source += "\tvar camera := Camera3D.new()\n"
+	source += "\tcamera.name = \"PlayerCamera\"\n"
+	source += "\tcamera.position = Vector3(0, 7, 10)\n"
+	source += "\tcamera.look_at(Vector3(0, 1, 0))\n"
+	source += "\tcamera.current = true\n"
+	source += "\tworld.add_child(camera)\n"
+	source += "\tvar light := DirectionalLight3D.new()\n"
+	source += "\tlight.name = \"SunLight\"\n"
+	source += "\tlight.rotation_degrees = Vector3(-45, -30, 0)\n"
+	source += "\tworld.add_child(light)\n"
+	if needs_pickup:
+		source += "\t_coin_area = Area3D.new()\n"
+		source += "\t_coin_area.name = \"Coin\"\n"
+		source += "\t_coin_area.position = Vector3(3, 0.6, 3)\n"
+		source += "\tvar coin_collision := CollisionShape3D.new()\n"
+		source += "\tvar coin_shape := SphereShape3D.new()\n"
+		source += "\tcoin_shape.radius = 0.5\n"
+		source += "\tcoin_collision.shape = coin_shape\n"
+		source += "\t_coin_area.add_child(coin_collision)\n"
+		source += "\tworld.add_child(_coin_area)\n"
+		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
+		source += "\tvar canvas := CanvasLayer.new()\n"
+		source += "\tcanvas.name = \"WinCanvas\"\n"
+		source += "\tadd_child(canvas)\n"
+		source += "\t_win_label = Label.new()\n"
+		source += "\t_win_label.name = \"WinLabel\"\n"
+		source += "\t_win_label.text = \"\"\n"
+		source += "\t_win_label.position = Vector2(40, 20)\n"
+		source += "\tcanvas.add_child(_win_label)\n"
+	source += "\nfunc _physics_process(delta: float) -> void:\n"
+	source += "\tvar input_plane := Input.get_vector(\"move_left\", \"move_right\", \"move_up\", \"move_down\")\n"
+	source += "\tif input_plane == Vector2.ZERO:\n"
+	source += "\t\tinput_plane = Vector2(\n"
+	source += "\t\t\tInput.get_axis(\"ui_left\", \"ui_right\"),\n"
+	source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
+	source += "\tvelocity.x = input_plane.x * SPEED\n"
+	source += "\tvelocity.z = input_plane.y * SPEED\n"
+	source += "\tif not is_on_floor():\n"
+	source += "\t\tvelocity.y -= _gravity * delta\n"
+	source += "\tvar jump_requested: bool = (InputMap.has_action(\"jump\") and Input.is_action_pressed(\"jump\")) or Input.is_action_pressed(\"ui_accept\")\n"
+	source += "\tif jump_requested and is_on_floor():\n"
+	source += "\t\tvelocity.y = JUMP_SPEED\n"
+	source += "\tmove_and_slide()\n"
+	if needs_pickup:
+		source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+		source += "\tif body != self:\n"
+		source += "\t\treturn\n"
+		source += "\tcoins_collected += 1\n"
+		source += "\tcoins_changed.emit(coins_collected)\n"
+		source += "\t_coin_area.queue_free()\n"
+		source += "\t_win_label.text = \"You Win!\"\n"
+	return source
+
+## 3D 语义测试：落地稳定 → 输入位移（X/Z）→ 跳跃上升（+Y）→ 走到金币 →
+## 胜利标签。坐标系与 2D 不同（3D 向上为 +Y），断言独立成生成器。
+static func semantic_test_script_3d(verbs: Dictionary, scene_path: String) -> String:
+	var wants_pickup: bool = bool(verbs.get("collectible", false)) \
+		or bool(verbs.get("win", false)) or bool(verbs.get("score", false))
+	var wants_movement: bool = bool(verbs.get("movement", false)) \
+		or bool(verbs.get("jump", false)) or bool(verbs.get("shoot", false))
+
+	var source: String = "# Goal semantic test (3D) generated from the objective.\n"
+	source += "extends \"res://addons/godot_mcp/game_tests/game_test_suite.gd\"\n\n"
+	source += "const SCENE_PATH: String = \"%s\"\n\n" % scene_path
+	source += "func before_all() -> void:\n"
+	source += "\t_ensure_input_actions()\n\n"
+	source += "func _ensure_input_actions() -> void:\n"
+	source += "\tvar fallbacks: Dictionary = {\"move_left\": KEY_LEFT, \"move_right\": KEY_RIGHT, \"move_up\": KEY_UP, \"move_down\": KEY_DOWN, \"jump\": KEY_SPACE}\n"
+	source += "\tfor action_name in fallbacks:\n"
+	source += "\t\tif InputMap.has_action(action_name):\n"
+	source += "\t\t\tcontinue\n"
+	source += "\t\tInputMap.add_action(action_name)\n"
+	source += "\t\tvar event := InputEventKey.new()\n"
+	source += "\t\tevent.physical_keycode = fallbacks[action_name]\n"
+	source += "\t\tInputMap.action_add_event(action_name, event)\n\n"
+	source += "func test_goal_semantics() -> void:\n"
+	source += "\tvar game: Node = load_scene(SCENE_PATH)\n"
+	source += "\tcheck_not_null(game, \"goal scene loads and instantiates\")\n"
+	source += "\tif game == null or not (game is CharacterBody3D):\n"
+	source += "\t\treturn\n"
+	source += "\tvar body: CharacterBody3D = game as CharacterBody3D\n"
+	source += "\tvar grounded: bool = await wait_until(func() -> bool: return body.is_on_floor(), 4000)\n"
+	source += "\tcheck(grounded, \"the character settles on the ground\")\n"
+	if wants_movement:
+		source += "\tvar start_x: float = body.global_position.x\n"
+		source += "\tpress_action(\"move_right\")\n"
+		source += "\tvar moved: bool = await wait_until(func() -> bool: return body.global_position.x > start_x + 0.5, 4000)\n"
+		source += "\trelease_action(\"move_right\")\n"
+		source += "\tcheck(moved, \"movement input displaces the character\")\n"
+		source += "\tpress_action(\"jump\")\n"
+		source += "\tvar rose: bool = await wait_until(func() -> bool: return body.velocity.y > 0.5, 4000)\n"
+		source += "\trelease_action(\"jump\")\n"
+		source += "\tcheck(rose, \"jump input launches the character upward\")\n"
+		source += "\tawait wait_until(func() -> bool: return body.is_on_floor(), 4000)\n"
+	if wants_pickup:
+		source += "\tvar coin: Node = _find_coin(body)\n"
+		source += "\tcheck_not_null(coin, \"goal scene contains the collectible\")\n"
+		source += "\tvar label: Label = _find_win_label(body)\n"
+		source += "\tcheck_not_null(label, \"goal scene contains the win label\")\n"
+		if wants_movement:
+			source += "\tif coin != null and label != null:\n"
+			source += "\t\tpress_action(\"move_right\")\n"
+			source += "\t\tpress_action(\"move_down\")\n"
+			source += "\t\tvar collected: bool = await wait_until(func() -> bool: return not is_instance_valid(coin), 8000, 10)\n"
+			source += "\t\trelease_action(\"move_right\")\n"
+			source += "\t\trelease_action(\"move_down\")\n"
+			source += "\t\tcheck(collected, \"player reaches and collects the coin\")\n"
+			source += "\t\tcheck(label.text != \"\", \"win label appears after collection\")\n"
+			source += "\n\nfunc _find_coin(body: CharacterBody3D) -> Node:\n"
+			source += "\tvar parent: Node = body.get_parent()\n"
+			source += "\tif parent != null:\n"
+			source += "\t\tvar coin: Node = parent.get_node_or_null(\"Coin\")\n"
+			source += "\t\tif coin != null:\n"
+			source += "\t\t\treturn coin\n"
+			source += "\treturn body.get_node_or_null(\"Coin\")\n"
+			source += "\n\nfunc _find_win_label(root: Node) -> Label:\n"
+			source += "\tfor child in root.get_children():\n"
+			source += "\t\tif child is CanvasLayer:\n"
+			source += "\t\t\treturn (child as CanvasLayer).get_node_or_null(\"WinLabel\") as Label\n"
+			source += "\treturn null\n"
+	return source
+

@@ -722,3 +722,23 @@ func test_partial_ledger_context_falls_back_to_creation() -> void:
 	var plan: Dictionary = _compile("arrow-key movement", ["gameplay_feature"],
 		{"existing_artifacts": {"script": "res://scripts/x.gd"}})["plan"]
 	assert_has(_tool_names(plan), "create_scene", "Partial context falls back to creation")
+
+func test_three_d_goal_derives_3d_scene_root() -> void:
+	var plan: Dictionary = _compile("3D game with player movement and jumping", ["gameplay_feature"])["plan"]
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "create_scene":
+			assert_eq(String((task.get("arguments", {}) as Dictionary).get("root_node_type", "")),
+				"CharacterBody3D", "3D goals derive a 3D scene root")
+			return
+	fail_test("3D goal must include a create_scene step")
+
+func test_two_d_goal_keeps_2d_scene_root() -> void:
+	var plan: Dictionary = _compile("arrow-key movement with coins", ["gameplay_feature"])["plan"]
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "create_scene":
+			assert_eq(String((task.get("arguments", {}) as Dictionary).get("root_node_type", "")),
+				"CharacterBody2D", "2D goals keep the 2D root")
+			return
+	fail_test("2D goal must include a create_scene step")

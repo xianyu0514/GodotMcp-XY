@@ -698,5 +698,42 @@
       "animation_audio",
       "performance"
     ]
+  },
+  {
+    "goal": "3D game where the player moves and jumps",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "三维小游戏，角色移动跳跃收集金币",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "First-person 3D character controller with gravity",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "3D 平台跳跃关卡",
+    "expect_profiles": [
+      "gameplay_feature",
+      "level_design"
+    ]
+  },
+  {
+    "goal": "A 3D collect-a-thon with a win screen",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
+  },
+  {
+    "goal": "3D 射击原型，移动并发射子弹",
+    "expect_profiles": [
+      "gameplay_feature"
+    ]
   }
 ]

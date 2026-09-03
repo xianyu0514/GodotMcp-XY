@@ -520,7 +520,10 @@ func _profile_specs(profile_id: String, objective: String, platform: String,
 					if String(spec.get("tool_name", "")) == "create_scene":
 						var scene_args: Dictionary = spec.get("arguments", {})
 						if not scene_args.has("root_node_type"):
-							scene_args["root_node_type"] = "CharacterBody2D"
+							# 3D 目标换 3D 根（蓝图/语义测试同步 3D 形态）。
+							scene_args["root_node_type"] = "CharacterBody3D" \
+								if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.THREE_D_KEYWORDS) \
+								else "CharacterBody2D"
 							spec["arguments"] = scene_args
 						break
 				# 目标语义证据：命中动词的目标额外生成一个 McpGameTestSuite
