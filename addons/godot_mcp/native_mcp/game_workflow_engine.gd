@@ -762,7 +762,7 @@ func _task_blueprint(task: Dictionary) -> Dictionary:
 static func _canonical_numbers(value: Variant) -> Variant:
 	if value is float:
 		var as_float: float = value
-		if is_equal_approx(as_float, roundf(as_float)) and absf(as_float) < 9007199254740992.0:
+		if as_float == roundf(as_float) and absf(as_float) < 9007199254740992.0:
 			return int(roundf(as_float))
 		return value
 	if value is Dictionary:

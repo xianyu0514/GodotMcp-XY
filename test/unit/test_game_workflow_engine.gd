@@ -114,6 +114,23 @@ func test_receipt_digest_survives_json_numeric_round_trip() -> void:
 	assert_eq(_engine.validate_integrity(persisted, _available).get("status", ""), "ok",
 		"Receipt hashing must canonicalize integers changed to floats by JSON persistence")
 
+func test_receipt_digest_does_not_collapse_near_integer_evidence() -> void:
+	var plan: Dictionary = _compile("get_project_info", [], {
+		"required_capabilities": ["get_project_info"]
+	})["plan"]
+	var task: Dictionary = _task_for_tool(plan, "get_project_info")
+	_engine.append_receipt(plan, {
+		"step_id": task.get("id", ""),
+		"tool_name": "get_project_info",
+		"passed": false,
+		"pending": true,
+		"summary": {"ratio": 1.0}
+	})
+	var receipt: Dictionary = ((plan["workflow"]["receipts"] as Array)[0] as Dictionary)
+	(receipt["summary"] as Dictionary)["ratio"] = 1.000001
+	assert_true(_engine.validate_integrity(plan, _available).has("error"),
+		"Distinct fractional evidence must not retain the digest of an integer value")
+
 func test_ready_step_limit_is_a_caller_slice_not_a_four_step_ceiling() -> void:
 	var plan: Dictionary = {"tasks": []}
 	for index in range(100):
