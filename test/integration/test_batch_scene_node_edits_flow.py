@@ -203,24 +203,31 @@ def main() -> int:
 var plugin = Engine.get_meta("GodotMCPPlugin")
 var editor_interface = plugin.get_editor_interface()
 var scene_root = editor_interface.get_edited_scene_root()
-var undo_redo_mgr = editor_interface.get_editor_undo_redo()
-var history_id = undo_redo_mgr.get_object_history_id(scene_root)
-var undo_redo = undo_redo_mgr.get_history_undo_redo(history_id)
-undo_redo.undo()
-var old_exists = scene_root.get_node_or_null("OldNode") != null
-var renamed_old_exists = scene_root.get_node_or_null("RenamedOld") != null
-var new_exists = scene_root.get_node_or_null("NewNode") != null
-var moved_back = scene_root.get_node_or_null("MoveTarget") != null
-var moved_child_exists = scene_root.get_node("TargetParent").get_node_or_null("MoveTarget") != null
-var delete_me_exists = scene_root.get_node_or_null("DeleteMe") != null
-_custom_print(JSON.stringify({
-    "old_exists": old_exists,
-    "renamed_old_exists": renamed_old_exists,
-    "new_exists": new_exists,
-    "moved_back": moved_back,
-    "moved_child_exists": moved_child_exists,
-    "delete_me_exists": delete_me_exists
-}))
+if scene_root == null:
+    _custom_print(JSON.stringify({"abort_guard": "edited_scene_root_unavailable"}))
+else:
+    var undo_redo_mgr = editor_interface.get_editor_undo_redo()
+    var history_id = undo_redo_mgr.get_object_history_id(scene_root)
+    var undo_redo = undo_redo_mgr.get_history_undo_redo(history_id)
+    if undo_redo == null:
+        _custom_print(JSON.stringify({"abort_guard": "undo_history_unavailable"}))
+    else:
+        undo_redo.undo()
+        var old_exists = scene_root.get_node_or_null("OldNode") != null
+        var renamed_old_exists = scene_root.get_node_or_null("RenamedOld") != null
+        var new_exists = scene_root.get_node_or_null("NewNode") != null
+        var moved_back = scene_root.get_node_or_null("MoveTarget") != null
+        var target_parent = scene_root.get_node_or_null("TargetParent")
+        var moved_child_exists = target_parent != null and target_parent.get_node_or_null("MoveTarget") != null
+        var delete_me_exists = scene_root.get_node_or_null("DeleteMe") != null
+        _custom_print(JSON.stringify({
+            "old_exists": old_exists,
+            "renamed_old_exists": renamed_old_exists,
+            "new_exists": new_exists,
+            "moved_back": moved_back,
+            "moved_child_exists": moved_child_exists,
+            "delete_me_exists": delete_me_exists
+        }))
 """,
             },
             request_id=10,
@@ -228,6 +235,8 @@ _custom_print(JSON.stringify({
         if undo_check.get("success") is not True or not undo_check.get("output"):
             raise AssertionError(f"execute_editor_script failed: {undo_check}")
         undo_state = json.loads(undo_check["output"][-1])
+        if "abort_guard" in undo_state:
+            raise AssertionError(f"editor transitional state during undo check: {undo_state}")
         expected_undo_state = {
             "old_exists": True,
             "renamed_old_exists": False,

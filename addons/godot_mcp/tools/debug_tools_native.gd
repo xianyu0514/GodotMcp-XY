@@ -871,20 +871,14 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 
 	var result_output: Variant = instance.call("execute")
 
-	var output: Array = []
-	if result_output is Array:
-		output = result_output
-	elif result_output != null:
-		output.append(str(result_output))
-
-	var instance_output: Variant = instance.get("_output")
-	if instance_output is Array:
-		for item in instance_output:
-			if not output.has(item):
-				output.append(item)
-
-	if instance is RefCounted:
-		pass
+	var verdict: Dictionary = _script_execution_verdict(result_output, instance.get("_output"))
+	if bool(verdict["aborted"]):
+		return {
+			"success": false,
+			"error": "Script aborted at runtime (see the editor log for the stack); partial output included",
+			"output": verdict["output"]
+		}
+	var output: Array = verdict["output"]
 
 	var result: Dictionary = {
 		"success": true,
@@ -898,6 +892,25 @@ func _tool_execute_editor_script(params: Dictionary) -> Dictionary:
 			result["success"] = false
 			result["error"] = "Execution finished but expected files were not created: " + ", ".join(verification.get("missing_files", []))
 	return result
+
+## execute() 的包装约定是"始终返回 _output 数组"：null 返回 = 运行时中止
+## （引擎已把错误与栈打进编辑器日志）。中止绝不能伪装成 success=true +
+## 空输出——那会以"execute_editor_script failed: {'output': [], 'success':
+## True}"的形式把真实错误吞成不可诊断的间歇失败。
+static func _script_execution_verdict(result_output: Variant, instance_output: Variant) -> Dictionary:
+	var output: Array = []
+	var aborted: bool = false
+	if result_output is Array:
+		output = (result_output as Array).duplicate()
+	elif result_output != null:
+		output.append(str(result_output))
+	else:
+		aborted = true
+	if instance_output is Array:
+		for item in instance_output:
+			if not output.has(item):
+				output.append(item)
+	return {"aborted": aborted, "output": output}
 
 func _count_indent(line: String) -> int:
 	var count: int = 0
