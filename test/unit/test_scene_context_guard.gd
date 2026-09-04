@@ -21,3 +21,34 @@ func test_missing_scene_file_fails_closed() -> void:
 	# EditorInterface cannot be instantiated headless; the file-existence branch
 	# is exercised through the same guard in scene tools during integration.
 	pending("Scene activation paths need a live editor (headless)")
+
+func test_current_scene_resolution_never_falls_back_to_an_arbitrary_open_tab() -> void:
+	# EditorInterface.get_open_scene_roots() is an unordered collection of tabs,
+	# not an active-scene API. Falling back to its first item can make a tool
+	# report or mutate an old scene while get_edited_scene_root() is transitional.
+	var consumers: Array[String] = [
+		"res://addons/godot_mcp/tools/scene_tools_native.gd",
+		"res://addons/godot_mcp/tools/node_tools_native.gd",
+		"res://addons/godot_mcp/tools/editor_tools_native.gd",
+		"res://addons/godot_mcp/tools/debug_runtime_tools.gd",
+	]
+	for path in consumers:
+		var source: String = FileAccess.get_file_as_string(path)
+		var function_start: int = source.find("func _get_user_scene_root()")
+		assert_gte(function_start, 0, "%s must define the current-scene helper" % path)
+		var function_end: int = source.find("\nfunc ", function_start + 1)
+		if function_end < 0:
+			function_end = source.length()
+		var function_body: String = source.substr(function_start, function_end - function_start)
+		assert_false(function_body.contains("get_open_scene_roots"),
+			"%s must fail closed instead of choosing an arbitrary open tab" % path)
+
+func test_scene_activation_requires_a_stable_edited_root() -> void:
+	var source: String = FileAccess.get_file_as_string(
+		"res://addons/godot_mcp/utils/scene_context.gd")
+	assert_true(source.contains("ACTIVE_SCENE_STABILITY_FRAMES"),
+		"scene activation must define an explicit stability window")
+	assert_true(source.contains("stable_frames += 1"),
+		"matching edited roots must accumulate consecutive stable frames")
+	assert_true(source.contains("stable_frames = 0"),
+		"a transitional mismatch must reset the stability window")

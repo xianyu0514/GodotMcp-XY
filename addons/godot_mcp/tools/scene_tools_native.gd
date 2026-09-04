@@ -32,21 +32,7 @@ func _is_vibe_coding_mode() -> bool:
 	return true
 
 func _get_user_scene_root() -> Node:
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return null
-	
-	var scene_root: Node = editor_interface.get_edited_scene_root()
-	if scene_root and not scene_root.name.begins_with("@") and scene_root.get_class() != "PanelContainer":
-		return scene_root
-	
-	var open_scene_roots: Array = editor_interface.get_open_scene_roots()
-	for root in open_scene_roots:
-		var node_root: Node = root
-		if node_root and not node_root.name.begins_with("@") and node_root.get_class() != "PanelContainer":
-			return node_root
-	
-	return scene_root
+	return SCENE_CONTEXT.get_edited_user_scene_root(_get_editor_interface())
 
 # ============================================================================
 # 工具注册
@@ -380,17 +366,10 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 	if editor_fs != null:
 		editor_fs.update_file(scene_path)
 	editor_interface.open_scene_from_path(scene_path)
-	# 确认条件必须是 get_edited_scene_root() 本身匹配：后续读取方
-	# （audit/get_current_scene 等）在 edited root 无效时经 open_scene_roots
-	# 回退解析，取的是"第一个打开的场景根"——若这里接受回退匹配提前返回，
-	# 切换中途的调用方会读到旧场景（TestScene 假阴性竞态）。
-	var scene_root: Node = null
-	for _frame in range(60):
-		await Engine.get_main_loop().process_frame
-		var candidate: Node = editor_interface.get_edited_scene_root()
-		if candidate and String(candidate.scene_file_path) == scene_path:
-			scene_root = candidate
-			break
+	# 单帧匹配不是已提交的场景切换：文件系统登记/导入仍可能在随后帧
+	# 暂时撤销或替换 edited root。统一稳定屏障后才允许返回 success。
+	var scene_root: Node = await SCENE_CONTEXT.wait_for_scene_active(
+		editor_interface, scene_path)
 	if not scene_root:
 		_scene_operation_in_progress = false
 		return {"error": "Failed to open scene: " + scene_path}
@@ -824,14 +803,14 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		if close_fs != null:
 			close_fs.update_file(scene_path)
 		editor_interface.open_scene_from_path(scene_path)
-		# 打开是延迟生效的：等切换完成再 close，否则关掉的是旧场景。
-		for _frame in range(60):
-			await Engine.get_main_loop().process_frame
-			var pending_root: Node = editor_interface.get_edited_scene_root()
-			if pending_root and String(pending_root.scene_file_path) == scene_path:
-				break
+		# 打开是延迟生效的：等目标成为稳定的 edited root 再 close，
+		# 否则过渡帧可能把另一个已打开场景关掉。
+		var pending_root: Node = await SCENE_CONTEXT.wait_for_scene_active(
+			editor_interface, scene_path)
+		if not pending_root:
+			return {"error": "Failed to activate scene before closing: " + scene_path}
 
-	var active_root: Node = editor_interface.get_edited_scene_root()
+	var active_root: Node = SCENE_CONTEXT.get_edited_user_scene_root(editor_interface)
 	var closed_scene: String = active_root.scene_file_path if active_root else scene_path
 	var close_error: Error = editor_interface.close_scene()
 	if close_error != OK:
