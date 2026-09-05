@@ -52,3 +52,13 @@ func test_scene_activation_requires_a_stable_edited_root() -> void:
 		"matching edited roots must accumulate consecutive stable frames")
 	assert_true(source.contains("stable_frames = 0"),
 		"a transitional mismatch must reset the stability window")
+
+func test_scene_activation_retries_silent_editor_open_failures() -> void:
+	var source: String = FileAccess.get_file_as_string(
+		"res://addons/godot_mcp/utils/scene_context.gd")
+	assert_true(source.contains("ACTIVE_SCENE_OPEN_ATTEMPTS"),
+		"scene activation must bound explicit open retries")
+	assert_true(source.contains("for _attempt in range(ACTIVE_SCENE_OPEN_ATTEMPTS)"),
+		"silent open_scene_from_path failures must be retried")
+	assert_true(source.contains("editor_fs.update_file(target_scene_path)"),
+		"each retry must refresh the target's EditorFileSystem registration")

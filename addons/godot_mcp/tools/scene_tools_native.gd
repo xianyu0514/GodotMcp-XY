@@ -360,15 +360,9 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 			"root_node_type": String(active_root.get_class())
 		}
 
-	# 编辑器启动扫描未完成时，新保存的场景不在文件系统缓存里，
-	# open_scene_from_path 会静默失败；update_file 幂等，先登记再打开。
-	var editor_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
-	if editor_fs != null:
-		editor_fs.update_file(scene_path)
-	editor_interface.open_scene_from_path(scene_path)
-	# 单帧匹配不是已提交的场景切换：文件系统登记/导入仍可能在随后帧
-	# 暂时撤销或替换 edited root。统一稳定屏障后才允许返回 success。
-	var scene_root: Node = await SCENE_CONTEXT.wait_for_scene_active(
+	# 新保存的场景可能尚未进入 EditorFileSystem，open_scene_from_path 会
+	# 静默失败；统一屏障负责登记、有限重试和连续帧稳定确认。
+	var scene_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
 		editor_interface, scene_path)
 	if not scene_root:
 		_scene_operation_in_progress = false
@@ -798,14 +792,8 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		var open_scene_paths: PackedStringArray = editor_interface.get_open_scenes()
 		if not open_scene_paths.has(scene_path):
 			return {"error": "Scene is not currently open: " + scene_path}
-		# 同 open_scene：先登记再打开，防文件系统缓存未收录时静默失败。
-		var close_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
-		if close_fs != null:
-			close_fs.update_file(scene_path)
-		editor_interface.open_scene_from_path(scene_path)
-		# 打开是延迟生效的：等目标成为稳定的 edited root 再 close，
-		# 否则过渡帧可能把另一个已打开场景关掉。
-		var pending_root: Node = await SCENE_CONTEXT.wait_for_scene_active(
+		# 先把目标稳定激活再 close，否则过渡帧可能关掉另一个场景。
+		var pending_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
 			editor_interface, scene_path)
 		if not pending_root:
 			return {"error": "Failed to activate scene before closing: " + scene_path}
