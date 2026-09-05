@@ -44,6 +44,9 @@ extends RefCounted
 
 const SCHEMA_VERSION: int = 1
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
+const CHECKPOINT_REVISION_KEY: String = "checkpoint_revision"
+const CHECKPOINT_STAGING_SUFFIX: String = ".next"
+const CHECKPOINT_BACKUP_SUFFIX: String = ".bak"
 const VALID_STATUSES: Array = ["pending", "in_progress", "blocked", "done"]
 
 # A DoD criterion may carry an optional 'gate' so the VERIFY phase can decide
@@ -619,27 +622,175 @@ static func save_plan(target_plan: Dictionary, path: String) -> Dictionary:
 			var err: Error = DirAccess.make_dir_recursive_absolute(abs_dir)
 			if err != OK and not DirAccess.dir_exists_absolute(abs_dir):
 				return {"error": "could not create directory '%s': %s" % [base_dir, error_string(err)]}
-	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	# A previous crash may have left the newest committed generation in .next.
+	# Promote it before reusing that filename, otherwise another interruption
+	# during the retry could fall back past work that was already recovered.
+	var recovery_result: Dictionary = _preserve_newest_staging(path)
+	if recovery_result.has("error"):
+		return recovery_result
+	# Write and validate a complete staging generation before touching the
+	# committed checkpoint.  The previous primary is retained as a backup so a
+	# process/editor crash in either rename window always leaves a readable plan.
+	var highest_revision: int = _highest_checkpoint_revision(path)
+	target_plan[CHECKPOINT_REVISION_KEY] = max(
+		int(target_plan.get(CHECKPOINT_REVISION_KEY, 0)), highest_revision
+	) + 1
+	var staging_path: String = path + CHECKPOINT_STAGING_SUFFIX
+	var file: FileAccess = FileAccess.open(staging_path, FileAccess.WRITE)
 	if file == null:
-		return {"error": "could not open '%s' for writing: %s" % [path, error_string(FileAccess.get_open_error())]}
+		return {"error": "could not open '%s' for writing: %s" % [staging_path, error_string(FileAccess.get_open_error())]}
 	file.store_string(JSON.stringify(target_plan, "\t"))
+	file.flush()
 	file.close()
-	return {"status": "ok"}
+	var staged: Dictionary = _read_checkpoint(staging_path)
+	if staged.has("error"):
+		return {"error": "could not validate staged task plan at '%s': %s" % [staging_path, staged["error"]]}
+
+	var primary_absolute: String = ProjectSettings.globalize_path(path)
+	var staging_absolute: String = ProjectSettings.globalize_path(staging_path)
+	var backup_path: String = path + CHECKPOINT_BACKUP_SUFFIX
+	var backup_absolute: String = ProjectSettings.globalize_path(backup_path)
+	if FileAccess.file_exists(path):
+		if FileAccess.file_exists(backup_path):
+			var remove_error: Error = DirAccess.remove_absolute(backup_absolute)
+			if remove_error != OK:
+				return {"error": "could not replace checkpoint backup '%s': %s" % [backup_path, error_string(remove_error)]}
+		var backup_error: Error = DirAccess.rename_absolute(primary_absolute, backup_absolute)
+		if backup_error != OK:
+			return {"error": "could not rotate task plan '%s' to backup: %s" % [path, error_string(backup_error)]}
+
+	var promote_error: Error = DirAccess.rename_absolute(staging_absolute, primary_absolute)
+	if promote_error != OK:
+		# Best-effort restoration is only needed when the primary was rotated.
+		# The fully written staging generation is intentionally left in place so
+		# load_plan() can still recover it if restoration also fails.
+		if not FileAccess.file_exists(path) and FileAccess.file_exists(backup_path):
+			DirAccess.rename_absolute(backup_absolute, primary_absolute)
+		return {"error": "could not promote staged task plan '%s': %s" % [staging_path, error_string(promote_error)]}
+	return {"status": "ok", CHECKPOINT_REVISION_KEY: target_plan[CHECKPOINT_REVISION_KEY]}
 
 static func load_plan(path: String) -> Dictionary:
-	# Returns the parsed plan dict, or {"error": ...} on parse failure.
-	# Callers should check plan_exists() first to distinguish "no plan yet".
-	if not FileAccess.file_exists(path):
+	# Consider all generations because a crash can happen after staging is
+	# flushed or after the primary has been renamed to its backup.  Revision wins;
+	# for legacy/tied generations the committed primary has highest priority.
+	if not plan_exists(path):
 		return {"error": "no task plan at '%s'; call init first" % path}
+	var best_plan: Dictionary = {}
+	var best_revision: int = -1
+	var best_priority: int = -1
+	var found_valid: bool = false
+	var candidates: Array = [
+		{"path": path + CHECKPOINT_BACKUP_SUFFIX, "priority": 0},
+		{"path": path + CHECKPOINT_STAGING_SUFFIX, "priority": 1},
+		{"path": path, "priority": 2}
+	]
+	for candidate_value in candidates:
+		var candidate: Dictionary = candidate_value
+		var candidate_path: String = str(candidate["path"])
+		if not FileAccess.file_exists(candidate_path):
+			continue
+		var loaded: Dictionary = _read_checkpoint(candidate_path)
+		if loaded.has("error"):
+			continue
+		var candidate_plan: Dictionary = loaded["plan"]
+		var revision: int = max(0, int(candidate_plan.get(CHECKPOINT_REVISION_KEY, 0)))
+		var priority: int = int(candidate["priority"])
+		if not found_valid or revision > best_revision or (revision == best_revision and priority > best_priority):
+			best_plan = candidate_plan
+			best_revision = revision
+			best_priority = priority
+			found_valid = true
+	if not found_valid:
+		return {"error": "task plan at '%s' has no valid checkpoint generation" % path}
+	return best_plan
+
+static func _read_checkpoint(path: String) -> Dictionary:
 	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		return {"error": "could not open '%s' for reading: %s" % [path, error_string(FileAccess.get_open_error())]}
+		return {"error": "could not open for reading: %s" % error_string(FileAccess.get_open_error())}
 	var text: String = file.get_as_text()
 	file.close()
-	var parsed = JSON.parse_string(text)
+	var parser := JSON.new()
+	var parse_error: Error = parser.parse(text)
+	if parse_error != OK:
+		return {"error": "invalid JSON at line %d: %s" % [parser.get_error_line(), parser.get_error_message()]}
+	var parsed = parser.data
 	if not (parsed is Dictionary):
-		return {"error": "task plan at '%s' is not a valid JSON object" % path}
-	return parsed
+		return {"error": "checkpoint is not a JSON object"}
+	return {"plan": parsed}
+
+static func _highest_checkpoint_revision(path: String) -> int:
+	var highest: int = 0
+	for candidate_path in [path, path + CHECKPOINT_STAGING_SUFFIX, path + CHECKPOINT_BACKUP_SUFFIX]:
+		if not FileAccess.file_exists(candidate_path):
+			continue
+		var loaded: Dictionary = _read_checkpoint(candidate_path)
+		if loaded.has("error"):
+			continue
+		var candidate_plan: Dictionary = loaded["plan"]
+		highest = max(highest, int(candidate_plan.get(CHECKPOINT_REVISION_KEY, 0)))
+	return highest
+
+static func _preserve_newest_staging(path: String) -> Dictionary:
+	var staging_path: String = path + CHECKPOINT_STAGING_SUFFIX
+	if not FileAccess.file_exists(staging_path):
+		return {"status": "unchanged"}
+	var staged_result: Dictionary = _read_checkpoint(staging_path)
+	if staged_result.has("error"):
+		return {"status": "unchanged"}
+	var staged_plan: Dictionary = staged_result["plan"]
+	var staged_revision: int = max(0, int(staged_plan.get(CHECKPOINT_REVISION_KEY, 0)))
+
+	var primary_valid: bool = false
+	var primary_revision: int = -1
+	if FileAccess.file_exists(path):
+		var primary_result: Dictionary = _read_checkpoint(path)
+		if not primary_result.has("error"):
+			primary_valid = true
+			primary_revision = max(0, int((primary_result["plan"] as Dictionary).get(CHECKPOINT_REVISION_KEY, 0)))
+	if primary_valid and primary_revision >= staged_revision:
+		return {"status": "unchanged"}
+
+	var backup_path: String = path + CHECKPOINT_BACKUP_SUFFIX
+	var backup_valid: bool = false
+	var backup_revision: int = -1
+	if FileAccess.file_exists(backup_path):
+		var backup_result: Dictionary = _read_checkpoint(backup_path)
+		if not backup_result.has("error"):
+			backup_valid = true
+			backup_revision = max(0, int((backup_result["plan"] as Dictionary).get(CHECKPOINT_REVISION_KEY, 0)))
+	if backup_valid and backup_revision > staged_revision:
+		return {"status": "unchanged"}
+
+	var primary_absolute: String = ProjectSettings.globalize_path(path)
+	var staging_absolute: String = ProjectSettings.globalize_path(staging_path)
+	var backup_absolute: String = ProjectSettings.globalize_path(backup_path)
+	var rotated_primary: bool = false
+	if FileAccess.file_exists(path):
+		if primary_valid:
+			if FileAccess.file_exists(backup_path):
+				var backup_remove_error: Error = DirAccess.remove_absolute(backup_absolute)
+				if backup_remove_error != OK:
+					return {"error": "could not replace checkpoint backup '%s': %s" % [backup_path, error_string(backup_remove_error)]}
+			var rotate_error: Error = DirAccess.rename_absolute(primary_absolute, backup_absolute)
+			if rotate_error != OK:
+				return {"error": "could not preserve previous task plan '%s': %s" % [path, error_string(rotate_error)]}
+			rotated_primary = true
+		else:
+			var corrupt_remove_error: Error = DirAccess.remove_absolute(primary_absolute)
+			if corrupt_remove_error != OK:
+				return {"error": "could not remove invalid task plan '%s': %s" % [path, error_string(corrupt_remove_error)]}
+
+	var promote_error: Error = DirAccess.rename_absolute(staging_absolute, primary_absolute)
+	if promote_error != OK:
+		if rotated_primary and not FileAccess.file_exists(path) and FileAccess.file_exists(backup_path):
+			DirAccess.rename_absolute(backup_absolute, primary_absolute)
+		return {"error": "could not preserve recovered task plan '%s': %s" % [staging_path, error_string(promote_error)]}
+	return {"status": "recovered"}
 
 static func plan_exists(path: String) -> bool:
-	return FileAccess.file_exists(path)
+	return (
+		FileAccess.file_exists(path)
+		or FileAccess.file_exists(path + CHECKPOINT_STAGING_SUFFIX)
+		or FileAccess.file_exists(path + CHECKPOINT_BACKUP_SUFFIX)
+	)

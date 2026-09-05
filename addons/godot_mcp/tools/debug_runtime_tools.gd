@@ -4,6 +4,8 @@
 class_name DebugRuntimeTools
 extends RefCounted
 
+const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
+
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
 
@@ -78,25 +80,10 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_await_runtime_condition(server_core)
 	_register_assert_runtime_condition(server_core)
 func _get_user_scene_root() -> Node:
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return null
-	var scene_root: Node = editor_interface.get_edited_scene_root()
-	if _is_user_scene_root(scene_root):
+	var scene_root: Node = SCENE_CONTEXT.get_edited_user_scene_root(_get_editor_interface())
+	if scene_root and not String(scene_root.scene_file_path).is_empty():
 		return scene_root
-	var open_scene_roots: Array = editor_interface.get_open_scene_roots()
-	for root in open_scene_roots:
-		var node_root: Node = root
-		if _is_user_scene_root(node_root):
-			return node_root
 	return null
-
-func _is_user_scene_root(node: Node) -> bool:
-	if not node:
-		return false
-	if node.name.begins_with("@") or node.get_class() == "PanelContainer":
-		return false
-	return not String(node.scene_file_path).is_empty()
 
 func _to_runtime_friendly_path(node: Node, scene_root: Node = null) -> String:
 	if not node:

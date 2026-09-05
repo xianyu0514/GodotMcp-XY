@@ -32,21 +32,7 @@ func _is_vibe_coding_mode() -> bool:
 	return true
 
 func _get_user_scene_root() -> Node:
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return null
-	
-	var scene_root: Node = editor_interface.get_edited_scene_root()
-	if scene_root and not scene_root.name.begins_with("@") and scene_root.get_class() != "PanelContainer":
-		return scene_root
-	
-	var open_scene_roots: Array = editor_interface.get_open_scene_roots()
-	for root in open_scene_roots:
-		var node_root: Node = root
-		if node_root and not node_root.name.begins_with("@") and node_root.get_class() != "PanelContainer":
-			return node_root
-	
-	return scene_root
+	return SCENE_CONTEXT.get_edited_user_scene_root(_get_editor_interface())
 
 # ============================================================================
 # 工具注册
@@ -374,23 +360,10 @@ func _tool_open_scene(params: Dictionary) -> Dictionary:
 			"root_node_type": String(active_root.get_class())
 		}
 
-	# 编辑器启动扫描未完成时，新保存的场景不在文件系统缓存里，
-	# open_scene_from_path 会静默失败；update_file 幂等，先登记再打开。
-	var editor_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
-	if editor_fs != null:
-		editor_fs.update_file(scene_path)
-	editor_interface.open_scene_from_path(scene_path)
-	# 确认条件必须是 get_edited_scene_root() 本身匹配：后续读取方
-	# （audit/get_current_scene 等）在 edited root 无效时经 open_scene_roots
-	# 回退解析，取的是"第一个打开的场景根"——若这里接受回退匹配提前返回，
-	# 切换中途的调用方会读到旧场景（TestScene 假阴性竞态）。
-	var scene_root: Node = null
-	for _frame in range(60):
-		await Engine.get_main_loop().process_frame
-		var candidate: Node = editor_interface.get_edited_scene_root()
-		if candidate and String(candidate.scene_file_path) == scene_path:
-			scene_root = candidate
-			break
+	# 新保存的场景可能尚未进入 EditorFileSystem，open_scene_from_path 会
+	# 静默失败；统一屏障负责登记、有限重试和连续帧稳定确认。
+	var scene_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
+		editor_interface, scene_path)
 	if not scene_root:
 		_scene_operation_in_progress = false
 		return {"error": "Failed to open scene: " + scene_path}
@@ -819,19 +792,13 @@ func _tool_close_scene_tab(params: Dictionary) -> Dictionary:
 		var open_scene_paths: PackedStringArray = editor_interface.get_open_scenes()
 		if not open_scene_paths.has(scene_path):
 			return {"error": "Scene is not currently open: " + scene_path}
-		# 同 open_scene：先登记再打开，防文件系统缓存未收录时静默失败。
-		var close_fs: EditorFileSystem = editor_interface.get_resource_filesystem()
-		if close_fs != null:
-			close_fs.update_file(scene_path)
-		editor_interface.open_scene_from_path(scene_path)
-		# 打开是延迟生效的：等切换完成再 close，否则关掉的是旧场景。
-		for _frame in range(60):
-			await Engine.get_main_loop().process_frame
-			var pending_root: Node = editor_interface.get_edited_scene_root()
-			if pending_root and String(pending_root.scene_file_path) == scene_path:
-				break
+		# 先把目标稳定激活再 close，否则过渡帧可能关掉另一个场景。
+		var pending_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
+			editor_interface, scene_path)
+		if not pending_root:
+			return {"error": "Failed to activate scene before closing: " + scene_path}
 
-	var active_root: Node = editor_interface.get_edited_scene_root()
+	var active_root: Node = SCENE_CONTEXT.get_edited_user_scene_root(editor_interface)
 	var closed_scene: String = active_root.scene_file_path if active_root else scene_path
 	var close_error: Error = editor_interface.close_scene()
 	if close_error != OK:
