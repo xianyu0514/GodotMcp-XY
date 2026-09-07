@@ -14,9 +14,10 @@ func before_each():
 	_plan_path = "user://test_manage_task_plan_%d.json" % Time.get_ticks_usec()
 
 func after_each():
-	var abs_path: String = ProjectSettings.globalize_path(_plan_path)
-	if FileAccess.file_exists(abs_path):
-		DirAccess.remove_absolute(abs_path)
+	for suffix in ["", ".next", ".bak"]:
+		var abs_path: String = ProjectSettings.globalize_path(_plan_path + suffix)
+		if FileAccess.file_exists(abs_path):
+			DirAccess.remove_absolute(abs_path)
 	_tools = null
 
 func _call(params: Dictionary) -> Dictionary:

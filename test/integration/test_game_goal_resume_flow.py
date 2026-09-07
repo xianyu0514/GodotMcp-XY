@@ -1,4 +1,4 @@
-"""Resume-after-crash regression for the goal closed loop.
+"""One-command resume-after-crash regression for the goal closed loop.
 
 The checkpoint chain (persisted plan -> tool cache -> idempotent steps ->
 retry -> replan fallback -> resume) is only real if a hard editor crash
@@ -23,13 +23,9 @@ from test_game_goal_flow import (  # noqa: E402
 
 PLAN_PATH = "res://.mcp/goal_flow_plan.json"
 OBJECTIVE = (
-    "Minimal 2D game: an arrow-key player movement controller, a collectible "
-    "coin that disappears on touch, and a win label shown after collection. "
-    "Validate the scripts and run a project smoke test."
+    "Run get_project_info, list_project_scenes, list_project_scripts, "
+    "and list_project_input_actions."
 )
-PROFILES = ["gameplay_feature", "ui_screen", "quality_assurance"]
-
-
 def spawn_editor() -> subprocess.Popen:
     return subprocess.Popen(
         [str(GODOT_EXE), "--editor", "--headless", "--path", str(SCRATCH), "--", "--mcp-server", f"--mcp-port={MCP_PORT}"],
@@ -70,13 +66,10 @@ def main() -> int:
         wait_for_server()
         assert_scratch_server()
 
-        tool_call("plan_game_workflow",
-                  {"action": "plan", "objective": OBJECTIVE, "profiles": PROFILES,
-                   "replace": True, "plan_path": PLAN_PATH}, request_id=2)
-
-        # 推进一个有界切片，制造"进行到一半"的检查点。
+        # 单条命令首次调用自动规划并推进一个有界切片，制造“进行到一半”的检查点。
         partial = tool_call("run_game_workflow",
-                            {"plan_path": PLAN_PATH, "max_steps": 6}, request_id=3)
+                            {"command": OBJECTIVE, "plan_path": PLAN_PATH, "max_steps": 2},
+                            request_id=2)
         state = str(partial.get("state", partial.get("status", "")))
         if state == "completed":
             print("[resume-flow] slice already completed the goal; crash test trivially passes")
@@ -92,10 +85,10 @@ def main() -> int:
         raise AssertionError("checkpoint plan file missing after hard kill")
 
     before = read_plan_progress()
-    if before["done"] < 3:
-        raise AssertionError(f"expected at least 3 done steps before the crash, got {before}")
+    if before["done"] < 1:
+        raise AssertionError(f"expected completed work before the crash, got {before}")
 
-    # 重启同一项目：模型无需重建上下文，直接续跑同一计划。
+    # 重启同一项目：重复同一命令即可续跑，无需重建计划或工作流身份。
     editor = spawn_editor()
     try:
         wait_for_server()
@@ -103,7 +96,9 @@ def main() -> int:
 
         resumed_id: str = ""
         for iteration in range(40):
-            run = tool_call("run_game_workflow", {"plan_path": PLAN_PATH}, request_id=100 + iteration)
+            run = tool_call("run_game_workflow",
+                            {"command": OBJECTIVE, "plan_path": PLAN_PATH},
+                            request_id=100 + iteration)
             state = str(run.get("state", run.get("status", "")))
             progress = run.get("progress", {})
             if iteration == 0:

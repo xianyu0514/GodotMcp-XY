@@ -63,9 +63,10 @@ func after_each() -> void:
 	_remove_plan()
 
 func _remove_plan() -> void:
-	var absolute: String = ProjectSettings.globalize_path(_plan_path)
-	if FileAccess.file_exists(absolute):
-		DirAccess.remove_absolute(absolute)
+	for suffix in ["", ".next", ".bak"]:
+		var absolute: String = ProjectSettings.globalize_path(_plan_path + suffix)
+		if FileAccess.file_exists(absolute):
+			DirAccess.remove_absolute(absolute)
 
 func _plan(profiles: Array, objective: String = "Run project tests") -> Dictionary:
 	return _tools._tool_plan_game_workflow({
@@ -112,6 +113,48 @@ func test_registers_only_two_compact_always_on_meta_tools() -> void:
 	var run_schema: Dictionary = _core.registrations["run_game_workflow"]["input_schema"]
 	assert_false((run_schema.get("properties", {}) as Dictionary).has("tool_name"),
 		"The runner must not expose an arbitrary nested tool invocation escape hatch")
+	assert_true((run_schema.get("properties", {}) as Dictionary).has("command"),
+		"One natural-language command must be able to create or resume its durable workflow")
+
+func test_command_entrypoint_plans_runs_and_replays_without_duplicate_work() -> void:
+	_successful_gate_responses()
+	var first: Dictionary = await _tools._tool_run_game_workflow({
+		"command": "Run project tests", "plan_path": _plan_path, "max_steps": 2
+	})
+	assert_false(first.has("error"), str(first.get("error", "")))
+	assert_true(TaskPlanStoreScript.plan_exists(_plan_path))
+	var workflow_id: String = String(first.get("workflow_id", ""))
+	assert_false(workflow_id.is_empty())
+	var second: Dictionary = await _tools._tool_run_game_workflow({
+		"command": "  run   PROJECT tests  ", "plan_path": _plan_path, "max_steps": 20
+	})
+	assert_eq(second.get("workflow_id", ""), workflow_id,
+		"A retried equivalent command must attach to the existing checkpoint")
+	assert_eq(second.get("status", ""), "completed", str(second.get("error", "")))
+	var calls_after_completion: int = _core.calls.size()
+	var replay: Dictionary = await _tools._tool_run_game_workflow({
+		"command": "Run project tests", "plan_path": _plan_path
+	})
+	assert_eq(replay.get("status", ""), "completed")
+	assert_eq(replay.get("workflow_id", ""), workflow_id)
+	assert_eq(_core.calls.size(), calls_after_completion,
+		"Retrying a completed command must return its terminal checkpoint without re-execution")
+
+func test_command_entrypoint_rejects_a_different_goal_without_replacing_checkpoint() -> void:
+	_successful_gate_responses()
+	var first: Dictionary = await _tools._tool_run_game_workflow({
+		"command": "Run project tests", "plan_path": _plan_path, "max_steps": 1
+	})
+	assert_false(first.has("error"), str(first.get("error", "")))
+	var calls_before_conflict: int = _core.calls.size()
+	var conflict: Dictionary = await _tools._tool_run_game_workflow({
+		"command": "Build a polished pause menu", "plan_path": _plan_path
+	})
+	assert_eq(conflict.get("status", ""), "conflict")
+	assert_true(conflict.has("error"))
+	assert_eq(conflict.get("workflow_id", ""), first.get("workflow_id", ""))
+	assert_eq(_core.calls.size(), calls_before_conflict,
+		"A different command must never mutate or advance the existing workflow")
 
 func test_plan_persists_contract_and_status_resumes_it() -> void:
 	var planned: Dictionary = _plan(["quality_assurance"])

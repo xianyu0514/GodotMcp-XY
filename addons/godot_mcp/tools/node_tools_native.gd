@@ -1539,21 +1539,7 @@ func _get_editor_interface() -> EditorInterface:
 	return null
 
 func _get_user_scene_root() -> Node:
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return null
-	
-	var scene_root: Node = editor_interface.get_edited_scene_root()
-	if scene_root and not scene_root.name.begins_with("@") and scene_root.get_class() != "PanelContainer":
-		return scene_root
-	
-	var open_scene_roots: Array = editor_interface.get_open_scene_roots()
-	for root in open_scene_roots:
-		var node_root: Node = root
-		if node_root and not node_root.name.begins_with("@") and node_root.get_class() != "PanelContainer":
-			return node_root
-	
-	return scene_root
+	return SCENE_CONTEXT.get_edited_user_scene_root(_get_editor_interface())
 
 static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 	if not scene_root:
