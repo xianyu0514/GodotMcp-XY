@@ -20,8 +20,8 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `get_editor_state` | core | Get the current state of the Godot editor, including active scene and selection info. |
-| `run_project` | core | Run the current project or a specific scene. Launches the game in play mode. |
-| `stop_project` | core | Stop the currently running project and return to editor mode. |
+| `run_project` | core | Run or reuse a scene and report observed debugger/probe readiness, including pending startup and debugger breaks. |
+| `stop_project` | core | Stop asynchronously; repeat safely and report a timeout if the game is still running. |
 | `execute_editor_script` | advanced | Execute a script in the editor with access to editor APIs. A runtime abort inside the script returns `success:false` with the editor-log pointer and partial output — never an empty success. Guarded by the script sandbox (see note below). |
 
 > **Script sandbox guard:** when `security_level` is `1` (STRICT, the default), `execute_editor_script` is scanned by a capability denylist before it runs. Scripts that reference OS process execution (`OS.execute`, `OS.create_process`, …), out-of-project filesystem paths, networking (`HTTPRequest`, `TCPServer`, …) or other dangerous APIs are rejected with `{"blocked": true, "reason": "script_sandbox", "category": …}` instead of being executed. Set `security_level = 0` (PERMISSIVE) to disable the guard. This is an anti-footgun guard, not an adversarial sandbox. The same guard applies to `execute_script` (including its single-line expression path), `evaluate_debug_expression` and `evaluate_runtime_expression`.
@@ -53,3 +53,19 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `undo` | advanced | Undo the most recent editor action(s) via the editor's UndoRedo stack (node create/delete, property change, tile paint, …). Pass `count` to undo several actions at once; the loop stops when the undo stack is empty. Returns status `noop` with message `Nothing to undo` when the stack is empty. |
 | `redo` | advanced | Redo the most recently undone editor action(s). Pass `count` to redo several actions at once; the loop stops when the redo stack is empty. Returns status `noop` with message `Nothing to redo` when the stack is empty. |
 | `get_undo_history` | advanced | Read-only summary of the editor's UndoRedo stack: how many actions can be undone/redone and the names of the most recent undoable and redoable actions (most recent first, capped by `limit`, default 20). |
+
+## Observed run and stop state
+
+`run_project` returns `success`, `already_running` and `game_status`, while preserving `status`, `mode`, `scene`, `session_active` and `probe_ready`. `game_status` includes `state`, `session_active`, `probe_ready` and `probe_installed`:
+
+| State | Meaning |
+| --- | --- |
+| `live` | Active debugger sessions have reported probe readiness. This does not prove gameplay correctness. |
+| `launching` | Readiness is unconfirmed. Returns `status: "pending"`, `success: false`; call `run_project` again to poll. |
+| `no_probe` | Debugger connected without an installed probe. Launch succeeds, with a hint that runtime inspection is unavailable. |
+| `break` | Debugger paused at a breakpoint or error; the call reports an error. |
+| `stopped` | The editor reports no running game. Startup reports an error; stopping succeeds. |
+
+Repeated runs check readiness again. A different requested scene is validated before stopping the current session. Probe installation is detected by its autoload path, including custom singleton names.
+
+Both tools accept optional integer `timeout_ms` from 0 to 60000; defaults are 7000 for run and 5000 for stop. Run shares its deadline across switching, startup and the existing up-to-1200 ms early-exit check. A new game exiting during that check retains `status: "started_but_exited"`. Zero dispatches the request and checks immediately. Stop yields editor frames until shutdown is observed; an already-stopped project succeeds with `stopped_after_ms: 0`. A timeout reports an error and the observed game state. Existing runtime-window policy still applies.

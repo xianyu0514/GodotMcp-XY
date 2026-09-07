@@ -9,6 +9,7 @@ const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_pol
 const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
 const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
 const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
+const SCRIPT_WRITE_DIAGNOSTICS = preload("res://addons/godot_mcp/utils/script_write_diagnostics.gd")
 
 var _editor_interface: EditorInterface = null
 
@@ -1441,7 +1442,7 @@ func _tool_batch_read_scripts(params: Dictionary) -> Dictionary:
 
 func _register_create_script(server_core: RefCounted) -> void:
 	var tool_name: String = "create_script"
-	var description: String = "Create a new GDScript (.gd) or C# (.cs) script file with optional template."
+	var description: String = "Create a new GDScript (.gd) or C# (.cs) script file with optional template. Saved GDScript returns immediate compiler diagnostics; check validation_status separately from write status."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -1486,6 +1487,7 @@ func _register_create_script(server_core: RefCounted) -> void:
 	}
 	
 	# 注册工具
+	output_schema["properties"].merge(SCRIPT_WRITE_DIAGNOSTICS.output_properties())
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_create_script"),
 						  output_schema, annotations,
@@ -1538,8 +1540,12 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
 			_get_editor_interface(), script_path).get("status", "")
 	}
+	result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path))
 
 	if not attach_to_node.is_empty():
+		if result.get("validation_status", "") == "failed":
+			result["attach_warning"] = "Script saved but not attached because compilation failed; inspect diagnostics."
+			return result
 		var editor_interface: EditorInterface = _get_editor_interface()
 		if editor_interface:
 			var node: Node = _resolve_node_path(editor_interface, attach_to_node)
@@ -1697,7 +1703,7 @@ func _get_csharp_script_template(template_name: String, script_class_name: Strin
 
 func _register_modify_script(server_core: RefCounted) -> void:
 	var tool_name: String = "modify_script"
-	var description: String = "Modify the content of an existing GDScript (.gd) or C# (.cs) script file. Can replace entire content or specific lines."
+	var description: String = "Modify the content of an existing GDScript (.gd) or C# (.cs) script file. Can replace entire content or specific lines. Saved GDScript returns immediate compiler diagnostics; check validation_status separately from write status."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -1743,6 +1749,7 @@ func _register_modify_script(server_core: RefCounted) -> void:
 	}
 	
 	# 注册工具
+	output_schema["properties"].merge(SCRIPT_WRITE_DIAGNOSTICS.output_properties())
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_modify_script"),
 						  output_schema, annotations,
@@ -1807,7 +1814,7 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	# 计算行数
 	var line_count: int = final_content.split("\n").size()
 
-	var response: Dictionary = {
+	var result: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
 		"line_count": line_count,
@@ -1815,20 +1822,17 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
 			_get_editor_interface(), script_path).get("status", "")
 	}
-	# 内联校验：编辑→验证从两次往返并为一次。默认只对 .gd 开启（GDScript
-	# 解析器无法校验 C#），可用 validate:false 关闭。
-	if script_path.ends_with(".gd") and bool(params.get("validate", true)):
-		var check: Dictionary = _tool_validate_script({"script_path": script_path, "check_warnings": false})
-		if check.has("error"):
-			response["validation"] = {"valid": true, "note": String(check["error"])}
-		else:
-			var errors: Array = check.get("errors", [])
-			response["validation"] = {
-				"valid": bool(check.get("valid", true)),
-				"error_count": int(check.get("error_count", errors.size())),
-				"errors": errors.slice(0, 5)
-			}
-	return response
+	var validation_enabled: bool = bool(params.get("validate", true))
+	result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path, validation_enabled))
+	if script_path.ends_with(".gd") and validation_enabled:
+		# Preserve the existing summary for clients that already consume it.
+		var errors: Array = []
+		for diagnostic: Dictionary in result["diagnostics"]:
+			if diagnostic["severity"] == "error":
+				errors.append(diagnostic)
+		result["validation"] = {"valid": result["validation_status"] == "passed",
+			"error_count": errors.size(), "errors": errors.slice(0, 5)}
+	return result
 
 # ============================================================================
 # analyze_script - 分析脚本结构（完整版）

@@ -92,3 +92,23 @@ curl -s \
 - Clean up generated files or keep them in ignored test output directories.
 - Do not commit local `user://` settings, tokens or editor cache files.
 - Avoid modifying generated `.uid` files by hand.
+
+## Script, lifecycle and batch recovery checks
+
+For targeted GUT runs, clear the repository's default directory configuration with `-gconfig=`; otherwise `-gtest` can also run the configured full suite:
+
+```bash
+godot --headless --path . -s addons/gut/gut_cmdln.gd -gconfig= -gtest=res://test/unit/tools/test_script_write_diagnostics.gd -gexit
+```
+
+The related fixtures are `test_project_lifecycle.gd` and `test_batch_scene_recovery.gd`. Run the tool directory plus manifest/schema/workflow checks when changing their shared contracts.
+
+Set `GODOT_EXE` to a Godot 4.7 executable before running these isolated editor tests:
+
+```bash
+python test/integration/test_script_write_diagnostics_flow.py
+python test/integration/test_project_lifecycle_flow.py
+python test/integration/test_batch_scene_recovery_flow.py
+```
+
+The diagnostics fixture checks actual source paths, global classes, autoloads, repairs and unchecked languages/templates. Lifecycle uses HTTP MCP to test run/reuse, pause, stop and probe installation. Batch recovery uses the real EditorUndoRedoManager to verify repeated undo/redo, object identity, ownership, saved scenes and history cleanup. Each test creates its own project and cleans it up; remaining `.tmp_adoption_*` logs are local evidence and must not be committed.
