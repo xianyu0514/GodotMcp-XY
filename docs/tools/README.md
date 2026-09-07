@@ -74,3 +74,5 @@ Each category page lists every tool with tier and description:
 To add or change a tool, follow [Contributing → Adding a new MCP tool](../contributing.md#adding-a-new-mcp-tool).
 
 Script writes include immediate compiler diagnostics; run/stop results expose observed readiness and shutdown; batch scene edits preserve original nodes across undo/redo. See [Script](script-tools.md), [Editor](editor-tools.md) and [Node](node-tools.md) for response contracts. These changes add no tools or groups.
+
+Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 232 tools (28 core, 198 advanced, 6 meta).
