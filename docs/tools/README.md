@@ -72,3 +72,5 @@ Each category page lists every tool with tier and description:
 | Meta | `addons/godot_mcp/tools/meta_tools_native.gd` |
 
 To add or change a tool, follow [Contributing → Adding a new MCP tool](../contributing.md#adding-a-new-mcp-tool).
+
+Script writes include immediate compiler diagnostics; run/stop results expose observed readiness and shutdown; batch scene edits preserve original nodes across undo/redo. See [Script](script-tools.md), [Editor](editor-tools.md) and [Node](node-tools.md) for response contracts. These changes add no tools or groups.

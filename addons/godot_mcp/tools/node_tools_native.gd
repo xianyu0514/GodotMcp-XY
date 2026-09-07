@@ -582,7 +582,7 @@ func _get_type_name(type_id: int) -> String:
 func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"batch_scene_node_edits",
-		"Apply multiple create/delete scene node edits inside one editor UndoRedo action so the full structure change undoes in a single step.",
+		"Apply multiple create/delete scene node edits inside one editor UndoRedo action so the full structure change undoes in a single step. Structural conflicts are checked before mutation; undo/redo preserves original nodes and subtree owners.",
 		{
 			"type": "object",
 			"properties": {
@@ -694,153 +694,21 @@ func _resolve_batch_edit_node(node_path: String, batch_created_nodes: Dictionary
 			return batch_created_nodes[key]
 	return null
 
-func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
-	var operations: Array = params.get("operations", [])
-	if operations.is_empty():
-		return {"error": "Missing required parameter: operations"}
-
-	# 形状校验先于环境检查：坏请求在无编辑器（如 headless 测试）时也能被拒绝。
-	for operation in operations:
-		if not (operation is Dictionary):
-			return {"error": "Each operation entry must be an object"}
-		var shape_error: String = validate_batch_edit_operation(operation)
-		if not shape_error.is_empty():
-			return {"error": shape_error}
-
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return {"error": "Editor interface not available"}
-
-	var scene_root: Node = _get_user_scene_root()
-	if not scene_root:
-		return {"error": "No scene is currently open"}
-
+func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, scene_root: Node) -> Dictionary:
 	var prepared_operations: Array = []
-	# 同批次内先建的节点：路径 -> 节点实例。后续 set_property/attach_script/
-	# connect_signal 可以直接作用于本批次新建的节点（例如 create Enemy 后立刻
-	# 挂脚本、连信号）。pending_scripts 记录批次内将挂载的脚本，供信号/方法
-	# 校验在脚本尚未 set 上的时刻使用。
 	var batch_created_nodes: Dictionary = {}
 	var batch_pending_scripts: Dictionary = {}
+	var structural_index: int = 0
 	for operation in operations:
-		if not (operation is Dictionary):
-			return {"error": "Each operation entry must be an object"}
-		var operation_type: String = str(operation.get("type", "")).strip_edges().to_lower()
+		var operation_type: String = String(operation["type"]).strip_edges().to_lower()
 		match operation_type:
-			"create":
-				var parent_path: String = str(operation.get("parent_path", ""))
-				var node_type: String = str(operation.get("node_type", "Node"))
-				var node_name: String = str(operation.get("node_name", "NewNode"))
-				if parent_path.is_empty() or node_name.is_empty():
-					return {"error": "Create operations require parent_path and node_name"}
-				var parent_node: Node = _resolve_node_path(parent_path)
-				if not parent_node:
-					if parent_path == "/root":
-						parent_node = scene_root
-					else:
-						return {"error": "Parent node not found: " + parent_path}
-				var type_error: String = _node_type_error(node_type)
-				if not type_error.is_empty():
-					return {"error": type_error}
-				var new_instance: Variant = ClassDB.instantiate(node_type)
-				if not (new_instance is Node):
-					if new_instance is Object and not (new_instance is RefCounted):
-						(new_instance as Object).free()
-					return {"error": "Failed to instantiate node type '%s' as a Node." % node_type}
-				var new_node: Node = new_instance
-				new_node.name = node_name
-				var created_future_path: String = parent_path.trim_suffix("/").path_join(node_name)
-				batch_created_nodes[created_future_path] = new_node
-				batch_created_nodes[_append_child_path(
-					_make_friendly_path(parent_node, scene_root), node_name)] = new_node
-				prepared_operations.append({
-					"type": "create",
-					"parent": parent_node,
-					"parent_path": parent_path,
-					"node": new_node,
-					"node_type": node_type,
-					"node_name": node_name
-				})
-			"delete":
-				var node_path: String = str(operation.get("node_path", ""))
-				if node_path.is_empty():
-					return {"error": "Delete operations require node_path"}
-				var target_node: Node = _resolve_node_path(node_path)
-				if not target_node:
-					return {"error": "Node not found: " + node_path}
-				var parent: Node = target_node.get_parent()
-				if not parent:
-					return {"error": "Cannot delete scene root"}
-				var node_index: int = target_node.get_index()
-				var duplicated: Node = target_node.duplicate()
-				if duplicated:
-					duplicated.owner = target_node.owner
-				prepared_operations.append({
-					"type": "delete",
-					"node_path": node_path,
-					"parent": parent,
-					"node": target_node,
-					"node_snapshot": duplicated,
-					"node_owner": target_node.owner,
-					"node_name": String(target_node.name),
-					"node_type": target_node.get_class(),
-					"node_index": node_index
-				})
-			"rename":
-				var rename_node_path: String = str(operation.get("node_path", ""))
-				var new_name: String = str(operation.get("new_name", "")).strip_edges()
-				if rename_node_path.is_empty() or new_name.is_empty():
-					return {"error": "Rename operations require node_path and new_name"}
-				var rename_target: Node = _resolve_node_path(rename_node_path)
-				if not rename_target:
-					return {"error": "Node not found: " + rename_node_path}
-				var old_name: String = str(rename_target.name)
-				var rename_parent: Node = rename_target.get_parent()
-				if rename_parent and old_name != new_name and rename_parent.has_node(new_name):
-					return {"error": "Name '" + new_name + "' already exists in parent"}
-				prepared_operations.append({
-					"type": "rename",
-					"node_path": rename_node_path,
-					"node": rename_target,
-					"old_name": old_name,
-					"new_name": new_name,
-					"node_type": rename_target.get_class()
-				})
-			"move":
-				var move_node_path: String = str(operation.get("node_path", ""))
-				var new_parent_path: String = str(operation.get("new_parent_path", ""))
-				var keep_global_transform: bool = bool(operation.get("keep_global_transform", true))
-				if move_node_path.is_empty() or new_parent_path.is_empty():
-					return {"error": "Move operations require node_path and new_parent_path"}
-				var move_target: Node = _resolve_node_path(move_node_path)
-				if not move_target:
-					return {"error": "Node not found: " + move_node_path}
-				var old_parent: Node = move_target.get_parent()
-				if not old_parent:
-					return {"error": "Cannot move scene root"}
-				var move_parent: Node = _resolve_node_path(new_parent_path)
-				if not move_parent:
-					if new_parent_path == "/root":
-						move_parent = scene_root
-					else:
-						return {"error": "New parent not found: " + new_parent_path}
-				if move_target == move_parent:
-					return {"error": "Cannot move node to itself"}
-				if move_target.is_ancestor_of(move_parent):
-					return {"error": "Cannot move node to its own descendant"}
-				prepared_operations.append({
-					"type": "move",
-					"node_path": move_node_path,
-					"node": move_target,
-					"old_parent": old_parent,
-					"new_parent": move_parent,
-					"new_parent_path": new_parent_path,
-					"keep_global_transform": keep_global_transform,
-					"node_owner": move_target.owner,
-					"node_name": String(move_target.name),
-					"node_type": move_target.get_class(),
-					"old_index": move_target.get_index()
-				})
+			"create", "delete", "rename", "move":
+				var prepared: Dictionary = structural[structural_index]
+				structural_index += 1
+				prepared_operations.append(prepared)
+				if operation_type == "create":
+					batch_created_nodes[String(prepared["parent_path"]).trim_suffix("/").path_join(prepared["node_name"])] = prepared["node"]
+					batch_created_nodes[_append_child_path(_make_friendly_path(prepared["parent"], scene_root), prepared["node_name"])] = prepared["node"]
 			"set_property":
 				var prop_node_path: String = str(operation.get("node_path", ""))
 				var prop_target: Node = _resolve_batch_edit_node(prop_node_path, batch_created_nodes)
@@ -954,7 +822,7 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					prepared_operations.append({
 						"type": "connect_signal", "node_path": signal_node_path,
 						"signal_name": signal_name, "method_name": method_name,
-						"already_connected": true
+						"already_connected": true, "node": signal_source, "target": signal_target, "callable": callable
 					})
 				else:
 					prepared_operations.append({
@@ -966,8 +834,275 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"method_name": method_name,
 						"callable": callable
 					})
+	return {"operations": prepared_operations}
+
+func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dictionary:
+	var prepared_operations: Array = []
+	for operation in operations:
+		if not (operation is Dictionary):
+			return {"error": "Each operation entry must be an object"}
+		var operation_type: String = str(operation.get("type", "")).strip_edges().to_lower()
+		match operation_type:
+			"create":
+				var parent_path: String = str(operation.get("parent_path", ""))
+				var node_type: String = str(operation.get("node_type", "Node"))
+				var node_name: String = str(operation.get("node_name", "NewNode"))
+				if parent_path.is_empty() or node_name.is_empty():
+					return {"error": "Create operations require parent_path and node_name"}
+				var parent_node: Node = _resolve_node_path(parent_path)
+				if not parent_node:
+					if parent_path == "/root":
+						parent_node = scene_root
+					else:
+						return {"error": "Parent node not found: " + parent_path}
+				var type_error: String = _node_type_error(node_type)
+				if not type_error.is_empty():
+					return {"error": type_error}
+				prepared_operations.append({
+					"type": "create",
+					"parent": parent_node,
+					"parent_path": parent_path,
+					"scene_root": scene_root,
+					"node_type": node_type,
+					"node_name": node_name
+				})
+			"delete":
+				var node_path: String = str(operation.get("node_path", ""))
+				if node_path.is_empty():
+					return {"error": "Delete operations require node_path"}
+				var target_node: Node = _resolve_node_path(node_path)
+				if not target_node:
+					return {"error": "Node not found: " + node_path}
+				var parent: Node = target_node.get_parent()
+				if not parent or target_node == scene_root:
+					return {"error": "Cannot delete scene root"}
+				var node_index: int = target_node.get_index()
+				prepared_operations.append({
+					"type": "delete",
+					"node_path": node_path,
+					"parent": parent,
+					"node": target_node,
+					"node_owner": target_node.owner,
+					"node_name": String(target_node.name),
+					"node_type": target_node.get_class(),
+					"node_index": node_index
+				})
+			"rename":
+				var rename_node_path: String = str(operation.get("node_path", ""))
+				var new_name: String = str(operation.get("new_name", "")).strip_edges()
+				if rename_node_path.is_empty() or new_name.is_empty():
+					return {"error": "Rename operations require node_path and new_name"}
+				var rename_target: Node = _resolve_node_path(rename_node_path)
+				if not rename_target:
+					return {"error": "Node not found: " + rename_node_path}
+				var old_name: String = str(rename_target.name)
+				prepared_operations.append({
+					"type": "rename",
+					"node_path": rename_node_path,
+					"node": rename_target,
+					"old_name": old_name,
+					"new_name": new_name,
+					"node_type": rename_target.get_class()
+				})
+			"move":
+				var move_node_path: String = str(operation.get("node_path", ""))
+				var new_parent_path: String = str(operation.get("new_parent_path", ""))
+				var keep_global_transform: bool = bool(operation.get("keep_global_transform", true))
+				if move_node_path.is_empty() or new_parent_path.is_empty():
+					return {"error": "Move operations require node_path and new_parent_path"}
+				var move_target: Node = _resolve_node_path(move_node_path)
+				if not move_target:
+					return {"error": "Node not found: " + move_node_path}
+				var old_parent: Node = move_target.get_parent()
+				if not old_parent or move_target == scene_root:
+					return {"error": "Cannot move scene root"}
+				var move_parent: Node = _resolve_node_path(new_parent_path)
+				if not move_parent:
+					if new_parent_path == "/root":
+						move_parent = scene_root
+					else:
+						return {"error": "New parent not found: " + new_parent_path}
+				if move_target == move_parent:
+					return {"error": "Cannot move node to itself"}
+				if move_target.is_ancestor_of(move_parent):
+					return {"error": "Cannot move node to its own descendant"}
+				prepared_operations.append({
+					"type": "move",
+					"node_path": move_node_path,
+					"node": move_target,
+					"old_parent": old_parent,
+					"new_parent": move_parent,
+					"new_parent_path": new_parent_path,
+					"keep_global_transform": keep_global_transform,
+					"node_owner": move_target.owner,
+					"node_name": String(move_target.name),
+					"node_type": move_target.get_class(),
+					"old_index": move_target.get_index()
+				})
 			_:
 				return {"error": "Unsupported operation type: " + operation_type}
+	var conflict_error: String = _batch_scene_conflict_error(prepared_operations, scene_root)
+	if not conflict_error.is_empty():
+		return {"error": conflict_error}
+	return {"operations": prepared_operations}
+
+# Preflight the evolving hierarchy without allocating nodes or mutating the scene.
+# Paths still resolve against the scene as it was at the start of the request.
+func _batch_scene_conflict_error(operations: Array, scene_root: Node) -> String:
+	var parents: Dictionary = {}
+	var names: Dictionary = {}
+	var occupied: Dictionary = {}
+	var deleted: Dictionary = {}
+	for operation in operations:
+		var kind: String = operation["type"]
+		var node: Node = operation.get("node")
+		var parent: Node = operation.get("parent") if kind == "create" else parents.get(node, node.get_parent())
+		var node_name: String = operation["node_name"] if kind == "create" else names.get(node, String(node.name))
+		var destination: Node = operation["new_parent"] if kind == "move" else parent
+		var new_name: String = operation["new_name"] if kind == "rename" else node_name
+		if new_name.is_empty() or new_name.validate_node_name() != new_name or new_name in [".", ".."]:
+			return "Invalid node name: " + new_name
+		var required_nodes: Array = [parent, destination] if kind == "create" else [node, destination]
+		if kind == "connect_signal":
+			required_nodes.append(operation["target"])
+		for required in required_nodes:
+			var cursor: Node = required
+			while cursor and cursor != scene_root:
+				if deleted.has(cursor):
+					return "Operation targets a node or parent deleted earlier in the batch"
+				cursor = parents.get(cursor, cursor.get_parent())
+			if cursor != scene_root and not (node == scene_root and kind not in ["create", "delete", "move"]):
+				return "Operation targets a node outside the edited scene"
+		if kind in ["set_property", "attach_script", "connect_signal"]:
+			continue
+		if kind == "move":
+			var cursor: Node = destination
+			while cursor:
+				if cursor == node:
+					return "Cannot move node to itself or its own descendant"
+				cursor = parents.get(cursor, cursor.get_parent())
+		for container in [parent, destination]:
+			if container and not occupied.has(container):
+				var children: Dictionary = {}
+				for child in container.get_children():
+					children[String(child.name)] = child
+				occupied[container] = children
+		if kind != "create" and parent:
+			occupied[parent].erase(node_name)
+		if kind == "delete":
+			deleted[node] = true
+			continue
+		if destination:
+			if occupied[destination].has(new_name):
+				return "Name '" + new_name + "' already exists in parent in this batch"
+			occupied[destination][new_name] = node if node else true
+		if node:
+			parents[node] = destination
+			names[node] = new_name
+	return ""
+
+func _capture_batch_node_owners(node: Node, owners: Array) -> void:
+	owners.append({"node": node, "owner": node.owner})
+	for child in node.get_children(true):
+		_capture_batch_node_owners(child, owners)
+
+func _restore_batch_node_owners(owners: Array) -> void:
+	for entry in owners:
+		var node: Node = entry["node"]
+		var owner: Node = entry["owner"]
+		if owner == null or owner.is_ancestor_of(node):
+			node.owner = owner
+
+# Each undo method restores one complete operation. The action registers these
+# methods in reverse operation order, without reversing add_child/set_owner.
+func _apply_batch_scene_node_edit(operation: Dictionary, undo: bool = false) -> void:
+	var node: Node = operation["node"]
+	var kind: String = operation["type"]
+	if undo:
+		match kind:
+			"set_property":
+				if operation["restore_bound"]:
+					node.set(operation["property_name"], operation["restore_value"])
+			"attach_script":
+				node.set_script(operation["restore_script"])
+			"connect_signal":
+				if operation["connected_by_batch"] and node.is_connected(operation["signal_name"], operation["callable"]):
+					node.disconnect(operation["signal_name"], operation["callable"])
+			"create":
+				node.get_parent().remove_child(node)
+			"delete":
+				operation["restore_parent"].add_child(node)
+				operation["restore_parent"].move_child(node, operation["restore_index"])
+				_restore_batch_node_owners(operation["owners"])
+			"rename":
+				node.name = operation["restore_name"]
+			"move":
+				node.reparent(operation["restore_parent"], operation["keep_global_transform"])
+				operation["restore_parent"].move_child(node, operation["restore_index"])
+				_restore_batch_node_owners(operation["owners"])
+		return
+	match kind:
+		"set_property":
+			operation["restore_bound"] = String(operation["property_name"]) in node
+			operation["restore_value"] = node.get(operation["property_name"])
+			node.set(operation["property_name"], operation["new_value"])
+		"attach_script":
+			operation["restore_script"] = node.get_script()
+			node.set_script(operation["new_script"])
+		"connect_signal":
+			operation["connected_by_batch"] = not bool(operation.get("already_connected", false)) and not node.is_connected(operation["signal_name"], operation["callable"])
+			if operation["connected_by_batch"]:
+				node.connect(operation["signal_name"], operation["callable"], Object.CONNECT_PERSIST)
+		"create":
+			operation["parent"].add_child(node)
+			node.owner = operation["scene_root"]
+		"delete", "move":
+			operation["restore_parent"] = node.get_parent()
+			operation["restore_index"] = node.get_index()
+			var owners: Array = []
+			_capture_batch_node_owners(node, owners)
+			operation["owners"] = owners
+			if kind == "delete":
+				node.get_parent().remove_child(node)
+			else:
+				node.reparent(operation["new_parent"], operation["keep_global_transform"])
+				_restore_batch_node_owners(owners)
+		"rename":
+			operation["restore_name"] = node.name
+			node.name = operation["new_name"]
+	if kind != "delete":
+		# Earlier operations may already have renamed this node or its parent.
+		# Capture the actual path at this step instead of predicting from input.
+		operation["applied_path"] = _make_friendly_path(node, operation["scene_root"])
+		if kind == "move":
+			operation["applied_parent_path"] = _make_friendly_path(node.get_parent(), operation["scene_root"])
+
+func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
+	if not params.get("operations", []) is Array:
+		return {"error": "operations must be an array"}
+	var operations: Array = params.get("operations", [])
+	if operations.is_empty():
+		return {"error": "Missing required parameter: operations"}
+	for operation in operations:
+		if not operation is Dictionary:
+			return {"error": "Each operation entry must be an object"}
+		var shape_error: String = validate_batch_edit_operation(operation)
+		if not shape_error.is_empty():
+			return {"error": shape_error}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	var scene_root: Node = _get_user_scene_root()
+	if not scene_root:
+		return {"error": "No scene is currently open"}
+	var structural_operations: Array = []
+	for operation in operations:
+		if String(operation["type"]).strip_edges().to_lower() in ["create", "delete", "rename", "move"]:
+			structural_operations.append(operation)
+	var preparation: Dictionary = _prepare_batch_scene_node_edits(structural_operations, scene_root)
+	if preparation.has("error"):
+		return preparation
+	var prepared_operations: Array = preparation["operations"]
 
 	var label: String = str(params.get("label", "Batch Scene Node Edits")).strip_edges()
 	if label.is_empty():
@@ -977,15 +1112,42 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 	if not undo_redo:
 		return {"error": "Editor UndoRedo is not available"}
 
-	undo_redo.create_action(label)
+	# Instantiation is delayed until all inputs and the undo manager are validated.
+	var allocated: Array[Node] = []
+	for prepared in prepared_operations:
+		prepared["scene_root"] = scene_root
+		if prepared["type"] == "create":
+			var instance: Variant = ClassDB.instantiate(prepared["node_type"])
+			if not instance is Node:
+				if instance is Object and not instance is RefCounted:
+					instance.free()
+				for pending in allocated:
+					pending.free()
+				return {"error": "Failed to instantiate node type: " + prepared["node_type"]}
+			instance.name = prepared["node_name"]
+			prepared["node"] = instance
+			allocated.append(instance)
+	var extended: Dictionary = _prepare_extended_batch_scene_edits(operations, prepared_operations, scene_root)
+	if extended.has("error"):
+		for pending in allocated:
+			pending.free()
+		return extended
+	prepared_operations = extended["operations"]
+	var conflict: String = _batch_scene_conflict_error(prepared_operations, scene_root)
+	if not conflict.is_empty():
+		for pending in allocated:
+			pending.free()
+		return {"error": conflict}
+	for prepared in prepared_operations:
+		prepared["scene_root"] = scene_root
+	undo_redo.create_action(label, UndoRedo.MERGE_DISABLE, scene_root)
 	var result_operations: Array = []
 	for prepared in prepared_operations:
+		undo_redo.add_do_method(self, "_apply_batch_scene_node_edit", prepared)
 		if prepared["type"] == "create":
 			var created_parent: Node = prepared["parent"]
 			var created_node: Node = prepared["node"]
-			undo_redo.add_do_method(created_parent, "add_child", created_node)
-			undo_redo.add_do_method(created_node, "set_owner", scene_root)
-			undo_redo.add_undo_method(created_parent, "remove_child", created_node)
+			undo_redo.add_do_reference(created_node)
 			result_operations.append({
 				"type": "create",
 				"node_path": _append_child_path(_make_friendly_path(created_parent, scene_root), prepared["node_name"]),
@@ -994,13 +1156,8 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 		else:
 			match String(prepared["type"]):
 				"delete":
-					var deleted_parent: Node = prepared["parent"]
 					var deleted_node: Node = prepared["node"]
-					var deleted_snapshot: Node = prepared["node_snapshot"]
-					undo_redo.add_do_method(deleted_parent, "remove_child", deleted_node)
-					undo_redo.add_undo_method(deleted_parent, "add_child", deleted_snapshot)
-					undo_redo.add_undo_method(deleted_snapshot, "set_owner", prepared["node_owner"])
-					undo_redo.add_undo_method(deleted_parent, "move_child", deleted_snapshot, prepared["node_index"])
+					undo_redo.add_undo_reference(deleted_node)
 					result_operations.append({
 						"type": "delete",
 						"node_path": prepared["node_path"],
@@ -1008,8 +1165,6 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 					})
 				"rename":
 					var renamed_node: Node = prepared["node"]
-					undo_redo.add_do_property(renamed_node, "name", prepared["new_name"])
-					undo_redo.add_undo_property(renamed_node, "name", prepared["old_name"])
 					var renamed_parent_path: String = _make_friendly_path(renamed_node.get_parent(), scene_root)
 					result_operations.append({
 						"type": "rename",
@@ -1020,15 +1175,7 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"node_type": prepared["node_type"]
 					})
 				"move":
-					var moved_node: Node = prepared["node"]
-					var old_parent_ref: Node = prepared["old_parent"]
 					var new_parent_ref: Node = prepared["new_parent"]
-					var preserve_global: bool = bool(prepared["keep_global_transform"])
-					undo_redo.add_do_method(moved_node, "reparent", new_parent_ref, preserve_global)
-					undo_redo.add_do_method(moved_node, "set_owner", prepared["node_owner"])
-					undo_redo.add_undo_method(moved_node, "reparent", old_parent_ref, preserve_global)
-					undo_redo.add_undo_method(moved_node, "set_owner", prepared["node_owner"])
-					undo_redo.add_undo_method(old_parent_ref, "move_child", moved_node, prepared["old_index"])
 					var friendly_new_parent_path: String = _make_friendly_path(new_parent_ref, scene_root)
 					result_operations.append({
 						"type": "move",
@@ -1038,51 +1185,24 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 						"node_type": prepared["node_type"]
 					})
 				"set_property":
-					var property_node: Node = prepared["node"]
-					if bool(prepared.get("via_method", false)):
-						undo_redo.add_do_method(property_node, "set",
-							prepared["property_name"], prepared["new_value"])
-					else:
-						undo_redo.add_do_property(property_node, prepared["property_name"], prepared["new_value"])
-						undo_redo.add_undo_property(property_node, prepared["property_name"], prepared["old_value"])
-					# 编辑器中非 @export 脚本变量不绑定成员（占位实例）；诚实上报。
-					var bound_now: bool = String(prepared["property_name"]) in property_node
-					var prop_entry: Dictionary = {
-						"type": "set_property",
-						"node_path": prepared["node_path"],
-						"property_name": prepared["property_name"],
-						"old_value": _serialize_value(prepared["old_value"]),
-						# 此循环在 commit 前运行，读节点仍是旧值；报告已转换的待应用值。
-						"new_value": _serialize_value(prepared["new_value"]),
-						"bound": bound_now
-					}
-					if not bound_now:
-						prop_entry["note"] = "non-exported script variables do not bind on editor scene nodes; mark the variable @export"
-					result_operations.append(prop_entry)
+					result_operations.append({"type": "set_property", "node_path": prepared["node_path"], "property_name": prepared["property_name"], "old_value": _serialize_value(prepared["old_value"]), "new_value": _serialize_value(prepared["new_value"]), "bound": not bool(prepared["via_method"])})
+					if prepared["via_method"]:
+						result_operations.back()["note"] = "non-exported script variables do not bind on editor scene nodes; mark the variable @export"
 				"attach_script":
-					var attach_node: Node = prepared["node"]
-					undo_redo.add_do_method(attach_node, "set_script", prepared["new_script"])
-					undo_redo.add_undo_method(attach_node, "set_script", prepared["old_script"])
-					result_operations.append({
-						"type": "attach_script",
-						"node_path": prepared["node_path"]
-					})
+					result_operations.append({"type": "attach_script", "node_path": prepared["node_path"]})
 				"connect_signal":
-					if not bool(prepared.get("already_connected", false)):
-						var signal_source_node: Node = prepared["node"]
-						var signal_callable: Callable = prepared["callable"]
-						undo_redo.add_do_method(signal_source_node, "connect",
-							prepared["signal_name"], signal_callable)
-						undo_redo.add_undo_method(signal_source_node, "disconnect",
-							prepared["signal_name"], signal_callable)
-					result_operations.append({
-						"type": "connect_signal",
-						"node_path": prepared["node_path"],
-						"signal_name": prepared["signal_name"],
-						"method_name": prepared["method_name"],
-						"already_connected": bool(prepared.get("already_connected", false))
-					})
+					result_operations.append({"type": "connect_signal", "node_path": prepared["node_path"], "signal_name": prepared["signal_name"], "method_name": prepared["method_name"], "already_connected": bool(prepared.get("already_connected", false))})
+	for index in range(prepared_operations.size() - 1, -1, -1):
+		undo_redo.add_undo_method(self, "_apply_batch_scene_node_edit", prepared_operations[index], true)
 	undo_redo.commit_action()
+	for index in range(prepared_operations.size()):
+		var prepared: Dictionary = prepared_operations[index]
+		if prepared.has("applied_path"):
+			result_operations[index]["node_path"] = prepared["applied_path"]
+		if prepared["type"] == "move":
+			result_operations[index]["new_parent_path"] = prepared["applied_parent_path"]
+		elif prepared["type"] == "rename":
+			result_operations[index]["old_name"] = String(prepared["restore_name"])
 	editor_interface.mark_scene_as_unsaved()
 
 	var save_requested: bool = bool(params.get("save", false))
@@ -1117,6 +1237,7 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 		if scene_saved:
 			response["scene_path"] = String(scene_root.scene_file_path)
 	return response
+
 
 func _register_audit_scene_node_persistence(server_core: RefCounted) -> void:
 	server_core.register_tool(

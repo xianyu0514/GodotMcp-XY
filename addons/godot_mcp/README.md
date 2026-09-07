@@ -2,6 +2,8 @@
 
 This directory is the distributable Godot addon. Copy `addons/godot_mcp` into any Godot 4.7 project to run an MCP server inside the editor.
 
+Script writes return compiler diagnostics, run/stop report observed game state, and batch scene edits preserve original nodes across undo/redo.
+
 ## What ships here
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.

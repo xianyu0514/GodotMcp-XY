@@ -14,6 +14,7 @@ Where typical Godot MCP servers stop at tool calls, this one closes the loop. `p
 
 ## Highlights
 
+- **Feedback and recovery:** script writes return compiler diagnostics, run/stop report observed game state, and batch scene edits preserve nodes across undo/redo.
 - **Durable goal orchestration:** 12 production profiles compose into a persistent goal DAG with objective-evidence gates, adaptive checkpoint slices, crash-and-resume execution and fail-closed semantics for non-idempotent steps — proven by dedicated end-to-end tests that kill the editor mid-goal and resume to completion.
 - **Honest evidence gates:** completion requires engine-issued receipts — real script compilation (truncated verifies rejected), genuinely-playing animation checks, per-workflow visual baselines, platform-correct export chains and a durable stderr ring that chatty games cannot flush.
 - **Native server:** the MCP server lives in the editor process and ships with the plugin; HTTP/SSE on `http://localhost:9080/mcp` plus stdio for local-process clients.

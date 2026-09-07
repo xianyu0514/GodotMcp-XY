@@ -11,7 +11,7 @@ const TUNNEL_MANAGER_SCRIPT = preload("res://addons/godot_mcp/native_mcp/mcp_tun
 
 var _editor_interface: EditorInterface = null
 var _editor_operation_in_progress: bool = false
-# Tracks the scene of the last successful play so run_project can reuse a
+# Tracks the scene of the last dispatched play so run_project can reuse a
 # matching live session instead of erroring on "already running".
 var _last_played_scene: String = ""
 # 导出模板下载状态机（工具自身的受信下载路径，不经过 execute_script 沙箱）。
@@ -45,18 +45,6 @@ func _get_debugger_bridge() -> RefCounted:
 		if plugin and plugin.has_method("get_debugger_bridge"):
 			return plugin.get_debugger_bridge()
 	return null
-
-# True once a played game child has connected back to the editor's debug server.
-# The editor only reports an active session when the play actually spawned and
-# connected a child process — a missing/failed scene leaves it inactive.
-func _has_active_debugger_session() -> bool:
-	var bridge: RefCounted = _get_debugger_bridge()
-	if not bridge:
-		return false
-	for session in bridge.get_sessions_info():
-		if bool(session.get("active", false)):
-			return true
-	return false
 
 func _get_export_templates_root() -> String:
 	var editor_interface: EditorInterface = _get_editor_interface()
@@ -241,7 +229,7 @@ func _tool_get_editor_state(params: Dictionary) -> Dictionary:
 
 func _register_run_project(server_core: RefCounted) -> void:
 	var tool_name: String = "run_project"
-	var description: String = "Run the current project or a specific scene. Launches the game in play mode."
+	var description: String = "Run or reuse the current project or a specific scene. Reports live, launching, no_probe, break or stopped from debugger and runtime-probe evidence; readiness timeout returns pending."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -251,6 +239,7 @@ func _register_run_project(server_core: RefCounted) -> void:
 				"type": "string",
 				"description": "Optional path to a specific scene to run. If not provided, runs the main scene."
 			},
+			"timeout_ms": {"type": "integer", "default": 7000, "description": "Wait budget in milliseconds (0-60000) for stopping a prior scene and observing readiness. Zero requests an immediate status check after dispatch."},
 			"allow_window": {
 				"type": "boolean",
 				"description": "Allow this call to open or control the runtime window when Vibe Coding mode is enabled.",
@@ -264,6 +253,9 @@ func _register_run_project(server_core: RefCounted) -> void:
 		"type": "object",
 		"properties": {
 			"status": {"type": "string"},
+			"success": {"type": "boolean"},
+			"already_running": {"type": "boolean"},
+			"game_status": _game_status_schema(),
 			"mode": {"type": "string"},
 			"scene": {"type": "string"},
 			"session_active": {"type": "boolean"},
@@ -286,6 +278,9 @@ func _register_run_project(server_core: RefCounted) -> void:
 						  "core", "Editor")
 
 func _tool_run_project(params: Dictionary) -> Dictionary:
+	var validation: Dictionary = _validate_lifecycle_params(params)
+	if not validation.is_empty():
+		return validation
 	var policy_result: Dictionary = VIBE_CODING_POLICY.evaluate_runtime_window(_is_vibe_coding_mode(), params)
 	if policy_result.get("blocked", false):
 		return policy_result
@@ -294,96 +289,168 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
 
-	if editor_interface.is_playing_scene():
-		# Idempotent session reuse: re-running the live scene (or leaving the
-		# scene unspecified) succeeds instead of stalling callers that already
-		# started the game; a different scene switches sessions deterministically.
-		var requested_scene: String = String(params.get("scene_path", "")).strip_edges()
-		if requested_scene.is_empty() or requested_scene == _last_played_scene:
-			return {
-				"success": true,
-				"already_running": true,
-				"scene": _last_played_scene
-			}
-		editor_interface.stop_playing_scene()
-		_last_played_scene = ""
-		var settle_tree: SceneTree = Engine.get_main_loop() as SceneTree
-		var settle_deadline: int = Time.get_ticks_msec() + 2000
-		while editor_interface.is_playing_scene() and Time.get_ticks_msec() < settle_deadline:
-			if settle_tree:
-				await settle_tree.process_frame
+	return await _run_project_with_interface(editor_interface, params)
+
+# Accept Object here so lifecycle behavior can be exercised without launching an editor.
+func _run_project_with_interface(editor_interface: Object, params: Dictionary) -> Dictionary:
+	var validation: Dictionary = _validate_lifecycle_params(params)
+	if not validation.is_empty():
+		return validation
+	var requested_scene: String = String(params.get("scene_path", "")).strip_edges()
+	# Validate before touching the existing session. A typo must not stop a game.
+	if not requested_scene.is_empty():
+		if not ResourceLoader.exists(requested_scene, "PackedScene"):
+			return {"error": "Scene file not found or not a PackedScene: " + requested_scene}
+		if not ResourceLoader.load(requested_scene, "PackedScene", ResourceLoader.CACHE_MODE_IGNORE) is PackedScene:
+			return {"error": "Resource is not a PackedScene: " + requested_scene}
+
+	var timeout_ms: int = int(params.get("timeout_ms", 7000))
+	var deadline_ms: int = Time.get_ticks_msec() + timeout_ms
+	var already_running: bool = editor_interface.is_playing_scene() and (requested_scene.is_empty() or requested_scene == _last_played_scene)
+	if editor_interface.is_playing_scene() and not already_running:
+		var stop_result: Dictionary = await _stop_project_with_interface(editor_interface, {"timeout_ms": timeout_ms})
+		if stop_result.has("error"):
+			return stop_result
+
+	var played_scene: String = _last_played_scene
+	if not already_running:
+		var bridge: RefCounted = _get_debugger_bridge()
+		if bridge:
+			bridge.reset_probe_ready()
+		if not requested_scene.is_empty():
+			played_scene = requested_scene
+			editor_interface.play_custom_scene(played_scene)
+		else:
+			var scene_root: Node = _get_user_scene_root()
+			if scene_root:
+				played_scene = scene_root.scene_file_path
+				editor_interface.play_current_scene()
 			else:
+				played_scene = String(ProjectSettings.get_setting("application/run/main_scene", ""))
+				editor_interface.play_main_scene()
+		_last_played_scene = played_scene
+
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	var game_status: Dictionary = _get_game_status(editor_interface)
+	var observed_playing: bool = editor_interface.is_playing_scene()
+	while true:
+		var state: String = game_status["state"]
+		if state == "live" or state == "no_probe" or state == "break":
+			break
+		if state == "stopped" and observed_playing:
+			break
+		if Time.get_ticks_msec() >= deadline_ms or not tree:
+			break
+		await tree.process_frame
+		observed_playing = observed_playing or editor_interface.is_playing_scene()
+		game_status = _get_game_status(editor_interface)
+
+	# Retain the upstream early-exit guard, bounded by the same caller deadline.
+	var started_but_exited: bool = false
+	if not already_running and game_status["state"] in ["live", "no_probe"]:
+		var grace_deadline: int = mini(deadline_ms, Time.get_ticks_msec() + 1200)
+		while tree and Time.get_ticks_msec() < grace_deadline:
+			await tree.process_frame
+			game_status = _get_game_status(editor_interface)
+			if game_status["state"] not in ["live", "no_probe"]:
+				started_but_exited = game_status["state"] == "stopped" or not game_status["session_active"]
 				break
 
-	var scene_path: String = params.get("scene_path", "")
-	var played_scene: String = ""
-
-	if not scene_path.is_empty():
-		if not FileAccess.file_exists(scene_path):
-			return {"error": "Scene file not found: " + scene_path}
-		played_scene = scene_path
-		editor_interface.play_custom_scene(scene_path)
-	else:
-		var scene_root: Node = _get_user_scene_root()
-		if scene_root:
-			played_scene = scene_root.scene_file_path
-			editor_interface.play_current_scene()
-		else:
-			played_scene = String(ProjectSettings.get_setting("application/run/main_scene", ""))
-			editor_interface.play_main_scene()
-
-	# Verify the play actually launched a debuggable child. Without this guard a
-	# failed play (e.g. application/run/main_scene pointing at a missing file)
-	# reports a fake success and leaves callers stuck retrying runtime tools (#172).
-	var tree: SceneTree = Engine.get_main_loop() as SceneTree
-	var connected: bool = false
-	var connect_deadline: int = Time.get_ticks_msec() + 5000
-	while Time.get_ticks_msec() < connect_deadline:
-		if _has_active_debugger_session():
-			connected = true
-			break
-		if tree:
-			await tree.process_frame
-		else:
-			break
-	if not connected:
-		return {
-			"status": "error",
-			"error": "Play was requested but no debugger session became active within the timeout. The scene likely failed to load — check ProjectSettings application/run/main_scene.",
-			"scene": played_scene
-		}
-	_last_played_scene = played_scene
-
-	# Give the runtime probe a brief window to signal ready so callers can use
-	# runtime tools (scene tree, screenshot, expression eval) right away.
-	var bridge: RefCounted = _get_debugger_bridge()
-	var probe_ready: bool = bridge.is_probe_ready() if bridge else false
-	var probe_deadline: int = Time.get_ticks_msec() + 2000
-	while not probe_ready and tree and Time.get_ticks_msec() < probe_deadline:
-		await tree.process_frame
-		probe_ready = bridge.is_probe_ready() if bridge else false
-
-	# Grace check: a parse error or early crash kills the debugger session within
-	# the first moments. Reporting success there is a false positive — the engine
-	# verdict must see "started_but_exited" so gates fail honestly.
-	var grace_deadline: int = Time.get_ticks_msec() + 1200
-	while tree and Time.get_ticks_msec() < grace_deadline:
-		await tree.process_frame
-		if not _has_active_debugger_session():
-			_last_played_scene = ""
-			return {
-				"status": "started_but_exited",
-				"error": "The game process exited shortly after launch (parse error or early crash). Check get_editor_logs / assert_no_runtime_errors evidence.",
-				"scene": played_scene,
-				"probe_ready": probe_ready
-			}
-
-	return {
+	var result: Dictionary = {
+		"success": game_status["state"] == "live" or game_status["state"] == "no_probe",
 		"status": "success",
-		"mode": "playing",
+		"mode": "editor" if game_status["state"] == "stopped" else "playing",
 		"scene": played_scene,
-		"session_active": true,
-		"probe_ready": probe_ready
+		"already_running": already_running,
+		"session_active": game_status["session_active"],
+		"probe_ready": game_status["probe_ready"],
+		"game_status": game_status
+	}
+	match game_status["state"]:
+		"launching":
+			result["status"] = "pending"
+			result["hint"] = "Play was requested, but readiness is not yet confirmed. Call run_project again to check this session; inspect debugger messages if startup remains pending."
+		"break":
+			result["status"] = "error"
+			result["error"] = "The debugger session is paused at a breakpoint or runtime error. Inspect the debugger before continuing."
+		"stopped":
+			_last_played_scene = ""
+			result["status"] = "started_but_exited" if started_but_exited else "error"
+			result["error"] = "The game is stopped; launch did not remain active. Inspect editor logs for details."
+		"no_probe":
+			result["hint"] = "The debugger is connected without an installed runtime probe. Runtime readiness is not verified; install_runtime_probe enables runtime inspection."
+	if started_but_exited:
+		_last_played_scene = ""
+		result["status"] = "started_but_exited"
+		result["success"] = false
+		result["error"] = "The game exited or its debugger disconnected shortly after launch. Inspect get_editor_logs / assert_no_runtime_errors before retrying."
+		result.erase("hint")
+	return result
+
+func _validate_lifecycle_params(params: Dictionary) -> Dictionary:
+	if params.has("scene_path") and not params["scene_path"] is String:
+		return {"error": "scene_path must be a string"}
+	if params.has("timeout_ms"):
+		var timeout_value: Variant = params["timeout_ms"]
+		if not (timeout_value is int or timeout_value is float):
+			return {"error": "timeout_ms must be an integer between 0 and 60000"}
+		if not is_finite(timeout_value as float) or timeout_value < 0 or timeout_value > 60000 or timeout_value != int(timeout_value):
+			return {"error": "timeout_ms must be an integer between 0 and 60000"}
+	return {}
+
+func _is_runtime_probe_installed() -> bool:
+	# install_runtime_probe accepts custom singleton names, so inspect paths.
+	for property_info: Dictionary in ProjectSettings.get_property_list():
+		var setting_name: String = String(property_info.get("name", ""))
+		if not setting_name.begins_with("autoload/"):
+			continue
+		var path: String = String(ProjectSettings.get_setting(setting_name, "")).trim_prefix("*")
+		if path == "res://addons/godot_mcp/runtime/mcp_runtime_probe.gd":
+			return true
+	return false
+
+func _get_game_status(editor_interface: Object) -> Dictionary:
+	var game_status: Dictionary = {
+		"state": "stopped",
+		"session_active": false,
+		"probe_ready": false,
+		"probe_installed": _is_runtime_probe_installed()
+	}
+	if not editor_interface.is_playing_scene():
+		return game_status
+	game_status["state"] = "launching"
+	var bridge: RefCounted = _get_debugger_bridge()
+	if not bridge:
+		return game_status
+	var all_probes_ready: bool = true
+	var breaked: bool = false
+	for session: Dictionary in bridge.get_sessions_info():
+		if not bool(session.get("active", false)):
+			continue
+		game_status["session_active"] = true
+		breaked = breaked or bool(session.get("breaked", false))
+		# Ignore ready notifications left behind by inactive sessions.
+		all_probes_ready = all_probes_ready and bridge.is_probe_ready(int(session.get("session_id", -1)))
+	if not game_status["session_active"]:
+		return game_status
+	game_status["probe_ready"] = all_probes_ready
+	if breaked:
+		game_status["state"] = "break"
+	elif all_probes_ready:
+		game_status["state"] = "live"
+	elif not game_status["probe_installed"]:
+		game_status["state"] = "no_probe"
+	return game_status
+
+func _game_status_schema() -> Dictionary:
+	return {
+		"type": "object",
+		"properties": {
+			"state": {"type": "string", "enum": ["live", "launching", "no_probe", "break", "stopped"]},
+			"session_active": {"type": "boolean"},
+			"probe_ready": {"type": "boolean"},
+			"probe_installed": {"type": "boolean"}
+		}
 	}
 
 # ============================================================================
@@ -392,12 +459,13 @@ func _tool_run_project(params: Dictionary) -> Dictionary:
 
 func _register_stop_project(server_core: RefCounted) -> void:
 	var tool_name: String = "stop_project"
-	var description: String = "Stop the currently running project and return to editor mode."
+	var description: String = "Stop the running project without blocking editor frames. Repeated stops succeed; report success only after the editor confirms shutdown, otherwise return a timeout error."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
+			"timeout_ms": {"type": "integer", "default": 5000, "description": "Wait budget in milliseconds (0-60000) for the editor to confirm shutdown. Zero dispatches stop and checks once."},
 			"allow_window": {
 				"type": "boolean",
 				"description": "Allow this call to control the runtime window when Vibe Coding mode is enabled.",
@@ -410,6 +478,8 @@ func _register_stop_project(server_core: RefCounted) -> void:
 		"type": "object",
 		"properties": {
 			"status": {"type": "string"},
+			"success": {"type": "boolean"},
+			"game_status": _game_status_schema(),
 			"mode": {"type": "string"},
 			"stopped_after_ms": {"type": "integer"}
 		}
@@ -430,6 +500,9 @@ func _register_stop_project(server_core: RefCounted) -> void:
 						  "core", "Editor")
 
 func _tool_stop_project(params: Dictionary) -> Dictionary:
+	var validation: Dictionary = _validate_lifecycle_params(params)
+	if not validation.is_empty():
+		return validation
 	var policy_result: Dictionary = VIBE_CODING_POLICY.evaluate_runtime_window(_is_vibe_coding_mode(), params)
 	if policy_result.get("blocked", false):
 		return policy_result
@@ -438,25 +511,38 @@ func _tool_stop_project(params: Dictionary) -> Dictionary:
 	if not editor_interface:
 		return {"error": "Editor interface not available"}
 
-	if not editor_interface.is_playing_scene():
-		return {"error": "Project is not currently running."}
+	return await _stop_project_with_interface(editor_interface, params)
 
-	editor_interface.stop_playing_scene()
-	_last_played_scene = ""
-
-	# Wait for the process to fully exit (up to 5s)
-	var max_wait_ms: int = 5000
-	var wait_interval_ms: int = 200
-	var waited_ms: int = 0
-	while editor_interface.is_playing_scene() and waited_ms < max_wait_ms:
-		OS.delay_msec(wait_interval_ms)
-		waited_ms += wait_interval_ms
-
-	return {
-		"status": "success",
-		"mode": "editor",
-		"stopped_after_ms": waited_ms
+func _stop_project_with_interface(editor_interface: Object, params: Dictionary) -> Dictionary:
+	var validation: Dictionary = _validate_lifecycle_params(params)
+	if not validation.is_empty():
+		return validation
+	var started_ms: int = Time.get_ticks_msec()
+	var deadline_ms: int = started_ms + int(params.get("timeout_ms", 5000))
+	var was_playing: bool = editor_interface.is_playing_scene()
+	if was_playing:
+		editor_interface.stop_playing_scene()
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	# The editor needs process frames to observe the child exit. Blocking this
+	# thread delays both shutdown and unrelated MCP requests.
+	while editor_interface.is_playing_scene() and Time.get_ticks_msec() < deadline_ms:
+		if not tree:
+			break
+		await tree.process_frame
+	var game_status: Dictionary = _get_game_status(editor_interface)
+	var stopped: bool = game_status["state"] == "stopped"
+	var result: Dictionary = {
+		"success": stopped,
+		"status": "success" if stopped else "error",
+		"mode": "editor" if stopped else "playing",
+		"stopped_after_ms": Time.get_ticks_msec() - started_ms if was_playing else 0,
+		"game_status": game_status
 	}
+	if stopped:
+		_last_played_scene = ""
+	else:
+		result["error"] = "Stop was requested, but the editor still reports a running game after the timeout."
+	return result
 
 # ============================================================================
 # get_selected_nodes - 获取选中的节点

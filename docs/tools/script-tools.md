@@ -21,8 +21,8 @@ Read, create, modify, validate and search project scripts. The category supports
 | --- | --- | --- |
 | `list_project_scripts` | core | List GDScript (.gd) and C# (.cs) script files in the project. Supports `limit`/`offset` pagination; `count` is the page size and `total_count` is the full total. Returns paths relative to res://. |
 | `read_script` | core | Read the content of a GDScript file (.gd). Returns the complete script source code. |
-| `create_script` | core | Create a new GDScript file with optional template. GDScript files are complete programs, not resource files. |
-| `modify_script` | core | Modify the content of an existing GDScript file. Can replace entire content or specific lines. After writing, `.gd` files are inline-validated (`validate: false` skips) and the response carries a `validation` summary with the first errors, merging the edit→verify loop into one round trip. |
+| `create_script` | core | Create a GDScript or C# file; return immediate GDScript diagnostics separately from file-write success. |
+| `modify_script` | core | Replace a script or a single line; validate the saved GDScript at its actual resource path. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
 | `attach_script` | core | Attach a script to a node. |
 | `execute_script` | advanced | Execute a script in the editor context. Guarded by the script sandbox under STRICT security (both the multi-line and single-line expression paths). |
@@ -42,3 +42,11 @@ Read, create, modify, validate and search project scripts. The category supports
 | `find_script_symbol_references` | advanced | Find textual project references to a script symbol across GDScript, C#, and scene files. |
 | `rename_script_symbol` | advanced | Rename a script symbol across project files using identifier-boundary text replacements. Supports dry-run previews before applying changes. |
 | `open_script_at_line` | advanced | Open a script file at a specific line number in the Godot editor. |
+
+## Diagnostics after script writes
+
+`create_script` and `modify_script` retain `status: "success"` for a successful file write. Inspect `validation_status` separately: `passed`, `failed` or `not_checked`. A saved file can still contain compiler errors; failed validation does not roll back the requested write. Creation skips optional node attachment when compilation fails. `modify_script` preserves its existing `validation` summary; `validate: false` skips compilation, returns `not_checked` and omits that legacy summary.
+
+`diagnostics` contains up to 64 entries with `severity`, `path`, `line` (1-based, or 0 when unavailable) and `message`; `diagnostics_truncated` indicates omitted entries. `validation_hint` explains failures or skipped checks. C# requires a .NET build. Project script-template paths skipped by Godot return `not_checked`.
+
+Loading at the saved path retains relative preloads, registered global classes and editor autoload context. Godot may refresh an existing Script resource; dependent scripts retain normal engine cache semantics. After related writes, use `verify_scripts` and runtime verification before treating a feature as complete.
