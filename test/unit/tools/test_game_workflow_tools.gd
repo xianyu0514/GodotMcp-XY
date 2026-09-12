@@ -934,3 +934,45 @@ func test_movement_and_pause_goal_derives_combined_exercise() -> void:
 		assert_true(has_pause, "combined exercise keeps pause/resume asserts")
 		return
 	fail_test("play_and_verify task not found for combined goal")
+
+func test_save_goal_derives_save_and_restore_exercises() -> void:
+	# 存档链两侧门禁各有专属演练（N3），通用 play 门禁对存档目标给移动演练。
+	var planned: Dictionary = _plan(["gameplay_feature"], "加存档读档：关闭进程再启动进度还在")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var by_key: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		by_key[String(task.get("step_key", ""))] = task
+	assert_true(by_key.has("save_play"), "plan carries the save gate")
+	assert_true(by_key.has("restore_play"), "plan carries the restore gate")
+
+	var save_args: Dictionary = _tools._derive_step_arguments(
+		loaded, by_key["save_play"], "play_and_verify",
+		_tools._resolve_inputs(by_key["save_play"], {}, false))
+	assert_eq(str((by_key["save_play"].get("derived_inputs", {}) as Dictionary).get("steps", "")),
+		"save-exercise")
+	var save_actions: Array = []
+	for step_value in save_args.get("steps", []):
+		var step: Dictionary = step_value
+		if bool(step.get("pressed", false)):
+			save_actions.append(step.get("action"))
+	assert_eq(save_actions, ["move_right", "save_game"])
+
+	var restore_args: Dictionary = _tools._derive_step_arguments(
+		loaded, by_key["restore_play"], "play_and_verify",
+		_tools._resolve_inputs(by_key["restore_play"], {}, false))
+	assert_eq(str((by_key["restore_play"].get("derived_inputs", {}) as Dictionary).get("steps", "")),
+		"save-restore-exercise")
+	var restore_steps: Array = restore_args.get("steps", [])
+	assert_eq(str(((restore_steps[0] as Dictionary).get("assert", {}) as Dictionary).get("expression", "")),
+		"position.x")
+
+	# 通用 play_verify 对存档目标派生移动演练（蓝图口径：存档暗含移动）
+	var generic_args: Dictionary = _tools._derive_step_arguments(
+		loaded, by_key["play_verify"], "play_and_verify",
+		_tools._resolve_inputs(by_key["play_verify"], {}, false))
+	assert_eq(str((by_key["play_verify"].get("derived_inputs", {}) as Dictionary).get("steps", "")),
+		"movement-exercise")

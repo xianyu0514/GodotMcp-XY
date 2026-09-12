@@ -30,6 +30,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 	"pause", "paused", "esc menu", "pause menu",
 	"暂停", "暂停菜单",
 ]
+# 存档动词：命中即生成 save/load（user:// JSON）+ 自动读档 + save_game 动作
+# 触发（F5，由工作流 upsert）。存档暗含移动：没有会变化的状态就没有可
+# 持久化的东西——位置与金币数即被保存的状态。
+const SAVE_KEYWORDS: Array[String] = [
+	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
+]
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -45,13 +51,15 @@ static func match_verbs(objective: String) -> Dictionary:
 		"collectible": _mentions(objective, COLLECTIBLE_KEYWORDS),
 		"win": _mentions(objective, WIN_KEYWORDS),
 		"pause": _mentions(objective, PAUSE_KEYWORDS),
+		"save": _mentions(objective, SAVE_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
 	return bool(verbs.get("movement", false)) \
 		or bool(verbs.get("collectible", false)) \
 		or bool(verbs.get("win", false)) \
-		or bool(verbs.get("pause", false))
+		or bool(verbs.get("pause", false)) \
+		or bool(verbs.get("save", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
@@ -60,6 +68,9 @@ static func controller_script(objective: String) -> String:
 		return ""
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
 	var needs_pause: bool = bool(verbs.get("pause", false))
+	var needs_save: bool = bool(verbs.get("save", false))
+	# 存档暗含移动：没有会变化的状态就没有可持久化的东西。
+	var needs_movement: bool = bool(verbs.get("movement", false)) or needs_save
 
 	var source: String = "# Goal blueprint: minimal playable controller.\n"
 	source += "extends CharacterBody2D\n\n"
@@ -67,11 +78,15 @@ static func controller_script(objective: String) -> String:
 	source += "const SPEED: float = 260.0\n"
 	if needs_pickup:
 		source += "const COINS_TO_WIN: int = 1\n"
+	if needs_save:
+		source += "const SAVE_PATH := \"user://save_game.json\"\n"
 	source += "\nvar coins_collected: int = 0\n"
 	if needs_pickup:
 		source += "var _coin_area: Area2D\nvar _win_label: Label\n"
 	if needs_pause:
 		source += "var _pause_label: Label\n"
+	if needs_save:
+		source += "var last_save_ok: bool = false\n"
 	source += "\nfunc _ready() -> void:\n"
 	if needs_pause:
 		# 控制器必须在暂停期间继续接收输入，否则 Esc 无法恢复游戏。
@@ -107,18 +122,24 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
-	if bool(verbs.get("movement", false)) or needs_pause:
+	if needs_save:
+		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
+		source += "\tload_game()\n"
+	if needs_movement or needs_pause:
 		# 单一 _physics_process：暂停开关用状态轮询（Input.is_action_just_pressed
 		# 依赖动作状态，运行时探针的动作模拟正是设置状态——事件派发路径
 		# （_unhandled_input）对模拟动作不可靠，真实编辑器 E2E 实测抓到）。
 		# 暂停期间提前 return：世界（含本控制器驱动的移动）必须停下。
 		source += "\nfunc _physics_process(_delta: float) -> void:\n"
+		if needs_save:
+			source += "\tif Input.is_action_just_pressed(\"save_game\"):\n"
+			source += "\t\tlast_save_ok = save_game()\n"
 		if needs_pause:
 			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
 			source += "\t\tset_paused(not get_tree().paused)\n"
 			source += "\tif get_tree().paused:\n"
 			source += "\t\treturn\n"
-		if bool(verbs.get("movement", false)):
+		if needs_movement:
 			source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_up\", \"move_down\")\n"
 			source += "\tif direction == Vector2.ZERO:\n"
 			source += "\t\tdirection = Vector2(\n"
@@ -140,4 +161,24 @@ static func controller_script(objective: String) -> String:
 		source += "\tget_tree().paused = value\n"
 		source += "\tif _pause_label != null:\n"
 		source += "\t\t_pause_label.visible = value\n"
+	if needs_save:
+		source += "\nfunc save_game() -> bool:\n"
+		source += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
+		source += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)\n"
+		source += "\tif file == null:\n"
+		source += "\t\treturn false\n"
+		source += "\tfile.store_string(JSON.stringify(data))\n"
+		source += "\treturn true\n"
+		source += "\nfunc load_game() -> bool:\n"
+		source += "\tif not FileAccess.file_exists(SAVE_PATH):\n"
+		source += "\t\treturn false\n"
+		source += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.READ)\n"
+		source += "\tif file == null:\n"
+		source += "\t\treturn false\n"
+		source += "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())\n"
+		source += "\tif not (parsed is Dictionary):\n"
+		source += "\t\treturn false\n"
+		source += "\tcoins_collected = int(parsed.get(\"coins\", 0))\n"
+		source += "\tposition = Vector2(float(parsed.get(\"x\", 0.0)), float(parsed.get(\"y\", 0.0)))\n"
+		source += "\treturn true\n"
 	return source

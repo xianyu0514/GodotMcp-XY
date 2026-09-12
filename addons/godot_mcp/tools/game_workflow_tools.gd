@@ -737,27 +737,20 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
 	if tool_name == "play_and_verify" and not arguments.has("steps"):
 		var play_objective: String = String(plan.get("goal", ""))
-		# 行为证据按目标动词组合派生：移动（位移断言）、暂停（暂停/恢复
-		# 断言）可叠加；两者都没有时退化为启动等待窗口（此时门禁只证明
-		# "发起过运行"，启动期脚本错误仍会被本步捕获）。
-		var wants_movement: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS)
-		var wants_pause: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS)
-		if wants_movement or wants_pause:
-			var play_steps: Array = []
-			if wants_movement:
-				play_steps.append_array(_movement_play_steps())
-			if wants_pause:
-				play_steps.append_array(_pause_play_steps())
-			arguments["steps"] = play_steps
+		# 存档链的两侧门禁各有专属演练（N3）：save_play = 移动+存档+断言
+		# 写盘；restore_play = 全新进程读档后断言磁盘状态回归。
+		var play_step_key: String = String(task.get("step_key", ""))
+		if play_step_key == "save_play":
+			arguments["steps"] = _save_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["steps"] = "movement+pause-exercise" if wants_movement and wants_pause \
-				else ("movement-exercise" if wants_movement else "pause-exercise")
+			task["derived_inputs"]["steps"] = "save-exercise"
+		elif play_step_key == "restore_play":
+			arguments["steps"] = _restore_play_steps()
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "save-restore-exercise"
 		else:
-			# 非移动目标也给一个启动等待窗口：零 steps 时编排立即返回，游戏
-			# 启动期的脚本错误还没到达调试桥——门禁只证明了"发起过运行"。
-			arguments["steps"] = [{"wait_ms": 600}]
-			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["steps"] = "boot-settle"
+			_derive_generic_play_steps(plan, task, tool_name, arguments)
+			# generic 分支保留在 _derive_generic_play_steps 中实现
 	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
 	if tool_name == "create_theme" and not arguments.has("theme_path") \
 			and not artifacts.has("theme"):
@@ -872,6 +865,65 @@ func _pause_play_steps() -> Array:
 	})
 	steps.append({"action": "ui_cancel", "pressed": false, "wait_ms": 120})
 	return steps
+
+## 存档腿（评测 N3）：右移制造非平凡状态 → 按 save_game（F5）→ 断言写盘
+## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
+func _save_play_steps() -> Array:
+	var steps: Array = []
+	# 位移先自证（headless 负载下墙钟等待的物理帧数会缩水，阈值 40 留足
+	# 余量）——保证写入磁盘的状态非平凡，恢复腿的断言才有意义。
+	steps.append({
+		"action": "move_right", "pressed": true, "wait_ms": 400,
+		"assert": {"expression": "position.x", "operator": "gt", "expected": 40,
+			"description": "player moved right, creating non-trivial state to save"}
+	})
+	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
+	steps.append({
+		"action": "save_game", "pressed": true, "wait_ms": 300, "screenshot": true,
+		"assert": {"expression": "last_save_ok", "expected": true,
+			"description": "save_game wrote the state to disk"}
+	})
+	steps.append({"action": "save_game", "pressed": false, "wait_ms": 80})
+	return steps
+
+## 恢复腿（评测 N3）：全新进程 _ready 自动读档 → 位置从磁盘恢复；
+## last_save_ok 仍为 false 证明这是全新会话——状态来自磁盘而非本次保存。
+func _restore_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"wait_ms": 900,
+		"assert": {"expression": "position.x", "operator": "gt", "expected": 30,
+			"description": "position restored from the save file after a full process restart"}
+	})
+	steps.append({
+		"assert": {"expression": "last_save_ok", "expected": false,
+			"description": "fresh session: the restored state came from disk, not this session's save"}
+	})
+	return steps
+
+## 通用 play 门禁演练派生（非存档链步骤）：移动（位移断言）/ 暂停（暂停
+## 恢复断言）按动词组合；存档目标暗含移动（蓝图口径）。都没有时退化为
+## 启动等待窗口（此时门禁只证明"发起过运行"，启动期脚本错误仍会被捕获）。
+func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: String,
+		arguments: Dictionary) -> void:
+	var play_objective: String = String(plan.get("goal", ""))
+	var wants_movement: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS) \
+		or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)
+	var wants_pause: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS)
+	if wants_movement or wants_pause:
+		var play_steps: Array = []
+		if wants_movement:
+			play_steps.append_array(_movement_play_steps())
+		if wants_pause:
+			play_steps.append_array(_pause_play_steps())
+		arguments["steps"] = play_steps
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["steps"] = "movement+pause-exercise" if wants_movement and wants_pause \
+			else ("movement-exercise" if wants_movement else "pause-exercise")
+	else:
+		arguments["steps"] = [{"wait_ms": 600}]
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["steps"] = "boot-settle"
 
 func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
 		artifacts: Dictionary, derived: Dictionary, workflow_id: String = "") -> void:

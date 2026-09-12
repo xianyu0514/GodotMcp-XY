@@ -66,6 +66,15 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "save-persistence",
+        "objective": (
+            "Add save/load: the player's progress persists after fully closing "
+            "and relaunching the game."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_save_persistence": True,
+    },
+    {
         "name": "pause-menu-behavior",
         "objective": (
             "Esc pause menu: pressing Esc pauses the world and shows a paused "
@@ -197,6 +206,8 @@ def _failing_receipt_summaries(name: str) -> str:
             receipts = [r.get("summary", {}) for r in plan.get("workflow", {}).get("receipts", [])
                         if r.get("step_id") == t.get("id")]
             out.append({"step": t.get("id"), "tool": t.get("tool_name"),
+                        "key": t.get("step_key", "?"),
+                        "derived": (t.get("derived_inputs", {}) or {}).get("steps", "?"),
                         "status": t.get("status"),
                         "fingerprint": str(t.get("verification_failure_fingerprint", ""))[:100],
                         "receipt_summaries": receipts})
@@ -208,6 +219,22 @@ def _failing_receipt_summaries(name: str) -> str:
 def run_scenario(scenario: dict) -> None:
     name = scenario["name"]
     print(f"[goal-flow] scenario: {name}", flush=True)
+    if scenario.get("assert_save_persistence"):
+        # user:// 在 scratch 重建后仍残留（app_userdata 按项目名存放）：
+        # 上一轮的存档会让新游戏从旧位置启动，位移断言全乱。先清档。
+        import os
+        user_dir = os.path.join(
+            os.environ.get("APPDATA", ""), "Godot", "app_userdata", "GoalFlowScratch")
+        stale_save = Path(user_dir) / "save_game.json"
+        if stale_save.exists():
+            stale_save.unlink()
+            print(f"[goal-flow] cleared stale user:// save at {stale_save}", flush=True)
+    # 场景 = 独立目标：上一个目标完成时其游戏可能仍在播放（同路径场景
+    # 会让 run_project 的 already_running 判定复用旧游戏——旧内容、旧脚本）。
+    # 每个场景开始前先停掉残留游戏，保证本目标验证的是自己的产物。
+    tool_call("enable_tools", {"tools": ["stop_project"]}, request_id=91)
+    stopped = tool_call("stop_project", {"allow_window": True}, request_id=92)
+    print(f"[goal-flow] pre-scenario game stop: {str(stopped.get('status', stopped))[:60]}", flush=True)
     plan = tool_call(
         "plan_game_workflow",
         {"action": "plan", "objective": scenario["objective"], "profiles": scenario["profiles"],
@@ -225,7 +252,35 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_pause_menu"):
+            if scenario.get("assert_save_persistence"):
+                # N3：存档跨进程证据——控制器含 save/load 与自动读档，
+                # 恢复门禁派生的是磁盘回归演练且已完成（目标完成本身
+                # 已要求两侧门禁的行为断言在真机上通过）。
+                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
+                if not script_files:
+                    raise AssertionError(f"[{name}] completed without any generated scripts")
+                controller = script_files[0].read_text(encoding="utf-8")
+                for marker in ("func save_game() -> bool", "func load_game() -> bool",
+                               "user://save_game.json", "load_game()"):
+                    if marker not in controller:
+                        raise AssertionError(f"[{name}] save controller lacks {marker}: {controller[:200]}")
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                if not plan_file.exists():
+                    raise AssertionError(f"[{name}] plan file missing for save-evidence check")
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                by_key = {t.get("step_key", ""): t for t in plan_data.get("tasks", [])}
+                for gate_key, exercise in (("save_play", "save-exercise"),
+                                           ("restore_play", "save-restore-exercise")):
+                    gate = by_key.get(gate_key)
+                    if gate is None:
+                        raise AssertionError(f"[{name}] plan is missing the {gate_key} gate")
+                    derived = str((gate.get("derived_inputs", {}) or {}).get("steps", ""))
+                    if derived != exercise:
+                        raise AssertionError(f"[{name}] {gate_key} derived '{derived}', expected '{exercise}'")
+                    if str(gate.get("status", "")) != "done":
+                        raise AssertionError(f"[{name}] {gate_key} gate not done")
+                note = "; save persistence verified across a full process restart"
+            elif scenario.get("assert_pause_menu"):
                 # M7：暂停目标必须留下真实暂停代码 + pause-exercise 行为证据。
                 script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
                 if not script_files:
