@@ -306,6 +306,14 @@ func _run_project_with_interface(editor_interface: Object, params: Dictionary) -
 			bridge.reset_probe_ready()
 		if not requested_scene.is_empty():
 			played_scene = requested_scene
+			# 同路径场景被重写后，编辑器资源缓存可能仍持有旧 PackedScene，
+			# play_custom_scene 会播出旧内容（真机 E2E 实测：pause 目标跑的
+			# 是上一个 save 控制器，磁盘上的新场景从未生效）。REPLACE 强制
+			# 从磁盘重载并刷新缓存，保证玩的是最新内容。
+			var fresh_scene: Variant = ResourceLoader.load(requested_scene,
+				"PackedScene", ResourceLoader.CACHE_MODE_REPLACE)
+			if fresh_scene == null or not (fresh_scene is PackedScene):
+				return {"error": "Scene failed to reload from disk: " + requested_scene}
 			editor_interface.play_custom_scene(played_scene)
 		else:
 			var scene_root: Node = _get_user_scene_root()

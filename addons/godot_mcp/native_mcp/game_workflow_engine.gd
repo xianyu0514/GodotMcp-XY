@@ -277,7 +277,11 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 			var probe_spec: Dictionary = _spec("runtime_probe", "install_runtime_probe", "runtime_probe")
 			probe_spec["profile"] = "runtime_prerequisite"
 			specs.append(probe_spec)
-		if not _specs_contain_tool(specs, "run_project"):
+		# 启动期 run 注入只被"首个运行时门禁之前已有的 run_project"豁免：
+		# 链条后部的 rerun（如存档跨进程链 stop→rerun）不能顶替启动运行，
+		# 否则游戏从未启动，门禁会打在上一个场景的残留进程上（真机 E2E
+		# 抓到：play_verify 在 level-design 残留游戏上断言 position.x 失败）。
+		if not _spec_runs_before_first_runtime_gate(specs):
 			var run_spec: Dictionary = _spec("runtime_run", "run_project", "runtime_run")
 			run_spec["profile"] = "runtime_prerequisite"
 			specs.append(run_spec)
@@ -438,6 +442,34 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 					gameplay_specs.insert(2, _spec(
 						"input_%s" % direction.get("action_name", "").replace("move_", ""),
 						"upsert_project_input_action", "build_configure", false, direction))
+			# 存档目标（评测 N3）：注册 save_game 动作（F5）+ 跨进程行为证据链
+			# —— 演练(移动→存档→断言写盘) → 停止 → 重启 → 恢复演练(断言磁盘
+			# 状态回归且是全新会话)。蓝图把存档暗含移动，方向动作也要注册。
+			if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.SAVE_KEYWORDS):
+				if not GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
+					var stale_upsert: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
+						return String(spec.get("key", "")) == "upsert_input")
+					if stale_upsert >= 0:
+						gameplay_specs.remove_at(stale_upsert)
+					for direction in _movement_input_actions():
+						gameplay_specs.insert(2, _spec(
+							"input_%s" % direction.get("action_name", "").replace("move_", ""),
+							"upsert_project_input_action", "build_configure", false, direction))
+				gameplay_specs.insert(2, _spec(
+					"input_save", "upsert_project_input_action", "build_configure", false,
+					{"action_name": "save_game", "deadzone": 0.2,
+						"events": [{"type": "key", "keycode": KEY_F5}]}))
+				var error_gate_index: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
+					return String(spec.get("key", "")) == "runtime_errors")
+				var chain_insert_at: int = error_gate_index if error_gate_index >= 0 else gameplay_specs.size()
+				for chain_spec in [
+					_spec("save_play", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
+					_spec("stop_game", "stop_project", "runtime_evidence"),
+					_spec("rerun_game", "run_project", "runtime_evidence"),
+					_spec("restore_play", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
+				]:
+					gameplay_specs.insert(chain_insert_at, chain_spec)
+					chain_insert_at += 1
 			# 蓝图脚本永远 extends CharacterBody2D（金币/胜利蓝图同样依赖物理体），
 			# 根节点类型直接写进 create_scene 的 spec 参数——引擎直出的计划即
 			# 自包含，适配器无需再派生。
@@ -641,6 +673,16 @@ func _infer_stage(tool_name: String) -> String:
 	if tool_name.begins_with("verify_") or tool_name.begins_with("validate_") or tool_name.begins_with("run_project_test"):
 		return "static_verify"
 	return "build_configure"
+
+## 首个 runtime_evidence 门禁之前是否已有 run_project（豁免启动期注入）。
+func _spec_runs_before_first_runtime_gate(specs: Array[Dictionary]) -> bool:
+	for spec_value in specs:
+		var spec: Dictionary = spec_value
+		if String(spec.get("tool_name", "")) == "run_project":
+			return true
+		if bool(spec.get("objective_gate", false)) 				and String(spec.get("stage", "")) == "runtime_evidence":
+			return false
+	return false
 
 func _specs_contain_tool(specs: Array[Dictionary], tool_name: String) -> bool:
 	for value in specs:
@@ -1319,6 +1361,30 @@ func _compact_result_summary(result: Variant, tool_name: String = "") -> Diction
 			summary["first_error"] = String(export_errors[0]).substr(0, 200)
 		elif data.has("exit_code"):
 			summary["first_error"] = "exit_code=%s" % str(data["exit_code"])
+	# 行为门禁失败必须能从回执看出"哪个断言、什么值"——否则重规划与审计
+	# 只有一个 failed。附首个失败断言与首个 errors/runtime_errors 条目。
+	if tool_name == "play_and_verify":
+		var gate_scene: Variant = (data.get("runtime_info", {}) if data.get("runtime_info") is Dictionary else {}).get("current_scene", null)
+		if gate_scene != null:
+			summary["current_scene"] = gate_scene
+	if tool_name == "play_and_verify" and not bool(data.get("passed", true)):
+		for assert_value in data.get("assertions", []) if data.get("assertions") is Array else []:
+			var assert_entry: Dictionary = assert_value if assert_value is Dictionary else {}
+			if not bool(assert_entry.get("passed", true)):
+				summary["first_failed_assertion"] = {
+					"expression": assert_entry.get("expression", ""),
+					"expected": assert_entry.get("expected", null),
+					"actual": assert_entry.get("actual", null),
+					"error": assert_entry.get("error", null),
+					"context": assert_entry.get("context", assert_entry.get("step", null)),
+				}
+				break
+		var gate_errors: Array = data.get("errors", []) if data.get("errors") is Array else []
+		if not gate_errors.is_empty():
+			summary["first_error"] = String(JSON.stringify(gate_errors[0])).substr(0, 200)
+		var gate_runtime_errors: Array = data.get("runtime_errors", []) if data.get("runtime_errors") is Array else []
+		if not gate_runtime_errors.is_empty():
+			summary["first_runtime_error"] = String(JSON.stringify(gate_runtime_errors[0])).substr(0, 200)
 	var evidence_keys: Array = GATE_EVIDENCE_KEYS.get(tool_name, []) if tool_name != "" else []
 	if not evidence_keys.is_empty():
 		var evidence: Dictionary = {}
