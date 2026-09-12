@@ -14,7 +14,7 @@
 
 Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原生实现 MCP（Model Context Protocol）服务器。
 它不启动 Node.js 之类的中间层，也不通过外部进程代理编辑器，而是直接把 MCP 协议栈嵌进编辑器，
-用 Godot API 作为执行边界，对外暴露 **231 个工具**。
+用 Godot API 作为执行边界，对外暴露 **233 个工具**。
 
 这一定位带来三个硬约束，后续所有设计决策几乎都是它们的推论：
 
@@ -31,10 +31,10 @@ Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原
 | 层级 | 数量 | 是否默认暴露 | 用途 |
 | --- | --- | --- | --- |
 | `core` | 28 | 是 | 覆盖建模主路径：建场景、建节点、读写脚本、跑项目 |
-| `supplementary` | 198 | 否 | 深度能力：调试器、资源审计、导出、本地化、瓦片、动画等 |
+| `supplementary` | 199 | 否 | 深度能力：调试器、资源审计、导出、本地化、瓦片、动画等 |
 | `meta` | 6 | 是（始终在线） | 工具发现与工作流编排：`list_tool_catalog` / `search_tools` / `get_tool_details` / `enable_tools` / `plan_game_workflow` / `run_game_workflow` |
 
-**为什么这样分层**：MCP 客户端会把 `tools/list` 的全部 schema 注入模型上下文。231 个工具的完整 schema
+**为什么这样分层**：MCP 客户端会把 `tools/list` 的全部 schema 注入模型上下文。233 个工具的完整 schema
 会吃掉大量上下文预算，且绝大多数请求用不到。`core + meta` 的 34 个工具足以启动，`enable_tools`
 按需补齐缺失能力——这是一个**发现预算**，而不是能力上限。
 
@@ -57,7 +57,7 @@ Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原
 │                 结果缓存 · 溢出落盘 · 进度与取消             │
 └────────────────────────────────────────────────────────────┘
                           ↓ await tool.callable(args)
-┌─ 能力层 · 231 工具 + 7 资源 + 7 prompts ───────────────────┐
+┌─ 能力层 · 233 工具 + 7 资源 + 7 prompts ───────────────────┐
 │  场景与节点 38 · 脚本 18 · 编辑器控制 27                    │
 │  运行与调试 73 · 项目与资源 69 · 元工具 6                   │
 └────────────────────────────────────────────────────────────┘
@@ -72,7 +72,7 @@ Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原
 └────────────────────────────────────────────────────────────┘
 ```
 
-领域分布按 `tools_manifest.gd` 的 group 归并（合计 231）：
+领域分布按 `tools_manifest.gd` 的 group 归并（合计 233）：
 
 | 领域 | 分组 | 工具数 |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原
 | 脚本 | Script / Script-Advanced | 18 |
 | 编辑器控制 | Editor / Editor-Advanced | 27 |
 | 运行与调试 | Debug / Debug-Advanced | 73 |
-| 项目与资源 | Project / Project-Advanced | 69 |
+| 项目与资源 | Project / Project-Advanced | 70 |
 | 元工具 | Meta | 6 |
 
 ---
@@ -381,7 +381,7 @@ user://mcp_settings.cfg（MCPSettingsManager）
 | --- | --- | --- | --- |
 | 1 | 标签化 revision 惰性失效 | 变更即清空缓存 | 写入路径 O(受影响标签) 而非 O(缓存)；昂贵扫描的命中率显著提升。代价是 `mutation_tags` 表需要人工维护，遗漏会导致陈旧读 |
 | 2 | 串行请求队列 | 并发执行工具 | Godot 编辑器 API 非线程安全，主线程并发会直接崩编辑器。代价是吞吐，用"每帧让出 + 单飞合并"缓解 |
-| 3 | 三层工具 + 按需发现 | 全量暴露 232 工具 | `tools/list` schema 直接占用模型上下文。代价是多一次 `enable_tools` 往返 |
+| 3 | 三层工具 + 按需发现 | 全量暴露 233 工具 | `tools/list` schema 直接占用模型上下文。代价是多一次 `enable_tools` 往返 |
 | 4 | 溢出落盘而非截断 | 截断或报错 | 大结果是常态（依赖扫描、场景结构）。截断会静默丢数据，报错会让 AI 无从下手 |
 | 5 | 60 秒 TTL 兜底 | 长 TTL 或纯 revision | 覆盖 MCP 之外的编辑路径；短 TTL 保证最坏情况下的陈旧有界 |
 | 6 | manifest 单一真相 | 各处重复维护 | 消除 5 处清单漂移；一致性由单测强制 |
@@ -486,8 +486,8 @@ user://mcp_settings.cfg（MCPSettingsManager）
 
 ### 10.1 工具计数漂移（已修正，2026-08-30）
 
-manifest 实际为 **232 个（28 + 198 + 6，非 meta 原子能力 226）**，但多处仍在使用更早的
-"223 / 189 / 217" 基数。已全部同步至 232 / 198 / 226：
+manifest 实际为 **233 个（28 + 199 + 6，非 meta 原子能力 227）**，但多处仍在使用更早的
+"223 / 189 / 217" 基数。已全部同步至 233 / 199 / 227：
 
 | 位置 | 影响等级 | 说明 |
 | --- | --- | --- |
