@@ -499,7 +499,18 @@ func _handle_http_request(peer: StreamPeerTCP, available_bytes: int = -1) -> voi
 	if _auth_manager and not _auth_manager.validate_request(parsed["headers"]):
 		_send_http_error(peer, 401, "Unauthorized. Please provide a valid Bearer token in the Authorization header.")
 		return
-	
+
+	# Origin 校验（MCP Streamable HTTP 传输安全要求）：非法 Origin 必须 403。
+	# 非浏览器客户端（curl / Python / MCP 客户端进程）不带 Origin 头，放行；
+	# 浏览器页面只能来自回环源或显式配置的 cors_origin，防 DNS 重绑定攻击
+	# （攻击者页面的 Origin 是攻击者域名，永远不会在白名单里）。
+	var origin_check: Dictionary = _validate_origin(parsed["headers"])
+	if not bool(origin_check["valid"]):
+		if _log_callback.is_valid():
+			_log_callback.call("WARN", "Origin rejected: " + str(origin_check["origin"]) + " (" + str(origin_check["reason"]) + ")")
+		_send_http_error(peer, 403, "Forbidden: Origin is not allowed by this server.")
+		return
+
 	# 路由请求
 	match parsed["method"]:
 		"POST":
@@ -817,6 +828,55 @@ func _cors_header() -> String:
 	if _cors_origin.is_empty():
 		return ""
 	return "Access-Control-Allow-Origin: " + _cors_origin + "\r\n"
+
+
+## Origin 请求校验（MCP Streamable HTTP 传输安全要求）。
+## 设置 CORS 响应头不能替代请求侧校验：本方法在路由前判定 Origin。
+## 规则：
+##   - 不带 Origin 头（curl / Python / MCP 客户端进程）→ 放行
+##   - 回环源（localhost / 127.0.0.1 / [::1]，任意端口与路径）→ 放行
+##   - 与配置的 cors_origin 完全一致（支持逗号分隔多源）→ 放行
+##   - 不透明 Origin "null"（沙箱 iframe 等）→ 拒绝
+##   - 其余（含公网隧道域名未配置 cors_origin）→ 拒绝，路由层回 403
+## @param headers: Dictionary - 已解析且键名已小写的请求头
+## @returns: Dictionary - {valid: bool, origin: String, reason: String}
+func _validate_origin(headers: Dictionary) -> Dictionary:
+	var origin: String = String(headers.get("origin", "")).strip_edges()
+	if origin.is_empty():
+		return {"valid": true, "origin": "", "reason": "no origin header (non-browser client)"}
+	if origin.to_lower() == "null":
+		return {"valid": false, "origin": origin, "reason": "opaque origin \"null\" is not trustable"}
+	if _origin_is_loopback(origin) or _origin_in_configured_list(origin):
+		return {"valid": true, "origin": origin, "reason": ""}
+	return {"valid": false, "origin": origin, "reason": "origin is neither loopback nor configured in cors_origin"}
+
+## 从 Origin 值提取主机名：去 scheme、去端口、去路径；
+## IPv6 字面量（[::1]:8080）取方括号内的部分。
+func _origin_host(origin: String) -> String:
+	var rest: String = origin
+	var scheme_end: int = rest.find("://")
+	if scheme_end >= 0:
+		rest = rest.substr(scheme_end + 3)
+	rest = rest.split("/")[0]
+	if rest.begins_with("["):
+		var close_bracket: int = rest.find("]")
+		if close_bracket > 0:
+			return rest.substr(1, close_bracket - 1)
+		return rest.substr(1)
+	return rest.split(":")[0]
+
+func _origin_is_loopback(origin: String) -> bool:
+	var host: String = _origin_host(origin.to_lower())
+	return host in ["localhost", "127.0.0.1", "::1"]
+
+func _origin_in_configured_list(origin: String) -> bool:
+	if _cors_origin.is_empty():
+		return false
+	var normalized: String = origin.strip_edges().to_lower()
+	for configured in _cors_origin.split(","):
+		if configured.strip_edges().to_lower() == normalized:
+			return true
+	return false
 
 
 # ==============================================================================
