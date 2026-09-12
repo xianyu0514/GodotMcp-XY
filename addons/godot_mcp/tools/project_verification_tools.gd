@@ -205,7 +205,7 @@ func _build_diff_image(baseline_image: Image, candidate_image: Image, per_pixel_
 
 func _register_assert_visual_baseline(server_core: RefCounted) -> void:
 	var tool_name: String = "assert_visual_baseline"
-	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and passes. Optionally writes a diff heatmap PNG. Dimension mismatches fail."
+	var description: String = "Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and returns passed=false with status baseline_created/baseline_updated — capturing a golden image is never itself a comparison pass; rerun to compare against it. Optionally writes a diff heatmap PNG. Dimension mismatches fail."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -225,9 +225,11 @@ func _register_assert_visual_baseline(server_core: RefCounted) -> void:
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
-			"passed": {"type": "boolean"},
+			"passed": {"type": "boolean", "description": "True only when a comparison against a pre-existing baseline succeeded."},
+			"status": {"type": "string", "description": "baseline_created | baseline_updated | passed | failed | dimension_mismatch."},
 			"baseline_created": {"type": "boolean"},
 			"baseline_updated": {"type": "boolean"},
+			"note": {"type": "string"},
 			"baseline_path": {"type": "string"},
 			"candidate_path": {"type": "string"},
 			"width": {"type": "integer"},
@@ -285,12 +287,17 @@ func _tool_assert_visual_baseline(params: Dictionary) -> Dictionary:
 		var save_result: Dictionary = _save_image_to_path(candidate_image, baseline_abs)
 		if save_result.has("error"):
 			return save_result
+		# 留存金标准不等于比较通过：首轮没有独立参照物，passed 必须为 false，
+		# 由 status 区分"已建立基线"与真正的比较结论。
+		var created: bool = not baseline_exists
 		return {
 			"baseline_path": baseline_path,
 			"candidate_path": candidate_path,
-			"passed": true,
-			"baseline_created": not baseline_exists,
-			"baseline_updated": baseline_exists and update_baseline,
+			"passed": false,
+			"status": "baseline_created" if created else "baseline_updated",
+			"baseline_created": created,
+			"baseline_updated": not created,
+			"note": "Baseline saved from the candidate; no comparison happened. Rerun to compare against this baseline.",
 			"diff_pixel_count": 0,
 			"diff_ratio": 0.0,
 			"rmse": 0.0,
@@ -308,6 +315,7 @@ func _tool_assert_visual_baseline(params: Dictionary) -> Dictionary:
 			"baseline_path": baseline_path,
 			"candidate_path": candidate_path,
 			"passed": false,
+			"status": "dimension_mismatch",
 			"baseline_created": false,
 			"baseline_updated": false,
 			"width": baseline_image.get_width(),
@@ -341,6 +349,7 @@ func _tool_assert_visual_baseline(params: Dictionary) -> Dictionary:
 		"baseline_path": baseline_path,
 		"candidate_path": candidate_path,
 		"passed": passed,
+		"status": "passed" if passed else "failed",
 		"baseline_created": false,
 		"baseline_updated": false,
 		"width": int(diff["width"]),

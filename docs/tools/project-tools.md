@@ -47,7 +47,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_class_api_metadata` | advanced | Get typed API metadata for an engine ClassDB class or a project global script class. |
 | `inspect_csharp_project_support` | advanced | Inspect C# / Mono project support files such as .csproj and .sln, including target frameworks, assembly metadata, and references. |
 | `compare_render_screenshots` | advanced | Compare two screenshot images and report pixel differences, RMSE, and threshold-based match status. |
-| `assert_visual_baseline` | advanced | Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and passes. Optionally writes a diff heatmap PNG. Dimension mismatches fail. |
+| `assert_visual_baseline` | advanced | Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and returns `passed=false` with status `baseline_created`/`baseline_updated` — capturing a golden image is never a comparison pass; rerun to compare against it. Optionally writes a diff heatmap PNG. Dimension mismatches fail. |
 | `inspect_tileset_resource` | advanced | Inspect a TileSet resource and summarize its sources, atlas tiles, and scene tiles. |
 | `reimport_resources` | advanced | Reimport project resources. |
 | `get_import_metadata` | advanced | Get resource import metadata. |

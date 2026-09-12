@@ -70,20 +70,24 @@ func test_diff_images_per_pixel_threshold_ignores_small_delta():
 	assert_eq(int(lenient["diff_pixel_count"]), 0, "Lenient threshold ignores tiny delta")
 
 # ---- assert_visual_baseline: baseline bootstrap ---------------------------
+# 契约：留存金标准（缺基线或 update_baseline）不是比较通过——passed=false，
+# status 区分 baseline_created / baseline_updated；下一轮才发生真实比较。
 
-func test_creates_baseline_when_missing():
+func test_creates_baseline_when_missing_but_does_not_pass():
 	var candidate_path: String = _save(_make_image(8, 8, Color(0.1, 0.2, 0.3, 1)), "candidate.png")
 	var baseline_path: String = _tmp_dir + "/baseline.png"
 	var result: Dictionary = _tools._tool_assert_visual_baseline({
 		"candidate_path": candidate_path,
 		"baseline_path": baseline_path
 	})
-	assert_true(bool(result["passed"]), "Missing baseline bootstraps and passes")
+	assert_false(bool(result["passed"]), "Capturing a golden image is not a comparison pass")
+	assert_eq(str(result.get("status", "")), "baseline_created", "status marks first-time capture")
 	assert_true(bool(result["baseline_created"]), "baseline_created should be true")
 	assert_false(bool(result["baseline_updated"]), "baseline_updated should be false on first create")
+	assert_false(str(result.get("note", "")).is_empty(), "Capture explains that no comparison happened")
 	assert_true(FileAccess.file_exists(ProjectSettings.globalize_path(baseline_path)), "Baseline file written")
 
-func test_update_baseline_overwrites_and_passes():
+func test_update_baseline_overwrites_without_claiming_pass():
 	var baseline_path: String = _save(_make_image(8, 8, Color(0, 0, 0, 1)), "baseline.png")
 	var candidate_path: String = _save(_make_image(8, 8, Color(1, 1, 1, 1)), "candidate.png")
 	var result: Dictionary = _tools._tool_assert_visual_baseline({
@@ -91,9 +95,28 @@ func test_update_baseline_overwrites_and_passes():
 		"baseline_path": baseline_path,
 		"update_baseline": true
 	})
-	assert_true(bool(result["passed"]), "update_baseline always passes")
+	assert_false(bool(result["passed"]), "Overwriting the baseline proves nothing about the candidate")
+	assert_eq(str(result.get("status", "")), "baseline_updated", "status marks explicit overwrite")
 	assert_true(bool(result["baseline_updated"]), "baseline_updated should be true")
 	assert_false(bool(result["baseline_created"]), "baseline_created should be false when it existed")
+
+func test_second_call_after_bootstrap_performs_real_comparison():
+	var img: Image = _make_image(8, 8, Color(0.4, 0.4, 0.4, 1))
+	var baseline_path: String = _tmp_dir + "/baseline.png"
+	var candidate_path: String = _save(img, "candidate.png")
+	var bootstrap: Dictionary = _tools._tool_assert_visual_baseline({
+		"candidate_path": candidate_path,
+		"baseline_path": baseline_path
+	})
+	assert_false(bool(bootstrap["passed"]), "Bootstrap round does not pass")
+	var compared: Dictionary = _tools._tool_assert_visual_baseline({
+		"candidate_path": candidate_path,
+		"baseline_path": baseline_path
+	})
+	assert_true(bool(compared["passed"]), "Rerun compares against the stored baseline")
+	assert_eq(str(compared.get("status", "")), "passed", "status marks a real comparison pass")
+	assert_false(bool(compared["baseline_created"]), "No capture on the comparison round")
+	assert_eq(int(compared["diff_pixel_count"]), 0)
 
 # ---- assert_visual_baseline: comparison ----------------------------------
 
