@@ -870,8 +870,9 @@ func test_pause_goal_derives_behavioral_play_steps() -> void:
 	assert_eq(bool((third.get("assert", {}) as Dictionary).get("expected", null)), false,
 		"second Esc asserts the world RESUMED")
 
-func test_movement_goal_still_derives_movement_exercise() -> void:
-	# 回归：新增暂停分支不得影响移动目标的既有演练派生。
+func test_movement_goal_derives_displacement_assertions() -> void:
+	# 移动演练必须带位移断言（N1 oracle 形态）：四向按键各断言位置变化，
+	# 否则控制器没挂上/没在动时门禁空转通过（#124 抓到过的盲区）。
 	var planned: Dictionary = _plan(["gameplay_feature"], "arrow-key movement controller")
 	var status: Dictionary = _tools._tool_plan_game_workflow({
 		"action": "status", "plan_path": _plan_path, "include_plan": true
@@ -886,6 +887,50 @@ func test_movement_goal_still_derives_movement_exercise() -> void:
 		assert_eq(str((task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
 			"movement-exercise")
 		var steps: Array = arguments.get("steps", [])
-		assert_eq(str((steps[0] as Dictionary).get("action", "")), "move_left")
+		assert_eq(steps.size(), 8, "four press/release legs")
+		var leg_actions: Array = []
+		var assert_count: int = 0
+		for step_value in steps:
+			var step: Dictionary = step_value
+			if bool(step.get("pressed", false)):
+				leg_actions.append(step.get("action"))
+				assert_true(step.has("assert"), "each press leg carries a displacement assert")
+				var leg_assert: Dictionary = step.get("assert", {})
+				assert_true(["gt", "lt"].has(String(leg_assert.get("operator", ""))),
+					"displacement asserts use signed comparisons")
+				assert_count += 1
+		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down"],
+			"all four directions exercised with asymmetric durations")
+		assert_eq(assert_count, 4, "all four legs assert displacement")
 		return
 	fail_test("play_and_verify task not found for movement goal")
+
+func test_movement_and_pause_goal_derives_combined_exercise() -> void:
+	# 组合目标两套演练都要：位移断言 + 暂停/恢复断言。
+	var planned: Dictionary = _plan(["gameplay_feature"], "arrow-key movement with an Esc pause menu")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) != "play_and_verify":
+			continue
+		var arguments: Dictionary = _tools._derive_step_arguments(
+			loaded, task, "play_and_verify", _tools._resolve_inputs(task, {}, false))
+		assert_eq(str((task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
+			"movement+pause-exercise")
+		var steps: Array = arguments.get("steps", [])
+		var has_displacement: bool = false
+		var has_pause: bool = false
+		for step_value in steps:
+			var step: Dictionary = step_value
+			if String(step.get("action", "")) == "ui_cancel":
+				has_pause = true
+			var leg_assert: Dictionary = step.get("assert", {}) if step.has("assert") else {}
+			if String(leg_assert.get("expression", "")) == "position.x":
+				has_displacement = true
+		assert_true(has_displacement, "combined exercise keeps displacement asserts")
+		assert_true(has_pause, "combined exercise keeps pause/resume asserts")
+		return
+	fail_test("play_and_verify task not found for combined goal")

@@ -737,16 +737,21 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
 	if tool_name == "play_and_verify" and not arguments.has("steps"):
 		var play_objective: String = String(plan.get("goal", ""))
-		if GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS):
-			arguments["steps"] = _movement_play_steps()
+		# 行为证据按目标动词组合派生：移动（位移断言）、暂停（暂停/恢复
+		# 断言）可叠加；两者都没有时退化为启动等待窗口（此时门禁只证明
+		# "发起过运行"，启动期脚本错误仍会被本步捕获）。
+		var wants_movement: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS)
+		var wants_pause: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS)
+		if wants_movement or wants_pause:
+			var play_steps: Array = []
+			if wants_movement:
+				play_steps.append_array(_movement_play_steps())
+			if wants_pause:
+				play_steps.append_array(_pause_play_steps())
+			arguments["steps"] = play_steps
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["steps"] = "movement-exercise"
-		elif GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS):
-			# 暂停目标的行为证据：Esc 暂停 → 步内断言世界已停（含菜单截图）→
-			# Esc 恢复 → 步内断言世界继续。缺这两条断言的门禁只证明了"能启动"。
-			arguments["steps"] = _pause_play_steps()
-			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["steps"] = "pause-exercise"
+			task["derived_inputs"]["steps"] = "movement+pause-exercise" if wants_movement and wants_pause \
+				else ("movement-exercise" if wants_movement else "pause-exercise")
 		else:
 			# 非移动目标也给一个启动等待窗口：零 steps 时编排立即返回，游戏
 			# 启动期的脚本错误还没到达调试桥——门禁只证明了"发起过运行"。
@@ -807,14 +812,41 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 ## engine annotates that round as bootstrap evidence and the next run compares
 ## against the stored baseline, so the gate never stalls on missing paths and
 ## never reports a capture as a visual verification pass.
-## 移动类目标的游玩演练：依次按下/释放四个方向动作。蓝图控制器的
+## 移动类目标的游玩演练：四方向按键各配位移断言。蓝图控制器的
 ## _physics_process 只有在输入驱动下才会执行，脚本错误才会暴露给
-## play_and_verify 的错误捕获（空 steps 的门禁是重言式）。
+## play_and_verify 的错误捕获；而位移断言进一步证明移动真的发生——
+## 控制器没挂上或没在动时，门禁必须失败而不是空转通过。
 func _movement_play_steps() -> Array:
+	# 移动演练带位移断言（N1 oracle 形态）：蓝图场景根在原点、SPEED=260、
+	# 60fps 物理——400ms ≈ +104px。左右/上下各用非对称时长保证净位移有
+	# 明确符号（右 400 → x>15；左 600 → x<-15；上 400 → y<-15；下 600 → y>15），
+	# 阈值留 6 倍余量抗帧率抖动。没有这些断言，门禁只证明"按键已发送"，
+	# 控制器没挂上/没在动也照样通过（#124 真机 E2E 抓到过这种空转）。
 	var steps: Array = []
-	for action_name in ["move_left", "move_right", "move_up", "move_down"]:
-		steps.append({"action": action_name, "pressed": true, "wait_ms": 250})
-		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
+	steps.append({
+		"action": "move_right", "pressed": true, "wait_ms": 400,
+		"assert": {"expression": "position.x", "operator": "gt", "expected": 15,
+			"description": "player moved right while holding move_right"}
+	})
+	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
+	steps.append({
+		"action": "move_left", "pressed": true, "wait_ms": 600,
+		"assert": {"expression": "position.x", "operator": "lt", "expected": -15,
+			"description": "player moved left past the origin while holding move_left"}
+	})
+	steps.append({"action": "move_left", "pressed": false, "wait_ms": 80})
+	steps.append({
+		"action": "move_up", "pressed": true, "wait_ms": 400,
+		"assert": {"expression": "position.y", "operator": "lt", "expected": -15,
+			"description": "player moved up while holding move_up"}
+	})
+	steps.append({"action": "move_up", "pressed": false, "wait_ms": 80})
+	steps.append({
+		"action": "move_down", "pressed": true, "wait_ms": 600,
+		"assert": {"expression": "position.y", "operator": "gt", "expected": 15,
+			"description": "player moved down past the origin while holding move_down"}
+	})
+	steps.append({"action": "move_down", "pressed": false, "wait_ms": 80})
 	return steps
 
 ## 暂停类目标的游玩演练（评测任务 N2 的行为证据）：
