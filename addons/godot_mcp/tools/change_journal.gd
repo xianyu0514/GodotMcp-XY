@@ -220,6 +220,83 @@ static func pending_operations_touching(file_paths: Array,
 	return pending
 
 # ============================================================================
+# 单文件观察式写入（M3 slice 2：场景/资源保存）
+# ============================================================================
+
+## 文件内容指纹；文件不存在返回空串（create 类操作的 before 语义）。
+static func file_sha256(file_path: String) -> String:
+	if not FileAccess.file_exists(file_path):
+		return ""
+	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content: String = file.get_as_text()
+	file.close()
+	return content.sha256_text()
+
+## 单文件一次性记录（观察式）：调用方先读 before 指纹、执行写入、再读
+## after 指纹后落一条 committed/failed 记录。与多文件两阶段（begin→mark→
+## finish）不同，单文件写入的崩溃窗口内重放即恢复（幂等覆盖），journal
+## 的价值是收据证据（供工作流恢复分类）与审计。kind: "create"|"modify"。
+static func record_write_operation(intent: String, file_path: String,
+		before_hash: String, after_hash: String, verified: bool,
+		journal_path: String = DEFAULT_JOURNAL_PATH) -> Dictionary:
+	var journal: Dictionary = load_journal(journal_path)
+	if journal.has("error"):
+		return journal
+	var record: Dictionary = {
+		"operation_id": _new_operation_id(journal),
+		"intent": intent,
+		"phase": "committed" if verified else "failed",
+		"created_at": _now(),
+		"finished_at": _now(),
+		"files": [{
+			"path": file_path,
+			"before_hash": before_hash,
+			"after_hash": after_hash,
+			"replacement_count": 0,
+			"state": "applied" if verified else "planned",
+		}],
+		"verification": {
+			"verified": verified,
+			"checked_at": _now(),
+			"mismatches": [] if verified else [{"path": file_path, "issue": "post-write readback failed"}],
+		},
+	}
+	(journal["operations"] as Array).append(record)
+	var save_result: Dictionary = save_journal(journal, journal_path)
+	if save_result.has("error"):
+		return save_result
+	return {"operation": record, "journal_path": journal_path}
+
+## 全部未收口（非终态）操作——恢复流程的排查入口。
+static func pending_operations(journal_path: String = DEFAULT_JOURNAL_PATH) -> Array:
+	var journal: Dictionary = load_journal(journal_path)
+	if journal.has("error"):
+		return []
+	var pending: Array = []
+	for operation_value in journal["operations"]:
+		var operation: Dictionary = operation_value
+		if not String(operation.get("phase", "")) in FINAL_PHASES:
+			pending.append(operation)
+	return pending
+
+## 该工具最近一条任意阶段的操作（intent 以 "tool_name " 开头）——恢复时
+## 判断"上一次写入是否真的落盘"。
+static func latest_operation_by_tool(tool_name: String,
+		journal_path: String = DEFAULT_JOURNAL_PATH) -> Dictionary:
+	var journal: Dictionary = load_journal(journal_path)
+	if journal.has("error"):
+		return {}
+	var prefix: String = tool_name + " "
+	var operations: Array = journal["operations"]
+	for index in range(operations.size() - 1, -1, -1):
+		var operation: Dictionary = operations[index]
+		if String(operation.get("intent", "")).begins_with(prefix):
+			return operation
+	return {}
+
+# ============================================================================
 # 恢复分类（以磁盘实况为准）
 # ============================================================================
 
@@ -270,6 +347,10 @@ static func classify_operation(operation: Dictionary) -> Dictionary:
 
 static func _current_file_state(file_path: String, before_hash: String, after_hash: String) -> String:
 	if not FileAccess.file_exists(file_path):
+		# create 类操作（无 before_hash）：文件不存在 = 从未发生（untouched）；
+		# modify 类：原文件被删 = 冲突。
+		if before_hash.is_empty():
+			return "untouched"
 		return "diverged"
 	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
 	if file == null:
@@ -281,6 +362,9 @@ static func _current_file_state(file_path: String, before_hash: String, after_ha
 		return "applied"
 	if not before_hash.is_empty() and current_hash == before_hash:
 		return "untouched"
+	if before_hash.is_empty():
+		# create 类：文件存在但不是记录的 after 内容 = 分歧
+		return "diverged"
 	return "diverged"
 
 # ============================================================================
