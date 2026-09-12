@@ -671,3 +671,72 @@ func test_expect_fail_rejects_infrastructure_errors() -> void:
 		{"error": "Debugger bridge is not available"})
 	assert_ne(String(verdict.get("status", "")), "completed",
 		"infrastructure errors are not inverted into detector proof")
+
+func test_result_passed_rejects_baseline_capture_as_comparison() -> void:
+	# 留存金标准不是比较证据：即使旧轮次/缓存载荷带着 passed=true，
+	# created/updated 标志也必须让严格门禁拒绝它。
+	assert_false(_engine.result_passed("assert_visual_baseline", {
+		"passed": true, "baseline_created": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}), "a capture round claiming passed (legacy payload) is not comparison evidence")
+	assert_false(_engine.result_passed("assert_visual_baseline", {
+		"passed": true, "baseline_updated": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}), "an explicit baseline overwrite is not comparison evidence")
+	assert_false(_engine.result_passed("assert_visual_baseline", {
+		"passed": false, "status": "baseline_created", "diff_pixel_count": 0
+	}), "an honest capture result does not pass the gate")
+	assert_true(_engine.result_passed("assert_visual_baseline", {
+		"passed": true, "diff_pixel_count": 0, "diff_ratio": 0.0
+	}), "a real comparison pass remains valid")
+
+func test_visual_gate_bootstrap_completes_with_honest_annotation() -> void:
+	var plan: Dictionary = _compile("Polished pause menu", ["ui_screen"])["plan"]
+	var task: Dictionary = _task_for_tool(plan, "assert_visual_baseline")
+	assert_false(task.is_empty(), "ui_screen profile contains a visual gate")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), {
+		"passed": false,
+		"status": "baseline_created",
+		"baseline_created": true,
+		"baseline_path": "user://visual_baselines/w1_shot.jpg",
+		"diff_pixel_count": 0,
+		"diff_ratio": 0.0
+	})
+	assert_eq(verdict.get("status", ""), "completed",
+		"the bootstrap round closes the step instead of stalling in repair loops")
+	assert_eq(String(task.get("evidence_status", "")), "baseline_bootstrap",
+		"the task carries the bootstrap evidence status")
+	var dod: Array = task.get("dod", [])
+	assert_true(not dod.is_empty() and bool((dod[0] as Dictionary).get("met", false)))
+	assert_true(String((dod[0] as Dictionary).get("evidence", "")).begins_with("baseline-captured:"),
+		"DoD evidence names the captured baseline, not a comparison receipt")
+	var found_bootstrap_receipt: bool = false
+	for receipt_value in (plan.get("workflow", {}) as Dictionary).get("receipts", []):
+		var receipt: Dictionary = receipt_value
+		if String(receipt.get("verdict", "")) == "baseline_bootstrap":
+			found_bootstrap_receipt = true
+			assert_true(bool(receipt.get("passed", false)),
+				"the receipt keeps the step passable for goal closing")
+	assert_true(found_bootstrap_receipt, "receipts record the bootstrap verdict")
+	var summary: Dictionary = _engine.summarize(plan)
+	var bootstraps: Array = summary.get("visual_bootstrap", [])
+	assert_eq(bootstraps.size(), 1, "the summary discloses bootstrap-only visual evidence")
+	assert_eq(str((bootstraps[0] as Dictionary).get("baseline_path", "")),
+		"user://visual_baselines/w1_shot.jpg",
+		"the disclosure points at the captured golden image")
+
+func test_visual_gate_real_comparison_keeps_normal_receipt_evidence() -> void:
+	var plan: Dictionary = _compile("Polished pause menu", ["ui_screen"])["plan"]
+	var task: Dictionary = _task_for_tool(plan, "assert_visual_baseline")
+	var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), {
+		"passed": true,
+		"status": "passed",
+		"diff_pixel_count": 0,
+		"diff_ratio": 0.0
+	})
+	assert_eq(verdict.get("status", ""), "completed")
+	assert_ne(String(task.get("evidence_status", "")), "baseline_bootstrap",
+		"a real comparison is not annotated as bootstrap")
+	var dod: Array = task.get("dod", [])
+	assert_true(String((dod[0] as Dictionary).get("evidence", "")).begins_with("workflow-receipt:"),
+		"a real comparison keeps receipt-based evidence")
+	assert_eq((_engine.summarize(plan).get("visual_bootstrap", []) as Array).size(), 0,
+		"no bootstrap disclosure for real comparisons")

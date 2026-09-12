@@ -1251,27 +1251,43 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 		return {}
 
 	var replacements: Array = []
+	var applied_total: int = 0
 	var updated_lines: PackedStringArray = []
 	for i in range(lines.size()):
 		var raw_line: String = lines[i]
-		var matches: Array = regex.search_all(raw_line)
-		var replacement_total: int = min(matches.size(), max(0, remaining_results - replacements.size()))
-		if replacement_total <= 0:
-			updated_lines.append(raw_line)
-			continue
-		var new_line: String = regex.sub(raw_line, new_name, true, replacement_total)
-		if new_line != raw_line:
+		var new_line: String = raw_line
+		var line_replaced: int = 0
+		if applied_total < remaining_results:
+			# RegEx.sub 的第 4 个参数是起始偏移而不是替换数量；
+			# 手工重建行内容，保证实际替换次数、预览与 replacement_count 三者一致。
+			var matches: Array = regex.search_all(raw_line)
+			var take: int = min(matches.size(), remaining_results - applied_total)
+			if take > 0:
+				var rebuilt: String = ""
+				var cursor: int = 0
+				for match_index in range(take):
+					var match_result: RegExMatch = matches[match_index]
+					rebuilt += raw_line.substr(cursor, match_result.get_start() - cursor)
+					rebuilt += new_name
+					cursor = match_result.get_end()
+					line_replaced += 1
+				rebuilt += raw_line.substr(cursor)
+				new_line = rebuilt
+		if line_replaced > 0:
+			applied_total += line_replaced
 			replacements.append({
 				"line": i + 1,
 				"before": raw_line.strip_edges(),
 				"after": new_line.strip_edges(),
-				"replacement_count": replacement_total
+				"replacement_count": line_replaced
 			})
-		updated_lines.append(new_line)
-		if replacements.size() >= remaining_results:
-			for j in range(i + 1, lines.size()):
-				updated_lines.append(lines[j])
-			break
+			updated_lines.append(new_line)
+			if applied_total >= remaining_results:
+				for j in range(i + 1, lines.size()):
+					updated_lines.append(lines[j])
+				break
+		else:
+			updated_lines.append(new_line)
 
 	if replacements.is_empty():
 		return {}
@@ -1283,13 +1299,9 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 		write_file.store_string("\n".join(updated_lines))
 		write_file.close()
 
-	var total_replacements: int = 0
-	for replacement in replacements:
-		total_replacements += int(replacement.get("replacement_count", 0))
-
 	return {
 		"script_path": file_path,
-		"replacement_count": total_replacements,
+		"replacement_count": applied_total,
 		"changes": replacements
 	}
 

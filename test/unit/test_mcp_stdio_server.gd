@@ -143,3 +143,38 @@ func test_stop_joins_finished_thread():
 	assert_false(_stdio_server._active, "stop() should clear the active flag")
 	assert_eq(_stdio_server._thread, null, "stop() should clear the thread reference after joining")
 	assert_lt(elapsed, 3000, "stop() should return quickly when the thread exits on its own")
+
+# ---- 畸形输入必须回答 JSON-RPC -32700（真实 stdio 握手测试发现的缺陷）------
+
+class CaptureStdioServer extends "res://addons/godot_mcp/native_mcp/mcp_stdio_server.gd":
+	var responses: Array = []
+	func _send_response(response: Dictionary) -> void:
+		responses.append(response)
+
+func test_parse_error_answers_with_jsonrpc_32700() -> void:
+	var server: CaptureStdioServer = CaptureStdioServer.new()
+	server._parse_and_queue_message("this is definitely not json {{{")
+	# _emit_error 经 call_deferred 在主线程执行；等两帧让延迟调用落地
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(server.responses.size(), 1,
+		"a malformed line must be answered with exactly one JSON-RPC error response")
+	var payload: Dictionary = server.responses[0]
+	assert_eq(payload.get("jsonrpc", ""), "2.0")
+	assert_eq((payload.get("error", {}) as Dictionary).get("code", 0), -32700,
+		"the parse error code must be -32700")
+	assert_eq(payload.get("id", "missing"), null,
+		"the parse error response carries id=null (the request id is unrecoverable)")
+
+func test_parse_error_does_not_queue_or_answer_valid_lines_twice() -> void:
+	var server: CaptureStdioServer = CaptureStdioServer.new()
+	server._parse_and_queue_message('{"jsonrpc":"2.0","id":7,"method":"ping"}')
+	# 入队是同步的：先验证队列，再等帧（延迟的 _process_next_message 会弹出）
+	server._mutex.lock()
+	var queued: int = server._message_queue.size()
+	server._mutex.unlock()
+	assert_eq(queued, 1, "the valid message reached the queue exactly once")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert_eq(server.responses.size(), 0,
+		"valid messages are queued for the core, not answered by the transport")

@@ -450,3 +450,48 @@ func test_dispatch_watchdog_timeout_is_bounded() -> void:
 		"看门狗时限至少 5 秒（避免误杀慢工具）")
 	assert_true(_http_server.DISPATCH_TIMEOUT <= 120.0,
 		"看门狗时限至多 120 秒（导入/扫描期间的远程调用方不应等更久）")
+
+# ---- Origin 请求校验（MCP Streamable HTTP 安全要求）------------------------
+
+func test_origin_absent_header_is_allowed():
+	var check: Dictionary = _http_server._validate_origin({})
+	assert_true(bool(check["valid"]), "Non-browser clients (no Origin header) are allowed")
+
+func test_origin_loopback_hosts_are_allowed():
+	for origin in ["http://localhost:5173", "http://127.0.0.1:3000",
+			"https://localhost", "http://[::1]:8080", "http://localhost:5173/app"]:
+		var check: Dictionary = _http_server._validate_origin({"origin": origin})
+		assert_true(bool(check["valid"]), "Loopback origin must be allowed: " + origin)
+
+func test_origin_foreign_domain_is_rejected():
+	var check: Dictionary = _http_server._validate_origin({"origin": "http://evil.example.com"})
+	assert_false(bool(check["valid"]), "A non-loopback, unconfigured origin must be rejected")
+	assert_ne(str(check.get("reason", "")), "", "Rejection carries a reason")
+
+func test_origin_opaque_null_is_rejected():
+	var check: Dictionary = _http_server._validate_origin({"origin": "null"})
+	assert_false(bool(check["valid"]), "Opaque origin \"null\" is not trustable")
+
+func test_origin_configured_cors_origin_is_allowed():
+	_http_server.set_remote_config(false, "https://editor.example.com")
+	var allowed: Dictionary = _http_server._validate_origin({"origin": "https://editor.example.com"})
+	assert_true(bool(allowed["valid"]), "An origin matching cors_origin is allowed")
+	var other: Dictionary = _http_server._validate_origin({"origin": "https://other.example.com"})
+	assert_false(bool(other["valid"]), "Origins other than the configured one stay rejected")
+
+func test_origin_comma_separated_cors_list():
+	_http_server.set_remote_config(false, "https://a.example.com, https://b.example.com")
+	for origin in ["https://a.example.com", "https://b.example.com"]:
+		var check: Dictionary = _http_server._validate_origin({"origin": origin})
+		assert_true(bool(check["valid"]), "Comma-separated cors_origin entries are allowed: " + origin)
+
+func test_origin_tunnel_domain_without_config_is_rejected():
+	# 公网隧道域名必须显式配置 cors_origin；未配置时浏览器请求应被拒绝
+	var check: Dictionary = _http_server._validate_origin({"origin": "https://xyz.trycloudflare.com"})
+	assert_false(bool(check["valid"]), "Unconfigured public origins are rejected (DNS rebinding protection)")
+
+func test_origin_host_parsing():
+	assert_eq(_http_server._origin_host("http://localhost:5173"), "localhost")
+	assert_eq(_http_server._origin_host("https://sub.domain.example.com:8443/path"), "sub.domain.example.com")
+	assert_eq(_http_server._origin_host("http://[::1]:8080"), "::1")
+	assert_eq(_http_server._origin_host("localhost:9080"), "localhost")

@@ -932,7 +932,13 @@ func result_passed(tool_name: String, result: Variant) -> bool:
 		"assert_performance_budget":
 			return bool(data.get("passed", false)) and data.get("checks") is Array and not (data["checks"] as Array).is_empty()
 		"assert_visual_baseline":
-			return bool(data.get("passed", false)) and (data.has("diff_pixel_count") or data.has("diff_ratio"))
+			# 基线留存（本轮自己建立/覆盖的金标准）不是比较证据：passed 必须
+			# 来自与既有基线的真实比对；历史回执或缓存载荷带着 created/updated
+			# 标志的"passed"同样拒绝，防止旧轮次结果绕过严格门禁。
+			return bool(data.get("passed", false)) \
+				and not bool(data.get("baseline_created", false)) \
+				and not bool(data.get("baseline_updated", false)) \
+				and (data.has("diff_pixel_count") or data.has("diff_ratio"))
 		"audit_project_health":
 			return status in ["healthy", "warning"] and data.get("summary") is Dictionary and not (data["summary"] as Dictionary).is_empty()
 		"play_and_verify":
@@ -1043,21 +1049,33 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 	# 基础设施错误（如 "Debugger bridge is not available"）不是探测器触发：
 	# 带非空 error 的负结果不得翻转成通过，否则故障注入循环会在探测器
 	# 从未运行的情况下"证明"它工作。
-	var passed: bool = evidence_passed
+	# 视觉基线门禁的首次留存：新项目没有独立金标准可比较，本轮的诚实
+	# 结论是"基线已建立、比较推迟到下一轮"，而不是视觉验证通过。
+	var visual_bootstrap: bool = String(task.get("tool_name", "")) == "assert_visual_baseline" \
+			and result is Dictionary \
+			and (bool((result as Dictionary).get("baseline_created", false)) \
+				or bool((result as Dictionary).get("baseline_updated", false)) \
+				or ["baseline_created", "baseline_updated"].has(String((result as Dictionary).get("status", ""))))
+	var passed: bool = evidence_passed or visual_bootstrap
 	if expect_failure:
 		var well_formed_negative: bool = not evidence_passed
 		if result is Dictionary \
 				and not String((result as Dictionary).get("error", "")).strip_edges().is_empty():
 			well_formed_negative = false
 		passed = well_formed_negative
-	var receipt: Dictionary = append_receipt(plan, {
+	var receipt_fields: Dictionary = {
 		"step_id": step_id,
 		"tool_name": task.get("tool_name", ""),
 		"passed": passed,
 		"pending": false,
 		"expected_failure": expect_failure,
 		"summary": _compact_result_summary(result, String(task.get("tool_name", "")))
-	})
+	}
+	if visual_bootstrap:
+		# 收据必须可审计：这轮只是留存金标准，verdict 区别于真实比较。
+		receipt_fields["verdict"] = "baseline_bootstrap"
+		receipt_fields["baseline_path"] = String((result as Dictionary).get("baseline_path", ""))
+	var receipt: Dictionary = append_receipt(plan, receipt_fields)
 	if passed:
 		task["status"] = "done"
 		task["receipt_digest"] = receipt.get("digest", "")
@@ -1070,7 +1088,13 @@ func record_step_result(plan: Dictionary, step_id: String, result: Variant) -> D
 			var dod: Array = task.get("dod", [])
 			if not dod.is_empty():
 				dod[0]["met"] = true
-				dod[0]["evidence"] = "workflow-receipt:%s" % receipt.get("digest", "")
+				if visual_bootstrap:
+					dod[0]["criterion"] = "Baseline established (bootstrap; visual comparison deferred to the next run)"
+					dod[0]["evidence"] = "baseline-captured:%s" % String((result as Dictionary).get("baseline_path", ""))
+					task["evidence_status"] = "baseline_bootstrap"
+					task["bootstrap_baseline_path"] = String((result as Dictionary).get("baseline_path", ""))
+				else:
+					dod[0]["evidence"] = "workflow-receipt:%s" % receipt.get("digest", "")
 		if workflow_completed(plan):
 			workflow["state"] = "completed"
 		else:
@@ -1463,6 +1487,7 @@ func summarize(plan: Dictionary) -> Dictionary:
 	var workflow: Dictionary = plan.get("workflow", {})
 	var counts: Dictionary = {"pending": 0, "done": 0, "blocked": 0, "in_progress": 0}
 	var needs_input: Array[Dictionary] = []
+	var visual_bootstrap: Array[Dictionary] = []
 	for task_value in plan.get("tasks", []):
 		var task: Dictionary = task_value
 		var status: String = String(task.get("status", "pending"))
@@ -1470,6 +1495,14 @@ func summarize(plan: Dictionary) -> Dictionary:
 			counts[status] = int(counts[status]) + 1
 		if bool(task.get("needs_input", false)):
 			needs_input.append({"step_id": task.get("id", ""), "tool_name": task.get("tool_name", ""), "missing": task.get("missing_inputs", [])})
+		# 视觉证据只剩"本轮留存的基线"时，完成报告必须如实披露：
+		# 这是 bootstrap，不是与独立金标准比较的通过。
+		if String(task.get("evidence_status", "")) == "baseline_bootstrap":
+			visual_bootstrap.append({
+				"step_id": task.get("id", ""),
+				"tool_name": task.get("tool_name", ""),
+				"baseline_path": task.get("bootstrap_baseline_path", "")
+			})
 	var ready_preview: Array[Dictionary] = []
 	for ready_value in ready_steps(plan, READY_PREVIEW_LIMIT):
 		var ready_task: Dictionary = ready_value
@@ -1488,6 +1521,7 @@ func summarize(plan: Dictionary) -> Dictionary:
 		"needs_input": needs_input,
 		"blocked_reason": workflow.get("blocked_reason", ""),
 		"blueprint_hash": workflow.get("blueprint_hash", ""),
+		"visual_bootstrap": visual_bootstrap,
 		"next_step_budget": recommended_step_budget(plan),
 		"metrics": workflow_metrics(plan).duplicate(true)
 	}

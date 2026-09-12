@@ -796,8 +796,11 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	return arguments
 
 ## Visual gates derive candidate_path from the latest runtime screenshot and a
-## deterministic baseline location; assert_visual_baseline captures the golden
-## image itself on first run, so the gate never stalls on missing paths.
+## deterministic baseline location. On a fresh project the gate bootstraps the
+## golden image itself (status baseline_created, passed=false); the workflow
+## engine annotates that round as bootstrap evidence and the next run compares
+## against the stored baseline, so the gate never stalls on missing paths and
+## never reports a capture as a visual verification pass.
 ## 移动类目标的游玩演练：依次按下/释放四个方向动作。蓝图控制器的
 ## _physics_process 只有在输入驱动下才会执行，脚本错误才会暴露给
 ## play_and_verify 的错误捕获（空 steps 的门禁是重言式）。
