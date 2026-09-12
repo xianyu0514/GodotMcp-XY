@@ -10,6 +10,7 @@ const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_com
 const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
 const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
 const SCRIPT_WRITE_DIAGNOSTICS = preload("res://addons/godot_mcp/utils/script_write_diagnostics.gd")
+const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 
 var _editor_interface: EditorInterface = null
 
@@ -616,25 +617,137 @@ func _tool_rename_script_symbol(params: Dictionary) -> Dictionary:
 	_collect_script_reference_files(search_path, include_extensions, file_paths)
 	file_paths.sort()
 
-	var changed_files: Array = []
+	# —— 准备阶段：dry_run 逐文件计算精确替换与内容指纹 ——
+	# 后续写入阶段对同一批未改动的文件重跑同一替换（符号级幂等），
+	# 预览（planned）与应用由这份数据绑定，写入后逐文件核对磁盘指纹。
+	var planned_results: Array = []
 	var replacement_count: int = 0
 	for file_path in file_paths:
 		if replacement_count >= max_results:
 			break
 		var remaining_results: int = max_results - replacement_count
-		var replacement_result: Dictionary = _rename_symbol_in_file(file_path, symbol_name, new_name, case_sensitive, dry_run, remaining_results)
+		var planned: Dictionary = _rename_symbol_in_file(file_path, symbol_name, new_name, case_sensitive, true, remaining_results)
+		if planned.is_empty():
+			continue
+		planned_results.append(planned)
+		replacement_count += int(planned.get("replacement_count", 0))
+
+	if dry_run or planned_results.is_empty():
+		return {
+			"symbol_name": symbol_name,
+			"new_name": new_name,
+			"dry_run": dry_run,
+			"changed_files": planned_results,
+			"replacement_count": replacement_count
+		}
+
+	# —— 写入前守卫 1：未收口的旧操作若与手工修改冲突（diverged），拒绝执行 ——
+	# 磁盘实况不是旧操作记录的 before/after 之一 = 中断后有人手工改过，
+	# 此时覆盖会吞掉用户工作（评测任务 R4 契约）。
+	var touched_paths: Array = []
+	for planned_entry in planned_results:
+		touched_paths.append(String(planned_entry.get("script_path", "")))
+	var resumable_notes: Array = []
+	for pending_value in ChangeJournalScript.pending_operations_touching(touched_paths):
+		var verdict: Dictionary = ChangeJournalScript.classify_operation(pending_value)
+		if String(verdict.get("action", "")) == "conflict":
+			return {
+				"error": "A previous interrupted operation has manually-modified files; refusing to overwrite. Resolve them, then retry.",
+				"prior_operation": verdict,
+			}
+		resumable_notes.append(verdict)
+
+	# —— 写入前守卫 2：目标文件在脚本编辑器中有未保存修改时，磁盘指纹不可靠，
+	# 写入会让用户保存时覆盖本次修改 ——
+	var editor_interface: EditorInterface = _get_editor_interface()
+	var script_editor: ScriptEditor = editor_interface.get_script_editor() if editor_interface else null
+	for planned_entry in planned_results:
+		var guard_result: Dictionary = _script_buffer_write_guard(script_editor, String(planned_entry.get("script_path", "")))
+		if guard_result.has("error"):
+			return guard_result
+
+	# —— 变更日志：任何文件写入之前先落盘 prepared 记录 ——
+	var journal_entries: Array = []
+	for planned_entry in planned_results:
+		journal_entries.append({
+			"path": String(planned_entry.get("script_path", "")),
+			"before_hash": String(planned_entry.get("content_before_hash", "")),
+			"after_hash": String(planned_entry.get("content_after_hash", "")),
+			"replacement_count": int(planned_entry.get("replacement_count", 0)),
+		})
+	var intent: String = "rename_script_symbol %s -> %s (case_sensitive=%s, max_results=%d)" % [symbol_name, new_name, str(case_sensitive), max_results]
+	var begun: Dictionary = ChangeJournalScript.begin_operation(intent, journal_entries)
+	var operation_id: String = ""
+	var journal_error: String = ""
+	if begun.has("error"):
+		# 日志不可写不应阻断重命名本身，但必须在结果里如实暴露（降级运行）。
+		journal_error = String(begun["error"])
+	else:
+		operation_id = String((begun.get("operation", {}) as Dictionary).get("operation_id", ""))
+		if not operation_id.is_empty():
+			ChangeJournalScript.supersede_pending_touching(touched_paths, operation_id)
+
+	# —— 写入阶段：逐文件应用，每写完一个立即推进日志并核对磁盘指纹 ——
+	var changed_files: Array = []
+	var applied_count: int = 0
+	var verification_mismatches: Array = []
+	for planned_entry in planned_results:
+		var target_path: String = String(planned_entry.get("script_path", ""))
+		var remaining: int = max_results - applied_count
+		if remaining <= 0:
+			break
+		var replacement_result: Dictionary = _rename_symbol_in_file(target_path, symbol_name, new_name, case_sensitive, false, remaining)
 		if replacement_result.is_empty():
+			# 准备与写入之间文件被改动，计划中的替换没有发生。
+			verification_mismatches.append({
+				"path": target_path,
+				"issue": "planned replacement did not apply (file changed between prepare and apply)"
+			})
 			continue
 		changed_files.append(replacement_result)
-		replacement_count += int(replacement_result.get("replacement_count", 0))
+		applied_count += int(replacement_result.get("replacement_count", 0))
+		if not operation_id.is_empty():
+			ChangeJournalScript.mark_file_applied(operation_id, target_path)
+		if _file_sha256(target_path) != String(planned_entry.get("content_after_hash", "")):
+			verification_mismatches.append({
+				"path": target_path,
+				"issue": "post-write disk content does not match the planned fingerprint"
+			})
 
-	return {
+	var verified: bool = verification_mismatches.is_empty() and applied_count == replacement_count
+	if not operation_id.is_empty():
+		ChangeJournalScript.finish_operation(operation_id, verified, verification_mismatches)
+
+	var result: Dictionary = {
 		"symbol_name": symbol_name,
 		"new_name": new_name,
-		"dry_run": dry_run,
+		"dry_run": false,
 		"changed_files": changed_files,
-		"replacement_count": replacement_count
+		"replacement_count": applied_count
 	}
+	if not operation_id.is_empty():
+		result["change_journal"] = {
+			"operation_id": operation_id,
+			"phase": "committed" if verified else "failed",
+			"verified": verified,
+			"journal_path": ChangeJournalScript.DEFAULT_JOURNAL_PATH,
+			"file_count": journal_entries.size()
+		}
+	elif not journal_error.is_empty():
+		result["change_journal_error"] = journal_error
+	if not resumable_notes.is_empty():
+		result["resumed_prior_operations"] = resumable_notes
+	if not verification_mismatches.is_empty():
+		result["verification_mismatches"] = verification_mismatches
+	return result
+
+static func _file_sha256(path: String) -> String:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content: String = file.get_as_text()
+	file.close()
+	return content.sha256_text()
 
 # 辅助函数：递归收集脚本文件
 func _collect_scripts(directory_path: String, result: Array) -> void:
@@ -1241,8 +1354,9 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 	if not file:
 		return {}
 
-	var lines: PackedStringArray = file.get_as_text().split("\n")
+	var original_content: String = file.get_as_text()
 	file.close()
+	var lines: PackedStringArray = original_content.split("\n")
 
 	var regex: RegEx = RegEx.new()
 	var escaped_symbol_name: String = _escape_regex_pattern(symbol_name)
@@ -1302,7 +1416,11 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 	return {
 		"script_path": file_path,
 		"replacement_count": applied_total,
-		"changes": replacements
+		"changes": replacements,
+		# 内容指纹：预览与实际写入由同一份数据计算（M3 变更日志绑定），
+		# after 指纹即写入后磁盘应有的内容，恢复时以此核对实况。
+		"content_before_hash": original_content.sha256_text(),
+		"content_after_hash": ("\n".join(updated_lines)).sha256_text()
 	}
 
 # ============================================================================
