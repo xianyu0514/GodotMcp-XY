@@ -44,6 +44,7 @@ func test_stdio_config_contains_launch_flags():
 	assert_eq(server["command"], "/usr/bin/godot", "command should be the godot executable")
 	var args: Array = server["args"]
 	assert_true("--editor" in args, "args must include --editor so the EditorPlugin loads and detects --mcp-server")
+	assert_true("--no-header" in args, "args must suppress the engine banner on stdout (stdio channel purity)")
 	assert_true("--mcp-server" in args, "args should enable MCP server mode")
 	assert_true("--mcp-transport=stdio" in args, "args should select stdio transport")
 	assert_true("/home/dev/project" in args, "args should include the project path")

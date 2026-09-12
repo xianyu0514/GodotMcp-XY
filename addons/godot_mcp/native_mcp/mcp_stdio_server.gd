@@ -195,6 +195,10 @@ func send_raw_message(message: Dictionary) -> void:
 		_log_callback.call("DEBUG", "Sending raw message: " + json_string)
 	print(json_string)
 
-## 在主线程中发送错误信号（线程安全）
+## 在主线程中发送错误信号并回复 JSON-RPC 错误响应（线程安全）。
+## JSON-RPC 2.0 要求无法解析的输入得到 -32700 Parse error（id=null）：
+## 只发信号不回响应，严格客户端（Claude Desktop 等）发送畸形行后只会
+## 收到沉默，无法区分"格式错误"与"服务死亡"。真实握手测试已复现此缺陷。
 func _emit_error(id: Variant, code: int, message: String, data: Variant = null) -> void:
 	server_error.emit("JSON parse error: " + message)
+	_send_error(id, code, message, data)

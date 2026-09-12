@@ -39,6 +39,10 @@ static func stdio_config(godot_executable: String, project_path: String) -> Stri
 		"args": [
 			"--editor",
 			"--headless",
+			# --no-header：引擎启动横幅会打到 stdout，污染 stdio JSON-RPC 通道
+			# （真实 stdio 握手测试实测）。Godot 4.7+ 支持；旧版引擎若不识别
+			# 该旗标也只是多一行横幅，不破坏客户端解析。
+			"--no-header",
 			"--path",
 			proj,
 			"--",
