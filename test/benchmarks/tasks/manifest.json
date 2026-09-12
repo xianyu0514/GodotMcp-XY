@@ -1,0 +1,199 @@
+{
+  "$schema_note": "M2 真实任务评测清单。oracle 步骤尽量落为可执行 MCP 工具序列（在独立编辑器会话运行，不信任被评系统的自述）。预算字段在 3 项校准任务后固定，固定前不得开始正式对照。",
+  "comparison_rules": "见 ../README.md。同模型版本/客户端/Godot/初始项目/预算/验收；每任务重复 3 次；保留全部样本。",
+  "initial_projects": {
+    "empty": "空白项目：仅 project.godot（无主场景、无脚本、无资产），GL Compatibility 渲染器。",
+    "mini_platformer": "含一个 CharacterBody2D 玩家（左右移动+跳跃已实现并有 GUT 测试）、三段静态平台、一枚 Area2D 金币（触碰即消失并计分）、HUD 显示分数；所有逻辑在 player.gd / coin.gd / hud.gd，均带 content_hash 快照。",
+    "mini_ui": "含主菜单场景（开始/设置/退出三按钮，锚点布局）、设置面板（音量滑条+全选开关）；有布局回归截图基线三张（1280x720 / 1920x1080 / 854x480）。"
+  },
+  "tasks": [
+    {
+      "id": "N1",
+      "type": "create",
+      "goal_en": "Add arrow-key movement with wall collision to the existing player scene.",
+      "goal_zh": "给现有玩家场景加上方向键移动并能撞墙停住。",
+      "initial_project": "mini_platformer（玩家改为不可移动的静态节点）",
+      "forbidden": ["删除/重命名既有 GUT 测试", "修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "run_project + 安装 runtime probe，模拟按住 move_right 600ms",
+        "assert_runtime_condition: 玩家 x 位移 > 40px",
+        "在移动方向放置 StaticBody2D 墙，重复输入，断言玩家未穿墙（x 距离墙 >= 碰撞边界）",
+        "assert_no_runtime_errors: error_count == 0"
+      ]
+    },
+    {
+      "id": "N2",
+      "type": "create",
+      "goal_en": "Add a pause menu: Esc pauses the world, the menu stays operable, Esc resumes and the world continues.",
+      "goal_zh": "加一个暂停菜单：按 Esc 世界暂停、菜单仍可操作、再按 Esc 恢复且世界继续。",
+      "initial_project": "mini_platformer",
+      "forbidden": ["删除既有移动/计分逻辑", "修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "启动项目，让玩家处于移动中；模拟 Esc 按下",
+        "assert_runtime_condition: get_tree().paused == true 且菜单节点 visible",
+        "暂停期间模拟菜单按钮 hover/press（信号触发计数 > 0）",
+        "再按 Esc：get_tree().paused == false 且玩家继续位移（位置继续变化）",
+        "assert_no_runtime_errors: error_count == 0"
+      ]
+    },
+    {
+      "id": "N3",
+      "type": "create",
+      "goal_en": "Add save/load: score persists after fully closing and relaunching the game.",
+      "goal_zh": "加存档/读档：完全关闭进程再启动后分数还在。",
+      "initial_project": "mini_platformer",
+      "forbidden": ["修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "启动 → 收集 2 枚金币 → 触发保存（按代理实现的入口）→ stop_project（确认进程退出）",
+        "重新 run_project，等待场景稳定",
+        "inspect_runtime_node / evaluate_runtime_expression: HUD 分数 == 保存值",
+        "user:// 下存在存档文件且 mtime 晚于保存时刻；assert_no_runtime_errors"
+      ]
+    },
+    {
+      "id": "N4",
+      "type": "create",
+      "goal_en": "Build a small 3D level: imported model on the ground, a camera showing it, and the player cannot walk through it.",
+      "goal_zh": "做一个小 3D 关卡：地面上的导入模型、能看到的相机、玩家走不进去的碰撞。",
+      "initial_project": "empty（附一个测试用 glb 模型路径）",
+      "forbidden": ["修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "run_project；get_runtime_scene_tree: 存在 MeshInstance3D（网格非空）与 CollisionShape3D/碰撞体",
+        "get_runtime_screenshot: 截图非纯背景色（像素方差 > 阈值）",
+        "模拟 move_forward 朝模型移动 1.5s：玩家与模型中心距离 >= 碰撞半径（未穿透）",
+        "assert_no_runtime_errors: error_count == 0"
+      ]
+    },
+    {
+      "id": "E1",
+      "type": "modify",
+      "goal_en": "Change 'jump' from Space to the gamepad A / on-screen button, keep every other input working.",
+      "goal_zh": "把跳跃从空格改成手柄 A 键/屏幕按钮，其他输入行为保持不变。",
+      "initial_project": "mini_platformer",
+      "forbidden": ["改动画/计分逻辑", "修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "list_project_input_actions: jump 不再绑定 Space，包含新绑定事件",
+        "运行时模拟新事件按下：assert_runtime_condition 跳跃发生（y 速度/位移）",
+        "模拟 Space 按下：断言无跳跃（位移不满足跳跃阈值）",
+        "move_left/move_right 仍产生位移；assert_no_runtime_errors"
+      ]
+    },
+    {
+      "id": "E2",
+      "type": "modify",
+      "goal_en": "Replace the coin sprite with the provided new PNG and keep pickup behavior, references and collision intact.",
+      "goal_zh": "用给定新 PNG 替换金币贴图，拾取行为、引用和碰撞保持完好。",
+      "initial_project": "mini_platformer（提供 new_coin.png）",
+      "forbidden": ["改 player.gd / hud.gd 逻辑", "修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "scan_missing_resource_dependencies: issue_count == 0",
+        "inspect_runtime_node: 金币 Sprite2D 的 texture 资源路径 == 新 PNG 且尺寸匹配新图",
+        "模拟接触金币：金币 queue_free/消失且分数 +1（既有行为不变）",
+        "既有 GUT 测试运行通过；assert_no_runtime_errors"
+      ]
+    },
+    {
+      "id": "E3",
+      "type": "modify",
+      "goal_en": "Make the settings panel usable at 854x480, 1280x720 and 1920x1080 without clipped or unclickable controls.",
+      "goal_zh": "让设置面板在 854x480、1280x720、1920x1080 三种分辨率下都无裁剪、无不可点击控件。",
+      "initial_project": "mini_ui",
+      "forbidden": ["删除三张布局基线截图", "修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "三种视口尺寸各运行一次并 get_runtime_screenshot；与该尺寸基线 compare_render_screenshots（容差由校准任务固定）",
+        "inspect_runtime_node: 关键按钮 global_rect 完全位于视口内且相互不重叠",
+        "模拟点击滑条/开关：对应属性值发生变化"
+      ]
+    },
+    {
+      "id": "E4",
+      "type": "modify",
+      "goal_en": "Rename the field 'score' (used across hud.gd, coin.gd and the scene) to 'points'; update all real references and nothing else.",
+      "goal_zh": "把 hud.gd、coin.gd 和场景里都在用的字段 score 更名为 points：真实引用全改，无关同名不改。",
+      "initial_project": "mini_platformer（额外在注释与普通字符串中埋入 'score' 字样、另设一个不同作用域的同名局部变量）",
+      "forbidden": ["修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "verify_scripts / 批量编译：0 错误",
+        "符号引用扫描：不存在指向旧名 score 的生产代码引用（注释与字符串里的 'score' 必须保留原样）",
+        "运行收集金币：HUD 显示递增（新字段在起作用）",
+        "dry_run 预览与实际写入的 replacement_count 一致（F1 契约）；assert_no_runtime_errors"
+      ]
+    },
+    {
+      "id": "R1",
+      "type": "recover",
+      "goal_en": "The project no longer runs: find the real errors, fix them, and prove the next run uses the new code.",
+      "goal_zh": "项目跑不起来了：找出真实错误并修复，并证明下一次运行用的是新代码。",
+      "initial_project": "mini_platformer（注入：player.gd 引用不存在的方法 + 场景引用缺失的 tscn 子场景）",
+      "forbidden": ["修改 addons/ 与 test/", "直接重写整个脚本绕过定位"],
+      "budget_tbd": true,
+      "oracle": [
+        "代理修复后 detect_broken_scripts: broken_count == 0；scan_missing_resource_dependencies: 0",
+        "run_project（独立进程）：启动成功且 assert_no_runtime_errors",
+        "新鲜度证据：运行期 evaluate_runtime_expression 读到的常量/标记 == 修复后代码中的值（证明非缓存旧码）"
+      ]
+    },
+    {
+      "id": "R2",
+      "type": "recover",
+      "goal_en": "Fix the missing resource references (broken UID/path) and make the level load and run again.",
+      "goal_zh": "修复缺失的资源引用（坏 UID/路径），让关卡恢复加载与运行。",
+      "initial_project": "mini_platformer（注入：两个资源的 UID 指向不存在文件、一个 scene 的 ext_resource path 错误）",
+      "forbidden": ["修改 addons/ 与 test/"],
+      "budget_tbd": true,
+      "oracle": [
+        "get_resource_uid_info / scan_missing_resource_dependencies: 0 个缺失",
+        "run_project + get_runtime_scene_tree: 注入前的节点数全部恢复",
+        "assert_no_runtime_errors: error_count == 0"
+      ]
+    },
+    {
+      "id": "R3",
+      "type": "recover",
+      "goal_en": "A write reported success but the receipt was lost (editor restart). Verify actual state, continue or roll back without duplicate side effects.",
+      "goal_zh": "一次写入回执丢失（编辑器重启过）：核对实际状态后继续或恢复，不得产生重复副作用。",
+      "initial_project": "mini_platformer（注入：金币场景已被复制为 3 份但计划账本显示步骤未完成）",
+      "forbidden": ["修改 addons/ 与 test/", "盲目重放整个计划"],
+      "budget_tbd": true,
+      "oracle": [
+        "恢复操作后：场景中金币实例数 == 3（不是 6/9）",
+        "计划账本状态与实际场景一致（manage_task_plan / 工作流状态无未完成的重复步骤）",
+        "score 初始值未被重复扣减/重置（若涉及）；assert_no_runtime_errors"
+      ]
+    },
+    {
+      "id": "R4",
+      "type": "recover",
+      "goal_en": "The user hand-edited a script after you read it. Refuse to overwrite their work; re-read and finish the goal on top of it.",
+      "goal_zh": "你读取脚本后用户手工改过：拒绝过期覆盖，保留其修改，重读后在其之上完成目标。",
+      "initial_project": "mini_platformer（时间线：代理读取 → 注入手工修改（加一个常量+改动一行）→ 代理继续写）",
+      "forbidden": ["丢失手工注入的那两处修改（事后 diff 必须包含它们）"],
+      "budget_tbd": true,
+      "oracle": [
+        "结束后文件包含手工注入的两处修改（逐字比对）",
+        "目标本身完成（以 N1 同款移动验收）",
+        "代理过程日志中存在 stale/hash 冲突被拒的事件（证明保护生效而非碰巧）"
+      ]
+    }
+  ],
+  "calibration": {
+    "tasks": ["N1", "E4", "R3"],
+    "purpose": "固定 token/调用数/墙钟预算与 E3 视觉容差；校准运行不计入对照结果",
+    "rule": "预算一经固定不得回调；正式对照期间耗尽记 budget_exhausted"
+  },
+  "metrics_sources": {
+    "oracle_passed": "oracle 全部步骤通过",
+    "false_completion": "agent_statement.claims_completed == true 且 oracle_passed == false",
+    "human_interventions": "运行期间人工介入次数（事件流水人工标记）",
+    "recovery_s": "R 类任务从发现异常到 oracle 通过的耗时；非恢复类为 null",
+    "unknown_policy": "取不到的真实用量记 null，禁止填 0"
+  }
+}
