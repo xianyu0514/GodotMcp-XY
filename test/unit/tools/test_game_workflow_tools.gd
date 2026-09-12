@@ -837,3 +837,55 @@ func test_export_chain_derives_the_goal_platform_preset() -> void:
 			_tools._resolve_inputs(chain_task, {}, false))
 		assert_eq(String(derived_args.get("preset", "")), "Web",
 			"%s derives the goal-platform preset (got %s)" % [expected_tool, derived_args.get("preset", "")])
+
+func test_pause_goal_derives_behavioral_play_steps() -> void:
+	# 暂停目标（含中文）的 play 门禁必须派生"Esc 暂停→断言已停→Esc 恢复→
+	# 断言继续"的演练：缺这两条步内断言只证明了"游戏能启动"。
+	var planned: Dictionary = _plan(["gameplay_feature"], "做一个 Esc 暂停菜单，按 Esc 暂停世界再按恢复")
+	assert_eq(planned.get("status", ""), "planned", str(planned.get("error", "")))
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var play_task: Dictionary = {}
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			play_task = task
+			break
+	assert_false(play_task.is_empty(), "gameplay profile contains the play gate")
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		loaded, play_task, "play_and_verify",
+		_tools._resolve_inputs(play_task, {}, false))
+	var steps: Array = arguments.get("steps", [])
+	assert_eq(str((play_task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
+		"pause-exercise", "pause goals derive the pause exercise, not boot-settle")
+	assert_true(steps.size() >= 4, "press/wait/release sequence present")
+	var first: Dictionary = steps[0] if steps.size() > 0 else {}
+	assert_eq(str(first.get("action", "")), "ui_cancel", "pause uses the built-in Esc action")
+	assert_eq(bool((first.get("assert", {}) as Dictionary).get("expected", null)), true,
+		"first Esc asserts the world IS paused")
+	assert_true(bool(first.get("screenshot", false)), "paused-state screenshot is part of the evidence")
+	var third: Dictionary = steps[2] if steps.size() > 2 else {}
+	assert_eq(bool((third.get("assert", {}) as Dictionary).get("expected", null)), false,
+		"second Esc asserts the world RESUMED")
+
+func test_movement_goal_still_derives_movement_exercise() -> void:
+	# 回归：新增暂停分支不得影响移动目标的既有演练派生。
+	var planned: Dictionary = _plan(["gameplay_feature"], "arrow-key movement controller")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) != "play_and_verify":
+			continue
+		var arguments: Dictionary = _tools._derive_step_arguments(
+			loaded, task, "play_and_verify", _tools._resolve_inputs(task, {}, false))
+		assert_eq(str((task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
+			"movement-exercise")
+		var steps: Array = arguments.get("steps", [])
+		assert_eq(str((steps[0] as Dictionary).get("action", "")), "move_left")
+		return
+	fail_test("play_and_verify task not found for movement goal")

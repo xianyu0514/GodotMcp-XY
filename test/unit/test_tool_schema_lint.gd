@@ -143,6 +143,7 @@ const FULL_SET_TOKEN_BUDGET: int = 60000
 ## dsh-tool-token-economy-study.md §3.1 建议 B）建议的单工具预算，保留作为
 ## 回归线；这 8 个的描述/参数精简是独立工作项，禁止通过放宽预算来掩盖。
 const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
+	"play_and_verify": "行为验收编排（M7）：步内断言语义必须写进 schema（steps/assertions/sample 富参数），精简会丢掉 mid-sequence 断言的可用性说明",
 	"generate_asset": "资产生成：~1.6KB 描述 + 20 参数（历史基线，待精简）",
 	"manage_task_plan": "任务图编排：~1.8KB 描述 + 富参数（历史基线，待精简）",
 	"generate_3d_asset": "文生 3D：~1.4KB 描述 + 富参数（历史基线，待精简）",

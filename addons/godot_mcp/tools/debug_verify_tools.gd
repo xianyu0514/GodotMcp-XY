@@ -69,13 +69,13 @@ func _send_tool_progress(progress_token: Variant, progress: int, total: int = 0,
 func _register_play_and_verify(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"play_and_verify",
-		"Drive the running game through scripted input steps and runtime assertions into one pass/fail report. Steps send input actions/events with optional waits and screenshots; assertions check runtime expressions, optionally vs expected. deterministic=true frame-steps waits exactly in-game and 'sample' builds a trajectory with per-label metrics. Captured runtime errors fail by default. Requires the game running with the runtime probe installed.",
+		"Drive the running game through scripted steps and assertions into one pass/fail report. Steps send actions/events with waits/screenshots and may carry an inline 'assert' (expression+expected) evaluated right after the step, proving mid-sequence behavior (paused after Esc, resumed after the second) in order. Final assertions check runtime expressions. deterministic=true frame-steps in-game; 'sample' builds per-label trajectories. Runtime errors fail by default; needs the game plus probe.",
 		{
 			"type": "object",
 			"properties": {
 				"steps": {
 					"type": "array",
-					"description": "Ordered input steps.",
+					"description": "Ordered steps; each may include action/event, waits, screenshot and an inline 'assert' ({expression, expected, ...}) evaluated right after it.",
 					"items": {"type": "object"}
 				},
 				"assertions": {
@@ -145,6 +145,9 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 	var errors: Array = []
 	var screenshots: Array = []
 	var executed: int = 0
+	# 断言结果统一记账：步内 assert（按序紧跟该步求值）+ 末尾 assertions。
+	var assertion_results: Array = []
+	var passed_count: int = 0
 
 	for i in steps.size():
 		# 客户端取消检查：每一步都检查，取消则中止编排并返回 cancelled。
@@ -193,6 +196,14 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 				errors.append({"step": i, "phase": "screenshot", "error": shot_result["error"]})
 			else:
 				screenshots.append({"step": i, "save_path": save_path, "size": shot_result.get("size", "")})
+		# 步内断言：紧跟本步求值（如 Esc 后世界应立即暂停），顺序即证据。
+		if step.has("assert") and step["assert"] is Dictionary:
+			var step_assert: Dictionary = step["assert"]
+			var step_result: Dictionary = await _evaluate_runtime_assertion(params, step_assert, "step %d" % i)
+			step_result["step"] = i
+			if bool(step_result.get("passed", false)):
+				passed_count += 1
+			assertion_results.append(step_result)
 		executed += 1
 		# 进度通知：step index -> progress（steps 为总进度）。
 		_send_tool_progress(progress_token, executed, steps.size(), "step")
@@ -209,12 +220,10 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 
 	var metrics: Dictionary = _compute_trajectory_metrics(trajectory, step_delta)
 
-	var assertion_results: Array = []
-	var passed_count: int = 0
 	for i in assertions.size():
 		# 断言阶段也可能耗时（每个断言都要轮询运行时探针），同样响应取消。
 		if _tool_cancelled():
-			return {"status": "cancelled", "error": "cancelled by client", "steps_executed": executed, "assertions_total": i, "assertions_passed": passed_count}
+			return {"status": "cancelled", "error": "cancelled by client", "steps_executed": executed, "assertions_total": i + assertion_results.size(), "assertions_passed": passed_count}
 		var spec: Dictionary = assertions[i] if assertions[i] is Dictionary else {}
 		if spec.has("metric"):
 			var metric_result: Dictionary = _evaluate_metric_assertion(spec, metrics)
@@ -223,40 +232,11 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 				passed_count += 1
 			assertion_results.append(metric_result)
 			continue
-		var expression: String = String(spec.get("expression", "")).strip_edges()
-		if expression.is_empty():
-			assertion_results.append({"index": i, "passed": false, "error": "Missing 'expression' (or 'metric')"})
-			continue
-		var assert_params: Dictionary = _merge_runtime_params(params, {"expression": expression})
-		assert_params["description"] = String(spec.get("description", spec.get("label", expression)))
-		if spec.has("node_path"):
-			assert_params["node_path"] = spec["node_path"]
-		if spec.has("expected"):
-			assert_params["expected"] = spec["expected"]
-		if spec.has("operator"):
-			assert_params["operator"] = spec["operator"]
-		if spec.has("timeout_ms"):
-			assert_params["timeout_ms"] = spec["timeout_ms"]
-		var assert_result: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(assert_params)
-		var passed: bool
-		if assert_result.has("error"):
-			passed = false
-		elif assert_result.has("passed"):
-			passed = bool(assert_result["passed"])
-		else:
-			passed = assert_result.get("status", "") == "success"
-		if passed:
+		var final_result: Dictionary = await _evaluate_runtime_assertion(params, spec, "")
+		final_result["index"] = i
+		if bool(final_result.get("passed", false)):
 			passed_count += 1
-		assertion_results.append({
-			"index": i,
-			"description": assert_params["description"],
-			"expression": expression,
-			"passed": passed,
-			"expected": assert_result.get("expected", null),
-			"actual": assert_result.get("actual", null),
-			"last_value": assert_result.get("last_value", null),
-			"error": assert_result.get("error", null)
-		})
+		assertion_results.append(final_result)
 
 	var end_info: Dictionary = await _get_runtime_tools()._tool_get_runtime_info(_merge_runtime_params(params, {}))
 
@@ -293,6 +273,44 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		if include_trajectory:
 			report["trajectory"] = trajectory
 	return report
+
+## 求值一条运行时表达式断言。步内 assert 与末尾 assertions 共用同一
+## 求值路径，保证 mid-sequence 与 final 断言的语义完全一致。
+## context 非空时标注求值时机（如 "step 3"）用于审计。
+func _evaluate_runtime_assertion(params: Dictionary, spec: Dictionary, context: String) -> Dictionary:
+	var expression: String = String(spec.get("expression", "")).strip_edges()
+	if expression.is_empty():
+		return {"passed": false, "error": "Missing 'expression' (or 'metric')"}
+	var assert_params: Dictionary = _merge_runtime_params(params, {"expression": expression})
+	assert_params["description"] = String(spec.get("description", spec.get("label", expression)))
+	if spec.has("node_path"):
+		assert_params["node_path"] = spec["node_path"]
+	if spec.has("expected"):
+		assert_params["expected"] = spec["expected"]
+	if spec.has("operator"):
+		assert_params["operator"] = spec["operator"]
+	if spec.has("timeout_ms"):
+		assert_params["timeout_ms"] = spec["timeout_ms"]
+	var assert_result: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(assert_params)
+	var passed: bool
+	if assert_result.has("error"):
+		passed = false
+	elif assert_result.has("passed"):
+		passed = bool(assert_result["passed"])
+	else:
+		passed = assert_result.get("status", "") == "success"
+	var result: Dictionary = {
+		"description": assert_params["description"],
+		"expression": expression,
+		"passed": passed,
+		"expected": assert_result.get("expected", null),
+		"actual": assert_result.get("actual", null),
+		"last_value": assert_result.get("last_value", null),
+		"error": assert_result.get("error", null)
+	}
+	if not context.is_empty():
+		result["context"] = context
+	return result
 
 ## Deterministically advances the running game by `frames` frames, sampling
 ## `sample_specs` each frame, via the runtime probe's advance_frames command.
