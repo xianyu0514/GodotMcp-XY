@@ -4,6 +4,8 @@ This directory is the distributable Godot addon. Copy `addons/godot_mcp` into an
 
 Script writes return compiler diagnostics, run/stop report observed game state, and batch scene edits preserve original nodes across undo/redo.
 
+Existing-script edits support unique text replacements and optional content-hash guards. Known unsaved target buffers and invalid line edits are rejected without writing. See the [script contract](../../docs/tools/script-tools.md).
+
 ## What ships here
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.

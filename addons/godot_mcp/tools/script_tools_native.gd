@@ -1299,7 +1299,7 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 
 func _register_read_script(server_core: RefCounted) -> void:
 	var tool_name: String = "read_script"
-	var description: String = "Read the content of a GDScript (.gd) or C# (.cs) script file. Returns the complete script source code."
+	var description: String = "Read complete GDScript (.gd) or C# (.cs) source and its content_hash. Pass this hash as expected_content_hash to modify_script to reject stale writes."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -1319,6 +1319,7 @@ func _register_read_script(server_core: RefCounted) -> void:
 		"properties": {
 			"script_path": {"type": "string"},
 			"content": {"type": "string"},
+			"content_hash": {"type": "string", "description": "SHA-256 of the returned UTF-8 text, including line endings."},
 			"line_count": {"type": "integer"}
 		}
 	}
@@ -1368,6 +1369,7 @@ func _tool_read_script(params: Dictionary) -> Dictionary:
 	return {
 		"script_path": script_path,
 		"content": content,
+		"content_hash": content.sha256_text(),
 		"line_count": line_count
 	}
 
@@ -1377,7 +1379,7 @@ func _tool_read_script(params: Dictionary) -> Dictionary:
 
 func _register_batch_read_scripts(server_core: RefCounted) -> void:
 	var tool_name: String = "batch_read_scripts"
-	var description: String = "Read the contents of multiple GDScript (.gd) or C# (.cs) script files in a single call. Returns one result entry per requested path, reducing round trips when reading several scripts."
+	var description: String = "Read multiple GDScript (.gd) or C# (.cs) scripts. Each successful entry includes content and content_hash for guarded modify_script calls."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1703,7 +1705,7 @@ func _get_csharp_script_template(template_name: String, script_class_name: Strin
 
 func _register_modify_script(server_core: RefCounted) -> void:
 	var tool_name: String = "modify_script"
-	var description: String = "Modify the content of an existing GDScript (.gd) or C# (.cs) script file. Can replace entire content or specific lines. Saved GDScript returns immediate compiler diagnostics; check validation_status separately from write status."
+	var description: String = "Modify an existing GDScript (.gd) or C# (.cs) file. Prefer old_text for an exact unique replacement and expected_content_hash from read_script to reject stale writes. Invalid lines and missing/ambiguous text leave the file unchanged. Saved GDScript returns compiler diagnostics; check validation_status separately from write status."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -1715,11 +1717,19 @@ func _register_modify_script(server_core: RefCounted) -> void:
 			},
 			"content": {
 				"type": "string",
-				"description": "New content for the script (full replacement)"
+				"description": "Replacement content: whole file by default, one line with line_number, or the unique old_text block. Empty content is allowed only with old_text (deletion)."
 			},
 			"line_number": {
 				"type": "integer",
-				"description": "Optional line number to replace (1-indexed). If provided with 'content', replaces that line only."
+				"description": "Line to replace (1-indexed); out-of-range values are rejected. Omitted or 0 means whole file. Cannot combine with old_text."
+			},
+			"old_text": {
+				"type": "string",
+				"description": "Optional exact nonempty text to replace with content. Must occur exactly once, including whitespace and line endings. Use a larger block when ambiguous."
+			},
+			"expected_content_hash": {
+				"type": "string",
+				"description": "Optional SHA-256 content_hash from read_script/batch_read_scripts or the last modify_script result. A mismatch returns content_conflict without writing; re-read and reapply the intended edit."
 			},
 			"validate": {
 				"type": "boolean",
@@ -1736,6 +1746,11 @@ func _register_modify_script(server_core: RefCounted) -> void:
 		"properties": {
 			"status": {"type": "string"},
 			"script_path": {"type": "string"},
+			"content_hash": {"type": "string", "description": "SHA-256 of the written UTF-8 source."},
+			"buffer_guard_supported": {"type": "boolean", "description": "Whether the editor can detect unsaved script buffers. False without an editor or on older engines."},
+			"error_code": {"type": "string"},
+			"current_content_hash": {"type": "string"},
+			"recovery_hint": {"type": "string"},
 			"line_count": {"type": "integer"}
 		}
 	}
@@ -1756,15 +1771,36 @@ func _register_modify_script(server_core: RefCounted) -> void:
 						  "core", "Script")
 
 func _tool_modify_script(params: Dictionary) -> Dictionary:
-	# 参数提取
+	# 在类型转换和打开写句柄之前验证，错误请求不能退化成全文件覆盖。
+	if not params.get("script_path", "") is String:
+		return {"error": "script_path must be a string"}
+	if not params.get("content") is String:
+		return {"error": "Missing or invalid required parameter: content (string)"}
+	var raw_line: Variant = params.get("line_number", 0)
+	if not (raw_line is int or raw_line is float):
+		return {"error": "line_number must be a non-negative integer"}
+	if not is_finite(raw_line) or raw_line < 0 or raw_line > 2147483647 or raw_line != int(raw_line):
+		return {"error": "line_number must be a non-negative integer within file bounds"}
+	var has_old_text: bool = params.has("old_text")
+	if has_old_text:
+		if not params["old_text"] is String or String(params["old_text"]).is_empty():
+			return {"error": "old_text must be a nonempty string"}
+		if params.has("line_number"):
+			return {"error": "old_text and line_number cannot be combined"}
+	if params.has("expected_content_hash"):
+		if not params["expected_content_hash"] is String:
+			return {"error": "expected_content_hash must be a SHA-256 hex string"}
+		var expected: String = params["expected_content_hash"]
+		if expected.length() != 64 or not expected.is_valid_hex_number(false):
+			return {"error": "expected_content_hash must be a 64-character SHA-256 hex string"}
 	var script_path: String = params.get("script_path", "")
 	var new_content: String = params.get("content", "")
-	var line_number: int = params.get("line_number", 0)
+	var line_number: int = int(raw_line)
 	
 	# 参数验证
 	if script_path.is_empty():
 		return {"error": "Missing required parameter: script_path"}
-	if new_content.is_empty():
+	if new_content.is_empty() and not has_old_text:
 		return {"error": "Missing required parameter: content"}
 	
 	# 使用PathValidator验证路径安全性
@@ -1778,27 +1814,45 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	# 验证文件是否存在
 	if not FileAccess.file_exists(script_path):
 		return {"error": "File not found: " + script_path}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	var script_editor: ScriptEditor = editor_interface.get_script_editor() if editor_interface else null
+	var buffer_guard: Dictionary = _script_buffer_write_guard(script_editor, script_path)
+	if buffer_guard.has("error"):
+		return buffer_guard
 	
 	# 读取现有内容
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
 	if not file:
 		return {"error": "Failed to open file for reading: " + script_path}
 	
-	var existing_lines: Array = []
-	while not file.eof_reached():
-		existing_lines.append(file.get_line())
+	var existing_content: String = file.get_as_text()
 	file.close()
-	
-	# 修改内容
-	var final_content: String
-	
-	if line_number > 0 and line_number <= existing_lines.size():
-		# 替换特定行
-		existing_lines[line_number - 1] = new_content
+	var current_hash: String = existing_content.sha256_text()
+	if params.has("expected_content_hash") and String(params["expected_content_hash"]).to_lower() != current_hash:
+		return {"error": "Script changed since it was read; no changes were written.",
+			"error_code": "content_conflict", "script_path": script_path,
+			"current_content_hash": current_hash,
+			"recovery_hint": "Read the script again, preserve newer changes, and reapply the intended edit with the new content_hash."}
+
+	var final_content: String = new_content
+	if has_old_text:
+		var old_text: String = params["old_text"]
+		var match_at: int = existing_content.find(old_text)
+		if match_at < 0:
+			return {"error": "old_text was not found; no changes were written.", "error_code": "text_not_found",
+				"recovery_hint": "Read the current script and use exact text, including whitespace and line endings."}
+		if existing_content.find(old_text, match_at + 1) >= 0:
+			return {"error": "old_text matches more than once; no changes were written.", "error_code": "ambiguous_text",
+				"recovery_hint": "Include more surrounding text so old_text identifies exactly one block."}
+		final_content = existing_content.substr(0, match_at) + new_content + existing_content.substr(match_at + old_text.length())
+	elif line_number > 0:
+		var existing_lines: PackedStringArray = existing_content.split("\n")
+		if line_number > existing_lines.size():
+			return {"error": "line_number is outside the script; no changes were written.", "error_code": "line_out_of_range"}
+		# 保留未修改部分的字节文本，包括 CRLF 和文件末尾换行。
+		var ending: String = "\r" if existing_lines[line_number - 1].ends_with("\r") and not new_content.ends_with("\r") else ""
+		existing_lines[line_number - 1] = new_content + ending
 		final_content = "\n".join(existing_lines)
-	else:
-		# 全量替换
-		final_content = new_content
 	
 	# 写入文件
 	file = FileAccess.open(script_path, FileAccess.WRITE)
@@ -1817,10 +1871,12 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 	var result: Dictionary = {
 		"status": "success",
 		"script_path": script_path,
+		"content_hash": final_content.sha256_text(),
+		"buffer_guard_supported": buffer_guard["supported"],
 		"line_count": line_count,
 		# 落盘后立即同步编辑器，避免“文件已在磁盘上修改”的重载弹窗。
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
-			_get_editor_interface(), script_path).get("status", "")
+			editor_interface, script_path).get("status", "")
 	}
 	var validation_enabled: bool = bool(params.get("validate", true))
 	result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path, validation_enabled))
@@ -1833,6 +1889,28 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 		result["validation"] = {"valid": result["validation_status"] == "passed",
 			"error_count": errors.size(), "errors": errors.slice(0, 5)}
 	return result
+
+
+## 编辑器未保存缓冲区与磁盘版本是两份状态，磁盘 hash 不能替代缓冲区检查。
+static func _script_buffer_write_guard(script_editor: Object, script_path: String) -> Dictionary:
+	if script_editor == null:
+		return {"supported": false}
+	var target_path: String = ProjectSettings.globalize_path(script_path).simplify_path()
+	if OS.get_name() == "Windows":
+		target_path = target_path.to_lower()
+	for method_name: String in ["get_unsaved_files", "get_unsaved_scripts"]:
+		if not script_editor.has_method(method_name):
+			continue
+		for unsaved_path: Variant in script_editor.call(method_name):
+			var normalized_path: String = ProjectSettings.globalize_path(str(unsaved_path)).simplify_path()
+			if OS.get_name() == "Windows":
+				normalized_path = normalized_path.to_lower()
+			if normalized_path == target_path:
+				return {"error": "The script has unsaved editor changes; no changes were written.",
+					"error_code": "unsaved_script_changes", "script_path": script_path, "supported": true,
+					"recovery_hint": "Preserve or resolve the unsaved editor changes, then read_script again before retrying."}
+		return {"supported": true}
+	return {"supported": false}
 
 # ============================================================================
 # analyze_script - 分析脚本结构（完整版）
