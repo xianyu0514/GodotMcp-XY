@@ -17,6 +17,10 @@ var _probe_ready_sent: bool = false
 const TYPE_TAG: String = "__godot_type"
 
 func _ready() -> void:
+	# 探针是调试仪器：游戏暂停（get_tree().paused = true）时必须继续应答
+	# 编辑器侧的轮询，否则"验证暂停行为"的断言会在游戏成功暂停的瞬间
+	# 超时失败（真实编辑器 E2E 抓到的缺陷：默认 PAUSABLE 会让探针随世界冻结）。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_ensure_debugger_capture_registered()
 	set_process(not _capture_registered)
 

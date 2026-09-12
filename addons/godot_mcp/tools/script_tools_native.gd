@@ -1712,6 +1712,14 @@ func _resolve_node_path(editor_interface: EditorInterface, path: String) -> Node
 	var edited_scene: Node = editor_interface.get_edited_scene_root()
 	if not edited_scene:
 		return null
+	return _resolve_node_within(edited_scene, path)
+
+## 纯逻辑路径解析（可单测）："/root" 与 "." 显式指被编辑场景根——
+## 裸 "/root" 走绝对路径会命中编辑器自己的 Window，挂载静默改错对象
+## （真实编辑器 E2E 抓到：场景根从未拿到脚本，控制器全都没在运行）。
+static func _resolve_node_within(edited_scene: Node, path: String) -> Node:
+	if path == "/root" or path == ".":
+		return edited_scene
 	if path == str(edited_scene.get_path()) or path == "/root/" + edited_scene.name:
 		return edited_scene
 	if path.begins_with("/root/" + edited_scene.name + "/"):
@@ -2413,6 +2421,11 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	var target_node: Node = _resolve_node_path(editor_interface, node_path)
 	if not target_node:
 		return {"error": "Node not found: " + node_path}
+	# 目标必须在被编辑场景子树内：解析到编辑器自身的节点（如编辑器 Window）
+	# 时挂载会静默改错对象——宁可失败也不动不属于当前场景的节点。
+	var edited_scene_root: Node = editor_interface.get_edited_scene_root()
+	if target_node != edited_scene_root and not edited_scene_root.is_ancestor_of(target_node):
+		return {"error": "Node '%s' is outside the edited scene; refusing to modify editor-owned nodes." % node_path}
 
 	var previous_script: String = ""
 	var old_script: Variant = target_node.get_script()
