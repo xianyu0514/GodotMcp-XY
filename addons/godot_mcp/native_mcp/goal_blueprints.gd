@@ -107,16 +107,26 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
-	if bool(verbs.get("movement", false)):
+	if bool(verbs.get("movement", false)) or needs_pause:
+		# 单一 _physics_process：暂停开关用状态轮询（Input.is_action_just_pressed
+		# 依赖动作状态，运行时探针的动作模拟正是设置状态——事件派发路径
+		# （_unhandled_input）对模拟动作不可靠，真实编辑器 E2E 实测抓到）。
+		# 暂停期间提前 return：世界（含本控制器驱动的移动）必须停下。
 		source += "\nfunc _physics_process(_delta: float) -> void:\n"
-		source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_up\", \"move_down\")\n"
-		source += "\tif direction == Vector2.ZERO:\n"
-		source += "\t\tdirection = Vector2(\n"
-		source += "\t\t\tInput.get_axis(\"ui_left\", \"ui_right\"),\n"
-		source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
-		source += "\tvelocity = direction * SPEED\n"
-		source += "\tmove_and_slide()\n"
-		if needs_pickup:
+		if needs_pause:
+			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
+			source += "\t\tset_paused(not get_tree().paused)\n"
+			source += "\tif get_tree().paused:\n"
+			source += "\t\treturn\n"
+		if bool(verbs.get("movement", false)):
+			source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_up\", \"move_down\")\n"
+			source += "\tif direction == Vector2.ZERO:\n"
+			source += "\t\tdirection = Vector2(\n"
+			source += "\t\t\tInput.get_axis(\"ui_left\", \"ui_right\"),\n"
+			source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
+			source += "\tvelocity = direction * SPEED\n"
+			source += "\tmove_and_slide()\n"
+	if needs_pickup:
 			source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
 			source += "\tif body != self:\n"
 			source += "\t\treturn\n"
@@ -126,9 +136,6 @@ static func controller_script(objective: String) -> String:
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 			source += "\t\t_win_label.text = \"You Win!\"\n"
 	if needs_pause:
-		source += "\nfunc _unhandled_input(event: InputEvent) -> void:\n"
-		source += "\tif event.is_action_pressed(\"ui_cancel\"):\n"
-		source += "\t\tset_paused(not get_tree().paused)\n"
 		source += "\nfunc set_paused(value: bool) -> void:\n"
 		source += "\tget_tree().paused = value\n"
 		source += "\tif _pause_label != null:\n"

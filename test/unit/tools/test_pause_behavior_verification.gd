@@ -7,6 +7,7 @@ extends "res://addons/gut/test.gd"
 
 const BlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 const VerifyToolsScript = preload("res://addons/godot_mcp/tools/debug_verify_tools.gd")
+const ScriptToolsScript = preload("res://addons/godot_mcp/tools/script_tools_native.gd")
 
 # ============================================================================
 # 蓝图：暂停动词
@@ -27,6 +28,9 @@ func test_pause_goal_generates_controller_with_pause_logic() -> void:
 	assert_true(source.contains("ui_cancel"), "pause uses the built-in Esc action")
 	assert_true(source.contains("set_paused"), "pause toggle function exists")
 	assert_true(source.contains("PauseLabel"), "pause menu layer exists")
+	assert_true(source.contains("Input.is_action_just_pressed(\"ui_cancel\")"),
+		"pause is driven by action-state polling (event dispatch is unreliable for simulated actions)")
+	assert_true(source.contains("if get_tree().paused:"), "world must stop while paused")
 
 func test_movement_and_pause_combine() -> void:
 	var source: String = BlueprintsScript.controller_script("arrow-key movement with a pause menu")
@@ -140,3 +144,24 @@ func test_pause_exercise_steps_shape() -> void:
 	assert_eq(int(report["steps_executed"]), 4)
 	assert_eq(int(report["assertions_total"]), 2)
 	assert_eq((report["screenshots"] as Array).size(), 1, "paused-state screenshot captured as evidence")
+
+# ============================================================================
+# _resolve_node_within："/root" 必须映射被编辑场景根（真机 E2E 抓到的静默错挂）
+# ============================================================================
+
+func test_resolve_root_and_dot_map_to_edited_scene_root() -> void:
+	var root: Node2D = Node2D.new()
+	root.name = "gameplay-feature"
+	var child: Node2D = Node2D.new()
+	child.name = "Child"
+	root.add_child(child)
+	get_tree().root.add_child(root)  # 运行时形态 /root/gameplay-feature
+	var resolved_root: Node = ScriptToolsScript._resolve_node_within(root, "/root")
+	var resolved_dot: Node = ScriptToolsScript._resolve_node_within(root, ".")
+	var resolved_child: Node = ScriptToolsScript._resolve_node_within(root, "/root/gameplay-feature/Child")
+	var resolved_relative: Node = ScriptToolsScript._resolve_node_within(root, "Child")
+	assert_eq(resolved_root, root, "'/root' must resolve to the edited scene root, not the editor Window")
+	assert_eq(resolved_dot, root, "'.' must resolve to the edited scene root")
+	assert_eq(resolved_child, child, "scene-name absolute paths still resolve within the scene")
+	assert_eq(resolved_relative, child, "relative paths still resolve")
+	root.queue_free()

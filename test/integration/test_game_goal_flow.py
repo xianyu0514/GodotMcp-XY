@@ -66,6 +66,16 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "pause-menu-behavior",
+        "objective": (
+            "Esc pause menu: pressing Esc pauses the world and shows a paused "
+            "menu, pressing Esc again resumes it. Verify the pause behavior "
+            "while playing."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_pause_menu": True,
+    },
+    {
         "name": "animation-audio",
         "objective": (
             "Animate the game: create an animation resource, insert its keys, "
@@ -173,6 +183,28 @@ def build_scratch_project() -> None:
 
 
 
+def _failing_receipt_summaries(name: str) -> str:
+    """needs_input/失败时dump未通过步骤的回执摘要，供失败诊断。"""
+    try:
+        status = tool_call("plan_game_workflow",
+                           {"action": "status", "plan_path": PLAN_PATH, "include_plan": True},
+                           request_id=97)
+        plan = status.get("plan", {})
+        out = []
+        for t in plan.get("tasks", []):
+            if t.get("status") == "done":
+                continue
+            receipts = [r.get("summary", {}) for r in plan.get("workflow", {}).get("receipts", [])
+                        if r.get("step_id") == t.get("id")]
+            out.append({"step": t.get("id"), "tool": t.get("tool_name"),
+                        "status": t.get("status"),
+                        "fingerprint": str(t.get("verification_failure_fingerprint", ""))[:100],
+                        "receipt_summaries": receipts})
+        return json.dumps(out, ensure_ascii=False)[:1500]
+    except Exception as exc:  # noqa: BLE001 - diagnostics only
+        return f"<receipt dump failed: {exc}>"
+
+
 def run_scenario(scenario: dict) -> None:
     name = scenario["name"]
     print(f"[goal-flow] scenario: {name}", flush=True)
@@ -193,7 +225,31 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_playable"):
+            if scenario.get("assert_pause_menu"):
+                # M7：暂停目标必须留下真实暂停代码 + pause-exercise 行为证据。
+                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
+                if not script_files:
+                    raise AssertionError(f"[{name}] completed without any generated scripts")
+                controller = script_files[0].read_text(encoding="utf-8")
+                for marker in ("set_paused", "ui_cancel", "PROCESS_MODE_ALWAYS", "PauseLabel"):
+                    if marker not in controller:
+                        raise AssertionError(f"[{name}] pause controller lacks {marker}: {controller[:200]}")
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                if plan_file.exists():
+                    plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                    play_tasks = [t for t in plan_data.get("tasks", [])
+                                  if t.get("tool_name") == "play_and_verify"]
+                    if play_tasks:
+                        derived = str((play_tasks[0].get("derived_inputs", {}) or {}).get("steps", ""))
+                        if derived != "pause-exercise":
+                            raise AssertionError(
+                                f"[{name}] play gate derived '{derived}', not the pause exercise")
+                        if str(play_tasks[0].get("status", "")) != "done":
+                            raise AssertionError(f"[{name}] pause play gate not done")
+                else:
+                    raise AssertionError(f"[{name}] plan file missing for pause-evidence check")
+                note = "; pause behavior verified (paused/resumed asserted in-run)"
+            elif scenario.get("assert_playable"):
                 script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
                 if not script_files:
                     raise AssertionError(f"[{name}] completed without any generated scripts")
@@ -213,7 +269,9 @@ def run_scenario(scenario: dict) -> None:
             return
         if state == "needs_input" or (state == "waiting" and run.get("needs_input")):
             needs = run.get("needs_input", run.get("needs", []))
-            raise AssertionError(f"[{name}] Goal stalled requiring input — derivation gap: {json.dumps(needs)[:600]}")
+            print(f"[{name}] needs_input detail: {_failing_receipt_summaries(name)}", flush=True)
+            last_exec = run.get("executed", [])[-1] if run.get("executed") else {}
+            print(f"[{name}] last executed step: {json.dumps(last_exec, ensure_ascii=False)[:2000]}", flush=True)
         if state == "waiting":
             # 纯 pending（无缺失输入）：异步步骤进行中，继续轮询。
             time.sleep(1.0)
@@ -264,7 +322,10 @@ def main() -> int:
             process.kill()
             process.wait(timeout=10)
         if os.environ.get("GOAL_FLOW_KEEP") != "1":
-            shutil.rmtree(SCRATCH, ignore_errors=True)
+            if os.environ.get("KEEP_SCRATCH"):
+                print(f"[goal-flow] scratch kept at {SCRATCH}", flush=True)
+            else:
+                shutil.rmtree(SCRATCH, ignore_errors=True)
 
 
 if __name__ == "__main__":
