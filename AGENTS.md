@@ -86,6 +86,7 @@ addons/godot_mcp/
 │   ├── project_workflow_tools.gd # 8 个工具 — bump_version（版本号递增 + changelog）、UI 主题创建/设置/默认主题、动画资源创建与关键帧插入、manage_task_plan（持久任务图 + DoD）、manage_localization（extract/import/export/list）
 │   ├── asset_provider_presets.gd # 支持文件（非工具）— generate_asset/generate_3d_asset 的外部 API 预设与 endpoint/密钥白名单
 │   ├── task_plan_store.gd      # 支持文件（非工具）— manage_task_plan 的持久任务图存储
+│   ├── change_journal.gd       # 支持文件（非工具）— 可恢复跨文件修改的操作日志（内容指纹 + 逐文件阶段 + 恢复分类，M3 首版接入 rename_script_symbol）
 │   ├── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 │   ├── export_preset_tools.gd  # 5 个工具 — inspect/create/update/remove/duplicate_export_preset（export_presets.cfg 的原子 CRUD）
 │   └── game_workflow_tools.gd  # 2 个工具（category=meta，始终在线）— plan_game_workflow（12 生产 profile 组装持久目标 DAG）、run_game_workflow（自适应检查点切片推进，证据门禁判 completed）
