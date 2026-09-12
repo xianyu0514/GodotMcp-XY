@@ -13,6 +13,7 @@ const EngineScript = preload("res://addons/godot_mcp/native_mcp/game_workflow_en
 const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_store.gd")
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
+const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -358,6 +359,14 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			uncertain["step_id"] = uncertain_task.get("id", "")
 			uncertain["tool_name"] = uncertain_task.get("tool_name", "")
 			uncertain["plan_path"] = plan_path
+			# 变更日志处方（信息性，不改变恢复语义）：pending 操作逐条分类，
+			# 该工具最近一条提交记录按磁盘实况复判——AI 从"inspect and replan"
+			# 升级为"写入已确认落盘/存在冲突需人工/可安全重放"的明确指引。
+			var journal_recovery: Dictionary = _change_journal_recovery(
+				String(uncertain_task.get("tool_name", "")))
+			if not journal_recovery.is_empty():
+				uncertain["change_journal"] = journal_recovery
+				workflow["blocked_reason"] = "Unknown non-idempotent outcome; change_journal verdict attached — %s" % str(journal_recovery.get("recommended", "inspect pending operations"))
 			return uncertain
 	if recovered_safe_step:
 		workflow["state"] = "running"
@@ -924,6 +933,41 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		arguments["steps"] = [{"wait_ms": 600}]
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["steps"] = "boot-settle"
+
+## 变更日志恢复处方：pending 操作逐条分类 + 该工具最近提交记录的磁盘
+## 复判。recommended 汇总最保守的下一步（conflict 优先）。
+func _change_journal_recovery(tool_name: String) -> Dictionary:
+	var out: Dictionary = {}
+	var pending_verdicts: Array = []
+	for operation in ChangeJournalScript.pending_operations():
+		pending_verdicts.append(ChangeJournalScript.classify_operation(operation))
+	if not pending_verdicts.is_empty():
+		out["pending"] = pending_verdicts
+	var latest: Dictionary = ChangeJournalScript.latest_operation_by_tool(tool_name)
+	if not latest.is_empty():
+		var verdict: Dictionary = ChangeJournalScript.classify_operation(latest)
+		out["latest_committed"] = {
+			"operation_id": latest.get("operation_id", ""),
+			"intent": latest.get("intent", ""),
+			"phase": latest.get("phase", ""),
+			"verdict": verdict.get("action", ""),
+			"files": verdict.get("files", []),
+		}
+	var recommended: String = ""
+	if not pending_verdicts.is_empty():
+		var has_conflict: bool = false
+		for verdict_entry in pending_verdicts:
+			if String((verdict_entry as Dictionary).get("action", "")) == "conflict":
+				has_conflict = true
+				break
+		recommended = "resolve manual-edit conflicts first" if has_conflict else "pending writes classify clean — replay is safe"
+	elif out.has("latest_committed"):
+		recommended = "latest committed write %s on disk — the write happened; %s" % [
+			"matches" if String(out["latest_committed"]["verdict"]) == "complete_receipt" else "does NOT match",
+			"no replay needed" if String(out["latest_committed"]["verdict"]) == "complete_receipt" else "inspect diverged files"]
+	if not recommended.is_empty():
+		out["recommended"] = recommended
+	return out
 
 func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
 		artifacts: Dictionary, derived: Dictionary, workflow_id: String = "") -> void:

@@ -7,6 +7,7 @@ extends RefCounted
 
 const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
 const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
+const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 
 var _editor_interface: EditorInterface = null
 var _server_core: RefCounted = null
@@ -292,12 +293,15 @@ func _tool_create_resource(params: Dictionary) -> Dictionary:
 			var converted_val: Variant = _convert_value_for_resource(resource, prop_name, properties[prop_name])
 			resource.set(prop_name, converted_val)
 	
-	# 保存资源
+	# 保存资源（写入指纹进变更日志）
+	var before_hash: String = ChangeJournalScript.file_sha256(resource_path)
 	var error: Error = ResourceSaver.save(resource, resource_path)
 	
 	if error != OK:
 		return {"error": "Failed to save resource: " + error_string(error)}
 	
+	ChangeJournalScript.record_write_operation("create_resource " + resource_path,
+		resource_path, before_hash, ChangeJournalScript.file_sha256(resource_path), true)
 	return {
 		"status": "success",
 		"resource_path": resource_path,
@@ -727,10 +731,13 @@ func _tool_update_resource_properties(params: Dictionary) -> Dictionary:
 	var skipped: Array = []
 	_apply_properties_to_resource(resource, properties, applied, skipped)
 
+	var before_hash: String = ChangeJournalScript.file_sha256(resource_path)
 	var error: Error = ResourceSaver.save(resource, resource_path)
 	if error != OK:
 		return {"error": "Failed to save resource: " + error_string(error)}
 
+	ChangeJournalScript.record_write_operation("update_resource_properties " + resource_path,
+		resource_path, before_hash, ChangeJournalScript.file_sha256(resource_path), true)
 	return {
 		"status": "success",
 		"resource_path": resource_path,

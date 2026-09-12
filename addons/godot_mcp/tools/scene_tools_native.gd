@@ -8,6 +8,7 @@ extends RefCounted
 
 const VIBE_CODING_POLICY = preload("res://addons/godot_mcp/utils/vibe_coding_policy.gd")
 const SCENE_CONTEXT = preload("res://addons/godot_mcp/utils/scene_context.gd")
+const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 
 var _editor_interface: EditorInterface = null
 var _scene_operation_in_progress: bool = false
@@ -150,6 +151,7 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	if parent_dir != "res://" and not parent_dir.is_empty():
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent_dir))
 
+	var before_hash: String = ChangeJournalScript.file_sha256(scene_path)
 	var error: Error = ResourceSaver.save(packed_scene, scene_path)
 	
 	# 清理
@@ -158,6 +160,8 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	if error != OK:
 		return {"error": "Failed to save scene: " + error_string(error)}
 	
+	ChangeJournalScript.record_write_operation("create_scene " + scene_path,
+		scene_path, before_hash, ChangeJournalScript.file_sha256(scene_path), true)
 	return {
 		"status": "success",
 		"scene_path": scene_path,
@@ -254,17 +258,28 @@ func _tool_save_scene(params: Dictionary) -> Dictionary:
 	if error != OK:
 		return {"error": "Failed to pack scene: " + error_string(error)}
 
-	# Save to file
+	# Save to file（写入前后指纹进变更日志：崩溃后可判定磁盘实况）
+	var before_hash: String = ChangeJournalScript.file_sha256(file_path)
 	error = ResourceSaver.save(packed_scene, file_path)
 
 	if error != OK:
 		return {"error": "Failed to save scene: " + error_string(error)}
 
-	return {
+	var after_hash: String = ChangeJournalScript.file_sha256(file_path)
+	var journal_result: Dictionary = ChangeJournalScript.record_write_operation(
+		"save_scene " + file_path, file_path, before_hash, after_hash,
+		not after_hash.is_empty())
+	var journaled: Dictionary = {
 		"status": "success",
 		"saved_path": file_path,
 		"operation": "save_as" if is_save_as else "save"
 	}
+	if journal_result.has("operation"):
+		journaled["change_journal"] = {
+			"operation_id": journal_result["operation"].get("operation_id", ""),
+			"verified": true,
+		}
+	return journaled
 
 # ============================================================================
 # open_scene - 打开场景
