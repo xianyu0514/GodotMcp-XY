@@ -6,8 +6,8 @@ const ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest
 const CASES: Array[Dictionary] = [
 	{"goal": "Create player movement and collision gameplay", "profiles": ["gameplay_feature"], "tools": ["create_script", "upsert_project_input_action", "play_and_verify"]},
 	{"goal": "创建玩家移动、输入和碰撞玩法", "profiles": ["gameplay_feature"], "tools": ["create_scene", "verify_scripts", "assert_no_runtime_errors"]},
-	{"goal": "Build a polished pause UI menu and verify its visuals", "profiles": ["ui_screen"], "tools": ["create_theme", "set_anchor_preset", "assert_visual_baseline"]},
-	{"goal": "制作暂停菜单界面并验证视觉效果", "profiles": ["ui_screen"], "tools": ["create_node", "get_runtime_screenshot", "assert_visual_baseline"]},
+	{"goal": "Build a polished pause UI menu and verify its visuals", "profiles": ["gameplay_feature", "ui_screen"], "tools": ["create_theme", "set_anchor_preset", "play_and_verify", "assert_visual_baseline"]},
+	{"goal": "制作暂停菜单界面并验证视觉效果", "profiles": ["gameplay_feature", "ui_screen"], "tools": ["create_node", "get_runtime_screenshot", "play_and_verify", "assert_visual_baseline"]},
 	{"goal": "Fix GDScript compile errors", "profiles": ["script_repair"], "tools": ["detect_broken_scripts", "modify_script", "verify_scripts"]},
 	{"goal": "修复脚本错误和编译错误", "profiles": ["script_repair"], "tools": ["read_script", "modify_script", "run_project_tests"]},
 	{"goal": "Import and validate a GLTF asset model", "profiles": ["asset_pipeline"], "tools": ["get_import_status", "inspect_gltf_asset", "scan_missing_resource_dependencies"]},

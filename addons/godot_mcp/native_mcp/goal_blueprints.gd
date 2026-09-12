@@ -24,6 +24,12 @@ const WIN_KEYWORDS: Array[String] = [
 	"win", "victory", "goal reached", "success screen", "win label", "win text",
 	"胜利", "获胜", "通关",
 ]
+# 暂停动词：命中即生成 Esc 暂停/恢复逻辑 + PauseLayer 菜单层。
+# 用内置 ui_cancel（默认 Esc）——不需要额外 InputMap 配置。
+const PAUSE_KEYWORDS: Array[String] = [
+	"pause", "paused", "esc menu", "pause menu",
+	"暂停", "暂停菜单",
+]
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -38,12 +44,14 @@ static func match_verbs(objective: String) -> Dictionary:
 		"movement": _mentions(objective, MOVEMENT_KEYWORDS),
 		"collectible": _mentions(objective, COLLECTIBLE_KEYWORDS),
 		"win": _mentions(objective, WIN_KEYWORDS),
+		"pause": _mentions(objective, PAUSE_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
 	return bool(verbs.get("movement", false)) \
 		or bool(verbs.get("collectible", false)) \
-		or bool(verbs.get("win", false))
+		or bool(verbs.get("win", false)) \
+		or bool(verbs.get("pause", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
@@ -51,6 +59,7 @@ static func controller_script(objective: String) -> String:
 	if not has_any_verb(verbs):
 		return ""
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+	var needs_pause: bool = bool(verbs.get("pause", false))
 
 	var source: String = "# Goal blueprint: minimal playable controller.\n"
 	source += "extends CharacterBody2D\n\n"
@@ -61,7 +70,23 @@ static func controller_script(objective: String) -> String:
 	source += "\nvar coins_collected: int = 0\n"
 	if needs_pickup:
 		source += "var _coin_area: Area2D\nvar _win_label: Label\n"
+	if needs_pause:
+		source += "var _pause_label: Label\n"
 	source += "\nfunc _ready() -> void:\n"
+	if needs_pause:
+		# 控制器必须在暂停期间继续接收输入，否则 Esc 无法恢复游戏。
+		source += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
+		source += "\t# 运行期生成暂停菜单层：CanvasLayer + PauseLabel，默认隐藏。\n"
+		source += "\tvar pause_layer := CanvasLayer.new()\n"
+		source += "\tpause_layer.name = \"PauseLayer\"\n"
+		source += "\tpause_layer.process_mode = Node.PROCESS_MODE_ALWAYS\n"
+		source += "\tadd_child(pause_layer)\n"
+		source += "\t_pause_label = Label.new()\n"
+		source += "\t_pause_label.name = \"PauseLabel\"\n"
+		source += "\t_pause_label.text = \"Paused - press Esc to resume\"\n"
+		source += "\t_pause_label.position = Vector2(40, 60)\n"
+		source += "\t_pause_label.visible = false\n"
+		source += "\tpause_layer.add_child(_pause_label)\n"
 	if needs_pickup:
 		source += "\t# 运行期生成拾取体与胜利标签，保持编辑场景最小。\n"
 		source += "\t_coin_area = Area2D.new()\n"
@@ -91,13 +116,21 @@ static func controller_script(objective: String) -> String:
 		source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
 		source += "\tvelocity = direction * SPEED\n"
 		source += "\tmove_and_slide()\n"
-	if needs_pickup:
-		source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
-		source += "\tif body != self:\n"
-		source += "\t\treturn\n"
-		source += "\tcoins_collected += 1\n"
-		source += "\tcoins_changed.emit(coins_collected)\n"
-		source += "\t_coin_area.queue_free()\n"
-		source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
-		source += "\t\t_win_label.text = \"You Win!\"\n"
+		if needs_pickup:
+			source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+			source += "\tif body != self:\n"
+			source += "\t\treturn\n"
+			source += "\tcoins_collected += 1\n"
+			source += "\tcoins_changed.emit(coins_collected)\n"
+			source += "\t_coin_area.queue_free()\n"
+			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
+			source += "\t\t_win_label.text = \"You Win!\"\n"
+	if needs_pause:
+		source += "\nfunc _unhandled_input(event: InputEvent) -> void:\n"
+		source += "\tif event.is_action_pressed(\"ui_cancel\"):\n"
+		source += "\t\tset_paused(not get_tree().paused)\n"
+		source += "\nfunc set_paused(value: bool) -> void:\n"
+		source += "\tget_tree().paused = value\n"
+		source += "\tif _pause_label != null:\n"
+		source += "\t\t_pause_label.visible = value\n"
 	return source

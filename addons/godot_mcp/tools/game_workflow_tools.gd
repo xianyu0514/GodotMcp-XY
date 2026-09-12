@@ -741,6 +741,12 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			arguments["steps"] = _movement_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "movement-exercise"
+		elif GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS):
+			# 暂停目标的行为证据：Esc 暂停 → 步内断言世界已停（含菜单截图）→
+			# Esc 恢复 → 步内断言世界继续。缺这两条断言的门禁只证明了"能启动"。
+			arguments["steps"] = _pause_play_steps()
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "pause-exercise"
 		else:
 			# 非移动目标也给一个启动等待窗口：零 steps 时编排立即返回，游戏
 			# 启动期的脚本错误还没到达调试桥——门禁只证明了"发起过运行"。
@@ -809,6 +815,30 @@ func _movement_play_steps() -> Array:
 	for action_name in ["move_left", "move_right", "move_up", "move_down"]:
 		steps.append({"action": action_name, "pressed": true, "wait_ms": 250})
 		steps.append({"action": action_name, "pressed": false, "wait_ms": 60})
+	return steps
+
+## 暂停类目标的游玩演练（评测任务 N2 的行为证据）：
+## Esc 暂停 → 断言 get_tree().paused == true（附暂停画面截图）→
+## Esc 恢复 → 断言 == false。步内断言按序求值，任一不通过即门禁失败。
+func _pause_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"action": "ui_cancel", "pressed": true, "wait_ms": 400,
+		"screenshot": true,
+		"assert": {
+			"expression": "get_tree().paused", "expected": true,
+			"description": "world pauses after Esc"
+		}
+	})
+	steps.append({"action": "ui_cancel", "pressed": false, "wait_ms": 120})
+	steps.append({
+		"action": "ui_cancel", "pressed": true, "wait_ms": 400,
+		"assert": {
+			"expression": "get_tree().paused", "expected": false,
+			"description": "world resumes after the second Esc"
+		}
+	})
+	steps.append({"action": "ui_cancel", "pressed": false, "wait_ms": 120})
 	return steps
 
 func _derive_visual_baseline_path(tool_name: String, arguments: Dictionary,
