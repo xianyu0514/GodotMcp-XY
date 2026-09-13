@@ -66,6 +66,15 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "input-remap",
+        "objective": (
+            "Arrow-key movement, then rebind move_up from the W key to the "
+            "U key and verify the new binding."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_remap": True,
+    },
+    {
         "name": "save-persistence",
         "objective": (
             "Add save/load: the player's progress persists after fully closing "
@@ -252,22 +261,33 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_save_persistence"):
+            if scenario.get("assert_remap"):
+                # E1：门禁必须派生 remap 演练（旧键失效 + 新键生效的事件级断言）
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                play_tasks = [t for t in plan_data.get("tasks", [])
+                              if t.get("tool_name") == "play_and_verify"]
+                derived = {str((t.get("derived_inputs", {}) or {}).get("steps", "")) for t in play_tasks}
+                if "remap-exercise" not in derived:
+                    raise AssertionError(f"[{name}] no play gate derived the remap exercise: {derived}")
+                note = "; rebind verified at event level (old key inert, new key works)"
+            elif scenario.get("assert_save_persistence"):
                 # N3：存档跨进程证据——控制器含 save/load 与自动读档，
                 # 恢复门禁派生的是磁盘回归演练且已完成（目标完成本身
                 # 已要求两侧门禁的行为断言在真机上通过）。
-                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
-                if not script_files:
-                    raise AssertionError(f"[{name}] completed without any generated scripts")
-                controller = script_files[0].read_text(encoding="utf-8")
+                # 脚本从计划工件取（场景间脚本累积，按文件名排序会拿错）
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                if not script_artifact:
+                    raise AssertionError(f"[{name}] plan carries no script artifact")
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
                 for marker in ("func save_game() -> bool", "func load_game() -> bool",
                                "user://save_game.json", "load_game()"):
                     if marker not in controller:
                         raise AssertionError(f"[{name}] save controller lacks {marker}: {controller[:200]}")
-                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 if not plan_file.exists():
                     raise AssertionError(f"[{name}] plan file missing for save-evidence check")
-                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
                 by_key = {t.get("step_key", ""): t for t in plan_data.get("tasks", [])}
                 for gate_key, exercise in (("save_play", "save-exercise"),
                                            ("restore_play", "save-restore-exercise")):

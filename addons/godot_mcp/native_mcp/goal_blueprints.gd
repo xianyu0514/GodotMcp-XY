@@ -88,6 +88,7 @@ static func controller_script(objective: String) -> String:
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
 	source += "\nfunc _ready() -> void:\n"
+	var ready_body_emitted: bool = false
 	if needs_pause:
 		# 控制器必须在暂停期间继续接收输入，否则 Esc 无法恢复游戏。
 		source += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
@@ -102,6 +103,7 @@ static func controller_script(objective: String) -> String:
 		source += "\t_pause_label.position = Vector2(40, 60)\n"
 		source += "\t_pause_label.visible = false\n"
 		source += "\tpause_layer.add_child(_pause_label)\n"
+		ready_body_emitted = true
 	if needs_pickup:
 		source += "\t# 运行期生成拾取体与胜利标签，保持编辑场景最小。\n"
 		source += "\t_coin_area = Area2D.new()\n"
@@ -122,9 +124,15 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
+		ready_body_emitted = true
 	if needs_save:
 		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
 		source += "\tload_game()\n"
+		ready_body_emitted = true
+	if not ready_body_emitted:
+		# 纯移动目标没有 _ready 内容：空函数体是非法 GDScript（真机 E2E
+		# 抓到——此前所有场景都带收集动词填充了 _ready，从未暴露）。
+		source += "\tpass\n"
 	if needs_movement or needs_pause:
 		# 单一 _physics_process：暂停开关用状态轮询（Input.is_action_just_pressed
 		# 依赖动作状态，运行时探针的动作模拟正是设置状态——事件派发路径
