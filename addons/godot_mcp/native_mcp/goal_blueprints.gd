@@ -66,6 +66,23 @@ const ENEMY_KEYWORDS: Array[String] = [
 	"敌人", "巡逻", "危险", "死亡", "重生",
 ]
 
+## 解析目标中的金币数量："3 coins" / "three coins" / "3 金币"。
+## 无数字默认 1（单金币最小可玩）。
+static func _coin_count(objective: String) -> int:
+	var text: String = objective.to_lower()
+	var number_regex: RegEx = RegEx.new()
+	if number_regex.compile("(\\d+)\\s*(coin|金币)") != OK:
+		return 1
+	var match_result: RegExMatch = number_regex.search(text)
+	if match_result:
+		var count: int = int(match_result.get_string(1))
+		return clampi(count, 1, 10)
+	if text.contains("three coins") or text.contains("三个金币"):
+		return 3
+	if text.contains("five coins") or text.contains("五个金币"):
+		return 5
+	return 1
+
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
 	for keyword in keywords:
@@ -121,7 +138,7 @@ static func controller_script(objective: String) -> String:
 	source += "signal coins_changed(collected: int)\n\n"
 	source += "const SPEED: float = 260.0\n"
 	if needs_pickup:
-		source += "const COINS_TO_WIN: int = 1\n"
+		source += "const COINS_TO_WIN: int = %d\n" % _coin_count(objective)
 	if needs_save:
 		source += "const SAVE_PATH := \"user://save_game.json\"\n"
 	source += "\nvar coins_collected: int = 0\n"
@@ -174,6 +191,18 @@ static func controller_script(objective: String) -> String:
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
 		source += "\t_coin_area.position = Vector2(200, 0)\n"
+		# 多金币：在玩家横扫路径上等距分布（可确定性收集全部）。
+		for _extra_coin in range(1, _coin_count(objective)):
+			source += "\t\tvar extra_coin := Area2D.new()\n"
+			source += "\t\textra_coin.name = \"Coin%d\" % _extra_coin\n"
+			source += "\t\textra_coin.position = Vector2(200 + _extra_coin * 180, 0)\n"
+			source += "\t\tvar extra_col := CollisionShape2D.new()\n"
+			source += "\t\tvar extra_shape := CircleShape2D.new()\n"
+			source += "\t\textra_shape.radius = 90\n"
+			source += "\t\textra_col.shape = extra_shape\n"
+			source += "\t\textra_coin.add_child(extra_col)\n"
+			source += "\t\textra_coin.body_entered.connect(_on_coin_touched)\n"
+			source += "\t\tget_parent().add_child.call_deferred(extra_coin)\n"
 		source += "\tvar coin_collision := CollisionShape2D.new()\n"
 		source += "\tvar coin_shape := CircleShape2D.new()\n"
 		source += "\t# 磁吸半径：开环演练（墙钟计时的位移有 ±40% 抖动）仍能确定性\n"

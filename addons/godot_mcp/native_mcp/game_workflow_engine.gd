@@ -162,7 +162,10 @@ const VOLATILE_FAILURE_KEYS: Array[String] = [
 	# 视觉门禁对活游戏重截图，diff 数值每轮必变：不剥离会让
 	# SAME_FAILURE_REPLAN_THRESHOLD 永不触发（每轮都是"新失败"），
 	# 修复循环在自适应模式下无界打转。
-	"diff_pixel_count", "diff_ratio", "rmse", "max_channel_delta"
+	"diff_pixel_count", "diff_ratio", "rmse", "max_channel_delta",
+	# 位移相对断言在帧饥饿下每轮的 displacement 值必变：不剥离会让
+	# 恢复路径的 play 门禁修复循环无界打转（R3 校准实测）。
+	"displacement", "before_value", "after_value",
 ]
 
 const FORBIDDEN_NESTED_CAPABILITIES: Array[String] = [

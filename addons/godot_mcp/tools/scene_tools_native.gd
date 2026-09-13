@@ -152,6 +152,16 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(parent_dir))
 
 	var before_hash: String = ChangeJournalScript.file_sha256(scene_path)
+	# Q1 累积性：场景已存在时不覆盖——返回 existing 状态，调用方可继续
+	# 在其上叠加（目标 B 的金币/敌人/墙进入目标 A 的场景，而非重建）。
+	if FileAccess.file_exists(scene_path):
+		root_node.free()
+		return {
+			"status": "existing",
+			"scene_path": scene_path,
+			"root_node_type": root_node_type,
+			"note": "scene already exists; goals accumulate on it"
+		}
 	var error: Error = ResourceSaver.save(packed_scene, scene_path)
 	
 	# 清理

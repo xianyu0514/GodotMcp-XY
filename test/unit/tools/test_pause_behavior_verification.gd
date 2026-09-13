@@ -284,3 +284,16 @@ func test_tuning_parse_directions() -> void:
 	assert_eq(str(tools.parse_tuning_goal("让移动更跟手").get("direction", "")), "faster")
 	assert_eq(str(tools.parse_tuning_goal("movement is too fast, make it slower").get("direction", "")), "slower")
 	assert_true(tools.parse_tuning_goal("arrow-key movement").is_empty())
+
+func test_multi_coin_goal_generates_correct_count() -> void:
+	var source: String = BlueprintsScript.controller_script("collect 3 coins and show a win label")
+	assert_true(source.contains("const COINS_TO_WIN: int = 3"), "3 coins parsed from goal")
+	assert_true(source.contains("\\"Coin%d\\" % _extra_coin"), "extra coin generation loop present")
+	assert_true(source.contains("180"), "coins spread across positions")
+
+func test_multi_param_tuning_parses() -> void:
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var enemy_tune: Dictionary = tools.parse_tuning_goal("make the enemy faster")
+	assert_eq(str(enemy_tune.get("param", "")), "ENEMY_SPEED")
+	var magnet_tune: Dictionary = tools.parse_tuning_goal("increase the pickup magnet radius")
+	assert_eq(str(magnet_tune.get("param", "")), "MAGNET")
