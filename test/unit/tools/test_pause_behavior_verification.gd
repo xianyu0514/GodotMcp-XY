@@ -220,3 +220,31 @@ func test_state_play_steps_assert_all_four_transitions() -> void:
 		if str(leg.get("expression", "")) == "game_state":
 			states.append(leg.get("expected"))
 	assert_eq(states, ["title", "playing", "win", "title"], "all four transitions asserted in order")
+
+func test_rename_goal_gets_native_objective_gate() -> void:
+	# E4：更名目标无需显式 required_capabilities——引擎按语义插入
+	# objective gate 的 rename 步骤（位于 verify_scripts 之前）。
+	var EngineScriptX = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
+	var ManifestScriptX = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+	var available: Array[String] = []
+	for tool_name in ManifestScriptX.TOOLS.keys():
+		available.append(tool_name)
+	var result: Dictionary = EngineScriptX.new().compile(
+		"arrow-key movement, then rename the field coins_collected to gems_collected",
+		{"profiles": ["gameplay_feature"]}, available)
+	assert_false(result.has("error"), str(result.get("error", "")))
+	var keys: Array = []
+	for task_value in result["plan"].get("tasks", []):
+		keys.append(String((task_value as Dictionary).get("step_key", "")))
+	assert_has(keys, "rename_symbol", "rename step enters the DAG natively")
+	assert_lt(keys.find("rename_symbol"), keys.find("verify_scripts"),
+		"rename runs before compile verification")
+
+func test_movement_feel_legs_shape() -> void:
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var feel: Dictionary = tools._movement_feel_legs()
+	assert_true(bool(feel["steps"][0].has("wait_frames")), "frame-stepped input hold")
+	var assertion: Dictionary = feel["assertions"][0]
+	assert_eq(str(assertion.get("metric", "")), "px")
+	assert_eq(str(assertion.get("aggregate", "")), "delta", "responsiveness = displacement over held frames")
+	assert_true(float(assertion.get("expected", 0)) > 0.0, "a real budget, not a tautology")

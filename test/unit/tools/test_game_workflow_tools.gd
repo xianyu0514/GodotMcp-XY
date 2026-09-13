@@ -887,21 +887,25 @@ func test_movement_goal_derives_displacement_assertions() -> void:
 		assert_eq(str((task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
 			"movement-exercise")
 		var steps: Array = arguments.get("steps", [])
-		assert_eq(steps.size(), 8, "four press/release legs")
+		# 四向位移腿 + 手感腿（末个 move_right 按压为帧步进保持，
+		# 断言走 metric 而非内联）= 5 组按压/释放
 		var leg_actions: Array = []
 		var assert_count: int = 0
 		for step_value in steps:
 			var step: Dictionary = step_value
 			if bool(step.get("pressed", false)):
 				leg_actions.append(step.get("action"))
-				assert_true(step.has("assert"), "each press leg carries a displacement assert")
-				var leg_assert: Dictionary = step.get("assert", {})
-				assert_true(["gt", "lt"].has(String(leg_assert.get("operator", ""))),
-					"displacement asserts use signed comparisons")
-				assert_count += 1
-		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down"],
-			"all four directions exercised with asymmetric durations")
-		assert_eq(assert_count, 4, "all four legs assert displacement")
+				if step.has("assert"):
+					var leg_assert: Dictionary = step.get("assert", {})
+					assert_true(["gt", "lt"].has(String(leg_assert.get("operator", ""))),
+						"displacement asserts use signed comparisons")
+					assert_count += 1
+		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down", "move_right"],
+			"four directions + the feel hold leg")
+		assert_eq(assert_count, 4, "all four displacement legs assert")
+		assert_true(bool(arguments.get("deterministic", false)), "feel sampling enables deterministic mode")
+		var final_assertions: Array = arguments.get("assertions", [])
+		assert_gt(final_assertions.size(), 0, "feel metric assertion appended")
 		return
 	fail_test("play_and_verify task not found for movement goal")
 

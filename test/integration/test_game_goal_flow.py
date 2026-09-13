@@ -66,6 +66,15 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "rename-symbol",
+        "objective": (
+            "Arrow-key movement with a coin, then rename the field "
+            "coins_collected to gems_collected across the scripts."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_rename": True,
+    },
+    {
         "name": "title-screen-flow",
         "objective": (
             "A game flow with a title screen: press start to play, collect "
@@ -279,7 +288,27 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_state_flow"):
+            if scenario.get("assert_rename"):
+                # E4+M3：更名经 journal 落盘（committed 记录），演练回归通过
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
+                if "coins_collected" in controller and "gems_collected" not in controller:
+                    raise AssertionError(f"[{name}] rename did not apply: still coins_collected")
+                if "gems_collected" not in controller:
+                    raise AssertionError(f"[{name}] renamed symbol missing")
+                journal_file = SCRATCH / ".mcp" / "change_journal.json"
+                if not journal_file.exists():
+                    raise AssertionError(f"[{name}] change journal missing")
+                journal = json.loads(journal_file.read_text(encoding="utf-8"))
+                rename_ops = [o for o in journal.get("operations", [])
+                              if str(o.get("intent", "")).startswith("rename_script_symbol")
+                              and str(o.get("phase", "")) == "committed"]
+                if not rename_ops:
+                    raise AssertionError(f"[{name}] no committed rename journal operation")
+                note = "; rename journaled and behavior regression green"
+            elif scenario.get("assert_state_flow"):
                 plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
                 script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))

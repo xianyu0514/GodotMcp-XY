@@ -272,6 +272,30 @@ func compile(objective: String, options: Dictionary, available_tools: Array[Stri
 				capability, capability, _infer_stage(capability), true)
 			required_spec["profile"] = "required_capability"
 			specs.append(required_spec)
+	# 更名目标（E4）原生支持：目标语句出现"rename X to Y / 重命名"时，
+	# 无需调用方显式 required_capabilities——语义就是本次操作的主证据，
+	# 必须作为 objective gate 进入 DAG（派生器会从目标解析 symbol 对）。
+	var goal_text: String = clean_objective
+	if not goal_text.is_empty() and not _specs_contain_tool(specs, "rename_script_symbol"):
+		var lowered_goal: String = goal_text.to_lower()
+		var mentions_rename: bool = false
+		for rename_word in ["rename", "更名", "重命名", "改名为"]:
+			if lowered_goal.contains(rename_word):
+				mentions_rename = true
+				break
+		if mentions_rename:
+			var rename_spec: Dictionary = _spec(
+				"rename_symbol", "rename_script_symbol", "build_configure", true, {}, "modify_script")
+			rename_spec["profile"] = "goal_semantics"
+			var verify_index: int = -1
+			for spec_index in range(specs.size()):
+				if String(specs[spec_index].get("tool_name", "")) == "verify_scripts":
+					verify_index = spec_index
+					break
+			if verify_index >= 0:
+				specs.insert(verify_index, rename_spec)
+			else:
+				specs.append(rename_spec)
 	if _specs_need_runtime(specs):
 		if not _specs_contain_tool(specs, "install_runtime_probe"):
 			var probe_spec: Dictionary = _spec("runtime_probe", "install_runtime_probe", "runtime_probe")
