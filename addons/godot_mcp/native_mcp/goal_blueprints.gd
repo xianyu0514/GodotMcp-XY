@@ -36,6 +36,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 游戏流状态机动词：标题→玩法→胜利→重开，状态转移可断言（P4）。
+const STATE_MACHINE_KEYWORDS: Array[String] = [
+	"title screen", "start menu", "game state", "game flow", "restart", "state machine",
+	"标题", "开始菜单", "游戏状态", "重新开始", "状态机",
+]
+
 # 敌人动词：巡逻敌人（触碰重置玩家 + 计数），行为可断言。
 const ENEMY_KEYWORDS: Array[String] = [
 	"enemy", "enemies", "hazard", "patrol", "death", "respawn",
@@ -58,6 +64,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"pause": _mentions(objective, PAUSE_KEYWORDS),
 		"save": _mentions(objective, SAVE_KEYWORDS),
 		"enemy": _mentions(objective, ENEMY_KEYWORDS),
+		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -66,17 +73,24 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("win", false)) \
 		or bool(verbs.get("pause", false)) \
 		or bool(verbs.get("save", false)) \
-		or bool(verbs.get("enemy", false))
+		or bool(verbs.get("enemy", false)) \
+		or bool(verbs.get("state_machine", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs):
 		return ""
+	# 状态机暗含收集（胜利条件）与移动（玩法本体）——在 needs_* 计算前
+	# 改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
+	if bool(verbs.get("state_machine", false)):
+		verbs["collectible"] = true
+		verbs["movement"] = true
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
 	var needs_pause: bool = bool(verbs.get("pause", false))
 	var needs_save: bool = bool(verbs.get("save", false))
 	var needs_enemy: bool = bool(verbs.get("enemy", false))
+	var needs_state: bool = bool(verbs.get("state_machine", false))
 	# 存档暗含移动：没有会变化的状态就没有可持久化的东西。
 	var needs_movement: bool = bool(verbs.get("movement", false)) or needs_save
 
@@ -95,6 +109,9 @@ static func controller_script(objective: String) -> String:
 		source += "var _pause_label: Label\n"
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
+	if needs_state:
+		source += "var game_state: String = \"title\"\n"
+		source += "var _title_label: Label\n"
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
@@ -156,6 +173,15 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
 		source += "\tload_game()\n"
 		ready_body_emitted = true
+	if needs_state:
+		source += "\tvar title_layer := CanvasLayer.new()\n"
+		source += "\ttitle_layer.name = \"TitleLayer\"\n"
+		source += "\tadd_child(title_layer)\n"
+		source += "\t_title_label = Label.new()\n"
+		source += "\t_title_label.name = \"TitleLabel\"\n"
+		source += "\t_title_label.text = \"Press Enter to Start\"\n"
+		source += "\t_title_label.position = Vector2(40, 100)\n"
+		source += "\ttitle_layer.add_child(_title_label)\n"
 	if needs_enemy:
 		source += "\tvar enemy := Area2D.new()\n"
 		source += "\tenemy.name = \"Enemy\"\n"
@@ -181,6 +207,19 @@ static func controller_script(objective: String) -> String:
 		# （_unhandled_input）对模拟动作不可靠，真实编辑器 E2E 实测抓到）。
 		# 暂停期间提前 return：世界（含本控制器驱动的移动）必须停下。
 		source += "\nfunc _physics_process(_delta: float) -> void:\n"
+		if needs_state:
+			source += "\tif game_state == \"title\" and Input.is_action_just_pressed(\"ui_accept\"):\n"
+			source += "\t\tgame_state = \"playing\"\n"
+			source += "\t\tif _title_label != null:\n"
+			source += "\t\t\t_title_label.visible = false\n"
+			source += "\telif game_state == \"win\" and Input.is_action_just_pressed(\"ui_accept\"):\n"
+			source += "\t\tgame_state = \"title\"\n"
+			source += "\t\tposition = Vector2.ZERO\n"
+			source += "\t\tcoins_collected = 0\n"
+			source += "\t\tif _title_label != null:\n"
+			source += "\t\t\t_title_label.visible = true\n"
+			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
+			source += "\t\treturn\n"
 		if needs_save:
 			source += "\tif Input.is_action_just_pressed(\"save_game\"):\n"
 			source += "\t\tlast_save_ok = save_game()\n"
@@ -209,6 +248,8 @@ static func controller_script(objective: String) -> String:
 			source += "\t_coin_area.queue_free()\n"
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 			source += "\t\t_win_label.text = \"You Win!\"\n"
+			if needs_state:
+				source += "\t\tgame_state = \"win\"\n"
 	if needs_pause:
 		source += "\nfunc set_paused(value: bool) -> void:\n"
 		source += "\tget_tree().paused = value\n"

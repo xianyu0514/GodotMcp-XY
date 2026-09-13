@@ -66,6 +66,15 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "title-screen-flow",
+        "objective": (
+            "A game flow with a title screen: press start to play, collect "
+            "the coin to win, then restart back to the title."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_state_flow": True,
+    },
+    {
         "name": "enemy-patrol",
         "objective": (
             "Arrow-key movement with a patrolling enemy that kills and "
@@ -270,7 +279,20 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_enemy"):
+            if scenario.get("assert_state_flow"):
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
+                for marker in ("game_state", "TitleLabel", "game_state = \"win\""):
+                    if marker not in controller:
+                        raise AssertionError(f"[{name}] state controller lacks {marker}")
+                play_tasks = [t for t in plan_data.get("tasks", []) if t.get("tool_name") == "play_and_verify"]
+                derived = {str((t.get("derived_inputs", {}) or {}).get("steps", "")) for t in play_tasks}
+                if not any("state" in d for d in derived):
+                    raise AssertionError(f"[{name}] no play gate derived state legs: {derived}")
+                note = "; title->playing->win->restart verified in-run"
+            elif scenario.get("assert_enemy"):
                 plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
                 script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))

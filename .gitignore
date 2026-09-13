@@ -49,3 +49,4 @@ addons/gut/
 
 # Goal-flow integration test scratch project (test_game_goal_flow.py)
 tmp_goal_flow_project/
+releases/
