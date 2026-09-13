@@ -66,6 +66,12 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "tune-speed",
+        "objective": "Arrow-key movement, then make it snappier and more responsive.",
+        "profiles": ["gameplay_feature"],
+        "assert_tuned": True,
+    },
+    {
         "name": "sfx-on-collect",
         "objective": "Arrow-key movement with a coin that plays a sound effect when collected.",
         "profiles": ["gameplay_feature"],
@@ -351,7 +357,20 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_sfx"):
+            if scenario.get("assert_tuned"):
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
+                if "const SPEED: float = 360.0" not in controller:
+                    raise AssertionError(f"[{name}] SPEED was not tuned faster: {controller[:200]}")
+                by_key = {t.get("step_key", ""): t for t in plan_data.get("tasks", [])}
+                for gate_key in ("tune_baseline", "tune_verify"):
+                    gate = by_key.get(gate_key)
+                    if gate is None or str(gate.get("status", "")) != "done":
+                        raise AssertionError(f"[{name}] {gate_key} gate not done")
+                note = "; baseline->tune->verify loop closed (faster displacement asserted)"
+            elif scenario.get("assert_sfx"):
                 plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
                 script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))

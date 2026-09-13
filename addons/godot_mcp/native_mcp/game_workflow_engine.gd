@@ -466,6 +466,27 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 					gameplay_specs.insert(2, _spec(
 						"input_%s" % direction.get("action_name", "").replace("move_", ""),
 						"upsert_project_input_action", "build_configure", false, direction))
+			# 迭代目标（闭环的"玩→调→再玩"）：基线演练 → 派生调参 →
+			# 对比演练（位移朝请求方向变化才算完成）。
+			if GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.TUNING_KEYWORDS):
+				var tune_error_index: int = gameplay_specs.find_custom(func(spec: Dictionary) -> bool:
+					return String(spec.get("key", "")) == "runtime_errors")
+				var tune_insert_at: int = tune_error_index if tune_error_index >= 0 else gameplay_specs.size()
+				# stop→rerun：运行中的游戏持有旧编译脚本（热重载不跨进程），
+				# 调参必须重启后才在真机上生效（与存档链同因）。
+				for tune_spec in [
+					_spec("tune_baseline", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
+					_spec("tune_apply", "modify_script", "build_configure", true, {}, "verify_scripts"),
+					# 重新挂载：attach 用的是现场编译副本（场景内嵌），改文件
+					# 不会自动到达场景——必须重挂后重启（真机 E2E 实测）。
+					_spec("tune_reattach", "attach_script", "build_configure"),
+					_spec("tune_save", "save_scene", "build_save"),
+					_spec("tune_stop", "stop_project", "runtime_evidence"),
+					_spec("tune_rerun", "run_project", "runtime_evidence"),
+					_spec("tune_verify", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
+				]:
+					gameplay_specs.insert(tune_insert_at, tune_spec)
+					tune_insert_at += 1
 			# 存档目标（评测 N3）：注册 save_game 动作（F5）+ 跨进程行为证据链
 			# —— 演练(移动→存档→断言写盘) → 停止 → 重启 → 恢复演练(断言磁盘
 			# 状态回归且是全新会话)。蓝图把存档暗含移动，方向动作也要注册。

@@ -260,3 +260,27 @@ func test_audio_leg_asserts_playback() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
 	var legs: Array = tools._audio_play_steps()
 	assert_eq(str((legs[0].get("assert", {}) as Dictionary).get("expression", "")), "sfx_played_count")
+
+func test_tuning_goal_builds_iterate_chain() -> void:
+	var EngineScriptT = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
+	var ManifestScriptT = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+	var available: Array[String] = []
+	for tool_name in ManifestScriptT.TOOLS.keys():
+		available.append(tool_name)
+	var result: Dictionary = EngineScriptT.new().compile(
+		"arrow-key movement, then make it snappier and more responsive",
+		{"profiles": ["gameplay_feature"]}, available)
+	assert_false(result.has("error"), str(result.get("error", "")))
+	var keys: Array = []
+	for task_value in result["plan"].get("tasks", []):
+		keys.append(String((task_value as Dictionary).get("step_key", "")))
+	assert_has(keys, "tune_baseline")
+	assert_has(keys, "tune_apply")
+	assert_has(keys, "tune_verify")
+	assert_lt(keys.find("tune_apply"), keys.find("tune_verify"), "apply runs before verify")
+
+func test_tuning_parse_directions() -> void:
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	assert_eq(str(tools.parse_tuning_goal("让移动更跟手").get("direction", "")), "faster")
+	assert_eq(str(tools.parse_tuning_goal("movement is too fast, make it slower").get("direction", "")), "slower")
+	assert_true(tools.parse_tuning_goal("arrow-key movement").is_empty())
