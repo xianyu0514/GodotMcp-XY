@@ -521,13 +521,15 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 			# 蓝图脚本永远 extends CharacterBody2D（金币/胜利蓝图同样依赖物理体），
 			# 根节点类型直接写进 create_scene 的 spec 参数——引擎直出的计划即
 			# 自包含，适配器无需再派生。
-			if GoalBlueprintsScript.has_any_verb(GoalBlueprintsScript.match_verbs(goal)):
+			var all_verbs: Dictionary = GoalBlueprintsScript.match_verbs(goal)
+			if GoalBlueprintsScript.has_any_verb(all_verbs):
+				var root_type: String = "CharacterBody3D" if bool(all_verbs.get("three_d", false)) else "CharacterBody2D"
 				for spec_value in gameplay_specs:
 					var spec: Dictionary = spec_value
 					if String(spec.get("tool_name", "")) == "create_scene":
 						var scene_args: Dictionary = spec.get("arguments", {})
 						if not scene_args.has("root_node_type"):
-							scene_args["root_node_type"] = "CharacterBody2D"
+							scene_args["root_node_type"] = root_type
 							spec["arguments"] = scene_args
 						break
 			return gameplay_specs

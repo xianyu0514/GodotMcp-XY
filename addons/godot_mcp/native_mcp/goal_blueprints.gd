@@ -36,6 +36,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 3D 动词：CharacterBody3D + 地面 + Area3D 金币（N4 最小支持）。
+const THREE_D_KEYWORDS: Array[String] = [
+	"3d", "3D", "three dimensional", "first person", "third person",
+	"三维", "3 维",
+]
+
 # 墙动词：StaticBody2D 边界墙（N1 的"撞墙停止"、Q2 内容深度起点）。
 const WALL_KEYWORDS: Array[String] = [
 	"wall", "walls", "blocked by", "stops when hitting",
@@ -102,6 +108,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
 		"audio": _mentions(objective, AUDIO_KEYWORDS),
 		"wall": _mentions(objective, WALL_KEYWORDS),
+		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -113,13 +120,84 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("enemy", false)) \
 		or bool(verbs.get("state_machine", false)) \
 		or bool(verbs.get("audio", false)) \
-		or bool(verbs.get("wall", false))
+		or bool(verbs.get("wall", false)) \
+		or bool(verbs.get("three_d", false))
+
+## 3D 控制器蓝图（N4 最小）：CharacterBody3D + WASD 移动 + Area3D 金币。
+## 位移/拾取断言复用 2D 的表达式机制（position.x 对 3D 节点同样有效）。
+static func controller_script_3d(objective: String) -> String:
+	var verbs: Dictionary = match_verbs(objective)
+	if not bool(verbs.get("three_d", false)):
+		return ""
+	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
+
+	var source: String = "# Goal blueprint: minimal 3D controller.\n"
+	source += "extends CharacterBody3D\n\n"
+	source += "const SPEED: float = 5.0\n"
+	if needs_pickup:
+		source += "const COINS_TO_WIN: int = 1\n"
+	source += "\nvar coins_collected: int = 0\n"
+	source += "var _coin_area: Area3D\n"
+	source += "\nfunc _ready() -> void:\n"
+	source += "\tvar body_shape := CollisionShape3D.new()\n"
+	source += "\tvar body_col := CapsuleShape3D.new()\n"
+	source += "\tbody_col.radius = 0.4\n"
+	source += "\tbody_col.height = 1.0\n"
+	source += "\tbody_shape.shape = body_col\n"
+	source += "\tadd_child(body_shape)\n"
+	source += "\t# 地面：StaticBody3D 大平面\n"
+	source += "\tvar ground := StaticBody3D.new()\n"
+	source += "\tground.name = \"Ground\"\n"
+	source += "\tvar ground_col := CollisionShape3D.new()\n"
+	source += "\tvar ground_shape := WorldBoundaryShape3D.new()\n"
+	source += "\tground_col.shape = ground_shape\n"
+	source += "\tground.add_child(ground_col)\n"
+	source += "\tget_parent().add_child.call_deferred(ground)\n"
+	source += "\t# 灯光：DirectionalLight3D（无灯光 3D 全黑）\n"
+	source += "\tvar light := DirectionalLight3D.new()\n"
+	source += "\tlight.rotation_degrees = Vector3(-45, 30, 0)\n"
+	source += "\tget_parent().add_child.call_deferred(light)\n"
+	source += "\t# 相机：第三人称跟随\n"
+	source += "\tvar camera := Camera3D.new()\n"
+	source += "\tcamera.position = Vector3(0, 3, 5)\n"
+	source += "\tadd_child(camera)\n"
+	if needs_pickup:
+		source += "\t_coin_area = Area3D.new()\n"
+		source += "\t_coin_area.name = \"Coin\"\n"
+		source += "\t_coin_area.position = Vector3(3, 1, 0)\n"
+		source += "\tvar coin_col := CollisionShape3D.new()\n"
+		source += "\tvar coin_shape := SphereShape3D.new()\n"
+		source += "\tcoin_shape.radius = 1.5\n"
+		source += "\tcoin_col.shape = coin_shape\n"
+		source += "\t_coin_area.add_child(coin_col)\n"
+		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
+		source += "\tget_parent().add_child.call_deferred(_coin_area)\n"
+	source += "\nfunc _physics_process(_delta: float) -> void:\n"
+	source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_back\")\n"
+	source += "\tvar input_dir := Vector3(direction.x, 0, direction.y)\n"
+	source += "\tif input_dir == Vector3.ZERO:\n"
+	source += "\t\tinput_dir = Vector3(\n"
+	source += "\t\t\tInput.get_axis(\"ui_left\", \"ui_right\"),\n"
+	source += "\t\t\t0,\n"
+	source += "\t\t\tInput.get_axis(\"ui_up\", \"ui_down\"))\n"
+	source += "\tvelocity = input_dir * SPEED\n"
+	source += "\tmove_and_slide()\n"
+	if needs_pickup:
+		source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+		source += "\tif body != self:\n"
+		source += "\t\treturn\n"
+		source += "\tcoins_collected += 1\n"
+		source += "\t_coin_area.queue_free()\n"
+	return source
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
 	var verbs: Dictionary = match_verbs(objective)
 	if not has_any_verb(verbs):
 		return ""
+	# 3D 目标走独立蓝图（引擎/坐标/输入轴都不同）
+	if bool(verbs.get("three_d", false)):
+		return controller_script_3d(objective)
 	# 状态机暗含收集（胜利条件）与移动（玩法本体）——在 needs_* 计算前
 	# 改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
 	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)):

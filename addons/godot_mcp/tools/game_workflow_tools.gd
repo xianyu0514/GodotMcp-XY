@@ -1387,11 +1387,27 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_enemy: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.ENEMY_KEYWORDS)
 		var wants_state: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
 		var wants_audio: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.AUDIO_KEYWORDS)
+		var wants_3d: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.THREE_D_KEYWORDS)
 		if wants_audio:
 			wants_collect = true
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
-			if wants_movement:
+			if wants_3d:
+				play_steps.append({
+					"action": "move_forward", "pressed": true, "wait_ms": 400,
+					"assert": {"expression": "position.z", "displacement_max": -1.0,
+						"description": "player moved forward in 3D"}
+				})
+				play_steps.append({"action": "move_forward", "pressed": false, "wait_ms": 80})
+				play_steps.append({
+					"action": "move_back", "pressed": true, "wait_ms": 400,
+					"assert": {"expression": "position.z", "displacement_min": 0.5,
+						"description": "player moved back in 3D"}
+				})
+				play_steps.append({"action": "move_back", "pressed": false, "wait_ms": 80})
+				if wants_collect:
+					play_steps.append_array(_collect_play_steps())
+			elif wants_movement:
 				play_steps.append_array(_movement_play_steps())
 				# 手感预算：确定性采样 + 帧步进响应断言（只在移动目标激活）
 				var feel: Dictionary = _movement_feel_legs()

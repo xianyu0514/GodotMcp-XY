@@ -2498,20 +2498,28 @@ func _tool_attach_script(params: Dictionary) -> Dictionary:
 	if not script_res:
 		return {"error": "Failed to load script: " + script_path}
 	# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源（有源码
-	# 无成员）。现场编译等价脚本且不注册路径：路径资源会被仍在进行的扫描
-	# 反复失效；更新文件系统登记足以让后续会话按路径正确加载。
+	# 无成员）。现场编译等价脚本验证可编译性，但挂载用文件引用（非匿名
+	# 副本）——累积模式下 save_scene 需要把 ext_resource 引用持久化到
+	# 场景文件，下一个 run_project 才会从磁盘加载正确的脚本（Q1 深修，
+	# 真机累积 E2E 抓到：内联编译的匿名脚本被嵌入 sub_resource，重启后
+	# 游戏仍跑旧控制器的行为）。
 	var script_was_cold: bool = false
 	if not script_res.can_instantiate():
 		var fresh_script: GDScript = GDScript.new()
 		fresh_script.source_code = FileAccess.get_file_as_string(script_path)
 		if fresh_script.reload() != OK:
 			return {"error": "Script did not compile: " + script_path}
-		script_res = fresh_script
 		script_was_cold = true
+		# 强制更新文件系统让文件资源可实例化，然后用文件引用挂载
+		editor_interface.get_resource_filesystem().update_file(script_path)
+		editor_interface.get_resource_filesystem().scan()
+		# 重新加载——扫描后应能实例化
+		script_res = load(script_path)
+		if not script_res or not script_res.can_instantiate():
+			# 扫描后仍冷：退回内联编译（单目标模式兼容）
+			script_res = fresh_script
 
 	target_node.set_script(script_res)
-	if script_was_cold:
-		editor_interface.get_resource_filesystem().update_file(script_path)
 
 	return {
 		"status": "success",
