@@ -36,6 +36,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 音效动词：事件（收集）触发生成的提示音——juice 维度，行为可断言。
+const AUDIO_KEYWORDS: Array[String] = [
+	"sound", "sfx", "sound effect", "audio", "beep", "juice",
+	"音效", "声音", "提示音",
+]
+
 # 游戏流状态机动词：标题→玩法→胜利→重开，状态转移可断言（P4）。
 const STATE_MACHINE_KEYWORDS: Array[String] = [
 	"title screen", "start menu", "game state", "game flow", "restart", "state machine",
@@ -65,6 +71,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"save": _mentions(objective, SAVE_KEYWORDS),
 		"enemy": _mentions(objective, ENEMY_KEYWORDS),
 		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
+		"audio": _mentions(objective, AUDIO_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -74,7 +81,8 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("pause", false)) \
 		or bool(verbs.get("save", false)) \
 		or bool(verbs.get("enemy", false)) \
-		or bool(verbs.get("state_machine", false))
+		or bool(verbs.get("state_machine", false)) \
+		or bool(verbs.get("audio", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
@@ -83,7 +91,7 @@ static func controller_script(objective: String) -> String:
 		return ""
 	# 状态机暗含收集（胜利条件）与移动（玩法本体）——在 needs_* 计算前
 	# 改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
-	if bool(verbs.get("state_machine", false)):
+	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)):
 		verbs["collectible"] = true
 		verbs["movement"] = true
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
@@ -109,6 +117,9 @@ static func controller_script(objective: String) -> String:
 		source += "var _pause_label: Label\n"
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
+	if bool(verbs.get("audio", false)):
+		source += "var sfx_played_count: int = 0\n"
+		source += "var _sfx_player: AudioStreamPlayer\n"
 	if needs_state:
 		source += "var game_state: String = \"title\"\n"
 		source += "var _title_label: Label\n"
@@ -174,6 +185,26 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
 		source += "\tload_game()\n"
 		ready_body_emitted = true
+	if bool(verbs.get("audio", false)):
+		source += "\t# 生成 880Hz 方波提示音（0.4s 衰减）——零外部资产。\n"
+		source += "\t_sfx_player = AudioStreamPlayer.new()\n"
+		source += "\t_sfx_player.name = \"SfxPlayer\"\n"
+		source += "\tadd_child(_sfx_player)\n"
+		source += "\tvar sample_rate: int = 22050\n"
+		source += "\tvar frames: int = int(0.4 * sample_rate)\n"
+		source += "\tvar pcm := PackedByteArray()\n"
+		source += "\tpcm.resize(frames * 2)\n"
+		source += "\tfor i in range(frames):\n"
+		source += "\t\tvar decay: float = 1.0 - float(i) / float(frames)\n"
+		source += "\t\tvar square: float = 1.0 if fmod(float(i) * 880.0 / float(sample_rate), 2.0) < 1.0 else -1.0\n"
+		source += "\t\tvar amplitude: int = int(square * decay * 12000.0)\n"
+		source += "\t\tpcm.encode_s16(i * 2, amplitude)\n"
+		source += "\tvar wav := AudioStreamWAV.new()\n"
+		source += "\twav.format = AudioStreamWAV.FORMAT_16_BITS\n"
+		source += "\twav.mix_rate = sample_rate\n"
+		source += "\twav.stereo = false\n"
+		source += "\twav.data = pcm\n"
+		source += "\t_sfx_player.stream = wav\n"
 	if needs_state:
 		source += "\tvar title_layer := CanvasLayer.new()\n"
 		source += "\ttitle_layer.name = \"TitleLayer\"\n"
@@ -248,6 +279,10 @@ static func controller_script(objective: String) -> String:
 			source += "\t\treturn\n"
 			source += "\tcoins_collected += 1\n"
 			source += "\tcoins_changed.emit(coins_collected)\n"
+			if bool(verbs.get("audio", false)):
+				source += "\tif _sfx_player != null:\n"
+				source += "\t\t_sfx_player.play()\n"
+				source += "\t\tsfx_played_count += 1\n"
 			source += "\t_coin_area.queue_free()\n"
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 			source += "\t\t_win_label.text = \"You Win!\"\n"

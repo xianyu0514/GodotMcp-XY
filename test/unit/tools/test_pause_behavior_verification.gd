@@ -248,3 +248,15 @@ func test_movement_feel_legs_shape() -> void:
 	assert_eq(str(assertion.get("metric", "")), "px")
 	assert_eq(str(assertion.get("aggregate", "")), "delta", "responsiveness = displacement over held frames")
 	assert_true(float(assertion.get("expected", 0)) > 0.0, "a real budget, not a tautology")
+
+func test_audio_goal_generates_sfx_on_collect() -> void:
+	var source: String = BlueprintsScript.controller_script("collect a coin that plays a sound effect")
+	assert_true(source.contains("AudioStreamPlayer"), "sfx player created")
+	assert_true(source.contains("AudioStreamWAV"), "sound generated programmatically (zero external assets)")
+	assert_true(source.contains("sfx_played_count"), "observable playback counter")
+	assert_true(source.contains("_sfx_player.play()"), "collection triggers playback")
+
+func test_audio_leg_asserts_playback() -> void:
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var legs: Array = tools._audio_play_steps()
+	assert_eq(str((legs[0].get("assert", {}) as Dictionary).get("expression", "")), "sfx_played_count")

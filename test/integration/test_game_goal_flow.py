@@ -66,6 +66,12 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "sfx-on-collect",
+        "objective": "Arrow-key movement with a coin that plays a sound effect when collected.",
+        "profiles": ["gameplay_feature"],
+        "assert_sfx": True,
+    },
+    {
         "name": "broken-script-repair",
         "objective": "Fix the script error in broken_hint.gd so the project compiles.",
         "profiles": ["script_repair"],
@@ -345,7 +351,20 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_r1_fixed"):
+            if scenario.get("assert_sfx"):
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
+                for marker in ("AudioStreamWAV", "sfx_played_count", "_sfx_player.play()"):
+                    if marker not in controller:
+                        raise AssertionError(f"[{name}] sfx controller lacks {marker}")
+                play_tasks = [t for t in plan_data.get("tasks", []) if t.get("tool_name") == "play_and_verify"]
+                derived = {str((t.get("derived_inputs", {}) or {}).get("steps", "")) for t in play_tasks}
+                if not any("audio" in d for d in derived):
+                    raise AssertionError(f"[{name}] no play gate derived audio legs: {derived}")
+                note = "; coin collect plays a generated sound (asserted in-run)"
+            elif scenario.get("assert_r1_fixed"):
                 fixed = (SCRATCH / "scripts" / "broken_hint.gd").read_text(encoding="utf-8")
                 if "func broken():" not in fixed:
                     raise AssertionError(f"[{name}] script not actually fixed: {fixed[:120]}")
