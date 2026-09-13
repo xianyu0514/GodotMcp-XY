@@ -14,6 +14,7 @@ const TaskPlanStoreScript = preload("res://addons/godot_mcp/tools/task_plan_stor
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
+const LayoutVerifierScript = preload("res://addons/godot_mcp/tools/layout_verifier.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -439,6 +440,23 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		var raw_result: Variant = await _server_core.invoke_planned_tool(tool_name, arguments, authorization)
 		atomic_calls += 1
 		metrics["atomic_calls"] = int(metrics.get("atomic_calls", 0)) + 1
+		# E3 离线布局门禁：ui profile 的 save_scene 成功后，按锚点在三种
+		# 视口尺寸解算根级控件矩形——越界/重叠即本步失败（确定性证据，
+		# 无需真机改窗口；真机交互抽查由 play 演练承担）。
+		if tool_name == "save_scene" and raw_result is Dictionary 				and String((raw_result as Dictionary).get("status", "")) == "success" 				and String(task.get("profile", "")) == "ui_screen":
+			var layout_check: Dictionary = LayoutVerifierScript.verify_scene_layout(
+				String((raw_result as Dictionary).get("saved_path", "")),
+				[Vector2i(854, 480), Vector2i(1280, 720), Vector2i(1920, 1080)])
+			if not (layout_check.get("violations", []) as Array).is_empty():
+				raw_result = {
+					"error": "Layout violations at multiple viewport sizes (E3 gate)",
+					"layout_check": layout_check,
+				}
+			else:
+				(raw_result as Dictionary)["layout_check"] = {
+					"checked": layout_check.get("checked", 0),
+					"sizes": layout_check.get("sizes", []),
+				}
 		var verdict: Dictionary = _engine.record_step_result(plan, String(task.get("id", "")), raw_result)
 		executed.append({
 			"step_id": task.get("id", ""),
@@ -741,6 +759,27 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["action_name"] = "move_up"
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["action_name"] = "move_up"
+	# E4 更名目标：rename 步骤缺 symbol_name 时从目标解析（受控模式），
+	# 并默认真写（工作流上下文里 dry_run 预览不推进目标）。
+	if tool_name == "rename_script_symbol" and not arguments.has("symbol_name"):
+		var rename_info: Dictionary = parse_rename_goal(String(plan.get("goal", "")))
+		if not rename_info.is_empty():
+			arguments["symbol_name"] = rename_info["symbol_name"]
+			arguments["new_name"] = rename_info["new_name"]
+			arguments["dry_run"] = false
+			arguments["search_path"] = "res://"
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["rename"] = "%s -> %s" % [rename_info["symbol_name"], rename_info["new_name"]]
+	# E1 换键目标：被换键动作的 upsert 覆盖为"擦除旧绑定 + 仅新键"，
+	# 演练随后以事件级断言验证旧键失效、新键生效。
+	if tool_name == "upsert_project_input_action":
+		var remap_info: Dictionary = parse_remap_goal(String(plan.get("goal", "")))
+		if not remap_info.is_empty() and String(remap_info.get("new_key", "")) != "" \
+				and String(arguments.get("action_name", "")) == String(remap_info["action"]):
+			arguments["erase_existing"] = true
+			arguments["events"] = [{"type": "key", "keycode": KEY_NAME_TO_CODE[remap_info["new_key"]]}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["rebind"] = "%s -> %s" % [remap_info["action"], remap_info["new_key"]]
 	# 游玩门禁缺步骤时给移动类目标派生输入演练：空 steps 的 play_and_verify
 	# 只证明"游戏能启动不崩"，输入驱动的 _physics_process 根本不会执行——
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
@@ -814,6 +853,174 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 ## engine annotates that round as bootstrap evidence and the next run compares
 ## against the stored baseline, so the gate never stalls on missing paths and
 ## never reports a capture as a visual verification pass.
+## 常用键名 → KEY_* 常量（E1 换键解析的受控词表；越界键名解析失败即
+## 不派生，宁可让通用路径接手也不猜）。
+const KEY_NAME_TO_CODE: Dictionary = {
+	"A": KEY_A, "B": KEY_B, "C": KEY_C, "D": KEY_D, "E": KEY_E, "F": KEY_F,
+	"G": KEY_G, "H": KEY_H, "I": KEY_I, "J": KEY_J, "K": KEY_K, "L": KEY_L,
+	"M": KEY_M, "N": KEY_N, "O": KEY_O, "P": KEY_P, "Q": KEY_Q, "R": KEY_R,
+	"S": KEY_S, "T": KEY_T, "U": KEY_U, "V": KEY_V, "W": KEY_W, "X": KEY_X,
+	"Y": KEY_Y, "Z": KEY_Z,
+	"UP": KEY_UP, "DOWN": KEY_DOWN, "LEFT": KEY_LEFT, "RIGHT": KEY_RIGHT,
+	"SPACE": KEY_SPACE, "ENTER": KEY_ENTER, "ESC": KEY_ESCAPE,
+	"F1": KEY_F1, "F2": KEY_F2, "F3": KEY_F3, "F4": KEY_F4, "F5": KEY_F5,
+	"F6": KEY_F6, "F7": KEY_F7, "F8": KEY_F8, "F9": KEY_F9, "F10": KEY_F10,
+	"F11": KEY_F11, "F12": KEY_F12,
+}
+
+const REMAP_KEYWORDS: Array[String] = [
+	"rebind", "remap", "reassign", "rebind ", "换键", "改键", "重绑", "改成",
+]
+
+const RENAME_GOAL_KEYWORDS: Array[String] = ["rename", "更名", "重命名", "改名为", "改名成"]
+
+## 解析更名目标（E4）："rename <ident> to <ident>" / 中文
+## "把 X 更名/重命名/改名为 Y"。两个标识符都是合法 GDScript 名才派生。
+static func parse_rename_goal(goal: String) -> Dictionary:
+	var text: String = " " + goal.to_lower() + " "
+	var has_rename_verb: bool = false
+	for keyword in RENAME_GOAL_KEYWORDS:
+		if text.contains(keyword.to_lower()):
+			has_rename_verb = true
+			break
+	if not has_rename_verb:
+		return {}
+	var ident_regex: RegEx = RegEx.new()
+	if ident_regex.compile("[a-z_][a-z0-9_]*") != OK:
+		return {}
+	# 英文模式：rename X ... to Y
+	var to_index: int = text.find(" to ")
+	if to_index > 0:
+		var before: String = text.substr(0, to_index)
+		var after: String = text.substr(to_index + 4)
+		var old_idents: Array = []
+		for match_value in ident_regex.search_all(before):
+			var candidate: String = String(match_value.get_string())
+			if candidate not in ["rename", "the", "field", "variable", "signal", "function", "symbol", "to", "and", "in", "scripts", "script"]:
+				old_idents.append(candidate)
+		var new_idents: Array = []
+		for match_value in ident_regex.search_all(after):
+			var candidate2: String = String(match_value.get_string())
+			if candidate2 not in ["in", "the", "scripts", "script", "everywhere", "and", "keep"]:
+				new_idents.append(candidate2)
+		if not old_idents.is_empty() and not new_idents.is_empty():
+			return {"symbol_name": old_idents[old_idents.size() - 1], "new_name": new_idents[0]}
+	# 中文模式：把 X 更名/重命名/改名为 Y
+	for zh_verb in ["更名", "重命名", "改名为", "改名成"]:
+		var verb_index: int = text.find(zh_verb)
+		if verb_index > 0:
+			var zh_before: String = text.substr(0, verb_index)
+			var zh_after: String = text.substr(verb_index + zh_verb.length())
+			var zh_old: Array = []
+			for match_value in ident_regex.search_all(zh_before):
+				zh_old.append(String(match_value.get_string()))
+			var zh_new: Array = []
+			for match_value in ident_regex.search_all(zh_after):
+				zh_new.append(String(match_value.get_string()))
+			if not zh_old.is_empty() and not zh_new.is_empty():
+				return {"symbol_name": zh_old[zh_old.size() - 1], "new_name": zh_new[0]}
+	return {}
+
+## 解析换键目标（E1，受控模式）："rebind <action> (from <key>) to <key>" /
+## 中文"把 <action> (从 <key>) 改成 <key> 键"。解析不出完整三元组时
+## old_key 可空（只验证新键生效）；action 不在受控动作表内则返回空。
+static func parse_remap_goal(goal: String) -> Dictionary:
+	var text: String = " " + goal.to_lower() + " "
+	var has_remap_verb: bool = false
+	for keyword in REMAP_KEYWORDS:
+		if text.contains(keyword.to_lower()):
+			has_remap_verb = true
+			break
+	if not has_remap_verb:
+		return {}
+	var action: String = ""
+	for candidate in ["move_left", "move_right", "move_up", "move_down", "jump", "dash"]:
+		if text.contains(candidate):
+			action = candidate
+			break
+	if action.is_empty():
+		return {}
+	# 键名候选：受控词表中的任何词出现在目标里，按出现位置排序
+	# （"from X to Y" 的归属由位置决定，与词表遍历顺序无关）
+	var key_hits: Array = []
+	for key_name in KEY_NAME_TO_CODE.keys():
+		var lowered: String = key_name.to_lower()
+		var position: int = text.find(" " + lowered + " ")
+		if position < 0:
+			position = text.find(" " + lowered + " key")
+		if position < 0:
+			position = text.find(lowered + " 键")
+		if position >= 0:
+			key_hits.append({"position": position, "key": key_name.to_upper()})
+	if key_hits.is_empty():
+		return {"action": action}
+	key_hits.sort_custom(func(a, b) -> bool: return int(a["position"]) < int(b["position"]))
+	var old_key: String = ""
+	var new_key: String = ""
+	var from_index: int = text.find(" from ")
+	if from_index < 0:
+		from_index = text.find(" 从 ")
+	for hit_value in key_hits:
+		var hit: Dictionary = hit_value
+		if from_index >= 0 and int(hit["position"]) > from_index:
+			old_key = String(hit["key"])
+			break
+	if old_key != "":
+		for hit_value in key_hits:
+			var hit2: Dictionary = hit_value
+			if String(hit2["key"]) != old_key and int(hit2["position"]) > from_index:
+				new_key = String(hit2["key"])
+				break
+		if new_key == "":
+			# from 之后只有一个键：它就是新键（旧键未明说）
+			new_key = old_key
+			old_key = ""
+	else:
+		new_key = String(key_hits[key_hits.size() - 1]["key"])
+		if key_hits.size() > 1:
+			old_key = String(key_hits[0]["key"])
+	return {"action": action, "old_key": old_key, "new_key": new_key}
+
+## 换键演练（E1 行为证据，事件级）：旧键按下必须**无效**（位移不变），
+## 新键按下必须生效（位移达成），再跑其余轴向回归——防误伤。
+func _remap_play_steps(action: String, old_key: String, new_key: String) -> Array:
+	var steps: Array = []
+	# 回归先行（四向位移断言以原点为基准）；remap 腿随后——inert 断言
+	# 用步前快照（位移相对），在任意起步位置都成立。
+	steps.append_array(_movement_play_steps())
+	var axis_expression: String = "position.x"
+	var axis_moved_operator: String = "gt"
+	var axis_moved_value: int = 15
+	if action in ["move_up", "move_down", "jump"]:
+		axis_expression = "position.y"
+	if action in ["move_left", "move_up"]:
+		axis_moved_operator = "lt"
+		axis_moved_value = -15
+	if not old_key.is_empty():
+		steps.append({
+			"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(old_key, 0), "pressed": true},
+			"wait_ms": 350,
+			"assert": {"expression": axis_expression, "inert": true,
+				"description": "old binding is inert after the rebind (%s)" % old_key}
+		})
+		steps.append({
+			"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(old_key, 0), "pressed": false},
+			"wait_ms": 80
+		})
+	steps.append({
+		"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(new_key, 0), "pressed": true},
+		"wait_ms": 400,
+		"screenshot": true,
+		"assert": {"expression": axis_expression, "operator": axis_moved_operator,
+			"expected": axis_moved_value,
+			"description": "new binding moves the player (%s)" % new_key}
+	})
+	steps.append({
+		"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(new_key, 0), "pressed": false},
+		"wait_ms": 80
+	})
+	return steps
+
 ## 移动类目标的游玩演练：四方向按键各配位移断言。蓝图控制器的
 ## _physics_process 只有在输入驱动下才会执行，脚本错误才会暴露给
 ## play_and_verify 的错误捕获；而位移断言进一步证明移动真的发生——
@@ -919,7 +1126,20 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 	var wants_movement: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS) \
 		or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)
 	var wants_pause: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.PAUSE_KEYWORDS)
-	if wants_movement or wants_pause:
+	var remap_info: Dictionary = parse_remap_goal(play_objective)
+	var rename_info: Dictionary = parse_rename_goal(play_objective)
+	if not rename_info.is_empty():
+		# 更名不改行为：门禁 = 更名产物可编译（verify_scripts 步骤）+
+		# 行为回归演练（演练以真实按键驱动重命名后的控制器）。
+		wants_movement = true
+	if not remap_info.is_empty() and String(remap_info.get("new_key", "")) != "":
+		arguments["steps"] = _remap_play_steps(
+			String(remap_info["action"]),
+			String(remap_info.get("old_key", "")),
+			String(remap_info["new_key"]))
+		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+		task["derived_inputs"]["steps"] = "remap-exercise"
+	elif wants_movement or wants_pause:
 		var play_steps: Array = []
 		if wants_movement:
 			play_steps.append_array(_movement_play_steps())

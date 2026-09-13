@@ -165,3 +165,10 @@ func test_resolve_root_and_dot_map_to_edited_scene_root() -> void:
 	assert_eq(resolved_child, child, "scene-name absolute paths still resolve within the scene")
 	assert_eq(resolved_relative, child, "relative paths still resolve")
 	root.queue_free()
+
+func test_pure_movement_goal_generates_compilable_ready() -> void:
+	# 真机 E2E 抓到的缺陷：纯移动目标（无收集/暂停/存档动词）生成空 _ready
+	# 函数体——非法 GDScript。空体必须补 pass。
+	var source: String = BlueprintsScript.controller_script("arrow-key movement controller")
+	assert_true(source.contains("func _ready() -> void:\n\tpass\n"),
+		"empty _ready body must be padded with pass")

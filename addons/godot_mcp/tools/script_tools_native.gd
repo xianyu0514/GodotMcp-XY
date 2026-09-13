@@ -1349,6 +1349,58 @@ func _escape_regex_pattern(text: String) -> String:
 			escaped += character_text
 	return escaped
 
+## 行级"代码区域"掩蔽：注释（# 之后）与字符串字面量（'…' / "…"，含
+## 反斜杠转义；三引号块跨行由调用方携带状态）里的位置标记为 true——
+## 这些位置上的符号名匹配不属于代码引用，重命名不得触碰（E4 语义）。
+static func _masked_code_positions(line: String, in_triple_quote_in: bool) -> Dictionary:
+	var mask: Array = []
+	mask.resize(line.length())
+	for i in range(line.length()):
+		mask[i] = in_triple_quote_in
+	var in_triple_quote: bool = in_triple_quote_in
+	var in_string: int = 0  # 0=无, 1='...', 2="..."
+	var i: int = 0
+	while i < line.length():
+		var ch: String = line[i]
+		if in_triple_quote:
+			if line.substr(i, 3) == '"""':
+				mask[i] = true
+				mask[i + 1] = true
+				mask[i + 2] = true
+				in_triple_quote = false
+				i += 3
+				continue
+			mask[i] = true
+			i += 1
+			continue
+		if in_string != 0:
+			mask[i] = true
+			var quote: String = "'" if in_string == 1 else '"'
+			if ch == "\\" and i + 1 < line.length():
+				mask[i + 1] = true
+				i += 2
+				continue
+			if ch == quote:
+				in_string = 0
+			i += 1
+			continue
+		if ch == "#":
+			for j in range(i, line.length()):
+				mask[j] = true
+			break
+		if line.substr(i, 3) == '"""':
+			mask[i] = true
+			mask[i + 1] = true
+			mask[i + 2] = true
+			in_triple_quote = true
+			i += 3
+			continue
+		if ch == "'" or ch == '"':
+			in_string = 1 if ch == "'" else 2
+			mask[i] = true
+		i += 1
+	return {"mask": mask, "in_triple_quote": in_triple_quote}
+
 func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: String, case_sensitive: bool, dry_run: bool, remaining_results: int) -> Dictionary:
 	var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
 	if not file:
@@ -1367,20 +1419,30 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 	var replacements: Array = []
 	var applied_total: int = 0
 	var updated_lines: PackedStringArray = []
+	var in_triple_quote: bool = false
 	for i in range(lines.size()):
 		var raw_line: String = lines[i]
 		var new_line: String = raw_line
 		var line_replaced: int = 0
+		# E4 语义：注释与字符串字面量里的同名文本不属于符号引用，不得修改。
+		var masking: Dictionary = _masked_code_positions(raw_line, in_triple_quote)
+		in_triple_quote = bool(masking["in_triple_quote"])
+		var mask: Array = masking["mask"]
 		if applied_total < remaining_results:
 			# RegEx.sub 的第 4 个参数是起始偏移而不是替换数量；
 			# 手工重建行内容，保证实际替换次数、预览与 replacement_count 三者一致。
 			var matches: Array = regex.search_all(raw_line)
-			var take: int = min(matches.size(), remaining_results - applied_total)
+			var code_matches: Array = []
+			for match_value in matches:
+				var match_candidate: RegExMatch = match_value
+				if not bool(mask[match_candidate.get_start()]):
+					code_matches.append(match_candidate)
+			var take: int = min(code_matches.size(), remaining_results - applied_total)
 			if take > 0:
 				var rebuilt: String = ""
 				var cursor: int = 0
 				for match_index in range(take):
-					var match_result: RegExMatch = matches[match_index]
+					var match_result: RegExMatch = code_matches[match_index]
 					rebuilt += raw_line.substr(cursor, match_result.get_start() - cursor)
 					rebuilt += new_name
 					cursor = match_result.get_end()

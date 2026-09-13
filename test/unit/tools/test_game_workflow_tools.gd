@@ -976,3 +976,66 @@ func test_save_goal_derives_save_and_restore_exercises() -> void:
 		_tools._resolve_inputs(by_key["play_verify"], {}, false))
 	assert_eq(str((by_key["play_verify"].get("derived_inputs", {}) as Dictionary).get("steps", "")),
 		"movement-exercise")
+
+func test_remap_goal_parses_and_overrides_upsert() -> void:
+	# E1：换键目标解析 + upsert 覆盖（擦除旧绑定、仅新键）+ remap 演练派生
+	var planned: Dictionary = _plan(["gameplay_feature"],
+		"arrow-key movement, then rebind move_up from the W key to the U key")
+	var status: Dictionary = _tools._tool_plan_game_workflow({
+		"action": "status", "plan_path": _plan_path, "include_plan": true
+	})
+	var loaded: Dictionary = status["plan"]
+	var remap_parse: Dictionary = _tools.parse_remap_goal(
+		"arrow-key movement, then rebind move_up from the W key to the U key")
+	assert_eq(str(remap_parse.get("action", "")), "move_up")
+	assert_eq(str(remap_parse.get("old_key", "")), "W")
+	assert_eq(str(remap_parse.get("new_key", "")), "U")
+	for task_value in loaded.get("tasks", []):
+		var task: Dictionary = task_value
+		var tool: String = String(task.get("tool_name", ""))
+		var arguments: Dictionary = _tools._derive_step_arguments(
+			loaded, task, tool, _tools._resolve_inputs(task, {}, false))
+		if tool == "upsert_project_input_action" and String(arguments.get("action_name", "")) == "move_up":
+			assert_true(bool(arguments.get("erase_existing", false)), "rebound action erases old bindings")
+			var events: Array = arguments.get("events", [])
+			assert_eq(events.size(), 1, "single new binding")
+			assert_eq(int((events[0] as Dictionary).get("keycode", 0)), KEY_U)
+		if tool == "play_and_verify":
+			assert_eq(str((task.get("derived_inputs", {}) as Dictionary).get("steps", "")),
+				"remap-exercise")
+			var steps: Array = arguments.get("steps", [])
+			var first: Dictionary = steps[0] if steps.size() > 0 else {}
+			var inert_found: bool = false
+			for step_value in steps:
+				var step_check: Dictionary = step_value
+				if step_check.has("assert") and bool((step_check.get("assert", {}) as Dictionary).get("inert", false)):
+					inert_found = true
+			assert_true(inert_found, "old binding asserted inert via a pre-step snapshot")
+			# 新键断言存在
+			var has_new_key_leg: bool = false
+			for step_value in steps:
+				var step: Dictionary = step_value
+				if step.has("event") and String((step.get("assert", {}) as Dictionary).get("description", "")).contains("new binding"):
+					has_new_key_leg = true
+			assert_true(has_new_key_leg, "new binding asserted effective")
+			return
+	fail_test("play_and_verify task not found for remap goal")
+
+func test_remap_parse_zh_and_failure_modes() -> void:
+	var zh: Dictionary = _tools.parse_remap_goal("把 move_left 从 A 键改成 Q 键")
+	assert_eq(str(zh.get("action", "")), "move_left")
+	assert_eq(str(zh.get("old_key", "")), "A")
+	assert_eq(str(zh.get("new_key", "")), "Q")
+	# 无换键动词 / 未知动作 → 空解析（宁可交给通用路径也不猜）
+	assert_true(_tools.parse_remap_goal("arrow-key movement only").is_empty())
+	assert_true(_tools.parse_remap_goal("rebind attack to R").is_empty())
+
+func test_rename_goal_parses_and_derives_step_arguments() -> void:
+	# E4：更名目标 → rename 步骤自主拿到 symbol 对 + 行为回归演练
+	var parsed: Dictionary = _tools.parse_rename_goal("rename the field speed to velocity in the scripts")
+	assert_eq(str(parsed.get("symbol_name", "")), "speed")
+	assert_eq(str(parsed.get("new_name", "")), "velocity")
+	var zh: Dictionary = _tools.parse_rename_goal("把 speed 重命名为 velocity")
+	assert_eq(str(zh.get("symbol_name", "")), "speed")
+	assert_eq(str(zh.get("new_name", "")), "velocity")
+	assert_true(_tools.parse_rename_goal("arrow-key movement only").is_empty())

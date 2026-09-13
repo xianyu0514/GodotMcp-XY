@@ -149,3 +149,32 @@ func _file_lines(path: String) -> PackedStringArray:
 	var content: String = file.get_as_text()
 	file.close()
 	return content.split("\n")
+
+# ---- E4 语义：注释与字符串里的同名文本不是符号引用，不得修改 -------------
+
+func test_rename_preserves_comments_and_strings() -> void:
+	_write("var speed = 10  # speed in m/s\nvar label = \"speed value\"\nspeed += 1\n")
+	var result: Dictionary = _tools._rename_symbol_in_file(_path, "speed", "velocity", true, false, 50)
+	assert_eq(_read(), "var velocity = 10  # speed in m/s\nvar label = \"speed value\"\nvelocity += 1\n",
+		"comment and string occurrences stay untouched; code occurrences renamed")
+	assert_eq(int(result.get("replacement_count", -1)), 2, "only code occurrences counted")
+
+func test_rename_triple_quote_block_masked_across_lines() -> void:
+	_write("speed = 1\nvar doc = \"\"\"\nspeed inside docs\n\"\"\"\nspeed = 2\n")
+	var result: Dictionary = _tools._rename_symbol_in_file(_path, "speed", "velocity", true, false, 50)
+	assert_eq(_read(), "velocity = 1\nvar doc = \"\"\"\nspeed inside docs\n\"\"\"\nvelocity = 2\n",
+		"triple-quoted block content preserved across lines")
+	assert_eq(int(result.get("replacement_count", -1)), 2)
+
+func test_rename_escaped_quote_inside_string() -> void:
+	_write("var s = \"say \\\"speed\\\" now\"\nspeed = 3\n")
+	_tools._rename_symbol_in_file(_path, "speed", "velocity", true, false, 50)
+	assert_eq(_read(), "var s = \"say \\\"speed\\\" now\"\nvelocity = 3\n",
+		"escaped quotes do not terminate the string region")
+
+func test_rename_budget_counts_only_code_matches() -> void:
+	_write("# speed note\nspeed = 1\nspeed = 2\n")
+	var result: Dictionary = _tools._rename_symbol_in_file(_path, "speed", "velocity", true, false, 1)
+	assert_eq(_read(), "# speed note\nvelocity = 1\nspeed = 2\n",
+		"comment match does not consume the budget")
+	assert_eq(int(result.get("replacement_count", -1)), 1)

@@ -75,7 +75,7 @@ func _register_play_and_verify(server_core: RefCounted) -> void:
 			"properties": {
 				"steps": {
 					"type": "array",
-					"description": "Ordered steps; each may include action/event, waits, screenshot and an inline 'assert' ({expression, expected, ...}) evaluated right after it.",
+					"description": "Ordered steps; each may include action/event, waits, screenshot and an inline 'assert' ({expression, expected, ...}) evaluated right after it; assert.inert=true snapshots the expression before the step and asserts it unchanged (proof an input is unbound).",
 					"items": {"type": "object"}
 				},
 				"assertions": {
@@ -154,6 +154,16 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		if _tool_cancelled():
 			return {"status": "cancelled", "error": "cancelled by client", "steps_executed": executed}
 		var step: Dictionary = steps[i] if steps[i] is Dictionary else {}
+		# inert 断言：发送本步输入前先读一次表达式值（快照），等待后断言
+		# 值不变——证明"该输入已失效"（E1 旧键证明）。绝对阈值在非原点
+		# 起步时不可用（真机 E2E 抓到），位移相对才是正确语义。
+		var inert_pre_value: Variant = null
+		if step.has("assert") and step["assert"] is Dictionary 				and bool((step["assert"] as Dictionary).get("inert", false)):
+			var pre_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+				_merge_runtime_params(params, {
+					"expression": String((step["assert"] as Dictionary).get("expression", "")),
+					"timeout_ms": 300}))
+			inert_pre_value = pre_read.get("last_value", null)
 		if step.has("action"):
 			var input_params: Dictionary = _merge_runtime_params(params, {
 				"action_name": String(step.get("action", "")),
@@ -199,6 +209,10 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		# 步内断言：紧跟本步求值（如 Esc 后世界应立即暂停），顺序即证据。
 		if step.has("assert") and step["assert"] is Dictionary:
 			var step_assert: Dictionary = step["assert"]
+			if inert_pre_value != null:
+				step_assert = step_assert.duplicate()
+				step_assert["expected"] = inert_pre_value
+				step_assert.erase("inert")
 			var step_result: Dictionary = await _evaluate_runtime_assertion(params, step_assert, "step %d" % i)
 			step_result["step"] = i
 			if bool(step_result.get("passed", false)):
