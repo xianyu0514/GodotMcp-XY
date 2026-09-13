@@ -1123,6 +1123,38 @@ func _collect_play_steps() -> Array:
 	})
 	return steps
 
+## 状态机腿（P4 游戏流）：标题→玩法→胜利→重开，四次转移全部断言。
+func _state_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"assert": {"expression": "game_state", "expected": "title",
+			"description": "the game starts on the title screen"}
+	})
+	steps.append({
+		"action": "ui_accept", "pressed": true, "wait_ms": 300,
+		"assert": {"expression": "game_state", "expected": "playing",
+			"description": "pressing Start enters gameplay"}
+	})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 80})
+	# 收集致胜（磁吸横扫）
+	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1200})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 400,
+		"assert": {"expression": "game_state", "expected": "win",
+			"description": "collecting the coin reaches the win state"}
+	})
+	steps.append({
+		"action": "ui_accept", "pressed": true, "wait_ms": 300,
+		"assert": {"expression": "game_state", "expected": "title",
+			"description": "restart returns to the title screen"}
+	})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 80,
+		"assert": {"expression": "coins_collected", "expected": 0,
+			"description": "restart resets the run state"}
+	})
+	return steps
+
 ## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
 ## 断言敌人确实在动；穿越敌人巡逻带 → 断言死亡计数与重生回原点。
 func _enemy_play_steps() -> Array:
@@ -1205,11 +1237,14 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_collect: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS) \
 			or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.WIN_KEYWORDS)
 		var wants_enemy: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.ENEMY_KEYWORDS)
-		if wants_movement or wants_pause or wants_collect or wants_enemy:
+		var wants_state: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
+		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
 			if wants_movement:
 				play_steps.append_array(_movement_play_steps())
-			if wants_collect:
+			if wants_state:
+				play_steps.append_array(_state_play_steps())
+			elif wants_collect:
 				play_steps.append_array(_collect_play_steps())
 			if wants_enemy:
 				play_steps.append_array(_enemy_play_steps())
@@ -1219,7 +1254,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			var labels: Array = []
 			if wants_movement:
 				labels.append("movement")
-			if wants_collect:
+			if wants_state:
+				labels.append("state")
+			elif wants_collect:
 				labels.append("collect")
 			if wants_enemy:
 				labels.append("enemy")

@@ -491,7 +491,15 @@ func _get_plugin_name() -> String:
 	return "MCP"
 
 func _get_plugin_icon() -> Texture2D:
-	return preload("res://addons/godot_mcp/icon.svg")
+	# 运行期加载而非编译期 preload：全新项目首次安装时 icon.svg 尚未
+	# 导入（无资源加载器），preload 会让整个插件脚本解析失败（发布包
+	# 安装门禁抓到）。未导入时退回程序化占位图标。
+	var icon: Variant = load("res://addons/godot_mcp/icon.svg")
+	if icon is Texture2D:
+		return icon
+	var placeholder := ImageTexture.create_from_image(
+		Image.create(16, 16, false, Image.FORMAT_RGBA8))
+	return placeholder
 
 func get_native_server() -> RefCounted:
 	return _native_server

@@ -203,3 +203,20 @@ func test_collect_and_enemy_exercises_derived() -> void:
 			enemy_expressions.append(str(leg2.get("expression", "")))
 	assert_has(enemy_expressions, "deaths_count")
 	assert_has(enemy_expressions, "position.x")
+
+func test_state_machine_goal_generates_flow() -> void:
+	var source: String = BlueprintsScript.controller_script("a title screen with start, gameplay, win state and restart")
+	assert_true(source.contains("var game_state: String = \"title\""), "observable state variable")
+	assert_true(source.contains("\"title\" and Input.is_action_just_pressed(\"ui_accept\")"), "title->playing transition")
+	assert_true(source.contains("game_state = \"win\""), "collect reaches win state")
+	assert_true(source.contains("coins_collected = 0"), "restart resets run state")
+	assert_true(source.contains("_coin_area"), "state implies collectible (win condition)")
+
+func test_state_play_steps_assert_all_four_transitions() -> void:
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var states: Array = []
+	for step_value in tools._state_play_steps():
+		var leg: Dictionary = step_value.get("assert", {}) if step_value.has("assert") else {}
+		if str(leg.get("expression", "")) == "game_state":
+			states.append(leg.get("expected"))
+	assert_eq(states, ["title", "playing", "win", "title"], "all four transitions asserted in order")
