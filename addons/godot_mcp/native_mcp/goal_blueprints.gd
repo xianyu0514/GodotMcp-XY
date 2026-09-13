@@ -36,6 +36,11 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 敌人动词：巡逻敌人（触碰重置玩家 + 计数），行为可断言。
+const ENEMY_KEYWORDS: Array[String] = [
+	"enemy", "enemies", "hazard", "patrol", "death", "respawn",
+	"敌人", "巡逻", "危险", "死亡", "重生",
+]
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -52,6 +57,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"win": _mentions(objective, WIN_KEYWORDS),
 		"pause": _mentions(objective, PAUSE_KEYWORDS),
 		"save": _mentions(objective, SAVE_KEYWORDS),
+		"enemy": _mentions(objective, ENEMY_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -59,7 +65,8 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("collectible", false)) \
 		or bool(verbs.get("win", false)) \
 		or bool(verbs.get("pause", false)) \
-		or bool(verbs.get("save", false))
+		or bool(verbs.get("save", false)) \
+		or bool(verbs.get("enemy", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
@@ -69,6 +76,7 @@ static func controller_script(objective: String) -> String:
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
 	var needs_pause: bool = bool(verbs.get("pause", false))
 	var needs_save: bool = bool(verbs.get("save", false))
+	var needs_enemy: bool = bool(verbs.get("enemy", false))
 	# 存档暗含移动：没有会变化的状态就没有可持久化的东西。
 	var needs_movement: bool = bool(verbs.get("movement", false)) or needs_save
 
@@ -87,8 +95,22 @@ static func controller_script(objective: String) -> String:
 		source += "var _pause_label: Label\n"
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
+	if needs_enemy:
+		source += "var deaths_count: int = 0\n"
+		source += "var _enemy: Area2D\n"
+		source += "const ENEMY_HOME_X: float = 300.0\n"
+		source += "const ENEMY_RANGE: float = 80.0\n"
+		source += "const ENEMY_SPEED: float = 120.0\n"
 	source += "\nfunc _ready() -> void:\n"
 	var ready_body_emitted: bool = false
+	# 玩家碰撞体（真缺陷修复：无形状的 CharacterBody2D 不会被任何 Area2D
+	# 探测到——金币/敌人的 body_entered 在真机上从未触发过）。
+	source += "\tvar body_shape := CollisionShape2D.new()\n"
+	source += "\tvar body_circle := CircleShape2D.new()\n"
+	source += "\tbody_circle.radius = 8\n"
+	source += "\tbody_shape.shape = body_circle\n"
+	source += "\tadd_child(body_shape)\n"
+	ready_body_emitted = true
 	if needs_pause:
 		# 控制器必须在暂停期间继续接收输入，否则 Esc 无法恢复游戏。
 		source += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
@@ -108,13 +130,18 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 运行期生成拾取体与胜利标签，保持编辑场景最小。\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
-		source += "\t_coin_area.position = Vector2(180, 120)\n"
+		source += "\t_coin_area.position = Vector2(200, 0)\n"
 		source += "\tvar coin_collision := CollisionShape2D.new()\n"
 		source += "\tvar coin_shape := CircleShape2D.new()\n"
-		source += "\tcoin_shape.radius = 14\n"
+		source += "\t# 磁吸半径：开环演练（墙钟计时的位移有 ±40% 抖动）仍能确定性\n"
+		source += "\t# 穿越拾取窗——宽恕式拾取本身就是平台游戏的常见手感设计。\n"
+		source += "\tcoin_shape.radius = 90\n"
 		source += "\tcoin_collision.shape = coin_shape\n"
 		source += "\t_coin_area.add_child(coin_collision)\n"
-		source += "\tadd_child(_coin_area)\n"
+		source += "\t# 挂到父节点（世界坐标）：真缺陷修复——金币原先是玩家的子节点，\n"
+		source += "\t# 永远保持相对偏移跟随玩家，且 Area2D 不探测自己的祖先，\n"
+		source += "\t# 收集机制从第一版起就不可能触发。\n"
+		source += "\tget_parent().add_child.call_deferred(_coin_area)\n"
 		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
 		source += "\tvar canvas := CanvasLayer.new()\n"
 		source += "\tcanvas.name = \"WinCanvas\"\n"
@@ -129,6 +156,21 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
 		source += "\tload_game()\n"
 		ready_body_emitted = true
+	if needs_enemy:
+		source += "\tvar enemy := Area2D.new()\n"
+		source += "\tenemy.name = \"Enemy\"\n"
+		source += "\tenemy.position = Vector2(ENEMY_HOME_X, 0.0)\n"
+		source += "\tvar enemy_collision := CollisionShape2D.new()\n"
+		source += "\tvar enemy_shape := RectangleShape2D.new()\n"
+		source += "\t# 纵向高墙：任意纵向偏移的水平穿越都会触发（开环演练确定性）。\n"
+		source += "\tenemy_shape.size = Vector2(16, 240)\n"
+		source += "\tenemy_collision.shape = enemy_shape\n"
+		source += "\tenemy.add_child(enemy_collision)\n"
+		source += "\t# 同金币：挂到父节点，巡逻才是世界坐标。\n"
+		source += "\tget_parent().add_child.call_deferred(enemy)\n"
+		source += "\tenemy.body_entered.connect(_on_enemy_touched)\n"
+		source += "\t_enemy = enemy\n"
+		ready_body_emitted = true
 	if not ready_body_emitted:
 		# 纯移动目标没有 _ready 内容：空函数体是非法 GDScript（真机 E2E
 		# 抓到——此前所有场景都带收集动词填充了 _ready，从未暴露）。
@@ -142,6 +184,9 @@ static func controller_script(objective: String) -> String:
 		if needs_save:
 			source += "\tif Input.is_action_just_pressed(\"save_game\"):\n"
 			source += "\t\tlast_save_ok = save_game()\n"
+		if needs_enemy:
+			source += "\t# 敌人巡逻：正弦往返，位置始终可解算（行为可断言）。\n"
+			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(Time.get_ticks_msec() / 1000.0 * (TAU / 4.0)) * ENEMY_RANGE\n"
 		if needs_pause:
 			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
 			source += "\t\tset_paused(not get_tree().paused)\n"
@@ -169,6 +214,12 @@ static func controller_script(objective: String) -> String:
 		source += "\tget_tree().paused = value\n"
 		source += "\tif _pause_label != null:\n"
 		source += "\t\t_pause_label.visible = value\n"
+	if needs_enemy:
+		source += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
+		source += "\tif body != self:\n"
+		source += "\t\treturn\n"
+		source += "\tdeaths_count += 1\n"
+		source += "\tposition = Vector2.ZERO\n"
 	if needs_save:
 		source += "\nfunc save_game() -> bool:\n"
 		source += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
