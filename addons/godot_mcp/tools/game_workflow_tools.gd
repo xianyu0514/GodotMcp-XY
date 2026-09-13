@@ -350,6 +350,16 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 				recovery_metrics["safe_recoveries"] = int(recovery_metrics.get("safe_recoveries", 0)) + 1
 				recovered_safe_step = true
 				continue
+			# journal 自动收口（R3）：该工具最近一次提交写入按磁盘复判为
+			# complete_receipt 且无 pending 冲突 → 写入已确凿发生，补回执
+			# 收口继续推进（崩溃慢测契约允许"步骤实际已完成"的诚实路径）；
+			# 无证据时维持 fail-closed 并附处方。
+			var autoclose_receipt: Dictionary = _journal_autoclose(plan, uncertain_task)
+			if not autoclose_receipt.is_empty():
+				var autoclose_metrics: Dictionary = _engine.workflow_metrics(plan)
+				autoclose_metrics["journal_autocloses"] = int(autoclose_metrics.get("journal_autocloses", 0)) + 1
+				recovered_safe_step = true
+				continue
 			workflow["state"] = "recovery_required"
 			workflow["blocked_reason"] = "A previously dispatched non-idempotent step has an unknown outcome; inspect the project and replan"
 			var uncertain_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
@@ -1153,6 +1163,35 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		arguments["steps"] = [{"wait_ms": 600}]
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["steps"] = "boot-settle"
+
+## journal 自动收口（R3）：仅当该工具最近一次提交写入按磁盘复判为
+## complete_receipt、且不存在 pending 冲突时，把不确定步骤补回执收口。
+## 返回收据（非空=已收口）；无证据/有冲突返回空，维持 fail-closed。
+func _journal_autoclose(plan: Dictionary, uncertain_task: Dictionary) -> Dictionary:
+	var tool_name: String = String(uncertain_task.get("tool_name", ""))
+	if tool_name.is_empty():
+		return {}
+	var recovery: Dictionary = _change_journal_recovery(tool_name)
+	for verdict_value in recovery.get("pending", []):
+		if String((verdict_value as Dictionary).get("action", "")) == "conflict":
+			return {}
+	var latest: Dictionary = recovery.get("latest_committed", {})
+	if latest.is_empty() or String(latest.get("phase", "")) != "committed" \
+			or String(latest.get("verdict", "")) != "complete_receipt":
+		return {}
+	uncertain_task["status"] = "done"
+	var receipt: Dictionary = _engine.append_receipt(plan, {
+		"step_id": uncertain_task.get("id", ""),
+		"tool_name": tool_name,
+		"passed": true,
+		"recovered": true,
+		"journal_operation": String(latest.get("operation_id", "")),
+		"summary": {"status": "success", "recovered_by": "change_journal",
+			"journal_intent": String(latest.get("intent", ""))},
+	})
+	uncertain_task["receipt_digest"] = receipt.get("digest", "")
+	uncertain_task["journal_autoclosed"] = true
+	return receipt
 
 ## 变更日志恢复处方：pending 操作逐条分类 + 该工具最近提交记录的磁盘
 ## 复判。recommended 汇总最保守的下一步（conflict 优先）。

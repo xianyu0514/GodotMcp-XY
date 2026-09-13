@@ -151,3 +151,39 @@ func test_recovery_bridge_pending_conflict_recommends_resolution() -> void:
 	assert_eq(String((bridge["pending"][0] as Dictionary).get("action", "")), "conflict")
 	assert_true(String(bridge.get("recommended", "")).contains("conflicts"),
 		str(bridge.get("recommended", "")))
+
+# ============================================================================
+# journal 自动收口（R3：回执丢失后按磁盘证据补回执）
+# ============================================================================
+
+func test_autoclose_closes_uncertain_step_on_committed_disk_match() -> void:
+	var path: String = TEMP_DIR + "/scene.tscn"
+	_write(path, "v1")
+	_write(path, "v2")
+	ChangeJournal.record_write_operation("save_scene " + path, path,
+		"v1".sha256_text(), "v2".sha256_text(), true)
+	var tools: RefCounted = WorkflowTools.new()
+	var task: Dictionary = {"id": "wf_010", "tool_name": "save_scene", "status": "in_progress"}
+	var receipt: Dictionary = tools._journal_autoclose({}, task)
+	assert_false(receipt.is_empty(), "committed disk match closes the step")
+	assert_eq(String(task.get("status", "")), "done")
+	assert_true(bool(task.get("journal_autoclosed", false)))
+	assert_true(str(receipt.get("summary", {}).get("recovered_by", "")) == "change_journal")
+
+func test_autoclose_refuses_without_evidence_or_on_conflict() -> void:
+	var tools: RefCounted = WorkflowTools.new()
+	# 无 journal 记录 → 不收口（维持 fail-closed）
+	assert_true(tools._journal_autoclose({}, {"id": "wf_1", "tool_name": "create_theme"}).is_empty())
+	# 磁盘与记录分歧（手工修改）→ 不收口
+	var path: String = TEMP_DIR + "/scene2.tscn"
+	_write(path, "v1")
+	_write(path, "v2")
+	ChangeJournal.record_write_operation("save_scene " + path, path,
+		"v1".sha256_text(), "v2".sha256_text(), true)
+	_write(path, "hand-edited")
+	assert_true(tools._journal_autoclose({}, {"id": "wf_2", "tool_name": "save_scene"}).is_empty())
+	# pending 冲突存在 → 不收口
+	ChangeJournal.begin_operation("interrupted rename", [
+		{"path": path, "before_hash": "x", "after_hash": "y", "replacement_count": 1},
+	])
+	assert_true(tools._journal_autoclose({}, {"id": "wf_3", "tool_name": "save_scene"}).is_empty())
