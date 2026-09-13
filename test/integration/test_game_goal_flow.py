@@ -66,6 +66,20 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "broken-script-repair",
+        "objective": "Fix the script error in broken_hint.gd so the project compiles.",
+        "profiles": ["script_repair"],
+        "inject_r1_fault": True,
+        "assert_r1_fixed": True,
+    },
+    {
+        "name": "hand-edit-conflict",
+        "objective": "Rename the field speed to velocity in the scripts.",
+        "profiles": ["gameplay_feature"],
+        "inject_r4_fault": True,
+        "accept_recovery_stall": "rename_script_symbol",
+    },
+    {
         "name": "rename-symbol",
         "objective": (
             "Arrow-key movement with a coin, then rename the field "
@@ -271,6 +285,40 @@ def run_scenario(scenario: dict) -> None:
     tool_call("enable_tools", {"tools": ["stop_project"]}, request_id=91)
     stopped = tool_call("stop_project", {"allow_window": True}, request_id=92)
     print(f"[goal-flow] pre-scenario game stop: {str(stopped.get('status', stopped))[:60]}", flush=True)
+    if scenario.get("inject_r1_fault"):
+        # R1：注入编译错误（真损坏的项目——修复链必须真的检测并修好它）
+        scripts_dir = SCRATCH / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / "broken_hint.gd").write_text(
+            "extends Node\n\nfunc broken(:\n\tpass\n", encoding="utf-8", newline="\n")
+        print("[goal-flow] R1 fault injected: broken_hint.gd", flush=True)
+    if scenario.get("inject_r4_fault"):
+        # R4：手工修改 + 未收口 journal 操作（diverged）——rename 必须拒绝覆盖
+        scripts_dir = SCRATCH / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        manual = scripts_dir / "manual.gd"
+        manual_content = "extends Node\n\nvar speed: float = 10.0  # hand-tuned\n"
+        manual.write_text(manual_content, encoding="utf-8", newline="\n")
+        import hashlib
+        fake_before = hashlib.sha256(b"something else entirely").hexdigest()
+        fake_after = hashlib.sha256(b"also something else").hexdigest()
+        mcp_dir = SCRATCH / ".mcp"
+        mcp_dir.mkdir(parents=True, exist_ok=True)
+        (mcp_dir / "change_journal.json").write_text(json.dumps({
+            "schema_version": 1,
+            "operations": [{
+                "operation_id": "op_injected_001",
+                "intent": "rename_script_symbol speed -> velocity",
+                "phase": "prepared",
+                "created_at": "2026-09-13T00:00:00",
+                "finished_at": "",
+                "files": [{"path": "res://scripts/manual.gd",
+                           "before_hash": fake_before, "after_hash": fake_after,
+                           "replacement_count": 1, "state": "planned"}],
+                "verification": {"verified": False, "checked_at": "", "mismatches": []},
+            }],
+        }), encoding="utf-8")
+        print("[goal-flow] R4 fault injected: diverged journal op + hand edit", flush=True)
     plan = tool_call(
         "plan_game_workflow",
         {"action": "plan", "objective": scenario["objective"], "profiles": scenario["profiles"],
@@ -280,15 +328,29 @@ def run_scenario(scenario: dict) -> None:
     if str(plan.get("status", "")) not in ("planned", "resumed", "ok", "compiled", "success"):
         raise AssertionError(f"[{name}] plan_game_workflow returned unexpected status: {json.dumps(plan)[:600]}")
 
+    run_extra: dict = {}
+    if scenario.get("inject_r1_fault"):
+        run_extra["step_inputs"] = {"modify_script": {
+            "script_path": "res://scripts/broken_hint.gd",
+            "old_text": "func broken(:",
+            "content": "func broken():",
+            "validate": True,
+        }}
     for iteration in range(RUN_ITERATIONS):
-        run = tool_call("run_game_workflow", {"plan_path": PLAN_PATH}, request_id=100 + iteration)
+        run = tool_call("run_game_workflow", dict({"plan_path": PLAN_PATH}, **run_extra),
+                        request_id=100 + iteration)
         state = str(run.get("state", run.get("status", "")))
         print(f"[{name}] iter {iteration}: state={state} progress={json.dumps(run.get('progress', {}))[:160]}", flush=True)
         if state == "completed":
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_rename"):
+            if scenario.get("assert_r1_fixed"):
+                fixed = (SCRATCH / "scripts" / "broken_hint.gd").read_text(encoding="utf-8")
+                if "func broken():" not in fixed:
+                    raise AssertionError(f"[{name}] script not actually fixed: {fixed[:120]}")
+                note = "; broken script detected, repaired, compiles"
+            elif scenario.get("assert_rename"):
                 # E4+M3：更名经 journal 落盘（committed 记录），演练回归通过
                 plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
@@ -375,10 +437,13 @@ def run_scenario(scenario: dict) -> None:
                 note = "; save persistence verified across a full process restart"
             elif scenario.get("assert_pause_menu"):
                 # M7：暂停目标必须留下真实暂停代码 + pause-exercise 行为证据。
-                script_files = sorted((SCRATCH / "scripts").glob("*.gd")) if (SCRATCH / "scripts").exists() else []
-                if not script_files:
-                    raise AssertionError(f"[{name}] completed without any generated scripts")
-                controller = script_files[0].read_text(encoding="utf-8")
+                # 脚本从计划工件取（R1 注入的故障脚本会排在字母序最前）
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                if not script_artifact:
+                    raise AssertionError(f"[{name}] plan carries no script artifact")
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
                 for marker in ("set_paused", "ui_cancel", "PROCESS_MODE_ALWAYS", "PauseLabel"):
                     if marker not in controller:
                         raise AssertionError(f"[{name}] pause controller lacks {marker}: {controller[:200]}")
@@ -415,8 +480,25 @@ def run_scenario(scenario: dict) -> None:
             print(f"[{name}] completed after {iteration + 1} run calls; "
                   f"executed {len(executed)} steps in the last slice{note}", flush=True)
             return
+        if state == "waiting" and scenario.get("accept_recovery_stall") and iteration >= 4:
+            # R4 边界的另一种形态：冲突让修复链在等待里无进展地循环
+            # （5 轮进度不变）——同样必须保留手工修改。
+            manual = (SCRATCH / "scripts" / "manual.gd").read_text(encoding="utf-8")
+            if "hand-tuned" not in manual:
+                raise AssertionError(f"[{name}] manual edit overwritten during stall: {manual[:120]}")
+            print(f"[{name}] honest boundary: no-progress wait loop preserves the hand edit", flush=True)
+            return
         if state == "needs_input" or (state == "waiting" and run.get("needs_input")):
             needs = run.get("needs_input", run.get("needs", []))
+            if scenario.get("accept_recovery_stall"):
+                # R4 诚实边界：冲突让修复链停在 needs_input（不给内容就不
+                # 动手工修改）——手工内容必须原样保留。
+                manual = (SCRATCH / "scripts" / "manual.gd").read_text(encoding="utf-8")
+                if "hand-tuned" not in manual:
+                    raise AssertionError(f"[{name}] manual edit was overwritten: {manual[:120]}")
+                print(f"[{name}] honest boundary: stalled at {scenario['accept_recovery_stall']} "
+                      f"without touching the hand edit", flush=True)
+                return
             print(f"[{name}] needs_input detail: {_failing_receipt_summaries(name)}", flush=True)
             last_exec = run.get("executed", [])[-1] if run.get("executed") else {}
             print(f"[{name}] last executed step: {json.dumps(last_exec, ensure_ascii=False)[:2000]}", flush=True)
