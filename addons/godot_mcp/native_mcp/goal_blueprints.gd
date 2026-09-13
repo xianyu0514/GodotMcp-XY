@@ -36,6 +36,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 迭代/调参动词：闭环的"玩→调→再玩"——基线→调 SPEED→对比位移。
+const TUNING_KEYWORDS: Array[String] = [
+	"tune", "tuning", "faster", "slower", "snappier", "more responsive", "too fast", "too slow",
+	"更跟手", "手感", "调快", "调慢", "太快", "太慢", "更灵敏", "调参", "迭代",
+]
+
 # 音效动词：事件（收集）触发生成的提示音——juice 维度，行为可断言。
 const AUDIO_KEYWORDS: Array[String] = [
 	"sound", "sfx", "sound effect", "audio", "beep", "juice",

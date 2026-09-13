@@ -784,6 +784,18 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["action_name"] = "move_up"
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["action_name"] = "move_up"
+	# 迭代调参（tune_apply）：SPEED 常量按方向调整（260 → 360/180）
+	if tool_name == "modify_script" and String(task.get("step_key", "")) == "tune_apply":
+		var tune_info: Dictionary = parse_tuning_goal(String(plan.get("goal", "")))
+		if not tune_info.is_empty():
+			var tune_artifacts: Dictionary = (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) \
+				if (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) is Dictionary else {}
+			arguments["script_path"] = String(tune_artifacts.get("script", ""))
+			arguments["old_text"] = "const SPEED: float = 260.0"
+			arguments["content"] = "const SPEED: float = %.1f" % float(tune_info["new_speed"])
+			arguments["validate"] = true
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["tune"] = str(tune_info["direction"])
 	# E4 更名目标：rename 步骤缺 symbol_name 时从目标解析（受控模式），
 	# 并默认真写（工作流上下文里 dry_run 预览不推进目标）。
 	if tool_name == "rename_script_symbol" and not arguments.has("symbol_name"):
@@ -813,7 +825,42 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		# 存档链的两侧门禁各有专属演练（N3）：save_play = 移动+存档+断言
 		# 写盘；restore_play = 全新进程读档后断言磁盘状态回归。
 		var play_step_key: String = String(task.get("step_key", ""))
-		if play_step_key == "save_play":
+		if play_step_key == "tune_baseline":
+			# 基线 = 短右腿健全性（全量演练的绝对阈值假设原点起步——
+			# 基线门在主门之后跑，起点已漂移，真机 E2E 抓到）。
+			arguments["steps"] = [
+				{"action": "move_right", "pressed": true, "wait_ms": 400,
+					"assert": {"expression": "position.x", "operator": "gt", "expected": 15,
+						"description": "baseline: the player moves at base speed"}},
+				{"action": "move_right", "pressed": false, "wait_ms": 80},
+			]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-baseline"
+		elif play_step_key == "tune_verify":
+			# 对比用帧步进位移 delta（起点无关，且区分调参前后）：
+			# 20 物理帧保持下 260px/s ≈ 86px，360px/s ≈ 120px，180px/s ≈ 60px。
+			# 阈值卡在两档之间——"调了但没变"不可能通过。
+			var verify_tune: Dictionary = parse_tuning_goal(String(plan.get("goal", "")))
+			var verify_threshold: float = 100.0
+			var verify_operator: String = "gt"
+			var verify_note: String = "tuned faster: 20-frame hold delta > 100px (base was ~86)"
+			if not verify_tune.is_empty() and String(verify_tune["direction"]) == "slower":
+				verify_threshold = 75.0
+				verify_operator = "lt"
+				verify_note = "tuned slower: 20-frame hold delta < 75px (base was ~86)"
+			arguments["steps"] = [
+				{"action": "move_right", "pressed": true, "wait_frames": 20},
+				{"action": "move_right", "pressed": false, "wait_ms": 80},
+			]
+			arguments["deterministic"] = true
+			arguments["sample"] = [{"label": "px", "expression": "position.x"}]
+			arguments["assertions"] = [{
+				"metric": "px", "aggregate": "delta", "operator": verify_operator,
+				"expected": verify_threshold, "description": verify_note,
+			}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-verify"
+		elif play_step_key == "save_play":
 			arguments["steps"] = _save_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "save-exercise"
@@ -1145,6 +1192,25 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected") -> A
 			"description": "the win label shows after collection"}
 	})
 	return steps
+
+## 迭代调参（闭环的"玩→调→再玩"）：解析方向 → 派生 modify_script 的
+## SPEED 调整（跟手/更快 = +30%，更慢 = -30%）→ 对比演练断言位移朝
+## 请求方向变化。"调了但没变"不算完成。
+static func parse_tuning_goal(goal: String) -> Dictionary:
+	var text: String = " " + goal.to_lower() + " "
+	if not GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.TUNING_KEYWORDS):
+		return {}
+	var wants_faster: bool = text.contains("faster") or text.contains("snappier") \
+		or text.contains("more responsive") or text.contains("too slow") \
+		or text.contains("更跟手") or text.contains("更灵敏") or text.contains("调快") \
+		or text.contains("太快") or text.contains("跟手")
+	var wants_slower: bool = text.contains("slower") or text.contains("too fast") \
+		or text.contains("调慢") or text.contains("太慢")
+	if wants_faster:
+		return {"direction": "faster", "new_speed": 360.0}
+	if wants_slower:
+		return {"direction": "slower", "new_speed": 180.0}
+	return {}
 
 ## 音效腿（P3 juice）：收集事件后断言声音确实播放过（可观测计数器，
 ## 不依赖声音时序窗口）。
