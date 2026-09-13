@@ -115,6 +115,7 @@ static func controller_script(objective: String) -> String:
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
+		source += "var _enemy_time: float = 0.0\n"
 		source += "const ENEMY_HOME_X: float = 300.0\n"
 		source += "const ENEMY_RANGE: float = 80.0\n"
 		source += "const ENEMY_SPEED: float = 120.0\n"
@@ -224,8 +225,10 @@ static func controller_script(objective: String) -> String:
 			source += "\tif Input.is_action_just_pressed(\"save_game\"):\n"
 			source += "\t\tlast_save_ok = save_game()\n"
 		if needs_enemy:
-			source += "\t# 敌人巡逻：正弦往返，位置始终可解算（行为可断言）。\n"
-			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(Time.get_ticks_msec() / 1000.0 * (TAU / 4.0)) * ENEMY_RANGE\n"
+			source += "\t# 敌人巡逻：相位从生成起累积（墙钟正弦会在整周期处过零，\n"
+			source += "\t# 断言窗口踩到过零点会闪断——真机 E2E 抓到）。\n"
+			source += "\t_enemy_time += _delta\n"
+			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(_enemy_time * (TAU / 6.0)) * ENEMY_RANGE\n"
 		if needs_pause:
 			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
 			source += "\t\tset_paused(not get_tree().paused)\n"

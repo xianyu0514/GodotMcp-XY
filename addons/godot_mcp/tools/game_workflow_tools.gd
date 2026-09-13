@@ -489,6 +489,13 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 	if final_status in ["planned", ""]:
 		final_status = "running"
 	var final_extra: Dictionary = {}
+	if final_status == "completed":
+		# 跨目标账本（P4 v1）：目标完成时把 goal + 工件持久记录到项目级
+		# 账本（与 plan 文件分开——plan 会被 replace，账本累积）。后续目标
+		# 的回归与冲突检测以此为准（修复/新目标不得破坏既有目标产物）。
+		var ledger_extra: Dictionary = _append_goal_ledger(plan)
+		if not ledger_extra.is_empty():
+			final_extra["goal_ledger"] = ledger_extra
 	if final_status != "completed" and atomic_calls >= max_steps:
 		metrics["yield_count"] = int(metrics.get("yield_count", 0)) + 1
 		final_extra["yield_reason"] = "execution_slice_complete"
@@ -1332,6 +1339,34 @@ func _journal_autoclose(plan: Dictionary, uncertain_task: Dictionary) -> Diction
 
 ## 变更日志恢复处方：pending 操作逐条分类 + 该工具最近提交记录的磁盘
 ## 复判。recommended 汇总最保守的下一步（conflict 优先）。
+## 跨目标账本：res://.mcp/goal_ledger.json 累积每个已完成目标的
+## {goal, completed_at, artifacts, scripts}。轻量 v1——只记录与读回；
+## 回归演练（重跑既往目标的行为断言）是下一片。
+func _append_goal_ledger(plan: Dictionary) -> Dictionary:
+	var ledger_path: String = "res://.mcp/goal_ledger.json"
+	var ledger: Dictionary = {"goals": []}
+	if FileAccess.file_exists(ledger_path):
+		var read_file: FileAccess = FileAccess.open(ledger_path, FileAccess.READ)
+		if read_file:
+			var parsed: Variant = JSON.parse_string(read_file.get_as_text())
+			read_file.close()
+			if parsed is Dictionary and (parsed as Dictionary).get("goals") is Array:
+				ledger = parsed
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts: Dictionary = workflow.get("artifacts", {}) if workflow.get("artifacts") is Dictionary else {}
+	var entry: Dictionary = {
+		"goal": plan.get("goal", ""),
+		"completed_at": Time.get_datetime_string_from_system(true, true),
+		"artifacts": artifacts.duplicate(true),
+	}
+	(ledger["goals"] as Array).append(entry)
+	var save_file: FileAccess = FileAccess.open(ledger_path, FileAccess.WRITE)
+	if save_file == null:
+		return {}
+	save_file.store_string(JSON.stringify(ledger, "\t"))
+	save_file.close()
+	return {"recorded_goals": (ledger["goals"] as Array).size()}
+
 func _change_journal_recovery(tool_name: String) -> Dictionary:
 	var out: Dictionary = {}
 	var pending_verdicts: Array = []
