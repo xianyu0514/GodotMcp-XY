@@ -46,6 +46,14 @@ enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")
 N1_GOAL = ("Minimal 2D game: an arrow-key player that moves and stops when "
            "hitting a wall. Validate the scripts and verify the movement.")
 
+E4_GOAL = ("Arrow-key movement with a coin, then rename the field "
+           "coins_collected to gems_collected across the scripts.")
+
+TASKS = {
+    "N1": {"goal": N1_GOAL, "plan_path": "res://.mcp/self_agent_plan.json"},
+    "E4": {"goal": E4_GOAL, "plan_path": "res://.mcp/self_agent_e4_plan.json"},
+}
+
 
 def event(kind: str, payload: dict) -> None:
     entry = {"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "run_id": "self_agent_n1",
@@ -128,9 +136,15 @@ def cmd_oracle_n1() -> int:
     checks.append(("displacement", bool(r.get("passed"))))
     # 2) no runtime errors
     r2 = tool_call("play_and_verify", {"steps": [{"wait_ms": 400}]})
-    checks.append(("no_runtime_errors", bool(r2.get("passed"))
-                   and int(r2.get("runtime_errors", [{}])[0].get("error_count", 1) if r2.get("runtime_errors") else 0) >= 0
-                   and not r2.get("runtime_errors")))
+    checks.append(("no_runtime_errors", bool(r2.get("passed")) and not r2.get("runtime_errors")))
+    # 3) wall collision: the blueprint builds the walls (wall verb in the goal);
+    # hold right long enough to reach the right wall and assert no penetration.
+    wr = tool_call("play_and_verify", {"steps": [
+        {"action": "move_right", "pressed": True, "wait_ms": 1600,
+         "assert": {"expression": "position.x", "operator": "lt", "expected": 240,
+             "description": "player stopped by the wall (no penetration past x=250)"}},
+        {"action": "move_right", "pressed": False, "wait_ms": 80}]})
+    checks.append(("wall_collision", bool(wr.get("passed"))))
     verdict = all(ok for _, ok in checks)
     for name, ok in checks:
         event("oracle_check", {"check": name, "passed": ok})

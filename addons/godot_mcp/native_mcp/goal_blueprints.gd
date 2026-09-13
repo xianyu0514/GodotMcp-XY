@@ -36,6 +36,12 @@ const PAUSE_KEYWORDS: Array[String] = [
 const SAVE_KEYWORDS: Array[String] = [
 	"save/load", "save game", "saving", "存档", "读档", "保存进度", "持久化",
 ]
+# 墙动词：StaticBody2D 边界墙（N1 的"撞墙停止"、Q2 内容深度起点）。
+const WALL_KEYWORDS: Array[String] = [
+	"wall", "walls", "blocked by", "stops when hitting",
+	"墙", "墙壁", "撞墙",
+]
+
 # 迭代/调参动词：闭环的"玩→调→再玩"——基线→调 SPEED→对比位移。
 const TUNING_KEYWORDS: Array[String] = [
 	"tune", "tuning", "faster", "slower", "snappier", "more responsive", "too fast", "too slow",
@@ -78,6 +84,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"enemy": _mentions(objective, ENEMY_KEYWORDS),
 		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
 		"audio": _mentions(objective, AUDIO_KEYWORDS),
+		"wall": _mentions(objective, WALL_KEYWORDS),
 	}
 
 static func has_any_verb(verbs: Dictionary) -> bool:
@@ -88,7 +95,8 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("save", false)) \
 		or bool(verbs.get("enemy", false)) \
 		or bool(verbs.get("state_machine", false)) \
-		or bool(verbs.get("audio", false))
+		or bool(verbs.get("audio", false)) \
+		or bool(verbs.get("wall", false))
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
 static func controller_script(objective: String) -> String:
@@ -211,6 +219,19 @@ static func controller_script(objective: String) -> String:
 		source += "\twav.stereo = false\n"
 		source += "\twav.data = pcm\n"
 		source += "\t_sfx_player.stream = wav\n"
+	if bool(verbs.get("wall", false)):
+		source += "\t# 边界墙（世界坐标，延迟挂载）：右墙在 +250，左墙在 -40——\n"
+		source += "\t# CharacterBody2D + 碰撞体天然被 StaticBody2D 阻挡。\n"
+		source += "\tfor wall_spec in [{\"name\": \"WallRight\", \"x\": 250.0}, {\"name\": \"WallLeft\", \"x\": -40.0}]:\n"
+		source += "\t\tvar wall_node := StaticBody2D.new()\n"
+		source += "\t\twall_node.name = wall_spec[\"name\"]\n"
+		source += "\t\twall_node.position = Vector2(wall_spec[\"x\"], 0.0)\n"
+		source += "\t\tvar wall_collision := CollisionShape2D.new()\n"
+		source += "\t\tvar wall_shape := RectangleShape2D.new()\n"
+		source += "\t\twall_shape.size = Vector2(16.0, 240.0)\n"
+		source += "\t\twall_collision.shape = wall_shape\n"
+		source += "\t\twall_node.add_child(wall_collision)\n"
+		source += "\t\tget_parent().add_child.call_deferred(wall_node)\n"
 	if needs_state:
 		source += "\tvar title_layer := CanvasLayer.new()\n"
 		source += "\ttitle_layer.name = \"TitleLayer\"\n"
