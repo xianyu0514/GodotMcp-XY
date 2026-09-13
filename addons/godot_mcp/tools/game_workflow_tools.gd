@@ -316,6 +316,25 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		return cas
 	var workflow: Dictionary = plan["workflow"]
 	var state: String = String(workflow.get("state", ""))
+	# 全新计划（尚未执行任何步骤）启动前停掉残留游戏：上一目标完成时其
+	# 游戏可能仍在运行，run_project 的 already_running 复用会让本目标的
+	# 行为断言在旧进程/旧位置上跑（E4 校准实测：重试从 x=+810 起步）。
+	var plan_needs_runtime: bool = false
+	for task_value in plan.get("tasks", []):
+		var task_tool: String = String((task_value as Dictionary).get("tool_name", ""))
+		if task_tool in ["play_and_verify", "run_project", "install_runtime_probe",
+				"assert_no_runtime_errors", "assert_performance_budget", "get_runtime_screenshot"]:
+			plan_needs_runtime = true
+			break
+	if state == "planned" and plan_needs_runtime:
+		var stale_stop: Variant = await _server_core.invoke_planned_tool("stop_project",
+			{"allow_window": true}, _authorization(plan, {}, false))
+		if stale_stop is Dictionary and not (stale_stop as Dictionary).has("error"):
+			var stopped_scene: String = String((stale_stop as Dictionary).get("last_played_scene",
+				(stale_stop as Dictionary).get("scene", "")))
+			if not stopped_scene.is_empty():
+				var stop_metrics: Dictionary = _engine.workflow_metrics(plan)
+				stop_metrics["stale_game_stops"] = int(stop_metrics.get("stale_game_stops", 0)) + 1
 	if state in ["cancelled", "completed", "replan_required", "recovery_required"]:
 		var terminal: Dictionary = _engine.summarize(plan)
 		terminal["status"] = state
@@ -1083,9 +1102,11 @@ func _remap_play_steps(action: String, old_key: String, new_key: String) -> Arra
 		"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(new_key, 0), "pressed": true},
 		"wait_ms": 400,
 		"screenshot": true,
-		"assert": {"expression": axis_expression, "operator": axis_moved_operator,
-			"expected": axis_moved_value,
+		"assert": ({"expression": axis_expression, "displacement_min": 15,
 			"description": "new binding moves the player (%s)" % new_key}
+			if axis_moved_operator == "gt" else
+			{"expression": axis_expression, "displacement_max": -15,
+			"description": "new binding moves the player (%s)" % new_key})
 	})
 	steps.append({
 		"event": {"type": "key", "keycode": KEY_NAME_TO_CODE.get(new_key, 0), "pressed": false},
@@ -1104,28 +1125,30 @@ func _movement_play_steps() -> Array:
 	# 阈值留 6 倍余量抗帧率抖动。没有这些断言，门禁只证明"按键已发送"，
 	# 控制器没挂上/没在动也照样通过（#124 真机 E2E 抓到过这种空转）。
 	var steps: Array = []
+	# 位移相对断言（步前快照差值）：起点无关——E4 校准实测残留游戏从
+	# x=+810 起步时原点绝对阈值必败；快照式在任何起点都测"本腿走够没有"。
 	steps.append({
 		"action": "move_right", "pressed": true, "wait_ms": 400,
-		"assert": {"expression": "position.x", "operator": "gt", "expected": 15,
+		"assert": {"expression": "position.x", "displacement_min": 15,
 			"description": "player moved right while holding move_right"}
 	})
 	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
 	steps.append({
 		"action": "move_left", "pressed": true, "wait_ms": 600,
-		"assert": {"expression": "position.x", "operator": "lt", "expected": -15,
-			"description": "player moved left past the origin while holding move_left"}
+		"assert": {"expression": "position.x", "displacement_max": -15,
+			"description": "player moved left while holding move_left"}
 	})
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 80})
 	steps.append({
 		"action": "move_up", "pressed": true, "wait_ms": 400,
-		"assert": {"expression": "position.y", "operator": "lt", "expected": -15,
+		"assert": {"expression": "position.y", "displacement_max": -15,
 			"description": "player moved up while holding move_up"}
 	})
 	steps.append({"action": "move_up", "pressed": false, "wait_ms": 80})
 	steps.append({
 		"action": "move_down", "pressed": true, "wait_ms": 600,
-		"assert": {"expression": "position.y", "operator": "gt", "expected": 15,
-			"description": "player moved down past the origin while holding move_down"}
+		"assert": {"expression": "position.y", "displacement_min": 15,
+			"description": "player moved down while holding move_down"}
 	})
 	steps.append({"action": "move_down", "pressed": false, "wait_ms": 80})
 	return steps

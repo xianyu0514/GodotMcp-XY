@@ -280,7 +280,16 @@ func test_hundred_capability_goal_completes_across_adaptive_slices() -> void:
 	assert_lte(largest_slice, 32, "Adaptive slices bound one turn's load without bounding the goal")
 	assert_eq(_core.registrations.size(), 2,
 		"One hundred hidden capabilities still add no always-on MCP schemas")
-	assert_eq(int((result.get("metrics", {}) as Dictionary).get("atomic_calls", 0)), _core.calls.size())
+	# 全新计划启动会先 stop_project（残留游戏防护，运行时类计划必发）：
+	# 该次调用计入 calls 但不计入 atomic_calls——这里核对的语义是"每个
+	# 原子调用都有记账"，容许恰好一次的启动期 stop。
+	var atomic_calls: int = int((result.get("metrics", {}) as Dictionary).get("atomic_calls", 0))
+	var stop_calls: int = 0
+	for call_value in _core.calls:
+		if String((call_value as Dictionary).get("tool_name", "")) == "stop_project":
+			stop_calls += 1
+	assert_eq(atomic_calls, _core.calls.size() - stop_calls,
+		"every atomic call is accounted (plus exactly the fresh-plan stop)")
 
 func test_default_workflow_responses_are_compact_projections() -> void:
 	var planned: Dictionary = _tools._tool_plan_game_workflow({
@@ -491,7 +500,7 @@ func test_missing_current_step_inputs_waits_without_invoking_or_losing_plan() ->
 	})
 	assert_eq(result.get("status", ""), "needs_input")
 	# 移动目标在两次巡检与 create_scene 之间合法执行四个方向输入注册步骤。
-	assert_eq(_core.calls.size(), 6, "Two inspections plus four directional input steps run before the missing build input")
+	assert_eq(_core.calls.size(), 7, "Two inspections plus four directional input steps (+1 fresh-plan stale-game stop) run before the missing build input")
 	assert_true("scene_name" in result.get("missing_inputs", []))
 	assert_eq((result.get("input_schema", {}) as Dictionary).get("required", []), ["scene_name"],
 		"The current atomic schema is returned on demand without expanding tools/list")
@@ -897,8 +906,8 @@ func test_movement_goal_derives_displacement_assertions() -> void:
 				leg_actions.append(step.get("action"))
 				if step.has("assert"):
 					var leg_assert: Dictionary = step.get("assert", {})
-					assert_true(["gt", "lt"].has(String(leg_assert.get("operator", ""))),
-						"displacement asserts use signed comparisons")
+					assert_true(leg_assert.has("displacement_min") or leg_assert.has("displacement_max"),
+						"displacement asserts are snapshot-relative (signed deltas)")
 					assert_count += 1
 		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down", "move_right"],
 			"four directions + the feel hold leg")

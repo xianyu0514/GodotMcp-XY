@@ -158,7 +158,14 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		# 值不变——证明"该输入已失效"（E1 旧键证明）。绝对阈值在非原点
 		# 起步时不可用（真机 E2E 抓到），位移相对才是正确语义。
 		var inert_pre_value: Variant = null
-		if step.has("assert") and step["assert"] is Dictionary 				and bool((step["assert"] as Dictionary).get("inert", false)):
+		var displacement_mode: String = ""
+		if step.has("assert") and step["assert"] is Dictionary:
+			if bool((step["assert"] as Dictionary).get("inert", false)):
+				displacement_mode = "inert"
+			elif (step["assert"] as Dictionary).has("displacement_min") \
+					or (step["assert"] as Dictionary).has("displacement_max"):
+				displacement_mode = "delta"
+		if not displacement_mode.is_empty():
 			var pre_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
 				_merge_runtime_params(params, {
 					"expression": String((step["assert"] as Dictionary).get("expression", "")),
@@ -209,15 +216,42 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		# 步内断言：紧跟本步求值（如 Esc 后世界应立即暂停），顺序即证据。
 		if step.has("assert") and step["assert"] is Dictionary:
 			var step_assert: Dictionary = step["assert"]
-			if inert_pre_value != null:
-				step_assert = step_assert.duplicate()
-				step_assert["expected"] = inert_pre_value
-				step_assert.erase("inert")
-			var step_result: Dictionary = await _evaluate_runtime_assertion(params, step_assert, "step %d" % i)
-			step_result["step"] = i
-			if bool(step_result.get("passed", false)):
-				passed_count += 1
-			assertion_results.append(step_result)
+			if displacement_mode == "delta" and inert_pre_value != null:
+				# 位移相对断言：步前快照 + 步后差值比较——起点无关（E4 校准
+				# 实测：残留游戏从 x=+810 起步时原点绝对阈值必败）。
+				var post_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+					_merge_runtime_params(params, {
+						"expression": String(step_assert.get("expression", "")),
+						"timeout_ms": 300}))
+				var post_value: float = float(post_read.get("last_value", inert_pre_value))
+				var delta_value: float = post_value - float(inert_pre_value)
+				var delta_passed: bool = true
+				if step_assert.has("displacement_min"):
+					delta_passed = delta_passed and delta_value >= float(step_assert["displacement_min"])
+				if step_assert.has("displacement_max"):
+					delta_passed = delta_passed and delta_value <= float(step_assert["displacement_max"])
+				var delta_result: Dictionary = {
+					"description": String(step_assert.get("description", step_assert.get("expression", ""))),
+					"expression": String(step_assert.get("expression", "")),
+					"passed": delta_passed,
+					"before_value": inert_pre_value,
+					"after_value": post_value,
+					"displacement": delta_value,
+					"step": i,
+				}
+				if bool(delta_passed):
+					passed_count += 1
+				assertion_results.append(delta_result)
+			else:
+				if displacement_mode == "inert" and inert_pre_value != null:
+					step_assert = step_assert.duplicate()
+					step_assert["expected"] = inert_pre_value
+					step_assert.erase("inert")
+				var step_result: Dictionary = await _evaluate_runtime_assertion(params, step_assert, "step %d" % i)
+				step_result["step"] = i
+				if bool(step_result.get("passed", false)):
+					passed_count += 1
+				assertion_results.append(step_result)
 		executed += 1
 		# 进度通知：step index -> progress（steps 为总进度）。
 		_send_tool_progress(progress_token, executed, steps.size(), "step")
