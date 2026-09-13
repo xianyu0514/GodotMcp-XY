@@ -251,7 +251,7 @@ static func controller_script(objective: String) -> String:
 	if bool(verbs.get("wall", false)):
 		source += "\t# 边界墙（世界坐标，延迟挂载）：右墙在 +250，左墙在 -40——\n"
 		source += "\t# CharacterBody2D + 碰撞体天然被 StaticBody2D 阻挡。\n"
-		source += "\tfor wall_spec in [{\"name\": \"WallRight\", \"x\": 250.0}, {\"name\": \"WallLeft\", \"x\": -40.0}]:\n"
+		source += "\tfor wall_spec in [{\"name\": \"WallRight\", \"x\": 500.0}, {\"name\": \"WallLeft\", \"x\": -40.0}]:\n"
 		source += "\t\tvar wall_node := StaticBody2D.new()\n"
 		source += "\t\twall_node.name = wall_spec[\"name\"]\n"
 		source += "\t\twall_node.position = Vector2(wall_spec[\"x\"], 0.0)\n"

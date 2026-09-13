@@ -156,11 +156,17 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	# 在其上叠加（目标 B 的金币/敌人/墙进入目标 A 的场景，而非重建）。
 	if FileAccess.file_exists(scene_path):
 		root_node.free()
+		# 累积模式：打开既有场景，让后续 attach/save 操作作用于它
+		var editor_interface: EditorInterface = _get_editor_interface()
+		if editor_interface:
+			var loaded: PackedScene = load(scene_path)
+			if loaded is PackedScene:
+				editor_interface.open_scene_from_path(scene_path)
 		return {
 			"status": "existing",
 			"scene_path": scene_path,
 			"root_node_type": root_node_type,
-			"note": "scene already exists; goals accumulate on it"
+			"note": "scene already exists; opened for accumulation"
 		}
 	var error: Error = ResourceSaver.save(packed_scene, scene_path)
 	
