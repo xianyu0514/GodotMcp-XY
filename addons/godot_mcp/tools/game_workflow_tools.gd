@@ -1146,6 +1146,16 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected") -> A
 	})
 	return steps
 
+## 音效腿（P3 juice）：收集事件后断言声音确实播放过（可观测计数器，
+## 不依赖声音时序窗口）。
+func _audio_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"assert": {"expression": "sfx_played_count", "operator": "gt", "expected": 0,
+			"description": "collecting the coin played a sound effect"}
+	})
+	return steps
+
 ## 状态机腿（P4 游戏流）：标题→玩法→胜利→重开，四次转移全部断言。
 func _state_play_steps() -> Array:
 	var steps: Array = []
@@ -1261,6 +1271,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.WIN_KEYWORDS)
 		var wants_enemy: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.ENEMY_KEYWORDS)
 		var wants_state: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
+		var wants_audio: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.AUDIO_KEYWORDS)
+		if wants_audio:
+			wants_collect = true
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
 			if wants_movement:
@@ -1289,6 +1302,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				play_steps.append_array(_enemy_play_steps())
 			if wants_pause:
 				play_steps.append_array(_pause_play_steps())
+			if wants_audio:
+				play_steps.append_array(_audio_play_steps())
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
@@ -1301,6 +1316,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				labels.append("enemy")
 			if wants_pause:
 				labels.append("pause")
+			if wants_audio:
+				labels.append("audio")
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
 		else:
