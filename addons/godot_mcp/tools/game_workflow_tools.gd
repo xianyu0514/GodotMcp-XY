@@ -1100,16 +1100,32 @@ func _pause_play_steps() -> Array:
 	steps.append({"action": "ui_cancel", "pressed": false, "wait_ms": 120})
 	return steps
 
+## 手感腿（P3 feel 预算）：确定性帧步进下按住输入 20 物理帧并逐帧采样
+## position.x——delta ≥ 60px 证明输入→响应延迟 ≤ ~3 帧（20 帧全速理论
+## 86px）。非确定性墙钟等待测不了延迟，只有帧步进能。
+func _movement_feel_legs() -> Dictionary:
+	return {
+		"steps": [
+			{"action": "move_right", "pressed": true, "wait_frames": 20},
+			{"action": "move_right", "pressed": false, "wait_ms": 80},
+		],
+		"sample": [{"label": "px", "expression": "position.x"}],
+		"assertions": [{
+			"metric": "px", "aggregate": "delta", "operator": "gt", "expected": 60,
+			"description": "input->response feel: 20 held physics frames displace >= 60px (response within ~3 frames)"
+		}],
+	}
+
 ## 收集腿（评测 N1 收集面）：走到金币（蓝图固定 (180,120)）→ 断言
 ## 金币已消失、计数已增、胜利标签已显示——收集/胜利的行为证据。
-func _collect_play_steps() -> Array:
+func _collect_play_steps(coin_count_expression: String = "coins_collected") -> Array:
 	var steps: Array = []
 	# 磁吸金币在 (200, 0)：从回归末位置的任意偏移出发，1200ms 右移横扫
 	# 必然穿越拾取窗（开环 + 宽恕半径 = 确定性收集）。
 	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1200})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
-		"assert": {"expression": "coins_collected", "operator": "gt", "expected": 0,
+		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
 			"description": "the coin was collected by the sweep"}
 	})
 	steps.append({
@@ -1242,10 +1258,26 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			var play_steps: Array = []
 			if wants_movement:
 				play_steps.append_array(_movement_play_steps())
+				# 手感预算：确定性采样 + 帧步进响应断言（只在移动目标激活）
+				var feel: Dictionary = _movement_feel_legs()
+				play_steps.append_array(feel["steps"])
+				arguments["deterministic"] = true
+				arguments["sample"] = feel["sample"]
+				var feel_assertions: Array = arguments.get("assertions", [])
+				if not (feel_assertions is Array):
+					feel_assertions = []
+				feel_assertions.append_array(feel["assertions"])
+				arguments["assertions"] = feel_assertions
 			if wants_state:
 				play_steps.append_array(_state_play_steps())
 			elif wants_collect:
-				play_steps.append_array(_collect_play_steps())
+				# 更名目标若改的就是计数字段，演练表达式跟随新符号名
+				# （rename 已落盘，旧名不再存在——断言旧名必失败）。
+				var coin_expression: String = "coins_collected"
+				if not rename_info.is_empty() \
+						and String(rename_info.get("symbol_name", "")) == "coins_collected":
+					coin_expression = String(rename_info.get("new_name", "coins_collected"))
+				play_steps.append_array(_collect_play_steps(coin_expression))
 			if wants_enemy:
 				play_steps.append_array(_enemy_play_steps())
 			if wants_pause:
