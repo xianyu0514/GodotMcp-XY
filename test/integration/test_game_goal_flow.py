@@ -66,6 +66,15 @@ SCENARIOS = [
         "assert_playable": False,
     },
     {
+        "name": "enemy-patrol",
+        "objective": (
+            "Arrow-key movement with a patrolling enemy that kills and "
+            "respawns the player on touch."
+        ),
+        "profiles": ["gameplay_feature"],
+        "assert_enemy": True,
+    },
+    {
         "name": "input-remap",
         "objective": (
             "Arrow-key movement, then rebind move_up from the W key to the "
@@ -261,7 +270,20 @@ def run_scenario(scenario: dict) -> None:
             executed = run.get("executed", [])
             if not executed:
                 raise AssertionError(f"[{name}] completed without any executed steps")
-            if scenario.get("assert_remap"):
+            if scenario.get("assert_enemy"):
+                plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
+                plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+                script_artifact = str(plan_data.get("workflow", {}).get("artifacts", {}).get("script", ""))
+                controller = (SCRATCH / script_artifact.replace("res://", "")).read_text(encoding="utf-8")
+                for marker in ("_on_enemy_touched", "deaths_count", "ENEMY_HOME_X"):
+                    if marker not in controller:
+                        raise AssertionError(f"[{name}] enemy controller lacks {marker}")
+                play_tasks = [t for t in plan_data.get("tasks", []) if t.get("tool_name") == "play_and_verify"]
+                derived = {str((t.get("derived_inputs", {}) or {}).get("steps", "")) for t in play_tasks}
+                if not any("enemy" in d for d in derived):
+                    raise AssertionError(f"[{name}] no play gate derived enemy legs: {derived}")
+                note = "; enemy patrol/death/respawn verified in-run"
+            elif scenario.get("assert_remap"):
                 # E1：门禁必须派生 remap 演练（旧键失效 + 新键生效的事件级断言）
                 plan_file = SCRATCH / ".mcp" / "goal_flow_plan.json"
                 plan_data = json.loads(plan_file.read_text(encoding="utf-8"))

@@ -167,8 +167,39 @@ func test_resolve_root_and_dot_map_to_edited_scene_root() -> void:
 	root.queue_free()
 
 func test_pure_movement_goal_generates_compilable_ready() -> void:
-	# 真机 E2E 抓到的缺陷：纯移动目标（无收集/暂停/存档动词）生成空 _ready
-	# 函数体——非法 GDScript。空体必须补 pass。
+	# 真机 E2E 抓到的两个缺陷的回归：空 _ready 函数体（非法 GDScript）与
+	# 无碰撞形状的玩家（Area2D 永远探测不到——收集/死亡从未生效）。
+	# 结构性修复：_ready 恒定生成玩家碰撞体，两个缺陷都不再可能出现。
 	var source: String = BlueprintsScript.controller_script("arrow-key movement controller")
-	assert_true(source.contains("func _ready() -> void:\n\tpass\n"),
-		"empty _ready body must be padded with pass")
+	assert_true(source.contains("func _ready() -> void:\n\tvar body_shape := CollisionShape2D.new()"),
+		"every controller gets a player collision shape in _ready")
+	assert_false(source.contains("func _ready() -> void:\n\n"),
+		"_ready is never empty")
+
+func test_enemy_goal_generates_patrol_and_respawn() -> void:
+	var source: String = BlueprintsScript.controller_script("patrolling enemies that kill and respawn the player")
+	assert_true(source.contains("ENEMY_HOME_X"), "enemy constants present")
+	assert_true(source.contains("_on_enemy_touched"), "death handler present")
+	assert_true(source.contains("deaths_count"), "observable death counter")
+	assert_true(source.contains("position = Vector2.ZERO"), "respawn resets the player")
+	assert_true(source.contains("_physics_process"), "patrol runs in the physics frame")
+
+func test_collect_and_enemy_exercises_derived() -> void:
+	# 派生组合：收集目标带收集腿，敌人目标带巡逻/重生腿
+	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
+	var collect_steps: Array = tools._collect_play_steps()
+	var descriptions: Array = []
+	for step_value in collect_steps:
+		var leg: Dictionary = (step_value.get("assert", {}) as Dictionary)
+		if not leg.is_empty():
+			descriptions.append(str(leg.get("expression", "")))
+	assert_has(descriptions, "coins_collected")
+	assert_has(descriptions, "_win_label.text")
+	var enemy_steps: Array = tools._enemy_play_steps()
+	var enemy_expressions: Array = []
+	for step_value in enemy_steps:
+		var leg2: Dictionary = (step_value.get("assert", {}) as Dictionary)
+		if not leg2.is_empty():
+			enemy_expressions.append(str(leg2.get("expression", "")))
+	assert_has(enemy_expressions, "deaths_count")
+	assert_has(enemy_expressions, "position.x")

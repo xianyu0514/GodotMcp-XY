@@ -627,8 +627,16 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			and not artifacts.has("script"):
 		var script_slug: String = step_profile.replace("_", "-") if not step_profile.is_empty() else "game"
 		var step_id: String = String(task.get("id", ""))
-		arguments["script_path"] = "res://scripts/%s%s.gd" % [
-			script_slug, "-" + step_id if not step_id.is_empty() else ""]
+		var script_suffix: String = "-" + step_id if not step_id.is_empty() else ""
+		# 跨目标同 step_id 复用同一派生路径：create_script 拒绝覆盖已存在
+		# 文件（安全特性），同路径的第二个目标会 replan——对已存在文件
+		# 自动递增后缀（真机 E2E：连续 gameplay 目标在同一项目累积时抓到）。
+		var script_candidate: String = "res://scripts/%s%s.gd" % [script_slug, script_suffix]
+		var collision_index: int = 2
+		while FileAccess.file_exists(script_candidate):
+			script_candidate = "res://scripts/%s%s-%d.gd" % [script_slug, script_suffix, collision_index]
+			collision_index += 1
+		arguments["script_path"] = script_candidate
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["script_path"] = arguments["script_path"]
 	# 目标命中蓝图动词时生成真实可运行内容（调用方显式 content 永远优先）。
@@ -1092,6 +1100,50 @@ func _pause_play_steps() -> Array:
 	steps.append({"action": "ui_cancel", "pressed": false, "wait_ms": 120})
 	return steps
 
+## 收集腿（评测 N1 收集面）：走到金币（蓝图固定 (180,120)）→ 断言
+## 金币已消失、计数已增、胜利标签已显示——收集/胜利的行为证据。
+func _collect_play_steps() -> Array:
+	var steps: Array = []
+	# 磁吸金币在 (200, 0)：从回归末位置的任意偏移出发，1200ms 右移横扫
+	# 必然穿越拾取窗（开环 + 宽恕半径 = 确定性收集）。
+	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1200})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
+		"assert": {"expression": "coins_collected", "operator": "gt", "expected": 0,
+			"description": "the coin was collected by the sweep"}
+	})
+	steps.append({
+		"assert": {"expression": "_coin_area == null or not is_instance_valid(_coin_area)",
+			"expected": true,
+			"description": "the collected coin is gone from the tree"}
+	})
+	steps.append({
+		"assert": {"expression": "_win_label.text", "expected": "You Win!",
+			"description": "the win label shows after collection"}
+	})
+	return steps
+
+## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
+## 断言敌人确实在动；穿越敌人巡逻带 → 断言死亡计数与重生回原点。
+func _enemy_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"wait_ms": 500,
+		"assert": {"expression": "abs(_enemy.position.x - 300.0)", "operator": "gt", "expected": 10,
+			"description": "the enemy patrols away from its home position"}
+	})
+	steps.append({
+		"action": "move_right", "pressed": true, "wait_ms": 1600,
+		"assert": {"expression": "deaths_count", "operator": "gt", "expected": 0,
+			"description": "touching the enemy killed the player"}
+	})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 300,
+		"assert": {"expression": "position.x", "operator": "lt", "expected": 220,
+			"description": "the player respawned left of the enemy band after death (no reset means x >= 404)"}
+	})
+	return steps
+
 ## 存档腿（评测 N3）：右移制造非平凡状态 → 按 save_game（F5）→ 断言写盘
 ## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
 func _save_play_steps() -> Array:
@@ -1149,20 +1201,36 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			String(remap_info["new_key"]))
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["steps"] = "remap-exercise"
-	elif wants_movement or wants_pause:
-		var play_steps: Array = []
-		if wants_movement:
-			play_steps.append_array(_movement_play_steps())
-		if wants_pause:
-			play_steps.append_array(_pause_play_steps())
-		arguments["steps"] = play_steps
-		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-		task["derived_inputs"]["steps"] = "movement+pause-exercise" if wants_movement and wants_pause \
-			else ("movement-exercise" if wants_movement else "pause-exercise")
 	else:
-		arguments["steps"] = [{"wait_ms": 600}]
-		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-		task["derived_inputs"]["steps"] = "boot-settle"
+		var wants_collect: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS) \
+			or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.WIN_KEYWORDS)
+		var wants_enemy: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.ENEMY_KEYWORDS)
+		if wants_movement or wants_pause or wants_collect or wants_enemy:
+			var play_steps: Array = []
+			if wants_movement:
+				play_steps.append_array(_movement_play_steps())
+			if wants_collect:
+				play_steps.append_array(_collect_play_steps())
+			if wants_enemy:
+				play_steps.append_array(_enemy_play_steps())
+			if wants_pause:
+				play_steps.append_array(_pause_play_steps())
+			arguments["steps"] = play_steps
+			var labels: Array = []
+			if wants_movement:
+				labels.append("movement")
+			if wants_collect:
+				labels.append("collect")
+			if wants_enemy:
+				labels.append("enemy")
+			if wants_pause:
+				labels.append("pause")
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
+		else:
+			arguments["steps"] = [{"wait_ms": 600}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "boot-settle"
 
 ## journal 自动收口（R3）：仅当该工具最近一次提交写入按磁盘复判为
 ## complete_receipt、且不存在 pending 冲突时，把不确定步骤补回执收口。
