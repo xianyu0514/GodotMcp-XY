@@ -515,6 +515,10 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		var ledger_extra: Dictionary = _append_goal_ledger(plan)
 		if not ledger_extra.is_empty():
 			final_extra["goal_ledger"] = ledger_extra
+		# Q1 账本重验：既往目标的脚本仍能编译（跨目标编译回归）。
+		var prior_compile: Dictionary = await _verify_ledger_scripts(plan)
+		if not prior_compile.is_empty():
+			final_extra["ledger_regression"] = prior_compile
 	if final_status != "completed" and atomic_calls >= max_steps:
 		metrics["yield_count"] = int(metrics.get("yield_count", 0)) + 1
 		final_extra["yield_reason"] = "execution_slice_complete"
@@ -810,11 +814,22 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			var tune_artifacts: Dictionary = (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) \
 				if (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) is Dictionary else {}
 			arguments["script_path"] = String(tune_artifacts.get("script", ""))
-			arguments["old_text"] = "const SPEED: float = 260.0"
-			arguments["content"] = "const SPEED: float = %.1f" % float(tune_info["new_speed"])
+			# Q4：按参数名派生 old_text/content（SPEED/ENEMY_SPEED/MAGNET）
+			var tune_param: String = String(tune_info.get("param", "SPEED"))
+			var tune_old: String = String(tune_info.get("old", "260.0"))
+			var tune_new: String = String(tune_info.get("new", "360.0"))
+			if tune_param == "SPEED":
+				arguments["old_text"] = "const SPEED: float = %s" % tune_old
+				arguments["content"] = "const SPEED: float = %s" % tune_new
+			elif tune_param == "ENEMY_SPEED":
+				arguments["old_text"] = "const ENEMY_SPEED: float = %s" % tune_old
+				arguments["content"] = "const ENEMY_SPEED: float = %s" % tune_new
+			elif tune_param == "MAGNET":
+				arguments["old_text"] = "coin_shape.radius = %s" % tune_old
+				arguments["content"] = "coin_shape.radius = %s" % tune_new
 			arguments["validate"] = true
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["tune"] = str(tune_info["direction"])
+			task["derived_inputs"]["tune"] = "%s %s->%s" % [tune_param, tune_old, tune_new]
 	# E4 更名目标：rename 步骤缺 symbol_name 时从目标解析（受控模式），
 	# 并默认真写（工作流上下文里 dry_run 预览不推进目标）。
 	if tool_name == "rename_script_symbol" and not arguments.has("symbol_name"):
@@ -1229,10 +1244,21 @@ static func parse_tuning_goal(goal: String) -> Dictionary:
 		or text.contains("太快") or text.contains("跟手")
 	var wants_slower: bool = text.contains("slower") or text.contains("too fast") \
 		or text.contains("调慢") or text.contains("太慢")
+	# Q4 多参数调参：除 SPEED 外，敌速/磁吸半径/跳跃力也可调
+	if text.contains("enemy") or text.contains("敌人"):
+		if wants_faster:
+			return {"direction": "faster", "param": "ENEMY_SPEED", "old": "120.0", "new": "180.0"}
+		if wants_slower:
+			return {"direction": "slower", "param": "ENEMY_SPEED", "old": "120.0", "new": "80.0"}
+	if text.contains("magnet") or text.contains("磁吸") or text.contains("pickup radius") or text.contains("拾取"):
+		if wants_faster:
+			return {"direction": "faster", "param": "MAGNET", "old": "90", "new": "130"}
+		if wants_slower:
+			return {"direction": "slower", "param": "MAGNET", "old": "90", "new": "60"}
 	if wants_faster:
-		return {"direction": "faster", "new_speed": 360.0}
+		return {"direction": "faster", "param": "SPEED", "old": "260.0", "new": "360.0"}
 	if wants_slower:
-		return {"direction": "slower", "new_speed": 180.0}
+		return {"direction": "slower", "param": "SPEED", "old": "260.0", "new": "180.0"}
 	return {}
 
 ## 音效腿（P3 juice）：收集事件后断言声音确实播放过（可观测计数器，
@@ -1445,6 +1471,35 @@ func _journal_autoclose(plan: Dictionary, uncertain_task: Dictionary) -> Diction
 
 ## 变更日志恢复处方：pending 操作逐条分类 + 该工具最近提交记录的磁盘
 ## 复判。recommended 汇总最保守的下一步（conflict 优先）。
+## Q1 账本重验：既往目标的工件脚本是否仍存在（存在性检查——
+## 编译由 verify_scripts 全项目覆盖，这里确认账本里的脚本没被删）。
+func _verify_ledger_scripts(plan: Dictionary) -> Dictionary:
+	var ledger_path: String = "res://.mcp/goal_ledger.json"
+	if not FileAccess.file_exists(ledger_path):
+		return {}
+	var file: FileAccess = FileAccess.open(ledger_path, FileAccess.READ)
+	if file == null:
+		return {}
+	var parsed: Variant = JSON.parse_string(file.get_as_text())
+	file.close()
+	if not (parsed is Dictionary):
+		return {}
+	var goals: Array = (parsed as Dictionary).get("goals", [])
+	if goals.size() <= 1:
+		return {}  # 首个目标无需回归
+	var missing: Array = []
+	for goal_value in goals:
+		var goal_entry: Dictionary = goal_value
+		var artifacts: Dictionary = goal_entry.get("artifacts", {})
+		var script_path: String = String(artifacts.get("script", ""))
+		if not script_path.is_empty() and not FileAccess.file_exists(script_path):
+			missing.append({"goal": goal_entry.get("goal", ""), "missing_script": script_path})
+	return {
+		"prior_goals": goals.size(),
+		"missing_scripts": missing,
+		"regression_clean": missing.is_empty(),
+	}
+
 ## 跨目标账本：res://.mcp/goal_ledger.json 累积每个已完成目标的
 ## {goal, completed_at, artifacts, scripts}。轻量 v1——只记录与读回；
 ## 回归演练（重跑既往目标的行为断言）是下一片。
