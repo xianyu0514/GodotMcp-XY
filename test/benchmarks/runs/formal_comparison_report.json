@@ -1,0 +1,41 @@
+{
+  "total_runs": 7,
+  "by_task": {
+    "E1": {
+      "pass": 0,
+      "total": 1,
+      "avg_s": 37.1
+    },
+    "E4": {
+      "pass": 0,
+      "total": 1,
+      "avg_s": 4.1
+    },
+    "N1": {
+      "pass": 1,
+      "total": 1,
+      "avg_s": 8.1
+    },
+    "N2": {
+      "pass": 1,
+      "total": 1,
+      "avg_s": 6.0
+    },
+    "N3": {
+      "pass": 1,
+      "total": 1,
+      "avg_s": 14.7
+    },
+    "N4": {
+      "pass": 0,
+      "total": 1,
+      "avg_s": 3.5
+    },
+    "R3": {
+      "pass": 0,
+      "total": 1,
+      "avg_s": 38.3
+    }
+  },
+  "overall_pass_rate": "43%"
+}
