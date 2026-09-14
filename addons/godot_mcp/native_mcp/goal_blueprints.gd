@@ -409,6 +409,9 @@ static func controller_script(objective: String) -> String:
 			source += "\t\tcoins_collected = 0\n"
 			source += "\t\tif _title_label != null:\n"
 			source += "\t\t\t_title_label.visible = true\n"
+			# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
+			if needs_pickup:
+				source += "\t\t_respawn_coins()\n"
 			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
 			source += "\t\treturn\n"
 		if needs_save:
@@ -456,6 +459,23 @@ static func controller_script(objective: String) -> String:
 		source += "\tget_tree().paused = value\n"
 		source += "\tif _pause_label != null:\n"
 		source += "\t\t_pause_label.visible = value\n"
+	if needs_state and needs_pickup:
+		source += "\nfunc _respawn_coins() -> void:\n"
+		source += "\tvar parent := get_parent()\n"
+		source += "\tfor child in parent.get_children():\n"
+		source += "\t\tif child is Area2D and String(child.name).begins_with(\"Coin\"):\n"
+		source += "\t\t\tchild.queue_free()\n"
+		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
+		source += "\t\tvar new_coin := Area2D.new()\n"
+		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"
+		source += "\t\tnew_coin.position = Vector2(200 + coin_index * 180, 0)\n"
+		source += "\t\tvar coin_col := CollisionShape2D.new()\n"
+		source += "\t\tvar coin_shape := CircleShape2D.new()\n"
+		source += "\t\tcoin_shape.radius = 90\n"
+		source += "\t\tcoin_col.shape = coin_shape\n"
+		source += "\t\tnew_coin.add_child(coin_col)\n"
+		source += "\t\tnew_coin.body_entered.connect(_on_coin_touched)\n"
+		source += "\t\tparent.add_child(new_coin)\n"
 	if needs_enemy:
 		source += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
 		source += "\tif body != self:\n"
