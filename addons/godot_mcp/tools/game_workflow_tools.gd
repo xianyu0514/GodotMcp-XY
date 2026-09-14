@@ -15,6 +15,7 @@ const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow
 const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blueprints.gd")
 const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 const LayoutVerifierScript = preload("res://addons/godot_mcp/tools/layout_verifier.gd")
+const FeatureRegistryScript = preload("res://addons/godot_mcp/tools/feature_registry.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -509,6 +510,15 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		final_status = "running"
 	var final_extra: Dictionary = {}
 	if final_status == "completed":
+		# Phase B 功能归属注册：记录本功能的动词与验收步骤，
+		# 供后续目标的旧行为重验使用
+		var feature_verbs: Dictionary = GoalBlueprintsScript.match_verbs(String(plan.get("goal", "")))
+		if GoalBlueprintsScript.has_any_verb(feature_verbs):
+			var feature_args: Dictionary = {}
+			_derive_generic_play_steps(plan, {}, "play_and_verify", feature_args)
+			var feature_exercise: Array = feature_args.get("steps", [])
+			FeatureRegistryScript.record_feature(String(plan.get("goal", "")),
+				feature_verbs, feature_exercise, "")
 		# 跨目标账本（P4 v1）：目标完成时把 goal + 工件持久记录到项目级
 		# 账本（与 plan 文件分开——plan 会被 replace，账本累积）。后续目标
 		# 的回归与冲突检测以此为准（修复/新目标不得破坏既有目标产物）。
@@ -673,9 +683,40 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	if tool_name == "create_script" and not arguments.has("content") \
 			and step_profile == "gameplay_feature":
 		var objective: String = String(plan.get("goal", ""))
-		var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
-		if not blueprint_source.is_empty():
-			arguments["content"] = blueprint_source
+		# Phase B 增量编辑：注册表已有功能时不覆盖控制器——只为新动词
+		# 生成增量代码块，追加到现有脚本（差距分析：每个目标重建控制器
+		# 而非增量合成是连续修改失效的根因）。
+		var registered: Dictionary = FeatureRegistryScript.registered_verbs()
+		var new_verbs: Dictionary = GoalBlueprintsScript.match_verbs(objective)
+		var has_new: bool = false
+		for verb_key in new_verbs.keys():
+			if bool(new_verbs[verb_key]) and not bool(registered.get(verb_key, false)):
+				has_new = true
+				break
+		if not registered.is_empty() and not has_new:
+			# 所有动词已注册：增量编辑模式，使用 modify_script 追加新块
+			var existing_script: String = String((plan.get("workflow", {}) as Dictionary \
+				).get("artifacts", {}).get("script", ""))
+			if not existing_script.is_empty() and FileAccess.file_exists(existing_script):
+				# 读取现有脚本，在末尾追加新动词的功能块
+				var current_source: String = FileAccess.get_file_as_string(existing_script)
+				var incremental: String = _generate_incremental_blocks(new_verbs, current_source)
+				if not incremental.is_empty():
+					arguments["content"] = current_source + incremental
+					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+					task["derived_inputs"]["content"] = "incremental-append"
+				else:
+					arguments["content"] = current_source
+					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+					task["derived_inputs"]["content"] = "reuse-existing"
+			else:
+				var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
+				if not blueprint_source.is_empty():
+					arguments["content"] = blueprint_source
+		else:
+			var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
+			if not blueprint_source.is_empty():
+				arguments["content"] = blueprint_source
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["content"] = "goal-blueprint"
 	# 读取脚本步骤无工件可引用时，回退到磁盘上项目脚本目录的第一个脚本。
@@ -1086,6 +1127,138 @@ static func parse_remap_goal(goal: String) -> Dictionary:
 		if key_hits.size() > 1:
 			old_key = String(key_hits[0]["key"])
 	return {"action": action, "old_key": old_key, "new_key": new_key}
+
+## Phase B 增量代码块生成：只为尚未注册的动词生成功能块，追加到现有
+## 控制器末尾（不覆盖已有功能）。返回空串表示无需追加。
+func _generate_incremental_blocks(new_verbs: Dictionary, current_source: String) -> String:
+	var blocks: String = ""
+	# 收集动词（需要收集代码块）
+	if bool(new_verbs.get("collectible", false)) and not current_source.contains("_coin_area"):
+		blocks += "\n# --- incremental: collectible ---\n"
+		blocks += "var _coin_area: Area2D\n"
+		blocks += "const COINS_TO_WIN: int = 1\n"
+		blocks += "var coins_collected: int = 0\n"
+		blocks += "\nfunc _spawn_coin() -> void:\n"
+		blocks += "\t_coin_area = Area2D.new()\n"
+		blocks += "\t_coin_area.name = \"Coin\"\n"
+		blocks += "\t_coin_area.position = Vector2(200, 0)\n"
+		blocks += "\tvar coin_col := CollisionShape2D.new()\n"
+		blocks += "\tvar coin_shape := CircleShape2D.new()\n"
+		blocks += "\tcoin_shape.radius = 90\n"
+		blocks += "\tcoin_col.shape = coin_shape\n"
+		blocks += "\t_coin_area.add_child(coin_col)\n"
+		blocks += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
+		blocks += "\tget_parent().add_child.call_deferred(_coin_area)\n"
+		blocks += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+		blocks += "\tif body != self:\n"
+		blocks += "\t\treturn\n"
+		blocks += "\tcoins_collected += 1\n"
+		blocks += "\t_coin_area.queue_free()\n"
+	# 暂停动词
+	if bool(new_verbs.get("pause", false)) and not current_source.contains("set_paused"):
+		blocks += "\n# --- incremental: pause ---\n"
+		blocks += "var _pause_label: Label\n"
+		blocks += "\nfunc _setup_pause() -> void:\n"
+		blocks += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
+		blocks += "\tvar pause_layer := CanvasLayer.new()\n"
+		blocks += "\tpause_layer.name = \"PauseLayer\"\n"
+		blocks += "\tadd_child(pause_layer)\n"
+		blocks += "\t_pause_label = Label.new()\n"
+		blocks += "\t_pause_label.name = \"PauseLabel\"\n"
+		blocks += "\t_pause_label.text = \"Paused - press Esc to resume\"\n"
+		blocks += "\t_pause_label.visible = false\n"
+		blocks += "\tpause_layer.add_child(_pause_label)\n"
+		blocks += "\nfunc set_paused(value: bool) -> void:\n"
+		blocks += "\tget_tree().paused = value\n"
+		blocks += "\tif _pause_label != null:\n"
+		blocks += "\t\t_pause_label.visible = value\n"
+	# 敌人动词
+	if bool(new_verbs.get("enemy", false)) and not current_source.contains("_enemy"):
+		blocks += "\n# --- incremental: enemy ---\n"
+		blocks += "var _enemy: Area2D\n"
+		blocks += "var deaths_count: int = 0\n"
+		blocks += "var _enemy_time: float = 0.0\n"
+		blocks += "const ENEMY_HOME_X: float = 300.0\n"
+		blocks += "const ENEMY_RANGE: float = 80.0\n"
+		blocks += "\nfunc _setup_enemy() -> void:\n"
+		blocks += "\t_enemy = Area2D.new()\n"
+		blocks += "\t_enemy.name = \"Enemy\"\n"
+		blocks += "\t_enemy.position = Vector2(ENEMY_HOME_X, 0)\n"
+		blocks += "\tvar enemy_col := CollisionShape2D.new()\n"
+		blocks += "\tvar enemy_shape := RectangleShape2D.new()\n"
+		blocks += "\tenemy_shape.size = Vector2(16, 240)\n"
+		blocks += "\tenemy_col.shape = enemy_shape\n"
+		blocks += "\t_enemy.add_child(enemy_col)\n"
+		blocks += "\t_enemy.body_entered.connect(_on_enemy_touched)\n"
+		blocks += "\tget_parent().add_child.call_deferred(_enemy)\n"
+		blocks += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
+		blocks += "\tif body != self:\n"
+		blocks += "\t\treturn\n"
+		blocks += "\tdeaths_count += 1\n"
+		blocks += "\tposition = Vector2.ZERO\n"
+	# 存档动词
+	if bool(new_verbs.get("save", false)) and not current_source.contains("save_game"):
+		blocks += "\n# --- incremental: save/load ---\n"
+		blocks += "const SAVE_PATH := \"user://save_game.json\"\n"
+		blocks += "var last_save_ok: bool = false\n"
+		blocks += "\nfunc save_game() -> bool:\n"
+		blocks += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
+		blocks += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)\n"
+		blocks += "\tif file == null:\n"
+		blocks += "\t\treturn false\n"
+		blocks += "\tfile.store_string(JSON.stringify(data))\n"
+		blocks += "\treturn true\n"
+		blocks += "\nfunc load_game() -> bool:\n"
+		blocks += "\tif not FileAccess.file_exists(SAVE_PATH):\n"
+		blocks += "\t\treturn false\n"
+		blocks += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.READ)\n"
+		blocks += "\tif file == null:\n"
+		blocks += "\t\treturn false\n"
+		blocks += "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())\n"
+		blocks += "\tif not (parsed is Dictionary):\n"
+		blocks += "\t\treturn false\n"
+		blocks += "\tcoins_collected = int(parsed.get(\"coins\", 0))\n"
+		blocks += "\tposition = Vector2(float(parsed.get(\"x\", 0.0)), float(parsed.get(\"y\", 0.0)))\n"
+		blocks += "\treturn true\n"
+	# 音效动词
+	if bool(new_verbs.get("audio", false)) and not current_source.contains("_sfx_player"):
+		blocks += "\n# --- incremental: audio ---\n"
+		blocks += "var sfx_played_count: int = 0\n"
+		blocks += "var _sfx_player: AudioStreamPlayer\n"
+		blocks += "\nfunc _setup_sfx() -> void:\n"
+		blocks += "\t_sfx_player = AudioStreamPlayer.new()\n"
+		blocks += "\t_sfx_player.name = \"SfxPlayer\"\n"
+		blocks += "\tadd_child(_sfx_player)\n"
+		blocks += "\t_sfx_player.stream = _generate_blip()\n"
+		blocks += "\nfunc _generate_blip() -> AudioStreamWAV:\n"
+		blocks += "\tvar sample_rate: int = 22050\n"
+		blocks += "\tvar frames: int = int(0.4 * sample_rate)\n"
+		blocks += "\tvar pcm := PackedByteArray()\n"
+		blocks += "\tpcm.resize(frames * 2)\n"
+		blocks += "\tfor i in range(frames):\n"
+		blocks += "\t\tvar decay: float = 1.0 - float(i) / float(frames)\n"
+		blocks += "\t\tvar square: float = 1.0 if fmod(float(i) * 880.0 / float(sample_rate), 2.0) < 1.0 else -1.0\n"
+		blocks += "\t\tpcm.encode_s16(i * 2, int(square * decay * 12000.0))\n"
+		blocks += "\tvar wav := AudioStreamWAV.new()\n"
+		blocks += "\twav.format = AudioStreamWAV.FORMAT_16_BITS\n"
+		blocks += "\twav.mix_rate = sample_rate\n"
+		blocks += "\twav.data = pcm\n"
+		blocks += "\treturn wav\n"
+	# 墙动词
+	if bool(new_verbs.get("wall", false)) and not current_source.contains("WallRight"):
+		blocks += "\n# --- incremental: walls ---\n"
+		blocks += "\nfunc _setup_walls() -> void:\n"
+		blocks += "\tfor wall_spec in [{\"name\": \"WallRight\", \"x\": 500.0}, {\"name\": \"WallLeft\", \"x\": -40.0}]:\n"
+		blocks += "\t\tvar wall_node := StaticBody2D.new()\n"
+		blocks += "\t\twall_node.name = wall_spec[\"name\"]\n"
+		blocks += "\t\twall_node.position = Vector2(wall_spec[\"x\"], 0)\n"
+		blocks += "\t\tvar wall_col := CollisionShape2D.new()\n"
+		blocks += "\t\tvar wall_shape := RectangleShape2D.new()\n"
+		blocks += "\t\twall_shape.size = Vector2(16, 240)\n"
+		blocks += "\t\twall_col.shape = wall_shape\n"
+		blocks += "\t\twall_node.add_child(wall_col)\n"
+		blocks += "\t\tget_parent().add_child.call_deferred(wall_node)\n"
+	return blocks
 
 ## 换键演练（E1 行为证据，事件级）：旧键按下必须**无效**（位移不变），
 ## 新键按下必须生效（位移达成），再跑其余轴向回归——防误伤。
