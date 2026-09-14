@@ -926,6 +926,22 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			]
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-baseline"
+		elif play_step_key == "tune_verify" and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "ENEMY_SPEED":
+			# 敌速调参验证：测敌人巡逻频率（单位时间位置变化量），不测玩家——
+			# 差距分析：调参验收采样玩家 x 位移是牛头不对马嘴。
+			arguments["steps"] = [
+				{"wait_ms": 600,
+				 "assert": {"expression": "_enemy.position.x", "inert": true,
+					 "description": "enemy patrol speed baseline (position changing)"}},
+			]
+			arguments["deterministic"] = true
+			arguments["sample"] = [{"label": "ex", "expression": "_enemy.position.x"}]
+			arguments["assertions"] = [{
+				"metric": "ex", "aggregate": "max", "operator": "gt", "expected": 310.0,
+				"description": "tuned enemy patrol reaches beyond home+10 (ENEMY_SPEED drives oscillation)"
+			}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-verify-enemy"
 		elif play_step_key == "tune_verify":
 			# 对比用帧步进位移 delta（起点无关，且区分调参前后）：
 			# 20 物理帧保持下 260px/s ≈ 86px，360px/s ≈ 120px，180px/s ≈ 60px。
@@ -1526,8 +1542,11 @@ func _state_play_steps() -> Array:
 ## 断言敌人确实在动；穿越敌人巡逻带 → 断言死亡计数与重生回原点。
 func _enemy_play_steps() -> Array:
 	var steps: Array = []
+	# 敌人巡逻断言：绝对位置 + 更长等待（800ms）——ENEMY_SPEED/60 驱动
+	# 的正弦周期约 3s，800ms 时 sin 值远离零点的概率高。不用 inert
+	# （inert 测"不变"，但敌人在动——语义相反，实测抓到）。
 	steps.append({
-		"wait_ms": 500,
+		"wait_ms": 800,
 		"assert": {"expression": "abs(_enemy.position.x - 300.0)", "operator": "gt", "expected": 10,
 			"description": "the enemy patrols away from its home position"}
 	})
