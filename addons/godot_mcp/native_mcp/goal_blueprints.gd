@@ -239,6 +239,7 @@ static func controller_script(objective: String) -> String:
 	source += "\nvar coins_collected: int = 0\n"
 	if needs_pickup:
 		source += "var _coin_area: Area2D\nvar _win_label: Label\n"
+		source += "var _hud_label: Label\n"
 	if needs_pause:
 		source += "var _pause_label: Label\n"
 	if needs_save:
@@ -319,6 +320,11 @@ static func controller_script(objective: String) -> String:
 		source += "\t_win_label.text = \"\"\n"
 		source += "\t_win_label.position = Vector2(40, 20)\n"
 		source += "\tcanvas.add_child(_win_label)\n"
+		source += "\t_hud_label = Label.new()\n"
+		source += "\t_hud_label.name = \"HudLabel\"\n"
+		source += "\t_hud_label.position = Vector2(10, 10)\n"
+		source += "\t_hud_label.text = \"Coins: 0/%d\" % COINS_TO_WIN\n"
+		source += "\tcanvas.add_child(_hud_label)\n"
 		ready_body_emitted = true
 	if needs_save:
 		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
@@ -411,7 +417,9 @@ static func controller_script(objective: String) -> String:
 			source += "\t# 敌人巡逻：相位从生成起累积（墙钟正弦会在整周期处过零，\n"
 			source += "\t# 断言窗口踩到过零点会闪断——真机 E2E 抓到）。\n"
 			source += "\t_enemy_time += _delta\n"
-			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(_enemy_time * (TAU / 6.0)) * ENEMY_RANGE\n"
+			source += "\t# ENEMY_SPEED 实际驱动巡逻频率（差距分析：常量存在但不参与\n"
+			source += "\t# 公式——调参后行为不变）。速度越快，往返周期越短。\n"
+			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(_enemy_time * (ENEMY_SPEED / 60.0)) * ENEMY_RANGE\n"
 		if needs_pause:
 			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
 			source += "\t\tset_paused(not get_tree().paused)\n"
@@ -431,6 +439,8 @@ static func controller_script(objective: String) -> String:
 			source += "\t\treturn\n"
 			source += "\tcoins_collected += 1\n"
 			source += "\tcoins_changed.emit(coins_collected)\n"
+			source += "\tif _hud_label != null:\n"
+			source += "\t\t_hud_label.text = \"Coins: %d/%d\" % [coins_collected, COINS_TO_WIN]\n"
 			if bool(verbs.get("audio", false)):
 				source += "\tif _sfx_player != null:\n"
 				source += "\t\t_sfx_player.play()\n"
