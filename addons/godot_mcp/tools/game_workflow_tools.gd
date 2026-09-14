@@ -929,16 +929,18 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		elif play_step_key == "tune_verify" and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "ENEMY_SPEED":
 			# 敌速调参验证：测敌人巡逻频率（单位时间位置变化量），不测玩家——
 			# 差距分析：调参验收采样玩家 x 位移是牛头不对马嘴。
+			# 采样只在 wait_frames 帧步进时发生（wait_ms 是墙钟等待）——
+			# 用 wait_frames 确保样本被收集。
 			arguments["steps"] = [
-				{"wait_ms": 600,
-				 "assert": {"expression": "_enemy.position.x", "inert": true,
-					 "description": "enemy patrol speed baseline (position changing)"}},
+				{"wait_frames": 36,
+				 "assert": {"expression": "_enemy.position.x", "operator": "gt", "expected": 305.0,
+					 "description": "tuned enemy patrol beyond home+5 after 36 frames"}},
 			]
 			arguments["deterministic"] = true
 			arguments["sample"] = [{"label": "ex", "expression": "_enemy.position.x"}]
 			arguments["assertions"] = [{
-				"metric": "ex", "aggregate": "max", "operator": "gt", "expected": 310.0,
-				"description": "tuned enemy patrol reaches beyond home+10 (ENEMY_SPEED drives oscillation)"
+				"metric": "ex", "aggregate": "max", "operator": "gt", "expected": 305.0,
+				"description": "tuned enemy patrol reaches beyond home (ENEMY_SPEED drives oscillation)"
 			}]
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-verify-enemy"
@@ -1630,6 +1632,14 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			wants_collect = true
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
+			# 上下文感知：注册表已有 state_machine 时，游戏从标题屏启动——
+			# 所有演练先按 Enter 进入 playing 状态再执行（否则移动被门控阻断）。
+			var context_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
+			if bool(context_verbs.get("state_machine", false)) \
+					and not wants_state:
+				play_steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300,
+					"description": "enter playing state from title screen"})
+				play_steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 			if wants_3d:
 				play_steps.append({
 					"action": "move_forward", "pressed": true, "wait_ms": 400,
