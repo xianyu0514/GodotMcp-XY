@@ -58,6 +58,9 @@ func before_each() -> void:
 	_tools.register_tools(_core)
 	_plan_path = "user://game_workflow_tool_test_%s.json" % str(get_instance_id())
 	_remove_plan()
+	# 按需演练测试隔离：清除功能注册表（累积模式会让主演练只测新功能腿）
+	if FileAccess.file_exists("res://.mcp/feature_registry.json"):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path("res://.mcp/feature_registry.json"))
 
 func after_each() -> void:
 	_remove_plan()

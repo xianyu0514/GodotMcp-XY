@@ -912,18 +912,6 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
 	if tool_name == "play_and_verify" and not arguments.has("steps"):
 		var play_objective: String = String(plan.get("goal", ""))
-		# 调参目标 + 累积模式：主演练缩减为最小健全性（游戏能跑）。
-		# 全量演练（敌人死亡+存档加载+暂停切换）在调参场景下失败面
-		# 太大，掩盖了真正的调参验证（真机审计：07-09 全因主演练
-		# 的功能交互失败，而非调参本身有问题）。
-		var tuning_in_accumulation: bool = not parse_tuning_goal(play_objective).is_empty() \
-				and not FeatureRegistryScript.registered_verbs().is_empty()
-		if tuning_in_accumulation \
-				and String(task.get("step_key", "")) == "play_verify":
-			arguments["steps"] = [{"wait_ms": 600}]
-			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["steps"] = "tune-boot-settle"
-			return {}
 		# 存档链的两侧门禁各有专属演练（N3）：save_play = 移动+存档+断言
 		# 写盘；restore_play = 全新进程读档后断言磁盘状态回归。
 		var play_step_key: String = String(task.get("step_key", ""))
@@ -989,8 +977,43 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "save-restore-exercise"
 		else:
-			_derive_generic_play_steps(plan, task, tool_name, arguments)
-			# generic 分支保留在 _derive_generic_play_steps 中实现
+			# 按需演练：累积模式下（注册表非空），非首目标的主演练只测
+			# 新增功能的腿 + boot-settle——不重测全部功能（每个目标的演练
+			# 与本目标新增内容成比例，旧功能由各自目标的门禁和账本回归覆盖）。
+			var accumulation_mode: bool = not FeatureRegistryScript.registered_verbs().is_empty()
+			if accumulation_mode:
+				var is_tune: bool = not parse_tuning_goal(play_objective).is_empty()
+				if is_tune:
+					arguments["steps"] = [{"wait_ms": 600}]
+					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+					task["derived_inputs"]["steps"] = "tune-boot-settle"
+				else:
+					var reg_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
+					var goal_verbs: Dictionary = GoalBlueprintsScript.match_verbs(play_objective)
+					var on_demand: Array = [{"wait_ms": 600}]
+					if bool(reg_verbs.get("state_machine", false)) \
+							and not bool(goal_verbs.get("state_machine", false)):
+						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+					if bool(goal_verbs.get("state_machine", false)):
+						on_demand.append_array(_state_play_steps())
+					if bool(goal_verbs.get("movement", false)) and not bool(reg_verbs.get("movement", false)):
+						on_demand.append_array(_movement_play_steps())
+					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false))) \
+							and not bool(reg_verbs.get("collectible", false)):
+						on_demand.append_array(_collect_play_steps())
+					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
+						on_demand.append_array(_enemy_play_steps())
+					if bool(goal_verbs.get("pause", false)) and not bool(reg_verbs.get("pause", false)):
+						on_demand.append_array(_pause_play_steps())
+					if bool(goal_verbs.get("save", false)) and not bool(reg_verbs.get("save", false)):
+						on_demand.append_array(_save_play_steps())
+					arguments["steps"] = on_demand
+					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+					task["derived_inputs"]["steps"] = "on-demand" if on_demand.size() > 1 else "revisit-boot-settle"
+			else:
+				_derive_generic_play_steps(plan, task, tool_name, arguments)
+				# generic 分支保留在 _derive_generic_play_steps 中实现
 	# 首个主题步骤同理：按 profile 推导确定性 .tres 路径。
 	if tool_name == "create_theme" and not arguments.has("theme_path") \
 			and not artifacts.has("theme"):
