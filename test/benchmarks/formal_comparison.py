@@ -132,6 +132,22 @@ def main():
                 print(f"SKIP: unknown task {task_id}")
                 continue
             for rep in range(1, args.reps + 1):
+                # Task isolation: clear the feature registry between tasks —
+                # shared registry causes cumulative merge to mix 2D/3D features
+                # from different tasks (N4 3D after N1-N3 2D = invalid controller)
+                rpc("stop_project", {"allow_window": True}, args.port, 900)
+                for state_file in ["res://.mcp/feature_registry.json",
+                                    "res://.mcp/goal_ledger.json",
+                                    "res://.mcp/change_journal.json"]:
+                    sp = SCRATCH / state_file.replace("res://", "")
+                    if sp.exists():
+                        sp.unlink()
+                # Also remove generated scripts/scenes to prevent collisions
+                import shutil as _sh
+                for d in ["scripts", "scenes"]:
+                    dp = SCRATCH / d
+                    if dp.exists():
+                        _sh.rmtree(dp, ignore_errors=True)
                 result = run_task(task_id.strip(), goal, args.port, rep)
                 results.append(result)
                 print(f"[{task_id} r{rep}] {result['outcome']} ({result['elapsed_s']}s) state={result.get('state','')}")
