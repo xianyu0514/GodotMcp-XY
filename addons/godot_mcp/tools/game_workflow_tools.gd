@@ -687,7 +687,20 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		# 动词，生成包含所有功能的完整控制器——每次替换都是功能超集，
 		# 旧功能不丢失（差距分析：只追加独立函数不接入 _ready 是行不通的，
 		# 正确做法是累积动词集 → 完整控制器）。
-		var registered_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
+		# 调参目标例外：不重新生成控制器——调参链用 modify_script 改参数，
+		# 重新生成会覆盖调参（累积模式下调参目标全部失败的根因）。
+		var is_tuning_goal: bool = not parse_tuning_goal(objective).is_empty()
+		var registered_verbs: Dictionary = {}
+		if is_tuning_goal:
+			var existing_for_tune: String = String((plan.get("workflow", {}) as Dictionary).get("artifacts", {}).get("script", ""))
+			if not existing_for_tune.is_empty() and FileAccess.file_exists(existing_for_tune):
+				arguments["content"] = FileAccess.get_file_as_string(existing_for_tune)
+				task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+				task["derived_inputs"]["content"] = "reuse-for-tuning"
+			else:
+				registered_verbs = FeatureRegistryScript.registered_verbs()
+		else:
+			registered_verbs = FeatureRegistryScript.registered_verbs()
 		var goal_verbs: Dictionary = GoalBlueprintsScript.match_verbs(objective)
 		# 累积合并仅当目标本身命中蓝图动词时生效——非玩法目标（如导出、
 		# 本地化）不应被合并拉入游戏控制器。
