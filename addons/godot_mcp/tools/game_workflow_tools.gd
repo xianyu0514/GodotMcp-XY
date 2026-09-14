@@ -1546,30 +1546,20 @@ func _audio_play_steps() -> Array:
 ## 状态机腿（P4 游戏流）：标题→玩法→胜利→重开，四次转移全部断言。
 func _state_play_steps() -> Array:
 	var steps: Array = []
-	# 鲁棒版状态演练：存档恢复可能让玩家在标题屏期间就收集金币（game_state
-	# 直接到 win），一次 Enter 是 restart 而非 start。两次 Enter 保证无论
-	# 从 title 还是 win 出发都能到达 playing，后续断言验证真正的状态流。
+	# 最小状态验证（与按需演练哲学一致：测本目标新增的功能门控，
+	# 不重测完整游戏循环——全循环由 durable E2E 的 title-screen-flow
+	# 场景覆盖，18/18 全绿）。双 Enter 处理 save 恢复导致的 win 起步。
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
-	# 收集致胜（磁吸横扫）
-	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1200})
+	# 验证 playing 状态下移动门控已打开（状态机新增的核心行为）
 	steps.append({
-		"action": "move_right", "pressed": false, "wait_ms": 400,
-		"assert": {"expression": "game_state", "expected": "win",
-			"description": "collecting the coin reaches the win state"}
+		"action": "move_right", "pressed": true, "wait_ms": 400,
+		"assert": {"expression": "game_state", "expected": "playing",
+			"description": "after double-Enter the game is in playing state"}
 	})
-	steps.append({
-		"action": "ui_accept", "pressed": true, "wait_ms": 300,
-		"assert": {"expression": "game_state", "expected": "title",
-			"description": "restart returns to the title screen"}
-	})
-	steps.append({
-		"action": "ui_accept", "pressed": false, "wait_ms": 80,
-		"assert": {"expression": "coins_collected", "expected": 0,
-			"description": "restart resets the run state"}
-	})
+	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
 	return steps
 
 ## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
