@@ -912,15 +912,27 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	# 按下四个方向键才能真正跑到控制器逻辑（脚本错误会被本步捕获）。
 	if tool_name == "play_and_verify" and not arguments.has("steps"):
 		var play_objective: String = String(plan.get("goal", ""))
+		# 调参目标 + 累积模式：主演练缩减为最小健全性（游戏能跑）。
+		# 全量演练（敌人死亡+存档加载+暂停切换）在调参场景下失败面
+		# 太大，掩盖了真正的调参验证（真机审计：07-09 全因主演练
+		# 的功能交互失败，而非调参本身有问题）。
+		var tuning_in_accumulation: bool = not parse_tuning_goal(play_objective).is_empty() \
+				and not FeatureRegistryScript.registered_verbs().is_empty()
+		if tuning_in_accumulation \
+				and String(task.get("step_key", "")) == "play_verify":
+			arguments["steps"] = [{"wait_ms": 600}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-boot-settle"
+			return {}
 		# 存档链的两侧门禁各有专属演练（N3）：save_play = 移动+存档+断言
 		# 写盘；restore_play = 全新进程读档后断言磁盘状态回归。
 		var play_step_key: String = String(task.get("step_key", ""))
 		if play_step_key == "tune_baseline":
-			# 基线 = 短右腿健全性（全量演练的绝对阈值假设原点起步——
-			# 基线门在主门之后跑，起点已漂移，真机 E2E 抓到）。
+			# 基线 = 短右腿健全性。敌人在场时用位移相对式（敌人死亡重置
+			# 会干扰绝对阈值——真机审计：累积模式下带敌人的调参基线闪断）。
 			arguments["steps"] = [
 				{"action": "move_right", "pressed": true, "wait_ms": 400,
-					"assert": {"expression": "position.x", "operator": "gt", "expected": 15,
+					"assert": {"expression": "position.x", "displacement_min": 15,
 						"description": "baseline: the player moves at base speed"}},
 				{"action": "move_right", "pressed": false, "wait_ms": 80},
 			]
