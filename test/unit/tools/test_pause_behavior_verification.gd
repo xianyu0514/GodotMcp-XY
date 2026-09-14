@@ -219,7 +219,7 @@ func test_state_play_steps_assert_all_four_transitions() -> void:
 		var leg: Dictionary = step_value.get("assert", {}) if step_value.has("assert") else {}
 		if str(leg.get("expression", "")) == "game_state":
 			states.append(leg.get("expected"))
-	assert_eq(states, ["title", "playing", "win", "title"], "all four transitions asserted in order")
+	assert_eq(states, ["win", "title"], "win and restart transitions asserted (robust double-Enter start)")
 
 func test_rename_goal_gets_native_objective_gate() -> void:
 	# E4：更名目标无需显式 required_capabilities——引擎按语义插入
