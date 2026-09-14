@@ -1238,12 +1238,14 @@ static func parse_tuning_goal(goal: String) -> Dictionary:
 	var text: String = " " + goal.to_lower() + " "
 	if not GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.TUNING_KEYWORDS):
 		return {}
+	# 调参方向：用户说"太快了"= 太快 = 需要更慢；"太慢了"= 太慢 = 需要更快。
+	# 中英语义一致：too fast → slower, too slow → faster（真实审计发现原实现反向）。
 	var wants_faster: bool = text.contains("faster") or text.contains("snappier") \
 		or text.contains("more responsive") or text.contains("too slow") \
 		or text.contains("更跟手") or text.contains("更灵敏") or text.contains("调快") \
-		or text.contains("太快") or text.contains("跟手")
+		or text.contains("太慢") or text.contains("跟手")
 	var wants_slower: bool = text.contains("slower") or text.contains("too fast") \
-		or text.contains("调慢") or text.contains("太慢")
+		or text.contains("调慢") or text.contains("太快")
 	# Q4 多参数调参：除 SPEED 外，敌速/磁吸半径/跳跃力也可调
 	if text.contains("enemy") or text.contains("敌人"):
 		if wants_faster:
@@ -1504,16 +1506,30 @@ func _verify_ledger_scripts(plan: Dictionary) -> Dictionary:
 	if goals.size() <= 1:
 		return {}  # 首个目标无需回归
 	var missing: Array = []
+	var orphaned: Array = []
 	for goal_value in goals:
 		var goal_entry: Dictionary = goal_value
 		var artifacts: Dictionary = goal_entry.get("artifacts", {})
 		var script_path: String = String(artifacts.get("script", ""))
 		if not script_path.is_empty() and not FileAccess.file_exists(script_path):
 			missing.append({"goal": goal_entry.get("goal", ""), "missing_script": script_path})
+		# 真实回归：脚本存在但场景不再引用它 = 旧功能可能失效（真实审计：
+		# 只查文件存在时，旧脚本不被场景使用也报"干净"）。
+		if not script_path.is_empty() and FileAccess.file_exists(script_path):
+			var scene_path: String = String(artifacts.get("scene", ""))
+			if not scene_path.is_empty() and FileAccess.file_exists(scene_path):
+				var scene_text: String = FileAccess.get_file_as_string(scene_path)
+				var script_file_name: String = script_path.get_file()
+				if not scene_text.contains(script_file_name):
+					orphaned.append({"goal": goal_entry.get("goal", ""),
+						"orphaned_script": script_path,
+						"scene": scene_path,
+						"note": "script exists but scene does not reference it"})
 	return {
 		"prior_goals": goals.size(),
 		"missing_scripts": missing,
-		"regression_clean": missing.is_empty(),
+		"orphaned_scripts": orphaned,
+		"regression_clean": missing.is_empty() and orphaned.is_empty(),
 	}
 
 ## 跨目标账本：res://.mcp/goal_ledger.json 累积每个已完成目标的
