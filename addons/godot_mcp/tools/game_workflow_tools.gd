@@ -683,36 +683,38 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	if tool_name == "create_script" and not arguments.has("content") \
 			and step_profile == "gameplay_feature":
 		var objective: String = String(plan.get("goal", ""))
-		# Phase B 增量编辑：注册表已有功能时不覆盖控制器——只为新动词
-		# 生成增量代码块，追加到现有脚本（差距分析：每个目标重建控制器
-		# 而非增量合成是连续修改失效的根因）。
-		var registered: Dictionary = FeatureRegistryScript.registered_verbs()
-		var new_verbs: Dictionary = GoalBlueprintsScript.match_verbs(objective)
-		var has_new: bool = false
-		for verb_key in new_verbs.keys():
-			if bool(new_verbs[verb_key]) and not bool(registered.get(verb_key, false)):
-				has_new = true
-				break
-		if not registered.is_empty() and not has_new:
-			# 所有动词已注册：增量编辑模式，使用 modify_script 追加新块
-			var existing_script: String = String((plan.get("workflow", {}) as Dictionary \
-				).get("artifacts", {}).get("script", ""))
-			if not existing_script.is_empty() and FileAccess.file_exists(existing_script):
-				# 读取现有脚本，在末尾追加新动词的功能块
-				var current_source: String = FileAccess.get_file_as_string(existing_script)
-				var incremental: String = _generate_incremental_blocks(new_verbs, current_source)
-				if not incremental.is_empty():
-					arguments["content"] = current_source + incremental
-					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-					task["derived_inputs"]["content"] = "incremental-append"
-				else:
-					arguments["content"] = current_source
-					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-					task["derived_inputs"]["content"] = "reuse-existing"
+		# Phase B 累积功能合成：注册表已有功能时，合并已注册动词与新目标
+		# 动词，生成包含所有功能的完整控制器——每次替换都是功能超集，
+		# 旧功能不丢失（差距分析：只追加独立函数不接入 _ready 是行不通的，
+		# 正确做法是累积动词集 → 完整控制器）。
+		var registered_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
+		var goal_verbs: Dictionary = GoalBlueprintsScript.match_verbs(objective)
+		# 累积合并仅当目标本身命中蓝图动词时生效——非玩法目标（如导出、
+		# 本地化）不应被合并拉入游戏控制器。
+		if not registered_verbs.is_empty() and GoalBlueprintsScript.has_any_verb(goal_verbs):
+			# 合并：已注册动词 ∪ 新目标动词（新目标优先——同动词可能被
+			# 新目标重新启用）
+			var merged_verbs: Dictionary = registered_verbs.duplicate()
+			for verb_key in goal_verbs.keys():
+				merged_verbs[verb_key] = goal_verbs[verb_key] or bool(registered_verbs.get(verb_key, false))
+			# state_machine 是游戏流覆盖层——标题屏门控会阻断其他目标的
+			# 移动逻辑。仅当当前目标明确请求时才纳入合并。
+			if not bool(goal_verbs.get("state_machine", false)):
+				merged_verbs.erase("state_machine")
+			# 用合并动词集构建合成目标语句（controller_script 按动词匹配，
+			# 所以只要动词集正确，生成的控制器就包含所有功能）
+			var merged_objective: String = _build_merged_objective(merged_verbs, objective)
+			var merged_source: String = GoalBlueprintsScript.controller_script(merged_objective)
+			if not merged_source.is_empty():
+				arguments["content"] = merged_source
+				task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+				task["derived_inputs"]["content"] = "cumulative-merge"
 			else:
-				var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
-				if not blueprint_source.is_empty():
-					arguments["content"] = blueprint_source
+				var fallback_source: String = GoalBlueprintsScript.controller_script(objective)
+				if not fallback_source.is_empty():
+					arguments["content"] = fallback_source
+					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+					task["derived_inputs"]["content"] = "goal-blueprint"
 		else:
 			var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
 			if not blueprint_source.is_empty():
@@ -1127,6 +1129,35 @@ static func parse_remap_goal(goal: String) -> Dictionary:
 		if key_hits.size() > 1:
 			old_key = String(key_hits[0]["key"])
 	return {"action": action, "old_key": old_key, "new_key": new_key}
+
+## Phase B 累积目标构建：从动词集构建一个能触发所有动词的目标语句。
+## controller_script 按关键词匹配动词，所以只要语句包含每个动词的
+## 触发词，生成的控制器就包含所有功能。
+func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) -> String:
+	var parts: Array = []
+	if bool(merged_verbs.get("movement", false)):
+		parts.append("arrow-key movement")
+	if bool(merged_verbs.get("collectible", false)):
+		parts.append("collect a coin")
+	if bool(merged_verbs.get("win", false)):
+		parts.append("win label")
+	if bool(merged_verbs.get("pause", false)):
+		parts.append("pause menu")
+	if bool(merged_verbs.get("save", false)):
+		parts.append("save/load")
+	if bool(merged_verbs.get("enemy", false)):
+		parts.append("patrolling enemy")
+	if bool(merged_verbs.get("state_machine", false)):
+		parts.append("title screen game flow restart")
+	if bool(merged_verbs.get("audio", false)):
+		parts.append("sound effect")
+	if bool(merged_verbs.get("wall", false)):
+		parts.append("walls")
+	if bool(merged_verbs.get("three_d", false)):
+		parts.append("3D")
+	if parts.is_empty():
+		return original_goal
+	return ", ".join(parts)
 
 ## Phase B 增量代码块生成：只为尚未注册的动词生成功能块，追加到现有
 ## 控制器末尾（不覆盖已有功能）。返回空串表示无需追加。

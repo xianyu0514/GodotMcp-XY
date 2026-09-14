@@ -288,6 +288,8 @@ func test_hundred_capability_goal_completes_across_adaptive_slices() -> void:
 	for call_value in _core.calls:
 		if String((call_value as Dictionary).get("tool_name", "")) == "stop_project":
 			stop_calls += 1
+	# The feature registry lookup + goal ledger are file reads, not tool calls.
+	# The accounting: atomic_calls == tool_calls - stop_calls
 	assert_eq(atomic_calls, _core.calls.size() - stop_calls,
 		"every atomic call is accounted (plus exactly the fresh-plan stop)")
 

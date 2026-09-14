@@ -169,7 +169,7 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			var pre_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
 				_merge_runtime_params(params, {
 					"expression": String((step["assert"] as Dictionary).get("expression", "")),
-					"timeout_ms": 300}))
+					"timeout_ms": 3000}))
 			inert_pre_value = pre_read.get("last_value", null)
 		if step.has("action"):
 			var input_params: Dictionary = _merge_runtime_params(params, {
@@ -222,7 +222,7 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 				var post_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
 					_merge_runtime_params(params, {
 						"expression": String(step_assert.get("expression", "")),
-						"timeout_ms": 300}))
+						"timeout_ms": 3000}))
 				var post_value: float = float(post_read.get("last_value", inert_pre_value))
 				var delta_value: float = post_value - float(inert_pre_value)
 				var delta_passed: bool = true
