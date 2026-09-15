@@ -90,7 +90,7 @@ def setup_scratch():
     (SCRATCH / "addons").mkdir(parents=True)
     shutil.copytree(REPO / "addons/godot_mcp", SCRATCH / "addons/godot_mcp")
     (SCRATCH / "project.godot").write_text(
-        'config_version=5\n\n[application]\n\nconfig_name="RepresentativeGame"\n\n'
+        'config_version=5\n\n[application]\n\nconfig/name="RepresentativeGame"\n\n'
         '[editor_plugins]\n\nenabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")\n',
         encoding="utf-8", newline="\n")
 

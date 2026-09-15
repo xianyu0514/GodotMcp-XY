@@ -1,0 +1,6 @@
+{"t": "2026-09-15T11:03:33", "run_id": "N4-r1-20260915T110333", "task_id": "N4", "rep": 1, "event": "run_started", "payload": {"objective": "A small 3D level: arrow-key movement with a coin to collect."}}
+{"t": "2026-09-15T11:03:40", "run_id": "N4-r1-20260915T110333", "task_id": "N4", "rep": 1, "event": "agent_statement", "payload": {"claims_completed": false, "state": "replan_required"}}
+{"t": "2026-09-15T11:03:40", "run_id": "N4-r1-20260915T110333", "task_id": "N4", "rep": 1, "event": "run_ended", "payload": {"outcome": "fail", "wall_clock_s": 6.3}}
+{"t": "2026-09-15T11:09:46", "run_id": "N4-r1-20260915T110946", "task_id": "N4", "rep": 1, "event": "run_started", "payload": {"objective": "A small 3D level: arrow-key movement with a coin to collect."}}
+{"t": "2026-09-15T11:10:30", "run_id": "N4-r1-20260915T110946", "task_id": "N4", "rep": 1, "event": "agent_statement", "payload": {"claims_completed": false, "state": "waiting"}}
+{"t": "2026-09-15T11:10:30", "run_id": "N4-r1-20260915T110946", "task_id": "N4", "rep": 1, "event": "run_ended", "payload": {"outcome": "fail", "wall_clock_s": 44.0}}
