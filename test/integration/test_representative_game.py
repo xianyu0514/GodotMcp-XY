@@ -36,7 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRATCH = REPO / "tmp_representative_game"
 GODOT = os.environ.get("GODOT_EXE", r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe")
-PORT = 9195
+PORT = int(os.environ.get("REP_PORT", "9195"))
 
 def rpc(name, args, rid=1, timeout=300.0):
     payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
@@ -120,7 +120,7 @@ def full_loop_steps():
         {"action": "ui_accept", "pressed": False, "wait_ms": 100},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 100},
-        {"action": "move_right", "pressed": True, "wait_ms": 1500},
+        {"action": "move_right", "pressed": True, "wait_frames": 90},
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
             "description": "round one: every coin collected (identity-safe pickup)"}},
@@ -138,7 +138,7 @@ def full_loop_steps():
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
          "assert": {"expression": "game_state", "expected": "playing",
             "description": "second round starts"}},
-        {"action": "move_right", "pressed": True, "wait_ms": 1500},
+        {"action": "move_right", "pressed": True, "wait_frames": 90},
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"",
             "expected": True,

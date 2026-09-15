@@ -1314,3 +1314,30 @@ func test_tune_steps_unlock_title_when_state_machine_registered() -> void:
 		"the first step unlocks the title gate before measuring")
 	assert_eq(String((steps[2] as Dictionary).get("action", "")), "ui_accept",
 		"double Enter covers a win-state start")
+func test_verify_gate_repair_dead_end_fails_fast() -> void:
+	# 真缺陷回归：play 门禁失败后 repair=modify_script 派生不出 content
+	# → 卡 waiting 63s 直到超时（goal 06 现场复现）。验证类失败应快速
+	# replan 而非挂起。
+	var plan: Dictionary = _plan(["gameplay_feature"], "Arrow-key movement and a coin.")
+	assert_false(plan.has("error"), plan.get("error", ""))
+	var plan_doc: Dictionary = _tools._load_plan(_plan_path)
+	var verify_task: Dictionary = {}
+	for task_value in plan_doc.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "play_and_verify":
+			verify_task = task
+			break
+	assert_false(verify_task.is_empty(), "gameplay plan has a play gate")
+	# 真实服务端的 modify_script 要求 content（FakeCore 默认无 required）
+	_core.schemas["modify_script"] = {"type": "object",
+		"required": ["script_path", "old_text", "content"], "properties": {}}
+	verify_task["repair_pending"] = true
+	verify_task["repair_tool"] = "modify_script"
+	# modify_script 的 content 无从派生（演练失败没有代码修复语义）
+	var outcome: Dictionary = await _tools._run_repair(plan_doc, verify_task, {}, _plan_path)
+	assert_eq(str(outcome.get("status", "")), "replan_required",
+		"an underivable verify repair fails fast instead of waiting")
+	assert_eq(str((plan_doc["workflow"] as Dictionary).get("state", "")), "replan_required",
+		"the workflow state moves to replan_required")
+	assert_true(str((plan_doc["workflow"] as Dictionary).get("blocked_reason", "")).contains("verification gate"),
+		"the blocked reason explains the verify-gate dead end")

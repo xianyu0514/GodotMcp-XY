@@ -609,6 +609,28 @@ func _run_repair(plan: Dictionary, task: Dictionary, step_inputs: Dictionary, pl
 		plan, task, repair_tool, _resolve_inputs(task, step_inputs, true))
 	var missing: Array[String] = _missing_required_inputs(repair_tool, arguments)
 	if not missing.is_empty():
+		# 修复死端快速失败（真机复现：验证类门禁失败后 repair=modify_script
+		# 永远派生不出 content → 卡 waiting 63s 直到测试超时）。验证步的
+		# 失败是证据失败，没有可派生的代码修复——直接 replan 而非挂起。
+		var repaired_step_tool: String = String(task.get("tool_name", ""))
+		var verify_class_repair: bool = repair_tool == "modify_script" \
+			and repaired_step_tool in ["play_and_verify", "assert_no_runtime_errors",
+				"assert_performance_budget", "assert_visual_baseline", "get_runtime_screenshot"] \
+			and "content" in missing
+		if verify_class_repair:
+			task["repair_pending"] = false
+			task["status"] = "failed"
+			(plan["workflow"] as Dictionary)["state"] = "replan_required"
+			(plan["workflow"] as Dictionary)["blocked_reason"] = \
+				"verification gate '%s' failed and its code repair cannot be derived; replan with different inputs or capabilities" % repaired_step_tool
+			var fast_fail_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if fast_fail_save.has("error"):
+				return {"stop": true, "status": "blocked", "error": fast_fail_save["error"]}
+			return {
+				"stop": true, "status": "replan_required", "step_id": task.get("id", ""),
+				"tool_name": repaired_step_tool, "repair": true,
+				"missing_inputs": missing,
+			}
 		task["needs_input"] = true
 		task["missing_inputs"] = missing
 		(plan["workflow"] as Dictionary)["state"] = "waiting"
@@ -1131,7 +1153,11 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 							and not bool(reg_verbs.get("collectible", false)):
 						on_demand.append_array(_collect_play_steps())
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
-						on_demand.append_array(_enemy_play_steps())
+						var enemy_legs: Dictionary = _enemy_play_legs()
+						on_demand.append_array(enemy_legs["steps"])
+						arguments["deterministic"] = true
+						arguments["sample"] = enemy_legs["sample"]
+						arguments["assertions"] = enemy_legs["assertions"]
 					if bool(goal_verbs.get("pause", false)) and not bool(reg_verbs.get("pause", false)):
 						on_demand.append_array(_pause_play_steps())
 					if bool(goal_verbs.get("save", false)) and not bool(reg_verbs.get("save", false)):
@@ -1561,33 +1587,33 @@ func _remap_play_steps(action: String, old_key: String, new_key: String) -> Arra
 ## 控制器没挂上或没在动时，门禁必须失败而不是空转通过。
 func _movement_play_steps() -> Array:
 	# 移动演练带位移断言（N1 oracle 形态）：蓝图场景根在原点、SPEED=260、
-	# 60fps 物理——400ms ≈ +104px。左右/上下各用非对称时长保证净位移有
-	# 明确符号（右 400 → x>15；左 600 → x<-15；上 400 → y<-15；下 600 → y>15），
-	# 阈值留 6 倍余量抗帧率抖动。没有这些断言，门禁只证明"按键已发送"，
-	# 控制器没挂上/没在动也照样通过（#124 真机 E2E 抓到过这种空转）。
+	# 60fps 物理。**确定性帧步进**（wait_frames 24 = 恰好 104px，与机器
+	# 负载无关——墙钟等待在冷启动/高负载下物理帧缩水 ±40%，位移断言
+	# 轮换闪断的根本原因；真机 11 轮复现）。阈值 15px 留 6 倍余量。
+	# 没有这些断言，门禁只证明"按键已发送"，控制器没挂上/没在动也照样
+	# 通过（#124 真机 E2E 抓到过这种空转）。
+	# 位移相对断言（步前快照差值）：起点无关——任何起点都测"本腿走够没有"。
 	var steps: Array = []
-	# 位移相对断言（步前快照差值）：起点无关——E4 校准实测残留游戏从
-	# x=+810 起步时原点绝对阈值必败；快照式在任何起点都测"本腿走够没有"。
 	steps.append({
-		"action": "move_right", "pressed": true, "wait_ms": 400,
+		"action": "move_right", "pressed": true, "wait_frames": 24,
 		"assert": {"expression": "position.x", "displacement_min": 15,
 			"description": "player moved right while holding move_right"}
 	})
 	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
 	steps.append({
-		"action": "move_left", "pressed": true, "wait_ms": 600,
+		"action": "move_left", "pressed": true, "wait_frames": 24,
 		"assert": {"expression": "position.x", "displacement_max": -15,
 			"description": "player moved left while holding move_left"}
 	})
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 80})
 	steps.append({
-		"action": "move_up", "pressed": true, "wait_ms": 400,
+		"action": "move_up", "pressed": true, "wait_frames": 24,
 		"assert": {"expression": "position.y", "displacement_max": -15,
 			"description": "player moved up while holding move_up"}
 	})
 	steps.append({"action": "move_up", "pressed": false, "wait_ms": 80})
 	steps.append({
-		"action": "move_down", "pressed": true, "wait_ms": 600,
+		"action": "move_down", "pressed": true, "wait_frames": 24,
 		"assert": {"expression": "position.y", "displacement_min": 15,
 			"description": "player moved down while holding move_down"}
 	})
@@ -1641,11 +1667,12 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected") -> A
 	# 先回归原点：save 恢复或上一轮演练可能把玩家留在金币右侧——从右侧
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
 	# 左扫最多撞左墙（或死于敌带重置回原点）——两种结局都锚定原点附近。
-	steps.append({"action": "move_left", "pressed": true, "wait_ms": 1200})
+	# 帧步进（72 帧 = 312px）：与机器负载无关的确定性锚定。
+	steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
 	# 磁吸金币聚簇在 (110..190)：从原点右扫横扫必然穿越全部拾取窗
-	# （开环 + 宽恕半径 = 确定性收集）。
-	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1600})
+	# （开环 + 宽恕半径 = 确定性收集）。96 帧 = 416px，远超最后一窗 (292)。
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 96})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
@@ -1718,7 +1745,7 @@ func _state_play_steps() -> Array:
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	# 第一轮：右扫聚簇金币 → 全部收集（身份安全拾取）→ 胜利
-	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1500})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": true,
@@ -1750,7 +1777,7 @@ func _state_play_steps() -> Array:
 		"assert": {"expression": "game_state", "expected": "playing",
 			"description": "second round starts from the title state"}
 	})
-	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1500})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"", "expected": true,
@@ -1760,36 +1787,40 @@ func _state_play_steps() -> Array:
 
 ## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
 ## 断言敌人确实在动；穿越敌人巡逻带 → 断言死亡计数与重生回原点。
-func _enemy_play_steps() -> Array:
-	var steps: Array = []
-	# 敌人巡逻断言：绝对位置 + 更长等待（800ms）——ENEMY_SPEED/60 驱动
-	# 的正弦周期约 3s，800ms 时 sin 值远离零点的概率高。不用 inert
-	# （inert 测"不变"，但敌人在动——语义相反，实测抓到）。
-	steps.append({
-		"wait_ms": 800,
-		"assert": {"expression": "abs(_enemy.position.x - 300.0)", "operator": "gt", "expected": 10,
-			"description": "the enemy patrols away from its home position"}
-	})
-	steps.append({
-		"action": "move_right", "pressed": true, "wait_ms": 1600,
-		"assert": {"expression": "deaths_count", "operator": "gt", "expected": 0,
-			"description": "touching the enemy killed the player"}
-	})
-	steps.append({
-		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "position.x", "operator": "lt", "expected": 220,
-			"description": "the player respawned left of the enemy band after death (no reset means x >= 404)"}
-	})
-	return steps
+## 返回 {steps, sample, assertions}：巡逻证明用 **range 指标**（采样窗内
+## 敌人 x 的最大-最小差）——任意相位下"在动"的稳健证明（点评估
+## |x-300|>10 在相位踩零点时 ~8% 闪断，真机 11 轮复现；96 帧窗口对
+## 调参后速度 78 的最差相位 range ≥ 41px，对 120 必含峰/谷 ≥ 80px）。
+func _enemy_play_legs() -> Dictionary:
+	return {
+		"steps": [
+			{"wait_frames": 96},
+			{
+				"action": "move_right", "pressed": true, "wait_frames": 96,
+				"assert": {"expression": "deaths_count", "operator": "gt", "expected": 0,
+					"description": "touching the enemy killed the player"}
+			},
+			{
+				"action": "move_right", "pressed": false, "wait_frames": 18,
+				"assert": {"expression": "position.x", "operator": "lt", "expected": 220,
+					"description": "the player respawned left of the enemy band after death"}
+			},
+		],
+		"sample": [{"label": "ex", "expression": "_enemy.position.x"}],
+		"assertions": [{
+			"metric": "ex", "aggregate": "range", "operator": "gt", "expected": 20,
+			"description": "the enemy patrols (x range > 20px across the sampled window)"
+		}],
+	}
 
 ## 存档腿（评测 N3）：右移制造非平凡状态 → 按 save_game（F5）→ 断言写盘
 ## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
 func _save_play_steps() -> Array:
 	var steps: Array = []
-	# 位移先自证（headless 负载下墙钟等待的物理帧数会缩水，阈值 40 留足
-	# 余量）——保证写入磁盘的状态非平凡，恢复腿的断言才有意义。
+	# 位移先自证（帧步进 24 帧 = 恰好 104px，确定性）——保证写入磁盘的
+	# 状态非平凡，恢复腿的断言才有意义。
 	steps.append({
-		"action": "move_right", "pressed": true, "wait_ms": 400,
+		"action": "move_right", "pressed": true, "wait_frames": 24,
 		"assert": {"expression": "position.x", "operator": "gt", "expected": 40,
 			"description": "player moved right, creating non-trivial state to save"}
 	})
@@ -1901,7 +1932,19 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 					coin_expression = String(rename_info.get("new_name", "coins_collected"))
 				play_steps.append_array(_collect_play_steps(coin_expression))
 			if wants_enemy:
-				play_steps.append_array(_enemy_play_steps())
+				var enemy_legs_generic: Dictionary = _enemy_play_legs()
+				play_steps.append_array(enemy_legs_generic["steps"])
+				arguments["deterministic"] = true
+				var enemy_samples: Array = arguments.get("sample", [])
+				if not (enemy_samples is Array):
+					enemy_samples = []
+				enemy_samples.append_array(enemy_legs_generic["sample"])
+				arguments["sample"] = enemy_samples
+				var enemy_assertions: Array = arguments.get("assertions", [])
+				if not (enemy_assertions is Array):
+					enemy_assertions = []
+				enemy_assertions.append_array(enemy_legs_generic["assertions"])
+				arguments["assertions"] = enemy_assertions
 			if wants_pause:
 				play_steps.append_array(_pause_play_steps())
 			if wants_audio:
