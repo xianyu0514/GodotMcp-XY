@@ -72,22 +72,54 @@ const ENEMY_KEYWORDS: Array[String] = [
 	"敌人", "巡逻", "危险", "死亡", "重生",
 ]
 
-## 解析目标中的金币数量："3 coins" / "three coins" / "3 金币"。
+## 解析目标中的金币数量："3 coins" / "3 collectible coins" / "three coins" /
+## "3 金币" / "再加 3 个金币"。数字与名词之间允许一个常见修饰词
+## （collectible/golden/gold/more）——差距分析：旧正则要求数字紧贴
+## "coin"，"Add 3 collectible coins." 的 3 会被吞掉退化为 1。
 ## 无数字默认 1（单金币最小可玩）。
 static func _coin_count(objective: String) -> int:
 	var text: String = objective.to_lower()
 	var number_regex: RegEx = RegEx.new()
-	if number_regex.compile("(\\d+)\\s*(coin|金币)") != OK:
+	if number_regex.compile("(\\d+)\\s*个?\\s*(?:(?:collectible|golden|gold|more)\\s+)?coins?\\b|(\\d+)\\s*个?\\s*金币") != OK:
 		return 1
 	var match_result: RegExMatch = number_regex.search(text)
 	if match_result:
-		var count: int = int(match_result.get_string(1))
-		return clampi(count, 1, 10)
+		var captured: String = match_result.get_string(1) if match_result.get_string(1) != "" else match_result.get_string(2)
+		if captured != "":
+			return clampi(int(captured), 1, 10)
 	if text.contains("three coins") or text.contains("三个金币"):
 		return 3
 	if text.contains("five coins") or text.contains("五个金币"):
 		return 5
 	return 1
+
+## 解析目标中的敌人数量："2 enemies" / "2 patrolling enemies" / "两个敌人"。
+## 无数字默认 1；"再加一个敌人"这类增量语义由 is_additive_request() 表达，
+## 合并层（游戏模型）负责 existing + requested。
+static func _enemy_count(objective: String) -> int:
+	var text: String = objective.to_lower()
+	var number_regex: RegEx = RegEx.new()
+	if number_regex.compile("(\\d+)\\s*个?\\s*(?:(?:patrolling|more|extra)\\s+)?enem(?:y|ies)\\b|(\\d+)\\s*个?\\s*敌人") != OK:
+		return 1
+	var match_result: RegExMatch = number_regex.search(text)
+	if match_result:
+		var captured: String = match_result.get_string(1) if match_result.get_string(1) != "" else match_result.get_string(2)
+		if captured != "":
+			return clampi(int(captured), 1, 6)
+	# 中文数字词（与金币解析口径一致）
+	if text.contains("两个敌人") or text.contains("二个敌人"):
+		return 2
+	if text.contains("三个敌人"):
+		return 3
+	return 1
+
+## 增量请求检测："再加 3 个金币" / "add 3 more coins" / "another enemy"
+## ——数量语义是 existing + requested，而非 max(existing, requested)。
+static func is_additive_request(objective: String) -> bool:
+	var text: String = " " + objective.to_lower() + " "
+	return text.contains(" 再加") or text.contains(" 多加") or text.contains("再加 ") \
+		or text.contains("更多") or text.contains(" more ") or text.contains("another ") \
+		or text.contains("extra ") or text.contains("additional ")
 
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
@@ -187,7 +219,7 @@ static func controller_script_3d(objective: String) -> String:
 		source += "\tcoin_sphere.height = 1.0\n"
 		source += "\tcoin_mesh.mesh = coin_sphere\n"
 		source += "\t_coin_area.add_child(coin_mesh)\n"
-		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
+		source += "\t_coin_area.body_entered.connect(_on_coin_touched.bind(_coin_area))\n"
 		source += "\tget_parent().add_child.call_deferred(_coin_area)\n"
 	source += "\nfunc _physics_process(_delta: float) -> void:\n"
 	source += "\tvar direction := Input.get_vector(\"move_left\", \"move_right\", \"move_forward\", \"move_back\")\n"
@@ -200,11 +232,15 @@ static func controller_script_3d(objective: String) -> String:
 	source += "\tvelocity = input_dir * SPEED\n"
 	source += "\tmove_and_slide()\n"
 	if needs_pickup:
-		source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+		source += "\nfunc _on_coin_touched(body: Node, coin: Node) -> void:\n"
 		source += "\tif body != self:\n"
 		source += "\t\treturn\n"
+		source += "\t# 一次性守卫：已释放/待释放的道具不再计数（真实审计：多金币时\n"
+		source += "\t# 第二、三枚会对已释放的第一枚重复 queue_free 并虚增计数）。\n"
+		source += "\tif coin == null or not is_instance_valid(coin) or coin.is_queued_for_deletion():\n"
+		source += "\t\treturn\n"
 		source += "\tcoins_collected += 1\n"
-		source += "\t_coin_area.queue_free()\n"
+		source += "\tcoin.queue_free()\n"
 	return source
 
 ## 组合出挂在场景根上的完整控制器脚本；目标未命中任何动词时返回空串。
@@ -234,6 +270,9 @@ static func controller_script(objective: String) -> String:
 	source += "const SPEED: float = 260.0\n"
 	if needs_pickup:
 		source += "const COINS_TO_WIN: int = %d\n" % _coin_count(objective)
+		# 拾取半径参数化（磁吸调参目标）：生成器三处创建点共用一个常量，
+		# 调参链 modify_script 改这一行即可全量生效。
+		source += "const COIN_RADIUS: float = 90.0\n"
 	if needs_save:
 		source += "const SAVE_PATH := \"user://save_game.json\"\n"
 	source += "\nvar coins_collected: int = 0\n"
@@ -253,7 +292,9 @@ static func controller_script(objective: String) -> String:
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
+		source += "var _enemies: Array[Area2D] = []\n"
 		source += "var _enemy_time: float = 0.0\n"
+		source += "const ENEMY_COUNT: int = %d\n" % _enemy_count(objective)
 		source += "const ENEMY_HOME_X: float = 300.0\n"
 		source += "const ENEMY_RANGE: float = 80.0\n"
 		source += "const ENEMY_SPEED: float = 120.0\n"
@@ -284,34 +325,37 @@ static func controller_script(objective: String) -> String:
 		ready_body_emitted = true
 	if needs_pickup:
 		source += "\t# 运行期生成拾取体与胜利标签，保持编辑场景最小。\n"
+		source += "\t# 金币聚簇在敌人巡逻带之前（80 + i*60，全部落在 x<210 走廊）：\n"
+		source += "\t# 敌人带 [220,380] 会让任何穿越死亡——旧布局 200/380/560 的\n"
+		source += "\t# 第二、三枚永远不可达，带敌人的完整通关从几何上不可能。\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
-		source += "\t_coin_area.position = Vector2(200, 0)\n"
+		source += "\t_coin_area.position = Vector2(110.0, 0)\n"
 		# 多金币：运行时循环生成（避免生成器侧变量泄漏到产物——
 		# 真实审计发现生成代码含非法缩进和 _extra_coin 残留）。
 		source += "\tfor coin_index in range(1, COINS_TO_WIN):\n"
 		source += "\t\tvar extra_coin := Area2D.new()\n"
 		source += "\t\textra_coin.name = \"Coin%d\" % coin_index\n"
-		source += "\t\textra_coin.position = Vector2(200 + coin_index * 180, 0)\n"
+		source += "\t\textra_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar extra_col := CollisionShape2D.new()\n"
 		source += "\t\tvar extra_shape := CircleShape2D.new()\n"
-		source += "\t\textra_shape.radius = 90\n"
+		source += "\t\textra_shape.radius = COIN_RADIUS\n"
 		source += "\t\textra_col.shape = extra_shape\n"
 		source += "\t\textra_coin.add_child(extra_col)\n"
-		source += "\t\textra_coin.body_entered.connect(_on_coin_touched)\n"
+		source += "\t\textra_coin.body_entered.connect(_on_coin_touched.bind(extra_coin))\n"
 		source += "\t\tget_parent().add_child.call_deferred(extra_coin)\n"
 		source += "\tvar coin_collision := CollisionShape2D.new()\n"
 		source += "\tvar coin_shape := CircleShape2D.new()\n"
 		source += "\t# 磁吸半径：开环演练（墙钟计时的位移有 ±40% 抖动）仍能确定性\n"
 		source += "\t# 穿越拾取窗——宽恕式拾取本身就是平台游戏的常见手感设计。\n"
-		source += "\tcoin_shape.radius = 90\n"
+		source += "\tcoin_shape.radius = COIN_RADIUS\n"
 		source += "\tcoin_collision.shape = coin_shape\n"
 		source += "\t_coin_area.add_child(coin_collision)\n"
-		source += "\t# 挂到父节点（世界坐标）：真缺陷修复——金币原先是玩家的子节点，\n"
-		source += "\t# 永远保持相对偏移跟随玩家，且 Area2D 不探测自己的祖先，\n"
-		source += "\t# 收集机制从第一版起就不可能触发。\n"
+		# 挂到父节点（世界坐标）：真缺陷修复——金币原先是玩家的子节点，
+		# 永远保持相对偏移跟随玩家，且 Area2D 不探测自己的祖先，
+		# 收集机制从第一版起就不可能触发。
 		source += "\tget_parent().add_child.call_deferred(_coin_area)\n"
-		source += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
+		source += "\t_coin_area.body_entered.connect(_on_coin_touched.bind(_coin_area))\n"
 		source += "\tvar canvas := CanvasLayer.new()\n"
 		source += "\tcanvas.name = \"WinCanvas\"\n"
 		source += "\tadd_child(canvas)\n"
@@ -374,19 +418,23 @@ static func controller_script(objective: String) -> String:
 		source += "\t_title_label.position = Vector2(40, 100)\n"
 		source += "\ttitle_layer.add_child(_title_label)\n"
 	if needs_enemy:
-		source += "\tvar enemy := Area2D.new()\n"
-		source += "\tenemy.name = \"Enemy\"\n"
-		source += "\tenemy.position = Vector2(ENEMY_HOME_X, 0.0)\n"
-		source += "\tvar enemy_collision := CollisionShape2D.new()\n"
-		source += "\tvar enemy_shape := RectangleShape2D.new()\n"
-		source += "\t# 纵向高墙：任意纵向偏移的水平穿越都会触发（开环演练确定性）。\n"
-		source += "\tenemy_shape.size = Vector2(16, 240)\n"
-		source += "\tenemy_collision.shape = enemy_shape\n"
-		source += "\tenemy.add_child(enemy_collision)\n"
-		source += "\t# 同金币：挂到父节点，巡逻才是世界坐标。\n"
-		source += "\tget_parent().add_child.call_deferred(enemy)\n"
-		source += "\tenemy.body_entered.connect(_on_enemy_touched)\n"
-		source += "\t_enemy = enemy\n"
+		# 敌人数参数化（ENEMY_COUNT）："再加一个敌人"由合并层把数量写进
+		# 合成目标，这里循环生成。首敌保持原相位/位置（既有断言校准过）。
+		source += "\tfor enemy_index in range(ENEMY_COUNT):\n"
+		source += "\t\tvar enemy := Area2D.new()\n"
+		source += "\t\tenemy.name = \"Enemy\" if enemy_index == 0 else \"Enemy%d\" % enemy_index\n"
+		source += "\t\tenemy.position = Vector2(ENEMY_HOME_X + enemy_index * 160.0, 0.0)\n"
+		source += "\t\tvar enemy_collision := CollisionShape2D.new()\n"
+		source += "\t\tvar enemy_shape := RectangleShape2D.new()\n"
+		source += "\t\t# 纵向高墙：任意纵向偏移的水平穿越都会触发（开环演练确定性）。\n"
+		source += "\t\tenemy_shape.size = Vector2(16, 240)\n"
+		source += "\t\tenemy_collision.shape = enemy_shape\n"
+		source += "\t\tenemy.add_child(enemy_collision)\n"
+		source += "\t\t# 同金币：挂到父节点，巡逻才是世界坐标。\n"
+		source += "\t\tget_parent().add_child.call_deferred(enemy)\n"
+		source += "\t\tenemy.body_entered.connect(_on_enemy_touched)\n"
+		source += "\t\t_enemies.append(enemy)\n"
+		source += "\t_enemy = _enemies[0]\n"
 		ready_body_emitted = true
 	if not ready_body_emitted:
 		# 纯移动目标没有 _ready 内容：空函数体是非法 GDScript（真机 E2E
@@ -423,7 +471,11 @@ static func controller_script(objective: String) -> String:
 			source += "\t_enemy_time += _delta\n"
 			source += "\t# ENEMY_SPEED 实际驱动巡逻频率（差距分析：常量存在但不参与\n"
 			source += "\t# 公式——调参后行为不变）。速度越快，往返周期越短。\n"
-			source += "\t_enemy.position.x = ENEMY_HOME_X + sin(_enemy_time * (ENEMY_SPEED / 60.0)) * ENEMY_RANGE\n"
+			source += "\t# 首敌相位偏移恒为 0（既有调参断言按此校准）；后续敌人各带\n"
+			source += "\t# 独立相位偏移，巡逻互不同步。\n"
+			source += "\tfor enemy_index in _enemies.size():\n"
+			source += "\t\tvar enemy_home: float = ENEMY_HOME_X + float(enemy_index) * 160.0\n"
+			source += "\t\t_enemies[enemy_index].position.x = enemy_home + sin(_enemy_time * (ENEMY_SPEED / 60.0) + float(enemy_index) * 1.7) * ENEMY_RANGE\n"
 		if needs_pause:
 			source += "\tif Input.is_action_just_pressed(\"ui_cancel\"):\n"
 			source += "\t\tset_paused(not get_tree().paused)\n"
@@ -438,8 +490,14 @@ static func controller_script(objective: String) -> String:
 			source += "\tvelocity = direction * SPEED\n"
 			source += "\tmove_and_slide()\n"
 	if needs_pickup:
-			source += "\nfunc _on_coin_touched(body: Node) -> void:\n"
+			source += "\nfunc _on_coin_touched(body: Node, coin: Node) -> void:\n"
 			source += "\tif body != self:\n"
+			source += "\t\treturn\n"
+			source += "\t# 道具身份修复（差距分析 P0）：释放实际触发拾取的那一枚，\n"
+			source += "\t# 而不是成员 _coin_area（第一枚）——多金币时第二、三枚会对\n"
+			source += "\t# 已释放的第一枚重复 queue_free 并虚增计数。一次性守卫\n"
+			source += "\t# 保证每枚只计一次。\n"
+			source += "\tif coin == null or not is_instance_valid(coin) or coin.is_queued_for_deletion():\n"
 			source += "\t\treturn\n"
 			source += "\tcoins_collected += 1\n"
 			source += "\tcoins_changed.emit(coins_collected)\n"
@@ -449,7 +507,7 @@ static func controller_script(objective: String) -> String:
 				source += "\tif _sfx_player != null:\n"
 				source += "\t\t_sfx_player.play()\n"
 				source += "\t\tsfx_played_count += 1\n"
-			source += "\t_coin_area.queue_free()\n"
+			source += "\tcoin.queue_free()\n"
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 			source += "\t\t_win_label.text = \"You Win!\"\n"
 			if needs_state:
@@ -462,20 +520,26 @@ static func controller_script(objective: String) -> String:
 	if needs_state and needs_pickup:
 		source += "\nfunc _respawn_coins() -> void:\n"
 		source += "\tvar parent := get_parent()\n"
+		source += "\tvar dying_index: int = 0\n"
 		source += "\tfor child in parent.get_children():\n"
 		source += "\t\tif child is Area2D and String(child.name).begins_with(\"Coin\"):\n"
+		source += "\t\t\t# 垂死金币先改名再释放：queue_free 到帧尾才生效，同名新金币会撞名拿到自动名（真机复现)。\n"
+		source += "\t\t\tchild.name = \"_coin_dying_%d\" % dying_index\n"
+		source += "\t\t\tdying_index += 1\n"
 		source += "\t\t\tchild.queue_free()\n"
 		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
 		source += "\t\tvar new_coin := Area2D.new()\n"
 		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"
-		source += "\t\tnew_coin.position = Vector2(200 + coin_index * 180, 0)\n"
+		source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar coin_col := CollisionShape2D.new()\n"
 		source += "\t\tvar coin_shape := CircleShape2D.new()\n"
-		source += "\t\tcoin_shape.radius = 90\n"
+		source += "\t\tcoin_shape.radius = COIN_RADIUS\n"
 		source += "\t\tcoin_col.shape = coin_shape\n"
 		source += "\t\tnew_coin.add_child(coin_col)\n"
-		source += "\t\tnew_coin.body_entered.connect(_on_coin_touched)\n"
+		source += "\t\tnew_coin.body_entered.connect(_on_coin_touched.bind(new_coin))\n"
 		source += "\t\tparent.add_child(new_coin)\n"
+		source += "\t\tif coin_index == 0:\n"
+		source += "\t\t\t_coin_area = new_coin\n"
 	if needs_enemy:
 		source += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
 		source += "\tif body != self:\n"

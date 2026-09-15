@@ -219,7 +219,8 @@ func test_state_play_steps_assert_all_four_transitions() -> void:
 		var leg: Dictionary = step_value.get("assert", {}) if step_value.has("assert") else {}
 		if str(leg.get("expression", "")) == "game_state":
 			states.append(leg.get("expected"))
-	assert_eq(states, ["playing"], "playing state reached (minimal state verify)")
+	assert_eq(states, ["win", "title", "playing"],
+		"full-loop states: win -> title -> playing (P2-3 supersedes the minimal verify)")
 
 func test_rename_goal_gets_native_objective_gate() -> void:
 	# E4：更名目标无需显式 required_capabilities——引擎按语义插入
@@ -289,7 +290,8 @@ func test_multi_coin_goal_generates_correct_count() -> void:
 	var source: String = BlueprintsScript.controller_script("collect 3 coins and show a win label")
 	assert_true(source.contains("const COINS_TO_WIN: int = 3"), "3 coins parsed from goal")
 	assert_true(source.contains("Coin%d"), "extra coin generation loop present")
-	assert_true(source.contains("180"), "coins spread across positions")
+	assert_true(source.contains("110.0 + coin_index * 40.0"),
+		"coins cluster before the enemy patrol band (P0-3 geometry fix)")
 
 func test_multi_param_tuning_parses() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()

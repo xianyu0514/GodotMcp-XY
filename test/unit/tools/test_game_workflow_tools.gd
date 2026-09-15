@@ -61,9 +61,14 @@ func before_each() -> void:
 	# 按需演练测试隔离：清除功能注册表（累积模式会让主演练只测新功能腿）
 	if FileAccess.file_exists("res://.mcp/feature_registry.json"):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path("res://.mcp/feature_registry.json"))
+	# 游戏模型同样隔离：合并数量/参数注入/手改保护都读默认模型路径
+	if FileAccess.file_exists("res://.mcp/game_model.json"):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path("res://.mcp/game_model.json"))
 
 func after_each() -> void:
 	_remove_plan()
+	if FileAccess.file_exists("res://.mcp/game_model.json"):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path("res://.mcp/game_model.json"))
 
 func _remove_plan() -> void:
 	for suffix in ["", ".next", ".bak"]:
@@ -1057,3 +1062,249 @@ func test_rename_goal_parses_and_derives_step_arguments() -> void:
 	assert_eq(str(zh.get("symbol_name", "")), "speed")
 	assert_eq(str(zh.get("new_name", "")), "velocity")
 	assert_true(_tools.parse_rename_goal("arrow-key movement only").is_empty())
+
+# ---------- P1/P2 新增：数量保留、state_machine 保留、手改保护、
+# ---------- 回归门禁、调参方向证明、完整循环验收器 ----------
+
+const GameModelStoreScript = preload("res://addons/godot_mcp/tools/game_model_store.gd")
+const FeatureRegistryScript = preload("res://addons/godot_mcp/tools/feature_registry.gd")
+
+func _create_script_task_from(plan: Dictionary) -> Dictionary:
+	for task_value in (plan as Dictionary).get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "create_script":
+			return task
+	return {}
+
+func test_merged_objective_carries_counts_from_game_model() -> void:
+	GameModelStoreScript.save_model({"counts": {"coins": 1, "enemies": 1}})
+	var merged: String = _tools._build_merged_objective(
+		{"movement": true, "collectible": true, "enemy": true},
+		"Add 3 collectible coins and another patrolling enemy.")
+	assert_true(merged.contains("collect 4 coins"),
+		"additive request: 1 existing + 3 requested (got: %s)" % merged)
+	assert_true(merged.contains("2 patrolling enemies"),
+		"'another enemy': 1 existing + 1 (got: %s)" % merged)
+
+func test_additive_request_only_touches_mentioned_kinds() -> void:
+	# 真机复现："Add another patrolling enemy." 给金币也 +1（3→4）
+	GameModelStoreScript.save_model({"counts": {"coins": 3, "enemies": 1}})
+	var merged: String = _tools._build_merged_objective(
+		{"movement": true, "collectible": true, "enemy": true},
+		"Add another patrolling enemy.")
+	assert_true(merged.contains("collect 3 coins"),
+		"an enemy-only additive goal does not inflate coins (got: %s)" % merged)
+	assert_true(merged.contains("2 patrolling enemies"),
+		"the enemy count increments (got: %s)" % merged)
+
+func test_tuning_goal_on_fresh_plan_still_merges() -> void:
+	# 真缺陷回归：合并块曾嵌在非调参 else 里——全新计划的调参目标生成
+	# extends Node 空壳，modify 找不到常量，目标必败。
+	FeatureRegistryScript.record_feature("Arrow-key player movement",
+		{"movement": true, "enemy": true}, [{"wait_ms": 1}], "fp")
+	var planned: Dictionary = _plan(["gameplay_feature"], "Make the enemy slower so the game is easier.")
+	assert_false(planned.has("error"), planned.get("error", ""))
+	var plan_doc: Dictionary = _tools._load_plan(_plan_path)
+	var task: Dictionary = _create_script_task_from(plan_doc)
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		plan_doc, task, "create_script", _tools._resolve_inputs(task, {}, false))
+	var content: String = String(arguments.get("content", ""))
+	assert_true(content.contains("extends CharacterBody2D"),
+		"a tuning goal on a fresh plan still generates a real controller (not an extends Node stub)")
+	assert_true(content.contains("const ENEMY_SPEED"),
+		"the tuned parameter exists in the merged controller")
+
+func test_tune_apply_derives_modify_script_arguments() -> void:
+	# 真缺陷回归：tune_apply 分支曾被缩进吞进 upsert 分支体内——
+	# modify_script 步骤永远派生不出 content（目标卡在 needs_input）。
+	var script_path: String = "user://tune_target_%s.gd" % str(get_instance_id())
+	var absolute: String = ProjectSettings.globalize_path(script_path)
+	var file: FileAccess = FileAccess.open(absolute, FileAccess.WRITE)
+	file.store_string("const ENEMY_SPEED: float = 120.0\n")
+	file.close()
+	var plan: Dictionary = {"goal": "Make the enemy slower so the game is easier.",
+		"workflow": {"artifacts": {"script": script_path}}}
+	var task: Dictionary = {"tool_name": "modify_script", "step_key": "tune_apply",
+		"profile": "gameplay_feature"}
+	var arguments: Dictionary = _tools._derive_step_arguments(plan, task, "modify_script", {})
+	assert_true(arguments.has("content"), "tune_apply derives its modify content")
+	assert_eq(String(arguments.get("old_text", "")), "const ENEMY_SPEED: float = 120.0",
+		"old_text reads the current value from disk truth")
+	assert_eq(String(arguments.get("content", "")), "const ENEMY_SPEED: float = 78.0",
+		"content applies the slower direction (x0.65)")
+	DirAccess.remove_absolute(absolute)
+
+func test_merged_objective_total_request_never_shrinks() -> void:
+	GameModelStoreScript.save_model({"counts": {"coins": 3}})
+	var merged: String = _tools._build_merged_objective({"collectible": true}, "Add a coin.")
+	assert_true(merged.contains("collect 3 coins"),
+		"a total request keeps the existing 3 (got: %s)" % merged)
+
+func test_merged_content_parses_model_counts() -> void:
+	# 端到端：注册表有移动功能 + 模型记 3 金币 → 新目标的合并源码
+	# 必须生成 COINS_TO_WIN = 3（数量不再被合并吞掉）
+	FeatureRegistryScript.record_feature("Arrow-key player movement",
+		{"movement": true}, [{"wait_ms": 1}], "fp")
+	GameModelStoreScript.save_model({"counts": {"coins": 3}})
+	var planned: Dictionary = _plan(["gameplay_feature"], "Add 3 collectible coins.")
+	assert_false(planned.has("error"), planned.get("error", ""))
+	var plan_doc: Dictionary = _tools._load_plan(_plan_path)
+	var task: Dictionary = _create_script_task_from(plan_doc)
+	assert_false(task.is_empty(), "gameplay profile has a create_script step")
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		plan_doc, task, "create_script", _tools._resolve_inputs(task, {}, false))
+	var content: String = String(arguments.get("content", ""))
+	assert_true(content.contains("const COINS_TO_WIN: int = 3"),
+		"merged controller keeps three coins (cumulative-merge with model counts)")
+	assert_eq(String(task.get("derived_inputs", {}).get("content", "")), "cumulative-merge")
+
+func test_state_machine_survives_cumulative_merge() -> void:
+	# 旧实现直接 erase state_machine——"加完标题屏再加玩法"失去标题流程
+	FeatureRegistryScript.record_feature("title screen game flow",
+		{"state_machine": true, "movement": true, "collectible": true}, [{"wait_ms": 1}], "fp")
+	var planned: Dictionary = _plan(["gameplay_feature"], "Add a pause menu.")
+	assert_false(planned.has("error"), planned.get("error", ""))
+	var plan_doc: Dictionary = _tools._load_plan(_plan_path)
+	var task: Dictionary = _create_script_task_from(plan_doc)
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		plan_doc, task, "create_script", _tools._resolve_inputs(task, {}, false))
+	var content: String = String(arguments.get("content", ""))
+	assert_true(content.contains("_title_label"),
+		"merged controller keeps the title screen when the goal does not mention it")
+
+func test_user_edit_conflict_blocks_regeneration() -> void:
+	var script_path: String = "user://protection_controller_%s.gd" % str(get_instance_id())
+	var absolute: String = ProjectSettings.globalize_path(script_path)
+	var file: FileAccess = FileAccess.open(absolute, FileAccess.WRITE)
+	file.store_string("# controller v1\n")
+	file.close()
+	GameModelStoreScript.apply_completion("movement goal", {"movement": true},
+		script_path, "# controller v1\n")
+	FeatureRegistryScript.record_feature("Arrow-key movement", {"movement": true},
+		[{"wait_ms": 1}], "fp")
+	# 用户手改（指纹漂移）
+	var edit: FileAccess = FileAccess.open(absolute, FileAccess.WRITE)
+	edit.store_string("# controller v1 + user tweaks\n")
+	edit.close()
+	var planned: Dictionary = _plan(["gameplay_feature"], "Add 3 collectible coins.")
+	assert_false(planned.has("error"), planned.get("error", ""))
+	var plan_doc: Dictionary = _tools._load_plan(_plan_path)
+	(plan_doc["workflow"] as Dictionary)["artifacts"] = {"script": script_path}
+	var task: Dictionary = _create_script_task_from(plan_doc)
+	var arguments: Dictionary = _tools._derive_step_arguments(
+		plan_doc, task, "create_script", _tools._resolve_inputs(task, {}, false))
+	assert_true(task.has("protection_conflict"),
+		"fingerprint drift blocks cumulative regeneration")
+	assert_false(arguments.has("content"), "no overwrite content derived")
+	assert_true(String((task["protection_conflict"] as Dictionary).get("reason", "")).contains("user edits"),
+		"conflict reason explains the manual-edit detection")
+	DirAccess.remove_absolute(absolute)
+
+func test_tuning_direction_blocks_unchanged_parameter() -> void:
+	# 差距分析反例：速度 80/120 在旧阈值下都通过——方向门禁必须拦下
+	# "调了但没变"（改后振幅与基线一致）
+	var plan: Dictionary = {"goal": "Make the enemy slower so the game is easier.",
+		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
+	var result: Variant = _tools._check_tuning_direction(plan,
+		{"passed": true, "assertions": [{"metric": "ex", "aggregate": "max", "actual": 57.4}]})
+	assert_true((result as Dictionary).has("error"),
+		"an unchanged amplitude fails the direction gate")
+
+func test_tuning_direction_passes_real_change() -> void:
+	var plan: Dictionary = {"goal": "Make the enemy slower so the game is easier.",
+		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
+	var result: Variant = _tools._check_tuning_direction(plan,
+		{"passed": true, "assertions": [{"metric": "ex", "aggregate": "max", "actual": 40.1}]})
+	assert_false((result as Dictionary).has("error"),
+		"an amplitude drop consistent with slower passes")
+	var direction: Dictionary = (result as Dictionary).get("tuning_direction", {})
+	assert_eq(float(direction.get("tuned", 0.0)), 40.1, "measured value surfaced as evidence")
+
+func test_tuning_direction_ignores_non_enemy_params() -> void:
+	var plan: Dictionary = {"goal": "Make the player faster.",
+		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
+	var result: Variant = _tools._check_tuning_direction(plan, {"passed": true, "assertions": []})
+	assert_false((result as Dictionary).has("error"),
+		"player-speed tuning keeps its own calibrated thresholds")
+
+func test_prior_regression_failure_blocks_completion() -> void:
+	FeatureRegistryScript.record_feature("Arrow-key player movement",
+		{"movement": true}, [{"wait_ms": 1}], "fp")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": false,
+		"assertions": [{"description": "player moved right while holding move_right", "passed": false}]}
+	var plan: Dictionary = {"goal": "Add a pause menu.", "workflow": {"workflow_id": "w1"}}
+	var regression: Dictionary = await _tools._run_prior_feature_regression(plan)
+	assert_true(bool(regression.get("failed", false)),
+		"a failed prior exercise marks the regression failed")
+	assert_true(String(regression.get("reason", "")).contains("player moved right"),
+		"the failing assertion is surfaced in the reason")
+	# 授权结构校验（真缺陷：空 step_id 会被 invoke_planned_tool 拒绝，
+	# 回归门禁因此从未真正执行过演练）
+	assert_eq(str(_core.calls[0]["authorization"].get("step_id", "")), "prior_regression",
+		"run_project carries a non-empty synthetic step_id")
+	assert_eq(str(_core.calls[1]["tool_name"]), "play_and_verify",
+		"the prior exercise ran through play_and_verify")
+	assert_eq(str(_core.calls[1]["authorization"].get("authorized_tool", "")), "play_and_verify",
+		"authorization matches the invoked tool")
+
+func test_prior_regression_success_allows_completion() -> void:
+	FeatureRegistryScript.record_feature("Arrow-key player movement",
+		{"movement": true}, [{"wait_ms": 1}], "fp")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
+	var plan: Dictionary = {"goal": "Add a pause menu.", "workflow": {"workflow_id": "w1"}}
+	var regression: Dictionary = await _tools._run_prior_feature_regression(plan)
+	assert_false(bool(regression.get("failed", true)),
+		"passing prior exercises do not block completion")
+	assert_eq((regression.get("checked", []) as Array).size(), 1, "one prior feature checked")
+
+func test_prior_regression_skips_current_goal_verbs() -> void:
+	FeatureRegistryScript.record_feature("Arrow-key player movement",
+		{"movement": true}, [{"wait_ms": 1}], "fp")
+	FeatureRegistryScript.record_feature("Patrolling enemy",
+		{"enemy": true}, [{"wait_ms": 1}], "fp2")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
+	var plan: Dictionary = {"goal": "Improve the patrolling enemy.",
+		"workflow": {"workflow_id": "w1"}}
+	var regression: Dictionary = await _tools._run_prior_feature_regression(plan)
+	assert_eq((regression.get("checked", []) as Array).size(), 1,
+		"the enemy feature is excluded (current goal touches it); only movement re-verifies")
+
+func test_state_play_steps_cover_full_two_round_loop() -> void:
+	var steps: Array = _tools._state_play_steps()
+	var expressions: PackedStringArray = []
+	for step_value in steps:
+		var step: Dictionary = step_value
+		if step.has("assert"):
+			var assertion: Dictionary = step["assert"]
+			expressions.append("%s == %s" % [String(assertion.get("expression", "")),
+				str(assertion.get("expected", ""))])
+	var joined: String = ";".join(expressions)
+	assert_true(joined.contains("coins_collected == COINS_TO_WIN"),
+		"full collection is asserted")
+	assert_true(joined.contains("game_state") and joined.contains("win"),
+		"the win state is asserted")
+	assert_true(joined.contains("game_state == title"),
+		"the restart-to-title transition is asserted")
+	assert_true(joined.contains("coins_collected == 0"),
+		"the counter reset is asserted")
+	assert_true(joined.contains("game_state == playing"),
+		"the second-round start is asserted")
+	assert_true(joined.to_lower().contains("and game_state"),
+		"the second-round full win is asserted")
+
+func test_tune_steps_unlock_title_when_state_machine_registered() -> void:
+	FeatureRegistryScript.record_feature("title screen game flow",
+		{"state_machine": true}, [{"wait_ms": 1}], "fp")
+	var plan: Dictionary = {"goal": "Make the player faster and snappier.", "workflow": {}}
+	var task: Dictionary = {"tool_name": "play_and_verify", "step_key": "tune_baseline",
+		"profile": "gameplay_feature"}
+	var arguments: Dictionary = _tools._derive_step_arguments(plan, task, "play_and_verify", {})
+	var steps: Array = arguments.get("steps", [])
+	assert_gt(steps.size(), 0, "tune baseline derives steps")
+	assert_eq(String((steps[0] as Dictionary).get("action", "")), "ui_accept",
+		"the first step unlocks the title gate before measuring")
+	assert_eq(String((steps[2] as Dictionary).get("action", "")), "ui_accept",
+		"double Enter covers a win-state start")

@@ -83,7 +83,9 @@ static func registered_verbs(path: String = REGISTRY_PATH) -> Dictionary:
 	return combined
 
 ## 既往功能的验收步骤（用于旧行为重验）。exclude_verbs 中的动词跳过
-## （新目标正在修改的功能不重验自己）。
+## （新目标正在修改的功能不重验自己）。返回携带原始 goal——完成前回归
+## 按"当前"语境重新推导演练（而非回放录制步骤），更名/调参后的符号
+## 变化不会让旧步骤失配。
 static func prior_exercises(exclude_verbs: Dictionary = {},
 		path: String = REGISTRY_PATH) -> Array:
 	var registry: Dictionary = load_registry(path)
@@ -102,6 +104,7 @@ static func prior_exercises(exclude_verbs: Dictionary = {},
 		if not exercise.is_empty():
 			exercises.append({
 				"feature_id": feature.get("id", ""),
+				"goal": feature.get("goal", ""),
 				"steps": exercise,
 			})
 	return exercises

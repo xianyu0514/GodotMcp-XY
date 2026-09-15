@@ -405,8 +405,11 @@ func _spec(key: String, tool_name: String, stage: String, objective_gate: bool =
 
 ## 蓝图控制器用到的四个移动动作（方向键 + WASD 双绑定）。
 ## upsert_project_input_action 的事件载荷直接使用引擎键码常量。
-func _movement_input_actions() -> Array[Dictionary]:
-	return [
+## 四方向输入动作表。is_3d 时把 up/down 替换为 forward/back（3D 控制器读
+## get_vector("move_left","move_right","move_forward","move_back")）——替换而非
+## 追加，保证任何目标的输入注册步数恒为 4，不改变 2D 目标的计划长度。
+func _movement_input_actions(is_3d: bool = false) -> Array[Dictionary]:
+	var actions: Array[Dictionary] = [
 		{
 			"action_name": "move_left",
 			"deadzone": 0.2,
@@ -440,6 +443,25 @@ func _movement_input_actions() -> Array[Dictionary]:
 			]
 		}
 	]
+	if is_3d:
+		for i in range(actions.size()):
+			if String(actions[i].get("action_name", "")) == "move_up":
+				actions[i] = {
+					"action_name": "move_forward", "deadzone": 0.2,
+					"events": [
+						{"type": "key", "keycode": KEY_UP},
+						{"type": "key", "keycode": KEY_W}
+					]
+				}
+			elif String(actions[i].get("action_name", "")) == "move_down":
+				actions[i] = {
+					"action_name": "move_back", "deadzone": 0.2,
+					"events": [
+						{"type": "key", "keycode": KEY_DOWN},
+						{"type": "key", "keycode": KEY_S}
+					]
+				}
+	return actions
 
 func _profile_specs(profile_id: String, objective: String, platform: String) -> Array[Dictionary]:
 	var goal: String = objective.to_lower()
@@ -465,7 +487,8 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 					return String(spec.get("key", "")) == "upsert_input")
 				if index >= 0:
 					gameplay_specs.remove_at(index)
-				for direction in _movement_input_actions():
+				var goal_is_3d: bool = GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.THREE_D_KEYWORDS)
+				for direction in _movement_input_actions(goal_is_3d):
 					gameplay_specs.insert(2, _spec(
 						"input_%s" % direction.get("action_name", "").replace("move_", ""),
 						"upsert_project_input_action", "build_configure", false, direction))
@@ -499,7 +522,8 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 						return String(spec.get("key", "")) == "upsert_input")
 					if stale_upsert >= 0:
 						gameplay_specs.remove_at(stale_upsert)
-					for direction in _movement_input_actions():
+					var save_goal_is_3d: bool = GoalBlueprintsScript._mentions(goal, GoalBlueprintsScript.THREE_D_KEYWORDS)
+					for direction in _movement_input_actions(save_goal_is_3d):
 						gameplay_specs.insert(2, _spec(
 							"input_%s" % direction.get("action_name", "").replace("move_", ""),
 							"upsert_project_input_action", "build_configure", false, direction))

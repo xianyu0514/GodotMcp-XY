@@ -546,6 +546,25 @@ func test_movement_goal_expands_directional_input_actions() -> void:
 		var events: Array = matched.get("arguments", {}).get("events", [])
 		assert_gt(events.size(), 0, "%s binds at least one key event" % expected)
 
+func test_3d_movement_goal_registers_forward_back_actions() -> void:
+	# 3D 控制器读 get_vector("move_left","move_right","move_forward","move_back")
+	# ——3D 目标必须把 up/down 替换为 forward/back（步数恒为 4，不追加）。
+	var plan: Dictionary = _compile(
+		"A small 3D level: arrow-key movement with a coin to collect.", ["gameplay_feature"])["plan"]
+	var upserts: Array[Dictionary] = []
+	for task_value in plan.get("tasks", []):
+		var task: Dictionary = task_value
+		if String(task.get("tool_name", "")) == "upsert_project_input_action":
+			upserts.append(task)
+	assert_eq(upserts.size(), 4, "3D movement goal still registers exactly four actions (got %d)" % upserts.size())
+	var action_names: Array[String] = []
+	for task in upserts:
+		action_names.append(String(task.get("arguments", {}).get("action_name", "")))
+	for expected in ["move_left", "move_right", "move_forward", "move_back"]:
+		assert_true(expected in action_names, "3D goal registers %s (got: %s)" % [expected, str(action_names)])
+	assert_false("move_up" in action_names, "3D goal does not register move_up (controller reads move_forward)")
+	assert_false("move_down" in action_names, "3D goal does not register move_down (controller reads move_back)")
+
 func test_collectible_only_goal_keeps_single_default_upsert() -> void:
 	var plan: Dictionary = _compile(
 		"Collect a coin and show a win label", ["gameplay_feature"])["plan"]

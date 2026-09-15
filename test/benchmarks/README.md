@@ -32,7 +32,7 @@
 
 ## 事件记录（JSONL，每次运行一个文件）
 
-每行一个事件，写入 `runs/<run_id>.jsonl`：
+每行一个事件，写入 `runs/<run_id>.jsonl`（runner 实现为每事件携带唯一 `run_id` 字段并追加到 `benchmark_<task>_r<rep>.jsonl`；`formal_comparison.py --fresh` 先归档旧批次——一份报告只对应一个代码状态，可按报告内声明的 `aggregation_rule` 从原始事件重算）：
 
 ```json
 {"t": "iso8601", "run_id": "...", "task_id": "N1", "product": "godot-mcp-native", "model": "...", "godot": "4.7.2", "event": "run_started", "payload": {"objective": "..."}}

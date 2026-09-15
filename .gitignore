@@ -50,3 +50,7 @@ addons/gut/
 # Goal-flow integration test scratch project (test_game_goal_flow.py)
 tmp_goal_flow_project/
 releases/
+
+# Benchmark / integration scratch workspaces (created by runners)
+tmp_benchmark_project/
+tmp_representative_game/

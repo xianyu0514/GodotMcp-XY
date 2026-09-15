@@ -16,6 +16,7 @@ const GoalBlueprintsScript = preload("res://addons/godot_mcp/native_mcp/goal_blu
 const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal.gd")
 const LayoutVerifierScript = preload("res://addons/godot_mcp/tools/layout_verifier.gd")
 const FeatureRegistryScript = preload("res://addons/godot_mcp/tools/feature_registry.gd")
+const GameModelStoreScript = preload("res://addons/godot_mcp/tools/game_model_store.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -328,8 +329,12 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			plan_needs_runtime = true
 			break
 	if state == "planned" and plan_needs_runtime:
+		# 授权必须是完整的（step_id 非空 + authorized_tool 匹配）——空任务的
+		# _authorization 会因 "missing 'step_id'" 被拒，stale-stop 从未真正
+		# 生效（残留游戏污染下一目标的调试器会话，N4/E1/R3 的 waiting 类
+		# 失败与此相关）。合成 step_id 仅需非空与工具匹配。
 		var stale_stop: Variant = await _server_core.invoke_planned_tool("stop_project",
-			{"allow_window": true}, _authorization(plan, {}, false))
+			{"allow_window": true}, _synthetic_authorization(plan, "stale_stop", "stop_project"))
 		if stale_stop is Dictionary and not (stale_stop as Dictionary).has("error"):
 			var stopped_scene: String = String((stale_stop as Dictionary).get("last_played_scene",
 				(stale_stop as Dictionary).get("scene", "")))
@@ -433,6 +438,20 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		var tool_name: String = String(task.get("tool_name", ""))
 		var arguments: Dictionary = _derive_step_arguments(
 			plan, task, tool_name, _resolve_inputs(task, step_inputs, false))
+		# 用户手改保护（P1-5）：累积合并会整脚本覆盖控制器——指纹漂移说明
+		# 脚本含插件未确认写入的修改，阻止覆盖并以明确指引失败。
+		if task.has("protection_conflict"):
+			var conflict: Dictionary = task["protection_conflict"]
+			task["status"] = "blocked"
+			workflow["state"] = "blocked"
+			workflow["blocked_reason"] = String(conflict.get("reason", "user edits detected"))
+			var conflict_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if conflict_save.has("error"):
+				return conflict_save
+			return _runner_response(plan, plan_path, "blocked", executed, {
+				"step_id": task.get("id", ""), "tool_name": tool_name,
+				"protection_conflict": conflict,
+			})
 		var missing: Array[String] = _missing_required_inputs(tool_name, arguments)
 		if not missing.is_empty():
 			task["needs_input"] = true
@@ -467,9 +486,45 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		if before_save.has("error"):
 			return before_save
 		var authorization: Dictionary = _authorization(plan, task, false)
+		# 调参测量前新鲜重启（P2-1 相位一致）：基线与验证必须在相同的初始
+		# 状态下测量——复用运行中的游戏会让敌相位随历史漂移，振幅对比
+		# 失去意义（真机复现：baseline 30.4 vs tuned 77.1，方向门禁正确地
+		# 拒绝了不可比的数据）。重启后 enemy_time 从 0 起算，两窗口同相位。
+		if tool_name == "play_and_verify" \
+				and String(task.get("step_key", "")) in ["tune_baseline", "tune_verify"]:
+			await _server_core.invoke_planned_tool("stop_project", {"allow_window": true},
+				_synthetic_authorization(plan, "tune_fresh_stop", "stop_project"))
+			await _server_core.invoke_planned_tool("run_project", {"allow_window": true},
+				_synthetic_authorization(plan, "tune_fresh_run", "run_project"))
 		var raw_result: Variant = await _server_core.invoke_planned_tool(tool_name, arguments, authorization)
 		atomic_calls += 1
 		metrics["atomic_calls"] = int(metrics.get("atomic_calls", 0)) + 1
+		# 调参基线携带（P2-1）：基线步的采样实际值持久化到工件——
+		# 调参验证步与它做跨会话方向对比（基线跑在改动之前）。
+		if tool_name == "play_and_verify" and String(task.get("step_key", "")) == "tune_baseline" \
+				and raw_result is Dictionary and not (raw_result as Dictionary).has("error"):
+			var baseline_value: float = _extract_metric_actual(raw_result, "ex")
+			if not is_nan(baseline_value):
+				var baseline_tune: Dictionary = parse_tuning_goal(String(plan.get("goal", "")))
+				if not (workflow.get("artifacts", {}) is Dictionary):
+					workflow["artifacts"] = {}
+				(workflow["artifacts"] as Dictionary)["tune_baseline"] = {
+					"param": String(baseline_tune.get("param", "")),
+					"value": baseline_value,
+				}
+		# 调参计划值捕获（P2-2）：modify 成功后把 old→new 记入工件，
+		# 磁吸半径验证步断言新值确已生效。
+		if tool_name == "modify_script" and String(task.get("step_key", "")) == "tune_apply" \
+				and raw_result is Dictionary and not (raw_result as Dictionary).has("error"):
+			var planned_tune: Dictionary = _parse_planned_tune(arguments)
+			if not planned_tune.is_empty():
+				if not (workflow.get("artifacts", {}) is Dictionary):
+					workflow["artifacts"] = {}
+				(workflow["artifacts"] as Dictionary)["tune_planned"] = planned_tune
+		# 调参方向证明（P2-1）：改后采样与改前基线对比——方向不成立即
+		# 门禁失败（"调了但没变"不可能通过；旧固定阈值区分不出）。
+		if tool_name == "play_and_verify" and String(task.get("step_key", "")) == "tune_verify":
+			raw_result = _check_tuning_direction(plan, raw_result)
 		# E3 离线布局门禁：ui profile 的 save_scene 成功后，按锚点在三种
 		# 视口尺寸解算根级控件矩形——越界/重叠即本步失败（确定性证据，
 		# 无需真机改窗口；真机交互抽查由 play 演练承担）。
@@ -510,6 +565,26 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 		final_status = "running"
 	var final_extra: Dictionary = {}
 	if final_status == "completed":
+		# 旧行为回归门禁（P1-4）：完成前重验受影响的旧功能——回归失败
+		# 阻止宣布完成（"错误完成声明"的核心来源：completed ≠ 十项需求完成）。
+		var prior_regression: Dictionary = await _run_prior_feature_regression(plan)
+		if bool(prior_regression.get("failed", false)):
+			workflow["state"] = "replan_required"
+			workflow["blocked_reason"] = "prior feature regression failed: %s" % String(prior_regression.get("reason", "unknown"))
+			var regression_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if regression_save.has("error"):
+				return regression_save
+			return _runner_response(plan, plan_path, "replan_required", executed, {"prior_regression": prior_regression})
+		if not prior_regression.is_empty():
+			final_extra["prior_regression"] = prior_regression
+		# 真实指纹（P1-4）：控制器脚本内容 sha256——注册表与游戏模型都以
+		# 磁盘实况为准（差距分析：空字符串指纹永远检不出漂移）。
+		var completion_artifacts: Dictionary = workflow.get("artifacts", {}) if workflow.get("artifacts", {}) is Dictionary else {}
+		var artifact_script: String = String(completion_artifacts.get("script", ""))
+		var script_source: String = ""
+		if not artifact_script.is_empty() and FileAccess.file_exists(artifact_script):
+			script_source = FileAccess.get_file_as_string(artifact_script)
+		var script_fingerprint: String = GameModelStoreScript.file_fingerprint(artifact_script)
 		# Phase B 功能归属注册：记录本功能的动词与验收步骤，
 		# 供后续目标的旧行为重验使用
 		var feature_verbs: Dictionary = GoalBlueprintsScript.match_verbs(String(plan.get("goal", "")))
@@ -518,7 +593,14 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			_derive_generic_play_steps(plan, {}, "play_and_verify", feature_args)
 			var feature_exercise: Array = feature_args.get("steps", [])
 			FeatureRegistryScript.record_feature(String(plan.get("goal", "")),
-				feature_verbs, feature_exercise, "")
+				feature_verbs, feature_exercise, script_fingerprint)
+		# 持久游戏模型（P1-1）：数量/参数/指纹入档——调参与更名目标同样
+		# 刷新指纹，用户手改检测的基线始终是"插件最后一次确认写入"。
+		if not script_source.is_empty():
+			var model_result: Dictionary = GameModelStoreScript.apply_completion(
+				String(plan.get("goal", "")), feature_verbs, artifact_script, script_source)
+			if not model_result.has("error"):
+				final_extra["game_model"] = model_result
 		# 跨目标账本（P4 v1）：目标完成时把 goal + 工件持久记录到项目级
 		# 账本（与 plan 文件分开——plan 会被 replace，账本累积）。后续目标
 		# 的回归与冲突检测以此为准（修复/新目标不得破坏既有目标产物）。
@@ -701,33 +783,49 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 				registered_verbs = FeatureRegistryScript.registered_verbs()
 		else:
 			registered_verbs = FeatureRegistryScript.registered_verbs()
+# 调参与非调参目标共用合并路径（真缺陷：合并块曾嵌在非调参 else 里，
+# 全新计划的调参目标生成 extends Node 空壳——modify 找不到常量，目标必败）。
 		var goal_verbs: Dictionary = GoalBlueprintsScript.match_verbs(objective)
 		# 累积合并仅当目标本身命中蓝图动词时生效——非玩法目标（如导出、
 		# 本地化）不应被合并拉入游戏控制器。
 		if not registered_verbs.is_empty() and GoalBlueprintsScript.has_any_verb(goal_verbs):
 			# 合并：已注册动词 ∪ 新目标动词（新目标优先——同动词可能被
-			# 新目标重新启用）
+				# 新目标重新启用）
 			var merged_verbs: Dictionary = registered_verbs.duplicate()
 			for verb_key in goal_verbs.keys():
 				merged_verbs[verb_key] = goal_verbs[verb_key] or bool(registered_verbs.get(verb_key, false))
-			# state_machine 是游戏流覆盖层——标题屏门控会阻断其他目标的
-			# 移动逻辑。仅当当前目标明确请求时才纳入合并。
-			if not bool(goal_verbs.get("state_machine", false)):
-				merged_verbs.erase("state_machine")
-			# 用合并动词集构建合成目标语句（controller_script 按动词匹配，
-			# 所以只要动词集正确，生成的控制器就包含所有功能）
-			var merged_objective: String = _build_merged_objective(merged_verbs, objective)
-			var merged_source: String = GoalBlueprintsScript.controller_script(merged_objective)
-			if not merged_source.is_empty():
-				arguments["content"] = merged_source
-				task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-				task["derived_inputs"]["content"] = "cumulative-merge"
-			else:
-				var fallback_source: String = GoalBlueprintsScript.controller_script(objective)
-				if not fallback_source.is_empty():
-					arguments["content"] = fallback_source
-					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-					task["derived_inputs"]["content"] = "goal-blueprint"
+			# state_machine 保留在合并里（P1-6）：旧实现直接从合并动词里
+				# 抹掉 state_machine，"加完标题屏再加玩法"会静默失去标题流程。
+				# 门控兼容由双 Enter 前缀（on-demand/generic 两处演练都会先
+				# 进入 playing）与完成前旧行为回归门禁兜底。
+				# 用合并动词集构建合成目标语句（controller_script 按动词匹配，
+				# 所以只要动词集正确，生成的控制器就包含所有功能）
+				var merged_objective: String = _build_merged_objective(merged_verbs, objective)
+				var merged_source: String = GoalBlueprintsScript.controller_script(merged_objective)
+				if not merged_source.is_empty():
+					# 用户手改保护（P1-5）：指纹漂移 = 插件最后确认写入之后有
+						# 人工修改——整脚本重生成会覆盖手改，阻止并给出指引
+						# （runner 在参数派生后拦截 protection_conflict）。
+					var merge_artifacts: Dictionary = (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) \
+						if (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) is Dictionary else {}
+					var merge_script: String = String(merge_artifacts.get("script", ""))
+					if GameModelStoreScript.has_user_edits(merge_script):
+						task["protection_conflict"] = {
+							"script": merge_script,
+							"reason": "user edits detected in %s (content differs from the fingerprint recorded in res://.mcp/game_model.json); cumulative regeneration would overwrite them — resolve manually, or delete game_model.json to accept regeneration" % merge_script,
+							}
+					else:
+						# 已调参数注入（P1-2）：调参成果不被合并重生成覆盖
+						merged_source = GameModelStoreScript.apply_param_overrides(merged_source)
+						arguments["content"] = merged_source
+						task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+						task["derived_inputs"]["content"] = "cumulative-merge"
+				else:
+					var fallback_source: String = GoalBlueprintsScript.controller_script(objective)
+					if not fallback_source.is_empty():
+						arguments["content"] = fallback_source
+						task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+						task["derived_inputs"]["content"] = "goal-blueprint"
 		else:
 			var blueprint_source: String = GoalBlueprintsScript.controller_script(objective)
 			if not blueprint_source.is_empty():
@@ -863,29 +961,33 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		arguments["action_name"] = "move_up"
 		task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 		task["derived_inputs"]["action_name"] = "move_up"
-	# 迭代调参（tune_apply）：SPEED 常量按方向调整（260 → 360/180）
+	# 迭代调参（tune_apply）：按磁盘实况读当前值再按方向换算
+	# （P2-1：old_text 不再假设固定基线——重复调参 80→52、跨目标
+	# 调参都能工作；faster ×1.5 / slower ×0.65）
 	if tool_name == "modify_script" and String(task.get("step_key", "")) == "tune_apply":
 		var tune_info: Dictionary = parse_tuning_goal(String(plan.get("goal", "")))
 		if not tune_info.is_empty():
 			var tune_artifacts: Dictionary = (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) \
 				if (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) is Dictionary else {}
 			arguments["script_path"] = String(tune_artifacts.get("script", ""))
-			# Q4：按参数名派生 old_text/content（SPEED/ENEMY_SPEED/MAGNET）
 			var tune_param: String = String(tune_info.get("param", "SPEED"))
-			var tune_old: String = String(tune_info.get("old", "260.0"))
-			var tune_new: String = String(tune_info.get("new", "360.0"))
-			if tune_param == "SPEED":
-				arguments["old_text"] = "const SPEED: float = %s" % tune_old
-				arguments["content"] = "const SPEED: float = %s" % tune_new
-			elif tune_param == "ENEMY_SPEED":
-				arguments["old_text"] = "const ENEMY_SPEED: float = %s" % tune_old
-				arguments["content"] = "const ENEMY_SPEED: float = %s" % tune_new
-			elif tune_param == "MAGNET":
-				arguments["old_text"] = "coin_shape.radius = %s" % tune_old
-				arguments["content"] = "coin_shape.radius = %s" % tune_new
+			# MAGNET 解析名映射到产物常量名 COIN_RADIUS（蓝图已把拾取
+			# 半径收敛为单一常量，三处创建点共用）。
+			var const_name: String = "COIN_RADIUS" if tune_param == "MAGNET" else tune_param
+			var tune_source: String = ""
+			if FileAccess.file_exists(String(tune_artifacts.get("script", ""))):
+				tune_source = FileAccess.get_file_as_string(String(tune_artifacts.get("script", "")))
+			var current_value: float = GameModelStoreScript.current_param_value(tune_source, const_name) \
+				if not tune_source.is_empty() else float(tune_info.get("old", "260.0"))
+			var tune_direction: String = String(tune_info.get("direction", "faster"))
+			var new_value: float = current_value * (1.5 if tune_direction == "faster" else 0.65)
+			var tune_old: String = "%.1f" % current_value
+			var tune_new: String = "%.1f" % new_value
+			arguments["old_text"] = "const %s: float = %s" % [const_name, tune_old]
+			arguments["content"] = "const %s: float = %s" % [const_name, tune_new]
 			arguments["validate"] = true
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
-			task["derived_inputs"]["tune"] = "%s %s->%s" % [tune_param, tune_old, tune_new]
+			task["derived_inputs"]["tune"] = "%s %s->%s" % [const_name, tune_old, tune_new]
 	# E4 更名目标：rename 步骤缺 symbol_name 时从目标解析（受控模式），
 	# 并默认真写（工作流上下文里 dry_run 预览不推进目标）。
 	if tool_name == "rename_script_symbol" and not arguments.has("symbol_name"):
@@ -915,35 +1017,63 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 		# 存档链的两侧门禁各有专属演练（N3）：save_play = 移动+存档+断言
 		# 写盘；restore_play = 全新进程读档后断言磁盘状态回归。
 		var play_step_key: String = String(task.get("step_key", ""))
-		if play_step_key == "tune_baseline":
+		if play_step_key == "tune_baseline" \
+				and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "ENEMY_SPEED":
+			# 敌速基线（P2-1）：确定性帧步进采样敌人巡逻振幅——改前基线与
+			# 改后采样同窗对比，方向证明不依赖固定阈值。24 帧窗口下
+			# 速度 120/80/180 的振幅分别约 57/40/75px，两向间隔 ≥16px。
+			arguments["steps"] = _title_unlock_prefix() + [{"wait_frames": 24}]
+			arguments["deterministic"] = true
+			arguments["sample"] = [{"label": "ex", "expression": "abs(_enemy.position.x - 300.0)"}]
+			arguments["assertions"] = [{"metric": "ex", "aggregate": "max",
+				"description": "baseline: enemy patrol amplitude over 24 physics frames"}]
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-baseline-enemy"
+		elif play_step_key == "tune_baseline":
 			# 基线 = 短右腿健全性。敌人在场时用位移相对式（敌人死亡重置
 			# 会干扰绝对阈值——真机审计：累积模式下带敌人的调参基线闪断）。
-			arguments["steps"] = [
-				{"action": "move_right", "pressed": true, "wait_ms": 400,
-					"assert": {"expression": "position.x", "displacement_min": 15,
-						"description": "baseline: the player moves at base speed"}},
-				{"action": "move_right", "pressed": false, "wait_ms": 80},
-			]
+			arguments["steps"] = _title_unlock_prefix() + [
+					{"action": "move_right", "pressed": true, "wait_ms": 400,
+						"assert": {"expression": "position.x", "displacement_min": 15,
+							"description": "baseline: the player moves at base speed"}},
+					{"action": "move_right", "pressed": false, "wait_ms": 80},
+				]
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-baseline"
-		elif play_step_key == "tune_verify" and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "ENEMY_SPEED":
-			# 敌速调参验证：测敌人巡逻频率（单位时间位置变化量），不测玩家——
-			# 差距分析：调参验收采样玩家 x 位移是牛头不对马嘴。
-			# 采样只在 wait_frames 帧步进时发生（wait_ms 是墙钟等待）——
-			# 用 wait_frames 确保样本被收集。
-			arguments["steps"] = [
-				{"wait_frames": 36,
-				 "assert": {"expression": "_enemy.position.x", "operator": "gt", "expected": 305.0,
-					 "description": "tuned enemy patrol beyond home+5 after 36 frames"}},
-			]
+		elif play_step_key == "tune_verify" \
+				and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "ENEMY_SPEED":
+			# 敌速调参验证（P2-1）：与改前基线同窗采样；方向由 runner 的
+			# _check_tuning_direction 对比断言。旧固定阈值 x>305 对速度
+			# 80/120 都通过——区分不出"调了"和"没调"（差距分析反例）。
+			arguments["steps"] = _title_unlock_prefix() + [{"wait_frames": 24}]
 			arguments["deterministic"] = true
-			arguments["sample"] = [{"label": "ex", "expression": "_enemy.position.x"}]
-			arguments["assertions"] = [{
-				"metric": "ex", "aggregate": "max", "operator": "gt", "expected": 305.0,
-				"description": "tuned enemy patrol reaches beyond home (ENEMY_SPEED drives oscillation)"
-			}]
+			arguments["sample"] = [{"label": "ex", "expression": "abs(_enemy.position.x - 300.0)"}]
+			arguments["assertions"] = [{"metric": "ex", "aggregate": "max",
+					"description": "tuned enemy patrol amplitude (direction checked against tune_baseline)"}]
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-verify-enemy"
+		elif play_step_key == "tune_verify" \
+				and String(parse_tuning_goal(String(plan.get("goal", ""))).get("param", "")) == "MAGNET":
+			# 磁吸半径验证（P2-2）：配置级（新半径值已生效，计划值由
+			# runner 在 tune_apply 成功后记入工件）+ 行为级（拾取仍完成）。
+			var magnet_steps: Array = [
+				{"action": "move_right", "pressed": true, "wait_ms": 1200},
+				{"action": "move_right", "pressed": false, "wait_ms": 300,
+					"assert": {"expression": "coins_collected", "operator": "gt", "expected": 0,
+						"description": "pickup still works at the tuned radius"}},
+			]
+			var planned_magnet: Dictionary = {}
+			if (plan.get("workflow", {}) as Dictionary).get("artifacts", {}) is Dictionary:
+				planned_magnet = ((plan.get("workflow", {}) as Dictionary)["artifacts"] as Dictionary).get("tune_planned", {})
+			if planned_magnet is Dictionary and String(planned_magnet.get("param", "")) == "COIN_RADIUS":
+				magnet_steps.append({
+					"assert": {"expression": "COIN_RADIUS", "operator": "eq",
+						"expected": float(planned_magnet.get("new", 0.0)),
+						"description": "tuned pickup radius is in effect"}
+				})
+			arguments["steps"] = _title_unlock_prefix() + magnet_steps
+			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
+			task["derived_inputs"]["steps"] = "tune-verify-magnet"
 		elif play_step_key == "tune_verify":
 			# 对比用帧步进位移 delta（起点无关，且区分调参前后）：
 			# 20 物理帧保持下 260px/s ≈ 86px，360px/s ≈ 120px，180px/s ≈ 60px。
@@ -953,13 +1083,13 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			var verify_operator: String = "gt"
 			var verify_note: String = "tuned faster: 20-frame hold delta > 100px (base was ~86)"
 			if not verify_tune.is_empty() and String(verify_tune["direction"]) == "slower":
-				verify_threshold = 75.0
-				verify_operator = "lt"
-				verify_note = "tuned slower: 20-frame hold delta < 75px (base was ~86)"
-			arguments["steps"] = [
-				{"action": "move_right", "pressed": true, "wait_frames": 20},
-				{"action": "move_right", "pressed": false, "wait_ms": 80},
-			]
+					verify_threshold = 75.0
+					verify_operator = "lt"
+					verify_note = "tuned slower: 20-frame hold delta < 75px (base was ~86)"
+			arguments["steps"] = _title_unlock_prefix() + [
+					{"action": "move_right", "pressed": true, "wait_frames": 20},
+					{"action": "move_right", "pressed": false, "wait_ms": 80},
+				]
 			arguments["deterministic"] = true
 			arguments["sample"] = [{"label": "px", "expression": "position.x"}]
 			arguments["assertions"] = [{
@@ -969,7 +1099,7 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-verify"
 		elif play_step_key == "save_play":
-			arguments["steps"] = _save_play_steps()
+			arguments["steps"] = _title_unlock_prefix() + _save_play_steps()
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "save-exercise"
 		elif play_step_key == "restore_play":
@@ -993,6 +1123,11 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 					var on_demand: Array = [{"wait_ms": 600}]
 					if bool(reg_verbs.get("state_machine", false)) \
 							and not bool(goal_verbs.get("state_machine", false)):
+						# 双 Enter（P1-6）：任意起步态都能进 playing——win→title→playing
+						# 或 title→playing（playing 态下 Enter 无副作用）。单次 Enter
+						# 从 win 起步会停在 title，演练被门控空转。
+						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 					if bool(goal_verbs.get("state_machine", false)):
@@ -1199,12 +1334,23 @@ static func parse_remap_goal(goal: String) -> Dictionary:
 ## Phase B 累积目标构建：从动词集构建一个能触发所有动词的目标语句。
 ## controller_script 按关键词匹配动词，所以只要语句包含每个动词的
 ## 触发词，生成的控制器就包含所有功能。
+## P1-2 数量保留：金币/敌人数量由游戏模型核算后写进语句——
+## "已有移动，再加 3 个金币"不再退化为 "collect a coin"（数量 1）；
+## "再加一个敌人" 走增量语义（existing + 1）。增量只作用于目标真正
+## 提到的种类："加另一个敌人"不得给金币 +1（真机复现：coins 3→4）。
 func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) -> String:
 	var parts: Array = []
+	var additive: bool = GoalBlueprintsScript.is_additive_request(original_goal)
+	var additive_coins: bool = additive \
+		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS)
+	var additive_enemies: bool = additive \
+		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.ENEMY_KEYWORDS)
 	if bool(merged_verbs.get("movement", false)):
 		parts.append("arrow-key movement")
 	if bool(merged_verbs.get("collectible", false)):
-		parts.append("collect a coin")
+		var coin_total: int = GameModelStoreScript.merged_count("coins",
+			GoalBlueprintsScript._coin_count(original_goal), additive_coins)
+		parts.append("collect %d coins" % coin_total)
 	if bool(merged_verbs.get("win", false)):
 		parts.append("win label")
 	if bool(merged_verbs.get("pause", false)):
@@ -1212,7 +1358,9 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 	if bool(merged_verbs.get("save", false)):
 		parts.append("save/load")
 	if bool(merged_verbs.get("enemy", false)):
-		parts.append("patrolling enemy")
+		var enemy_total: int = GameModelStoreScript.merged_count("enemies",
+			GoalBlueprintsScript._enemy_count(original_goal), additive_enemies)
+		parts.append("%d patrolling enemies" % enemy_total)
 	if bool(merged_verbs.get("state_machine", false)):
 		parts.append("title screen game flow restart")
 	if bool(merged_verbs.get("audio", false)):
@@ -1357,6 +1505,21 @@ func _generate_incremental_blocks(new_verbs: Dictionary, current_source: String)
 		blocks += "\t\tget_parent().add_child.call_deferred(wall_node)\n"
 	return blocks
 
+## 标题解锁前缀（P1-6 配套）：注册表已有 state_machine 时，游戏从标题
+## （或上一轮演练留下的 win 态）启动——调参/存档等演练先双 Enter 进入
+## playing（win→title→playing 或 title→playing；playing 态 Enter 无副作用）。
+## 不解锁时采样/位移发生在门控之下：敌人冻结、玩家不动，基线必假。
+func _title_unlock_prefix() -> Array:
+	if not bool(FeatureRegistryScript.registered_verbs().get("state_machine", false)):
+		return []
+	return [
+		{"action": "ui_accept", "pressed": true, "wait_ms": 300,
+			"description": "enter playing state (win or title start)"},
+		{"action": "ui_accept", "pressed": false, "wait_ms": 100},
+		{"action": "ui_accept", "pressed": true, "wait_ms": 300},
+		{"action": "ui_accept", "pressed": false, "wait_ms": 100},
+	]
+
 ## 换键演练（E1 行为证据，事件级）：旧键按下必须**无效**（位移不变），
 ## 新键按下必须生效（位移达成），再跑其余轴向回归——防误伤。
 func _remap_play_steps(action: String, old_key: String, new_key: String) -> Array:
@@ -1482,9 +1645,14 @@ func _movement_feel_legs() -> Dictionary:
 ## 金币已消失、计数已增、胜利标签已显示——收集/胜利的行为证据。
 func _collect_play_steps(coin_count_expression: String = "coins_collected") -> Array:
 	var steps: Array = []
-	# 磁吸金币在 (200, 0)：从回归末位置的任意偏移出发，1200ms 右移横扫
-	# 必然穿越拾取窗（开环 + 宽恕半径 = 确定性收集）。
-	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1200})
+	# 先回归原点：save 恢复或上一轮演练可能把玩家留在金币右侧——从右侧
+	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
+	# 左扫最多撞左墙（或死于敌带重置回原点）——两种结局都锚定原点附近。
+	steps.append({"action": "move_left", "pressed": true, "wait_ms": 1200})
+	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
+	# 磁吸金币聚簇在 (110..190)：从原点右扫横扫必然穿越全部拾取窗
+	# （开环 + 宽恕半径 = 确定性收集）。
+	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1600})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
@@ -1543,23 +1711,58 @@ func _audio_play_steps() -> Array:
 	})
 	return steps
 
-## 状态机腿（P4 游戏流）：标题→玩法→胜利→重开，四次转移全部断言。
+## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
+## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
+## 金币聚簇在敌人巡逻带之前（蓝图 80+i*60，全在 x<210 走廊），一次右扫
+## 即可全收——"带敌人的完整通关"几何可达（旧布局 200/380/560 的第二、
+## 三枚落在死亡带 [220,380] 内，完整通关不可能发生）。
 func _state_play_steps() -> Array:
 	var steps: Array = []
-	# 最小状态验证（与按需演练哲学一致：测本目标新增的功能门控，
-	# 不重测完整游戏循环——全循环由 durable E2E 的 title-screen-flow
-	# 场景覆盖，18/18 全绿）。双 Enter 处理 save 恢复导致的 win 起步。
+	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
+	# playing（Enter 无副作用）——save 恢复导致的 win 起步也被覆盖。
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
-	# 验证 playing 状态下移动门控已打开（状态机新增的核心行为）
+	# 第一轮：右扫聚簇金币 → 全部收集（身份安全拾取）→ 胜利
+	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1500})
 	steps.append({
-		"action": "move_right", "pressed": true, "wait_ms": 400,
-		"assert": {"expression": "game_state", "expected": "playing",
-			"description": "after double-Enter the game is in playing state"}
+		"action": "move_right", "pressed": false, "wait_ms": 300,
+		"assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": true,
+			"description": "first round: every coin collected (identity-safe pickup)"}
 	})
-	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
+	steps.append({
+		"assert": {"expression": "_win_label.text", "expected": "You Win!",
+			"description": "first round: the win label shows"}
+	})
+	steps.append({
+		"assert": {"expression": "game_state", "expected": "win",
+			"description": "first round: the flow reached the win state"}
+	})
+	# 重开：win --Enter--> title（位置重置、计数清零、金币重生）
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "game_state", "expected": "title",
+			"description": "restart returns the flow to the title state"}
+	})
+	steps.append({
+		"assert": {"expression": "coins_collected == 0", "expected": true,
+			"description": "restart resets the coin counter"}
+	})
+	# 第二轮：title --Enter--> playing → 再收集 → 再次胜利
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "game_state", "expected": "playing",
+			"description": "second round starts from the title state"}
+	})
+	steps.append({"action": "move_right", "pressed": true, "wait_ms": 1500})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 300,
+		"assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"", "expected": true,
+			"description": "second round: full win achieved again after restart"}
+	})
 	return steps
 
 ## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
@@ -1654,13 +1857,16 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			wants_collect = true
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
-			# 上下文感知：注册表已有 state_machine 时，游戏从标题屏启动——
-			# 所有演练先按 Enter 进入 playing 状态再执行（否则移动被门控阻断）。
+			# 上下文感知：注册表已有 state_machine 时，游戏从标题屏（或上一
+			# 轮演练留下的 win 态）启动——所有演练先双 Enter 进入 playing 再
+			# 执行（否则移动被门控阻断；单次 Enter 从 win 起步会停在 title）。
 			var context_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
 			if bool(context_verbs.get("state_machine", false)) \
 					and not wants_state:
 				play_steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300,
-					"description": "enter playing state from title screen"})
+					"description": "enter playing state (win or title start)"})
+				play_steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+				play_steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 				play_steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 			if wants_3d:
 				play_steps.append({
@@ -1754,6 +1960,135 @@ func _journal_autoclose(plan: Dictionary, uncertain_task: Dictionary) -> Diction
 	uncertain_task["receipt_digest"] = receipt.get("digest", "")
 	uncertain_task["journal_autoclosed"] = true
 	return receipt
+
+## 合成授权（非计划步骤的 runner 内部调用）：invoke_planned_tool 校验
+## 四字段非空且 authorized_tool 匹配——stale-stop 与完成前回归都不是计划
+## 步骤，用合成 step_id 满足结构校验（不削弱任何实质权限：调用仍限定在
+## runner 自身发起的 stop/play 上）。
+func _synthetic_authorization(plan: Dictionary, step_id: String, tool_name: String) -> Dictionary:
+	var workflow: Dictionary = plan.get("workflow", {})
+	return {
+		"kind": "game_workflow",
+		"workflow_id": workflow.get("workflow_id", ""),
+		"blueprint_hash": workflow.get("blueprint_hash", ""),
+		"step_id": step_id,
+		"authorized_tool": tool_name,
+		"repair": false
+	}
+
+## 旧行为回归门禁（P1-4）：完成前对既往功能逐个重新推导并执行演练。
+## 演练按"当前"语境重新推导（而非回放录制步骤）——更名/调参后的符号
+## 与阈值变化不会让旧步骤失配；当前目标的动词被排除（新功能由本目标
+## 的门禁覆盖）。游戏须可运行：先 run_project（已在运行则复用）。
+## 任一旧功能失败 → {failed: true, reason} → 调用方阻止宣布完成。
+func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
+	var current_verbs: Dictionary = GoalBlueprintsScript.match_verbs(String(plan.get("goal", "")))
+	var priors: Array = FeatureRegistryScript.prior_exercises(current_verbs)
+	if priors.is_empty():
+		return {}
+	var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
+		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
+	# run_discard 不判断：已在运行/刚启动都继续；不可运行时首个演练自然报错
+	var checked: Array = []
+	const MAX_REGRESSION_FEATURES: int = 8
+	for prior_value in priors:
+		if checked.size() >= MAX_REGRESSION_FEATURES:
+			break
+		var prior: Dictionary = prior_value
+		var prior_goal: String = String(prior.get("goal", ""))
+		if prior_goal.is_empty():
+			continue
+		var exercise_args: Dictionary = {}
+		_derive_generic_play_steps({"goal": prior_goal}, {}, "play_and_verify", exercise_args)
+		var steps: Array = exercise_args.get("steps", [])
+		if steps.is_empty():
+			continue
+		var play_args: Dictionary = {"steps": steps}
+		for extra_key in ["deterministic", "sample", "assertions"]:
+			if exercise_args.has(extra_key):
+				play_args[extra_key] = exercise_args[extra_key]
+		var result: Variant = await _server_core.invoke_planned_tool("play_and_verify",
+			play_args, _synthetic_authorization(plan, "prior_regression", "play_and_verify"))
+		var passed: bool = result is Dictionary and not (result as Dictionary).has("error") \
+			and bool((result as Dictionary).get("passed", false))
+		checked.append({"feature_id": prior.get("feature_id", ""), "goal": prior_goal, "passed": passed})
+		if not passed:
+			var reason: String = "prior feature '%s' (%s) failed re-verification" % [
+				String(prior.get("feature_id", "")), prior_goal]
+			if result is Dictionary:
+				if (result as Dictionary).has("error"):
+					reason += ": %s" % String((result as Dictionary)["error"])
+				else:
+					for assertion_value in (result as Dictionary).get("assertions", []):
+						var assertion: Dictionary = assertion_value
+						if not bool(assertion.get("passed", true)):
+							reason += ": %s" % String(assertion.get("description", "assertion failed"))
+							break
+			return {"failed": true, "reason": reason, "checked": checked}
+	return {"failed": false, "checked": checked}
+
+## 从 play_and_verify 结果中提取某指标断言的实际计算值（基线携带用）。
+## 找不到返回 NAN（调用方自行决定缺失语义）。
+func _extract_metric_actual(result: Variant, label: String) -> float:
+	if not (result is Dictionary):
+		return NAN
+	for assertion_value in (result as Dictionary).get("assertions", []):
+		var assertion: Dictionary = assertion_value
+		if String(assertion.get("metric", "")) == label and assertion.has("actual"):
+			return float(assertion["actual"])
+	return NAN
+
+## 调参方向证明（P2-1，敌速）：改后采样与改前基线（工件 tune_baseline，
+## 由基线步落盘、跨重启持久）对比。方向不成立即失败——"调了但没变"
+## 不可能通过。其他参数（SPEED/MAGNET）由各自固定阈值/配置断言证明。
+func _check_tuning_direction(plan: Dictionary, raw_result: Variant) -> Variant:
+	if not (raw_result is Dictionary) or (raw_result as Dictionary).has("error"):
+		return raw_result
+	var tune_info: Dictionary = parse_tuning_goal(String(plan.get("goal", "")))
+	if tune_info.is_empty() or String(tune_info.get("param", "")) != "ENEMY_SPEED":
+		return raw_result
+	var artifacts_value: Variant = (plan.get("workflow", {}) as Dictionary).get("artifacts", {})
+	if not (artifacts_value is Dictionary) or not (artifacts_value as Dictionary).has("tune_baseline"):
+		return raw_result
+	var baseline: Dictionary = (artifacts_value as Dictionary)["tune_baseline"]
+	var baseline_value: float = float(baseline.get("value", NAN))
+	var tuned_value: float = _extract_metric_actual(raw_result, "ex")
+	if is_nan(baseline_value) or is_nan(tuned_value):
+		return raw_result  # 采样缺失由 play 步自身断言报错
+	var direction: String = String(tune_info.get("direction", ""))
+	var margin: float = 8.0
+	var direction_ok: bool = (direction == "slower" and tuned_value <= baseline_value - margin) \
+		or (direction == "faster" and tuned_value >= baseline_value + margin)
+	if not direction_ok:
+		var bound: float = baseline_value - margin if direction == "slower" else baseline_value + margin
+		return {
+			"error": "tuning direction not proven: enemy patrol amplitude baseline %.1f vs tuned %.1f (direction=%s requires %s %.1f)" % [
+				baseline_value, tuned_value, direction,
+				"at most" if direction == "slower" else "at least", bound],
+		}
+	(raw_result as Dictionary)["tuning_direction"] = {
+		"param": "ENEMY_SPEED", "direction": direction,
+		"baseline": baseline_value, "tuned": tuned_value, "margin": margin,
+	}
+	return raw_result
+
+## 从 tune_apply 的 modify_script 参数解析计划值（runner 记入工件，
+## 磁吸半径验证步断言新值生效）。
+func _parse_planned_tune(arguments: Dictionary) -> Dictionary:
+	var content: String = String(arguments.get("content", ""))
+	var old_text: String = String(arguments.get("old_text", ""))
+	var regex: RegEx = RegEx.new()
+	if regex.compile("const ([A-Z_]+): float = ([\\d.]+)") != OK:
+		return {}
+	var new_match: RegExMatch = regex.search(content)
+	var old_match: RegExMatch = regex.search(old_text)
+	if new_match == null or old_match == null:
+		return {}
+	return {
+		"param": new_match.get_string(1),
+		"old": float(old_match.get_string(2)),
+		"new": float(new_match.get_string(2)),
+	}
 
 ## 变更日志恢复处方：pending 操作逐条分类 + 该工具最近提交记录的磁盘
 ## 复判。recommended 汇总最保守的下一步（conflict 优先）。

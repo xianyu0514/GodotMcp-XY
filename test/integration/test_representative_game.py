@@ -5,19 +5,24 @@ then verifies the final product with independent oracle checks.
 
 Game spec (from gap analysis Phase D):
 - 4-direction movement with walls
-- 3 collectible coins
-- Patrolling enemy with death/respawn
+- 3 collectible coins (each with its own identity — one-shot pickup)
+- Patrolling enemy with death/respawn (a second one from goal 08)
 - Esc pause menu
 - Save/load across process restart
 - Sound effect on collection
 - Score HUD
 - Win condition (collect all coins)
-- Tune difficulty (enemy speed)
+- Tune difficulty (enemy speed — direction must be PROVEN vs baseline)
 - Visual polish (walls)
 
-This is the proof that "the same game gets more complete with each change" —
-not just that individual features work, but that the accumulated game is
-playable end-to-end.
+Honesty rules (gap analysis 2026-09-15, P0-2):
+- The final verdict gates on BOTH goal completion AND independent oracle
+  checks. "10/10 goals completed" alone is not success.
+- Oracle checks assert real behavior (full two-round game loop, meaningful
+  enemy patrol and death, exact coin count) — not config presence
+  (the old `COINS_TO_WIN >= 1` / `deaths_count >= 0` checks were vacuous).
+- Windows console cannot encode emoji/UTF-8 by default: stdout is
+  reconfigured up-front so the run cannot die mid-report (the CI break).
 """
 import json
 import os
@@ -86,7 +91,9 @@ def run_goal(goal_id, objective, iteration_base):
         "profiles":["gameplay_feature"],"replace":True,"plan_path":plan_path})
     state = "?"
     d = {}
-    for i in range(15):
+    # 旧行为回归门禁让每个完成多花 ~10-60s（受影响旧功能逐个重验）——
+    # 轮询预算相应放大。
+    for i in range(25):
         d = rpc("run_game_workflow", {"plan_path":plan_path,"max_steps":8}, iteration_base+i)
         state = d.get("state", d.get("status","?"))
         if state in ("completed","needs_input","recovery_required","replan_required"):
@@ -95,7 +102,68 @@ def run_goal(goal_id, objective, iteration_base):
     rpc("stop_project", {"allow_window":True}, iteration_base+90)
     return state, d
 
+# ---- Oracle step sequences (mirror the workflow's own exercise semantics) ----
+
+def full_loop_steps():
+    """Title -> playing -> collect ALL coins -> win -> restart -> win again."""
+    return [
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "move_right", "pressed": True, "wait_ms": 1500},
+        {"action": "move_right", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
+            "description": "round one: every coin collected (identity-safe pickup)"}},
+        {"assert": {"expression": "_win_label.text", "expected": "You Win!",
+            "description": "round one: win label shows"}},
+        {"assert": {"expression": "game_state", "expected": "win",
+            "description": "round one: win state reached"}},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 200,
+         "assert": {"expression": "game_state", "expected": "title",
+            "description": "restart returns to title"}},
+        {"assert": {"expression": "coins_collected == 0", "expected": True,
+            "description": "restart resets the counter"}},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 200,
+         "assert": {"expression": "game_state", "expected": "playing",
+            "description": "second round starts"}},
+        {"action": "move_right", "pressed": True, "wait_ms": 1500},
+        {"action": "move_right", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"",
+            "expected": True,
+            "description": "second round: full win achieved again after restart"}},
+    ]
+
+def death_check_steps():
+    """Dodge below the enemy band, pass it, return to y=0, sweep back left
+    through the band: a death must occur and the player must respawn."""
+    return [
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "move_down", "pressed": True, "wait_ms": 1000},
+        {"action": "move_down", "pressed": False, "wait_ms": 100},
+        {"action": "move_right", "pressed": True, "wait_ms": 2000},
+        {"action": "move_right", "pressed": False, "wait_ms": 100},
+        {"action": "move_up", "pressed": True, "wait_ms": 1000},
+        {"action": "move_up", "pressed": False, "wait_ms": 100},
+        {"action": "move_left", "pressed": True, "wait_ms": 1500},
+        {"action": "move_left", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "deaths_count > 0", "expected": True,
+            "description": "crossing the patrol band killed the player at least once"}},
+        {"assert": {"expression": "position.x < 220", "expected": True,
+            "description": "the player respawned left of the enemy band"}},
+    ]
+
 def main() -> int:
+    # P0-1: Windows 控制台默认 GBK 无法编码 emoji/长破折号——CI 曾在
+    # 输出勾号时 UnicodeEncodeError 中断整轮测试。先重配 stdout/stderr。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     setup_scratch()
     editor = subprocess.Popen(
         [GODOT, "--editor", "--headless", "--path", str(SCRATCH),
@@ -116,51 +184,74 @@ def main() -> int:
             elapsed = time.time() - started
             ledger = d.get("goal_ledger", {})
             regression = d.get("ledger_regression", {})
+            prior = d.get("prior_regression", {})
+            model = d.get("game_model", {})
             results.append({
                 "goal": goal_id, "state": state, "elapsed_s": round(elapsed, 1),
                 "ledger_goals": ledger.get("recorded_goals", 0),
                 "regression_clean": regression.get("regression_clean", None),
+                "prior_checked": len(prior.get("checked", [])) if prior else None,
+                "model_counts": model.get("counts", {}),
             })
             status = "✅" if state == "completed" else f"❌({state})"
             print(f"  [{goal_id}] {status} {elapsed:.0f}s ledger={ledger.get('recorded_goals',0)} "
-                  f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'}")
+                  f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'} "
+                  f"prior_reverified={len(prior.get('checked', [])) if prior else 0} "
+                  f"model={model.get('counts', {})}")
 
-        # Summary
         completed = sum(1 for r in results if r["state"] == "completed")
         print(f"\n{'='*60}")
         print(f"GAME BUILD RESULT: {completed}/{len(GOALS)} goals completed")
         print(f"{'='*60}")
 
-        # Independent oracle: verify the final game is playable
+        # Independent oracle: verify the final game is actually playable.
         print("\nORACLE: Independent verification of final game")
         oracle_checks = []
         try:
-            # Start the game
             rpc("enable_tools", {"tools": ["play_and_verify", "run_project",
                 "install_runtime_probe", "stop_project"]}, 900)
             rpc("run_project", {"allow_window": True}, 901)
             time.sleep(3)
 
-            # Check 1: Movement works
-            r = rpc("play_and_verify", {"steps": [
-                {"action": "move_right", "pressed": True, "wait_ms": 400,
-                 "assert": {"expression": "position.x", "displacement_min": 10}},
-                {"action": "move_right", "pressed": False, "wait_ms": 80},
-            ]}, 910)
-            oracle_checks.append(("movement", bool(r.get("passed"))))
-
-            # Check 2: No runtime errors
-            r2 = rpc("play_and_verify", {"steps": [{"wait_ms": 500}]}, 911)
-            oracle_checks.append(("no_runtime_errors", bool(r2.get("passed")) and not r2.get("runtime_errors")))
-
-            # Check 3: Coins exist (controller has coins_collected)
+            # Check 1: exact coin count (goal 02 asked for three — the count
+            # must survive every later merge; the old >= 1 check was vacuous)
             r3 = rpc("play_and_verify", {"steps": [
-                {"wait_ms": 200, "assert": {"expression": "COINS_TO_WIN >= 1", "expected": True,
-                    "description": "coins are configured"}},
+                {"wait_ms": 200, "assert": {"expression": "COINS_TO_WIN == 3", "expected": True,
+                    "description": "three coins configured (count survived all merges)"}},
             ]}, 912)
-            oracle_checks.append(("coins_configured", bool(r3.get("passed"))))
+            oracle_checks.append(("coins_configured_exact", bool(r3.get("passed"))))
 
-            # Check 4: Pause works (if controller has set_paused)
+            # Check 2: full two-round game loop (title -> collect all -> win
+            # -> restart -> collect all again -> win again)
+            r6 = rpc("play_and_verify", {"steps": full_loop_steps()}, 915)
+            oracle_checks.append(("full_two_round_loop", bool(r6.get("passed"))))
+
+            # Check 3: no runtime errors anywhere above (the old multi-coin
+            # double-free would surface here)
+            oracle_checks.append(("no_runtime_errors",
+                bool(r6.get("passed")) and not r6.get("runtime_errors")))
+
+            # Check 4: enemy patrol is meaningful (moves away from home)
+            r5 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 800, "assert": {"expression": "abs(_enemy.position.x - 300.0) > 10",
+                    "expected": True,
+                    "description": "the first enemy patrols away from its home"}},
+            ]}, 914)
+            oracle_checks.append(("enemy_patrols", bool(r5.get("passed"))))
+
+            # Check 5: touching the enemy actually kills (deaths > 0 via a
+            # deliberate band crossing, not the vacuous >= 0)
+            r7 = rpc("play_and_verify", {"steps": death_check_steps()}, 916)
+            oracle_checks.append(("enemy_kills", bool(r7.get("passed"))))
+
+            # Check 6: two enemies really exist (goal 08 added a second one)
+            r8 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 200, "assert": {"expression": "ENEMY_COUNT == 2", "expected": True,
+                    "description": "the second enemy survived later merges (goal 08)"}},
+            ]}, 917)
+            oracle_checks.append(("two_enemies", bool(r8.get("passed"))))
+
+            # Check 7: pause works
             r4 = rpc("play_and_verify", {"steps": [
                 {"action": "ui_cancel", "pressed": True, "wait_ms": 300,
                  "assert": {"expression": "get_tree().paused", "expected": True}},
@@ -170,13 +261,6 @@ def main() -> int:
                 {"action": "ui_cancel", "pressed": False, "wait_ms": 100},
             ]}, 913)
             oracle_checks.append(("pause_resume", bool(r4.get("passed"))))
-
-            # Check 5: Enemy exists
-            r5 = rpc("play_and_verify", {"steps": [
-                {"wait_ms": 500, "assert": {"expression": "deaths_count >= 0", "expected": True,
-                    "description": "enemy system present (deaths_count accessible)"}},
-            ]}, 914)
-            oracle_checks.append(("enemy_system", bool(r5.get("passed"))))
 
         except Exception as exc:
             oracle_checks.append(("oracle_error", False))
@@ -199,8 +283,11 @@ def main() -> int:
         print(f"  Scripts: {len(scripts)}")
         print(f"  Scenes: {len(scenes)}")
         print(f"  Ledger entries: {results[-1]['ledger_goals'] if results else 0}")
+        print(f"  Game model counts: {results[-1]['model_counts'] if results else {}}")
 
-        overall = completed == len(GOALS)
+        # P0-2: independent oracle checks gate the final verdict — completed
+        # goals alone are a claim, not evidence.
+        overall = completed == len(GOALS) and oracle_pass == len(oracle_checks)
         print(f"\n{'='*60}")
         print(f"OVERALL: {'PASS' if overall else 'PARTIAL'} — "
               f"{completed}/{len(GOALS)} goals, {oracle_pass}/{len(oracle_checks)} oracle checks")

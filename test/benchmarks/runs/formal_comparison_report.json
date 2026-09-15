@@ -1,41 +1,42 @@
 {
   "total_runs": 7,
+  "aggregation_rule": "one run per (task_id, rep); outcome = the run_ended event; every event carries a unique run_id",
   "by_task": {
     "E1": {
       "pass": 0,
       "total": 1,
-      "avg_s": 38.4
+      "avg_s": 40.6
     },
     "E4": {
       "pass": 0,
       "total": 1,
-      "avg_s": 5.3
+      "avg_s": 7.9
     },
     "N1": {
-      "pass": 0,
+      "pass": 1,
       "total": 1,
-      "avg_s": 37.2
+      "avg_s": 12.5
     },
     "N2": {
       "pass": 1,
       "total": 1,
-      "avg_s": 6.3
+      "avg_s": 8.3
     },
     "N3": {
       "pass": 1,
       "total": 1,
-      "avg_s": 15.5
+      "avg_s": 18.9
     },
     "N4": {
       "pass": 0,
       "total": 1,
-      "avg_s": 4.4
+      "avg_s": 6.3
     },
     "R3": {
       "pass": 0,
       "total": 1,
-      "avg_s": 38.9
+      "avg_s": 41.5
     }
   },
-  "overall_pass_rate": "29%"
+  "overall_pass_rate": "43%"
 }
