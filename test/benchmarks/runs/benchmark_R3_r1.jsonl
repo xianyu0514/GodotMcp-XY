@@ -4,3 +4,6 @@
 {"t": "2026-09-15T05:24:53", "task_id": "R3", "rep": 1, "event": "run_started", "payload": {"objective": "Arrow-key movement with a coin and walls (crash-recovery tested separately)."}}
 {"t": "2026-09-15T05:25:31", "task_id": "R3", "rep": 1, "event": "agent_statement", "payload": {"claims_completed": false, "state": "waiting"}}
 {"t": "2026-09-15T05:25:31", "task_id": "R3", "rep": 1, "event": "run_ended", "payload": {"outcome": "fail", "wall_clock_s": 38.3}}
+{"t": "2026-09-15T08:56:10", "task_id": "R3", "rep": 1, "event": "run_started", "payload": {"objective": "Arrow-key movement with a coin and walls (crash-recovery tested separately)."}}
+{"t": "2026-09-15T08:56:49", "task_id": "R3", "rep": 1, "event": "agent_statement", "payload": {"claims_completed": false, "state": "waiting"}}
+{"t": "2026-09-15T08:56:49", "task_id": "R3", "rep": 1, "event": "run_ended", "payload": {"outcome": "fail", "wall_clock_s": 38.9}}

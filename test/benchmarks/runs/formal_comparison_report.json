@@ -4,38 +4,38 @@
     "E1": {
       "pass": 0,
       "total": 1,
-      "avg_s": 37.1
+      "avg_s": 38.4
     },
     "E4": {
       "pass": 0,
       "total": 1,
-      "avg_s": 4.1
+      "avg_s": 5.3
     },
     "N1": {
-      "pass": 1,
+      "pass": 0,
       "total": 1,
-      "avg_s": 8.1
+      "avg_s": 37.2
     },
     "N2": {
       "pass": 1,
       "total": 1,
-      "avg_s": 6.0
+      "avg_s": 6.3
     },
     "N3": {
       "pass": 1,
       "total": 1,
-      "avg_s": 14.7
+      "avg_s": 15.5
     },
     "N4": {
       "pass": 0,
       "total": 1,
-      "avg_s": 3.5
+      "avg_s": 4.4
     },
     "R3": {
       "pass": 0,
       "total": 1,
-      "avg_s": 38.3
+      "avg_s": 38.9
     }
   },
-  "overall_pass_rate": "43%"
+  "overall_pass_rate": "29%"
 }
