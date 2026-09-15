@@ -75,7 +75,16 @@ GOALS = [
     ("10-final-tune", "Make the player movement snappier and more responsive."),
 ]
 
+def purge_user_saves():
+    # user:// 存档跨运行残留（真机复现：漂移时代的 {"x":4812} 毒化每次
+    # 全新启动——恢复位置远离金币，收集重验永远失败）。游戏进程实际
+    # 落在 "[unnamed project]"，两个名字都清。
+    appdata = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata")
+    for name in ("[unnamed project]", "RepresentativeGame"):
+        shutil.rmtree(os.path.join(appdata, name), ignore_errors=True)
+
 def setup_scratch():
+    purge_user_saves()
     if SCRATCH.exists():
         shutil.rmtree(SCRATCH, ignore_errors=True)
     (SCRATCH / "addons").mkdir(parents=True)
@@ -123,8 +132,8 @@ def full_loop_steps():
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
          "assert": {"expression": "game_state", "expected": "title",
             "description": "restart returns to title"}},
-        {"assert": {"expression": "coins_collected == 0", "expected": True,
-            "description": "restart resets the counter"}},
+        {"assert": {"expression": "abs(position.x) < 20", "expected": True,
+            "description": "restart reset the player to the origin"}},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
          "assert": {"expression": "game_state", "expected": "playing",

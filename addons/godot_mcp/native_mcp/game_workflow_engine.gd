@@ -500,6 +500,8 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 				var tune_insert_at: int = tune_error_index if tune_error_index >= 0 else gameplay_specs.size()
 				# stop→rerun：运行中的游戏持有旧编译脚本（热重载不跨进程），
 				# 调参必须重启后才在真机上生效（与存档链同因）。
+				# sort_rank：基线排在 runtime_run(45) 之后、改参之前——先测
+				# 改前行为再改参数（stage 排序会把 apply 提到 baseline 前）。
 				for tune_spec in [
 					_spec("tune_baseline", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
 					_spec("tune_apply", "modify_script", "build_configure", true, {}, "verify_scripts"),
@@ -511,6 +513,15 @@ func _profile_specs(profile_id: String, objective: String, platform: String) -> 
 					_spec("tune_rerun", "run_project", "runtime_evidence"),
 					_spec("tune_verify", "play_and_verify", "runtime_evidence", true, {}, "modify_script"),
 				]:
+					match String(tune_spec.get("key", "")):
+						"tune_baseline":
+							tune_spec["sort_rank"] = 46
+						"tune_apply":
+							tune_spec["sort_rank"] = 47
+						"tune_reattach":
+							tune_spec["sort_rank"] = 48
+						"tune_save":
+							tune_spec["sort_rank"] = 49
 					gameplay_specs.insert(tune_insert_at, tune_spec)
 					tune_insert_at += 1
 			# 存档目标（评测 N3）：注册 save_game 动作（F5）+ 跨进程行为证据链
@@ -773,9 +784,13 @@ func _specs_need_runtime(specs: Array[Dictionary]) -> bool:
 
 func _sort_specs(specs: Array[Dictionary]) -> Array[Dictionary]:
 	var result: Array[Dictionary] = specs.duplicate(true)
+	# sort_rank 是可选的每步覆盖（调参链用）：tune_baseline 必须真正先于
+	# tune_apply 执行——按 stage 排序时 build_configure(20) 的 apply 永远
+	# 排在 runtime_evidence(70) 的 baseline 之前，基线测到的已是改后行为，
+	# 方向对比从根基上不成立（真机复现：baseline 78.6 vs tuned 78.9）。
 	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var ar: int = int(STAGE_RANK.get(String(a.get("stage", "")), 999))
-		var br: int = int(STAGE_RANK.get(String(b.get("stage", "")), 999))
+		var ar: int = int(a.get("sort_rank", STAGE_RANK.get(String(a.get("stage", "")), 999)))
+		var br: int = int(b.get("sort_rank", STAGE_RANK.get(String(b.get("stage", "")), 999)))
 		if ar != br:
 			return ar < br
 		var ao: int = int(a.get("_compose_order", 0))

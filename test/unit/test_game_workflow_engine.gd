@@ -759,3 +759,23 @@ func test_visual_gate_real_comparison_keeps_normal_receipt_evidence() -> void:
 		"a real comparison keeps receipt-based evidence")
 	assert_eq((_engine.summarize(plan).get("visual_bootstrap", []) as Array).size(), 0,
 		"no bootstrap disclosure for real comparisons")
+
+func test_tune_chain_measures_baseline_before_apply() -> void:
+	# P2-1 真缺陷：stage 排序把 build_configure 的 tune_apply 排在
+	# runtime_evidence 的 tune_baseline 之前——基线测到的已是改后行为，
+	# 方向对比从根基上不成立（真机复现：baseline 78.6 vs tuned 78.9）。
+	# sort_rank 修正后基线必须先于改参。
+	var plan: Dictionary = _compile(
+		"Make the enemy slower so the game is easier.", ["gameplay_feature"])["plan"]
+	var keys: Array = []
+	for task_value in plan.get("tasks", []):
+		keys.append(String((task_value as Dictionary).get("step_key", "")))
+	var baseline_index: int = keys.find("tune_baseline")
+	var apply_index: int = keys.find("tune_apply")
+	assert_gt(baseline_index, -1, "tune baseline step exists")
+	assert_gt(apply_index, -1, "tune apply step exists")
+	assert_lt(baseline_index, apply_index,
+		"the baseline measurement runs before the parameter is modified")
+	assert_lt(apply_index, keys.find("tune_verify"), "verify runs after apply")
+	assert_lt(keys.find("runtime_run"), baseline_index,
+		"the game is running before the baseline measures it")

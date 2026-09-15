@@ -1200,32 +1200,33 @@ func test_user_edit_conflict_blocks_regeneration() -> void:
 		"conflict reason explains the manual-edit detection")
 	DirAccess.remove_absolute(absolute)
 
-func test_tuning_direction_blocks_unchanged_parameter() -> void:
-	# 差距分析反例：速度 80/120 在旧阈值下都通过——方向门禁必须拦下
-	# "调了但没变"（改后振幅与基线一致）
+func test_enemy_tune_verify_asserts_live_parameter() -> void:
+	# P2-1 v2：验证步断言 ENEMY_SPEED == 计划新值——运行中的游戏仍持旧值
+	# （"调了没变"）必然失败，且相位免疫（取代峰顶饱和的振幅对比）。
+	FeatureRegistryScript.record_feature("patrolling enemy",
+		{"enemy": true}, [{"wait_ms": 1}], "fp")
 	var plan: Dictionary = {"goal": "Make the enemy slower so the game is easier.",
-		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
-	var result: Variant = _tools._check_tuning_direction(plan,
-		{"passed": true, "assertions": [{"metric": "ex", "aggregate": "max", "actual": 57.4}]})
-	assert_true((result as Dictionary).has("error"),
-		"an unchanged amplitude fails the direction gate")
-
-func test_tuning_direction_passes_real_change() -> void:
-	var plan: Dictionary = {"goal": "Make the enemy slower so the game is easier.",
-		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
-	var result: Variant = _tools._check_tuning_direction(plan,
-		{"passed": true, "assertions": [{"metric": "ex", "aggregate": "max", "actual": 40.1}]})
-	assert_false((result as Dictionary).has("error"),
-		"an amplitude drop consistent with slower passes")
-	var direction: Dictionary = (result as Dictionary).get("tuning_direction", {})
-	assert_eq(float(direction.get("tuned", 0.0)), 40.1, "measured value surfaced as evidence")
-
-func test_tuning_direction_ignores_non_enemy_params() -> void:
-	var plan: Dictionary = {"goal": "Make the player faster.",
-		"workflow": {"artifacts": {"tune_baseline": {"param": "ENEMY_SPEED", "value": 57.4}}}}
-	var result: Variant = _tools._check_tuning_direction(plan, {"passed": true, "assertions": []})
-	assert_false((result as Dictionary).has("error"),
-		"player-speed tuning keeps its own calibrated thresholds")
+		"workflow": {"artifacts": {"tune_planned": {"param": "ENEMY_SPEED", "old": 120.0, "new": 78.0}}}}
+	var task: Dictionary = {"tool_name": "play_and_verify", "step_key": "tune_verify",
+		"profile": "gameplay_feature"}
+	var arguments: Dictionary = _tools._derive_step_arguments(plan, task, "play_and_verify", {})
+	var steps: Array = arguments.get("steps", [])
+	var expressions: Array = []
+	for step_value in steps:
+		var step: Dictionary = step_value
+		if step.has("assert"):
+			expressions.append(String((step["assert"] as Dictionary).get("expression", "")))
+	assert_true(expressions.has("ENEMY_SPEED"),
+		"the live parameter is asserted in the running game (got %s)" % str(expressions))
+	var live_assert: Dictionary = {}
+	for step_value in steps:
+		var step: Dictionary = step_value
+		if step.has("assert") and String((step["assert"] as Dictionary).get("expression", "")) == "ENEMY_SPEED":
+			live_assert = step["assert"]
+	assert_eq(float(live_assert.get("expected", 0.0)), 78.0,
+		"the expected value is the planned new speed")
+	assert_true(expressions.has("abs(_enemy.position.x - 300.0)"),
+		"patrol-alive behavior is still asserted")
 
 func test_prior_regression_failure_blocks_completion() -> void:
 	FeatureRegistryScript.record_feature("Arrow-key player movement",
@@ -1240,12 +1241,17 @@ func test_prior_regression_failure_blocks_completion() -> void:
 	assert_true(String(regression.get("reason", "")).contains("player moved right"),
 		"the failing assertion is surfaced in the reason")
 	# 授权结构校验（真缺陷：空 step_id 会被 invoke_planned_tool 拒绝，
-	# 回归门禁因此从未真正执行过演练）
-	assert_eq(str(_core.calls[0]["authorization"].get("step_id", "")), "prior_regression",
-		"run_project carries a non-empty synthetic step_id")
-	assert_eq(str(_core.calls[1]["tool_name"]), "play_and_verify",
+	# 回归门禁因此从未真正执行过演练）；且必须先 stop 再 run——直接
+	# run_project 会复用残留游戏（真机复现：回归在 x=4782 的陈旧会话上跑）
+	assert_eq(str(_core.calls[0]["tool_name"]), "stop_project",
+		"the gate stops any stale game first")
+	assert_eq(str(_core.calls[0]["authorization"].get("step_id", "")), "prior_regression_stop",
+		"stop carries a non-empty synthetic step_id")
+	assert_eq(str(_core.calls[1]["tool_name"]), "run_project",
+		"a fresh game is launched for the regression")
+	assert_eq(str(_core.calls[2]["tool_name"]), "play_and_verify",
 		"the prior exercise ran through play_and_verify")
-	assert_eq(str(_core.calls[1]["authorization"].get("authorized_tool", "")), "play_and_verify",
+	assert_eq(str(_core.calls[2]["authorization"].get("authorized_tool", "")), "play_and_verify",
 		"authorization matches the invoked tool")
 
 func test_prior_regression_success_allows_completion() -> void:
@@ -1288,8 +1294,8 @@ func test_state_play_steps_cover_full_two_round_loop() -> void:
 		"the win state is asserted")
 	assert_true(joined.contains("game_state == title"),
 		"the restart-to-title transition is asserted")
-	assert_true(joined.contains("coins_collected == 0"),
-		"the counter reset is asserted")
+	assert_true(joined.contains("abs(position.x) < 20"),
+		"the origin reset is asserted (racy counter observable replaced)")
 	assert_true(joined.contains("game_state == playing"),
 		"the second-round start is asserted")
 	assert_true(joined.to_lower().contains("and game_state"),

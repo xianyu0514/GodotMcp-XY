@@ -207,10 +207,15 @@ func test_collect_and_enemy_exercises_derived() -> void:
 func test_state_machine_goal_generates_flow() -> void:
 	var source: String = BlueprintsScript.controller_script("a title screen with start, gameplay, win state and restart")
 	assert_true(source.contains("var game_state: String = \"title\""), "observable state variable")
-	assert_true(source.contains("\"title\" and Input.is_action_just_pressed(\"ui_accept\")"), "title->playing transition")
+	assert_true(source.contains("if _enter_edge():"), "transitions use the state-polled enter edge (probe-safe)")
+	assert_true(source.contains("if game_state == \"title\":"), "title->playing transition")
+	assert_true(source.contains("elif game_state == \"win\":"), "win->title restart transition")
 	assert_true(source.contains("game_state = \"win\""), "collect reaches win state")
 	assert_true(source.contains("coins_collected = 0"), "restart resets run state")
 	assert_true(source.contains("_coin_area"), "state implies collectible (win condition)")
+	assert_true(source.contains("func _enter_edge() -> bool:"), "edge latch helper emitted")
+	assert_false(source.contains("is_action_just_pressed(\"ui_accept\")"),
+		"the unreliable just_pressed edge is gone for ui_accept")
 
 func test_state_play_steps_assert_all_four_transitions() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()

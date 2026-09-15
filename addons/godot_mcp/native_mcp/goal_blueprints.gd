@@ -289,6 +289,7 @@ static func controller_script(objective: String) -> String:
 	if needs_state:
 		source += "var game_state: String = \"title\"\n"
 		source += "var _title_label: Label\n"
+		source += "var _enter_was_down: bool = false\n"
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
@@ -441,25 +442,28 @@ static func controller_script(objective: String) -> String:
 		# 抓到——此前所有场景都带收集动词填充了 _ready，从未暴露）。
 		source += "\tpass\n"
 	if needs_movement or needs_pause:
-		# 单一 _physics_process：暂停开关用状态轮询（Input.is_action_just_pressed
-		# 依赖动作状态，运行时探针的动作模拟正是设置状态——事件派发路径
-		# （_unhandled_input）对模拟动作不可靠，真实编辑器 E2E 实测抓到）。
+		# 单一 _physics_process：输入读取一律状态轮询（Input.is_action_*
+		# 的 just_pressed 边沿在探针 parse_input_event 模拟下对 ui_accept
+		# 不可靠——真机复现：win→title 转移在按住 300ms 内从未触发，
+		# 同机制在 title→playing 却工作；状态轮询 + 上一帧锁存把状态转成
+		# 可靠边沿。事件派发路径（_unhandled_input）同样不可靠（真机抓到）。
 		# 暂停期间提前 return：世界（含本控制器驱动的移动）必须停下。
 		source += "\nfunc _physics_process(_delta: float) -> void:\n"
 		if needs_state:
-			source += "\tif game_state == \"title\" and Input.is_action_just_pressed(\"ui_accept\"):\n"
-			source += "\t\tgame_state = \"playing\"\n"
-			source += "\t\tif _title_label != null:\n"
-			source += "\t\t\t_title_label.visible = false\n"
-			source += "\telif game_state == \"win\" and Input.is_action_just_pressed(\"ui_accept\"):\n"
-			source += "\t\tgame_state = \"title\"\n"
-			source += "\t\tposition = Vector2.ZERO\n"
-			source += "\t\tcoins_collected = 0\n"
-			source += "\t\tif _title_label != null:\n"
-			source += "\t\t\t_title_label.visible = true\n"
+			source += "\tif _enter_edge():\n"
+			source += "\t\tif game_state == \"title\":\n"
+			source += "\t\t\tgame_state = \"playing\"\n"
+			source += "\t\t\tif _title_label != null:\n"
+			source += "\t\t\t\t_title_label.visible = false\n"
+			source += "\t\telif game_state == \"win\":\n"
+			source += "\t\t\tgame_state = \"title\"\n"
+			source += "\t\t\tposition = Vector2.ZERO\n"
+			source += "\t\t\tcoins_collected = 0\n"
+			source += "\t\t\tif _title_label != null:\n"
+			source += "\t\t\t\t_title_label.visible = true\n"
 			# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
 			if needs_pickup:
-				source += "\t\t_respawn_coins()\n"
+				source += "\t\t\t_respawn_coins()\n"
 			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
 			source += "\t\treturn\n"
 		if needs_save:
@@ -517,6 +521,14 @@ static func controller_script(objective: String) -> String:
 		source += "\tget_tree().paused = value\n"
 		source += "\tif _pause_label != null:\n"
 		source += "\t\t_pause_label.visible = value\n"
+	if needs_state:
+		source += "\nfunc _enter_edge() -> bool:\n"
+		source += "\t# 状态轮询转边沿（探针的 parse_input_event 模拟下\n"
+		source += "\t# is_action_just_pressed 对 ui_accept 不可靠——真机复现）。\n"
+		source += "\tvar down: bool = Input.is_action_pressed(\"ui_accept\")\n"
+		source += "\tvar fresh: bool = down and not _enter_was_down\n"
+		source += "\t_enter_was_down = down\n"
+		source += "\treturn fresh\n"
 	if needs_state and needs_pickup:
 		source += "\nfunc _respawn_coins() -> void:\n"
 		source += "\tvar parent := get_parent()\n"

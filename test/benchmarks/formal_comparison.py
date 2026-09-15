@@ -57,7 +57,13 @@ def wait_server(port):
             time.sleep(1)
     return False
 
+def purge_user_saves():
+    # user:// 存档跨运行残留会毒化 N3（恢复到上一时代的漂移位置）
+    appdata = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata")
+    shutil.rmtree(os.path.join(appdata, "Benchmark"), ignore_errors=True)
+
 def setup_scratch(port):
+    purge_user_saves()
     if SCRATCH.exists():
         shutil.rmtree(SCRATCH, ignore_errors=True)
     (SCRATCH / "addons").mkdir(parents=True)
