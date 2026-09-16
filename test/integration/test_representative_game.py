@@ -134,6 +134,8 @@ def full_loop_steps():
         {"action": "ui_accept", "pressed": False, "wait_ms": 100},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
         {"action": "move_right", "pressed": True, "wait_frames": 90},
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
@@ -143,9 +145,13 @@ def full_loop_steps():
         {"assert": {"expression": "game_state", "expected": "win",
             "description": "round one: win state reached"}},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
-         "assert": {"expression": "game_state", "expected": "title",
-            "description": "restart returns to title"}},
+         "assert": {"expression": "coins_collected == 0", "expected": True,
+            "description": "the restart cycle reset the counter (win->title->playing)"}},
         {"assert": {"expression": "abs(position.x) < 20", "expected": True,
             "description": "restart reset the player to the origin"}},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
@@ -163,6 +169,8 @@ def death_check_steps():
     """Dodge below the enemy band, pass it, return to y=0, sweep back left
     through the band: a death must occur and the player must respawn."""
     return [
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 100},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},

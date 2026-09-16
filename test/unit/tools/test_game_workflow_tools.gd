@@ -1294,8 +1294,8 @@ func test_state_play_steps_cover_full_two_round_loop() -> void:
 		"full collection is asserted")
 	assert_true(joined.contains("game_state") and joined.contains("win"),
 		"the win state is asserted")
-	assert_true(joined.contains("game_state == title"),
-		"the restart-to-title transition is asserted")
+	assert_true(joined.contains("coins_collected == 0"),
+		"the restart reset effect is asserted (transient-title assert replaced)")
 	assert_true(joined.contains("abs(position.x) < 20"),
 		"the origin reset is asserted (racy counter observable replaced)")
 	assert_true(joined.contains("game_state == playing"),

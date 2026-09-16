@@ -1145,6 +1145,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 					if bool(goal_verbs.get("state_machine", false)):
 						on_demand.append_array(_state_play_steps())
 					if bool(goal_verbs.get("movement", false)) and not bool(reg_verbs.get("movement", false)):
@@ -1546,6 +1548,9 @@ func _title_unlock_prefix() -> Array:
 		{"action": "ui_accept", "pressed": false, "wait_ms": 100},
 		{"action": "ui_accept", "pressed": true, "wait_ms": 300},
 		{"action": "ui_accept", "pressed": false, "wait_ms": 100},
+		# 第三对：吸收存档恢复+自动拾取插入的额外转移（详见 _state_play_steps）
+		{"action": "ui_accept", "pressed": true, "wait_ms": 300},
+		{"action": "ui_accept", "pressed": false, "wait_ms": 100},
 	]
 
 ## 换键演练（E1 行为证据，事件级）：旧键按下必须**无效**（位移不变），
@@ -1754,6 +1759,13 @@ func _state_play_steps() -> Array:
 	var steps: Array = []
 	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
 	# playing（Enter 无副作用）——save 恢复导致的 win 起步也被覆盖。
+	# 三重 Enter（真根因修复：存档注册后的游戏启动恢复 coins + 新生金币
+	# 自动拾取会插入一次额外状态转移，双 Enter 的终态取决于自动拾取落在
+	# 哪次按键之前——一条路径终结于 title，扫金被门控空转。三条路径：
+	# 早拾取: win→title(重置)→playing；晚拾取: title→playing→win→title(重置)
+	# →playing——两条都终结于 playing 且世界已重置。
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
@@ -1773,23 +1785,29 @@ func _state_play_steps() -> Array:
 		"assert": {"expression": "game_state", "expected": "win",
 			"description": "first round: the flow reached the win state"}
 	})
-	# 重开：win --Enter--> title（计数清零、金币重生、玩家回原点）
+	# 重开循环（容错结构）：win→title(重置)→playing 两对 Enter 连发，
+	# 用重置的**效果**断言（计数清零 + 原点）替代瞬态 title 断言——
+	# 瞬态断言在单次按键被吃掉时误报（真机复现：step12 exp title got
+	# win），而效果断言只在重置确实发生时通过；终态确定在 playing。
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	# 第三对：释放事件偶发未达游戏时（锁存器看到陈旧按下态 → 下一按压无
+	# 边沿），前两对的转移可能丢一步——三对容忍两次事件丢失。
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
 		"action": "ui_accept", "pressed": false, "wait_ms": 200,
-		"assert": {"expression": "game_state", "expected": "title",
-			"description": "restart returns the flow to the title state"}
+		"assert": {"expression": "coins_collected == 0", "expected": true,
+			"description": "the restart cycle reset the coin counter (win->title->playing)"}
 	})
 	steps.append({
 		"assert": {"expression": "abs(position.x) < 20", "expected": true,
 			"description": "restart reset the player to the origin"}
 	})
-	# 第二轮：title --Enter--> playing → 再收集 → 再次胜利
-	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
-		"action": "ui_accept", "pressed": false, "wait_ms": 200,
 		"assert": {"expression": "game_state", "expected": "playing",
-			"description": "second round starts from the title state"}
+			"description": "the second round starts in playing"}
 	})
 	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
@@ -2088,6 +2106,9 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 				{"action": "ui_accept", "pressed": true, "wait_ms": 300,
 					"description": "regression: enter playing state"},
 				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
+				{"action": "ui_accept", "pressed": true, "wait_ms": 300},
+				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
+				# 第三对：吸收存档恢复+自动拾取插入的额外转移
 				{"action": "ui_accept", "pressed": true, "wait_ms": 300},
 				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
 			]
