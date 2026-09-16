@@ -195,14 +195,17 @@ func test_collect_and_enemy_exercises_derived() -> void:
 			descriptions.append(str(leg.get("expression", "")))
 	assert_has(descriptions, "coins_collected")
 	assert_has(descriptions, "_win_label.text")
-	var enemy_steps: Array = tools._enemy_play_steps()
+	var enemy_legs: Dictionary = tools._enemy_play_legs()
 	var enemy_expressions: Array = []
-	for step_value in enemy_steps:
+	for step_value in enemy_legs["steps"]:
 		var leg2: Dictionary = (step_value.get("assert", {}) as Dictionary)
 		if not leg2.is_empty():
 			enemy_expressions.append(str(leg2.get("expression", "")))
 	assert_has(enemy_expressions, "deaths_count")
 	assert_has(enemy_expressions, "position.x")
+	var enemy_metrics: Array = enemy_legs["assertions"]
+	assert_eq(String((enemy_metrics[0] as Dictionary).get("aggregate", "")), "range",
+		"patrol proof uses the phase-robust range metric")
 
 func test_state_machine_goal_generates_flow() -> void:
 	var source: String = BlueprintsScript.controller_script("a title screen with start, gameplay, win state and restart")
