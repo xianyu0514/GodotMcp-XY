@@ -2078,6 +2078,19 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 				{"action": "ui_accept", "pressed": true, "wait_ms": 300},
 				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
 			]
+		# 回归安全锚点（真根因修复：连续 play"输入失效"其实是敌人击杀重置）：
+		# 上一演练可能把玩家留在敌带击杀窗内（收集演练结束于 x≈392，敌右
+		# 极值 380 的击杀窗覆盖它）——下一演练的移动腿在窗口内遭遇死亡重置，
+		# 位移断言随机失败（判别实验：只按右键却向左位移=死亡回原点）。左扫
+		# 90 帧回原点：死于敌带重置回 (0,0)、或贴左墙——两种结局都在安全区。
+		steps += [
+			# 墙钟左扫（非帧步进）：物理同样把玩家带回原点，但不进入采样
+			# 轨迹——feel 指标的 last-first delta 保持原点基准（帧步进锚点
+			# 会让轨迹起点偏到左墙 −24，delta 余量从 87 掉到 63 闪断）。
+			{"action": "move_left", "pressed": true, "wait_ms": 2000,
+				"description": "regression: return to the safe origin anchor"},
+			{"action": "move_left", "pressed": false, "wait_ms": 100},
+		]
 		var play_args: Dictionary = {"steps": steps}
 		for extra_key in ["deterministic", "sample", "assertions"]:
 			if exercise_args.has(extra_key):
