@@ -203,6 +203,9 @@ def main() -> int:
                 "model_counts": model.get("counts", {}),
             })
             status = "✅" if state == "completed" else f"❌({state})"
+            if state != "completed":
+                reason = str(d.get("blocked_reason", ""))[:220]
+                print(f"      reason: {reason}")
             print(f"  [{goal_id}] {status} {elapsed:.0f}s ledger={ledger.get('recorded_goals',0)} "
                   f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'} "
                   f"prior_reverified={len(prior.get('checked', [])) if prior else 0} "
