@@ -914,10 +914,13 @@ func test_movement_goal_derives_displacement_assertions() -> void:
 			var step: Dictionary = step_value
 			if bool(step.get("pressed", false)):
 				leg_actions.append(step.get("action"))
-				if step.has("assert"):
-					var leg_assert: Dictionary = step.get("assert", {})
-					assert_true(leg_assert.has("displacement_min") or leg_assert.has("displacement_max"),
-						"displacement asserts are snapshot-relative (signed deltas)")
+			if step.has("assert"):
+				var leg_assert: Dictionary = step.get("assert", {})
+				if leg_assert.has("displacement_min") or leg_assert.has("displacement_max"):
+					# 解耦结构：按键步（墙钟落定）与纯帧步进测量步分离——
+					# 断言在测量步上，不再要求与按键同步
+					assert_true(step.has("wait_frames"),
+						"displacement asserts measure exact frame-stepped windows")
 					assert_count += 1
 		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down", "move_right"],
 			"four directions + the feel hold leg")
@@ -1341,3 +1344,15 @@ func test_verify_gate_repair_dead_end_fails_fast() -> void:
 		"the workflow state moves to replan_required")
 	assert_true(str((plan_doc["workflow"] as Dictionary).get("blocked_reason", "")).contains("verification gate"),
 		"the blocked reason explains the verify-gate dead end")
+
+func test_frame_stepped_exercises_always_enable_deterministic() -> void:
+	# 真缺陷回归：wait_frames 只在 deterministic=true 时步进（执行器契约）
+	# ——移动/收集/存档/状态演练曾未设标志，帧步进被静默忽略（零等待、
+	# 断言立即求值、位移恒 0），多轮代表运行退化至此。派生出口统一兜底。
+	var plan: Dictionary = {"goal": "Arrow-key player movement with walls.",
+		"workflow": {}}
+	var task: Dictionary = {"tool_name": "play_and_verify", "step_key": "play_verify",
+		"profile": "gameplay_feature"}
+	var arguments: Dictionary = _tools._derive_step_arguments(plan, task, "play_and_verify", {})
+	assert_true(bool(arguments.get("deterministic", false)),
+		"any exercise containing wait_frames enables deterministic stepping")

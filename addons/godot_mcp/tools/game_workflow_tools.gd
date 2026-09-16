@@ -1214,6 +1214,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 	var focus_param: String = String(FOCUS_POLICY_TOOLS.get(tool_name, ""))
 	if not focus_param.is_empty() and not arguments.has(focus_param):
 		arguments[focus_param] = true
+	# wait_frames 只在 deterministic=true 时步进（执行器契约）——任何演练
+	# 含帧步进步而未设标志 = 零等待立即断言（真缺陷：帧步进迁移后移动/
+	# 收集/存档/状态演练静默失效，位移恒 0，多轮退化至此）。统一出口兜底。
+	if tool_name == "play_and_verify" and arguments.has("steps") \
+			and not bool(arguments.get("deterministic", false)):
+		for step_value in arguments["steps"]:
+			if step_value is Dictionary and (step_value as Dictionary).has("wait_frames"):
+				arguments["deterministic"] = true
+				break
 	return arguments
 
 ## Visual gates derive candidate_path from the latest runtime screenshot and a
@@ -1795,13 +1804,13 @@ func _enemy_play_legs() -> Dictionary:
 	return {
 		"steps": [
 			{"wait_frames": 96},
+			{"action": "move_right", "pressed": true, "wait_frames": 96},
 			{
-				"action": "move_right", "pressed": true, "wait_frames": 96,
+				"action": "move_right", "pressed": false, "wait_frames": 18,
 				"assert": {"expression": "deaths_count", "operator": "gt", "expected": 0,
 					"description": "touching the enemy killed the player"}
 			},
 			{
-				"action": "move_right", "pressed": false, "wait_frames": 18,
 				"assert": {"expression": "position.x", "operator": "lt", "expected": 220,
 					"description": "the player respawned left of the enemy band after death"}
 			},

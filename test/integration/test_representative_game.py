@@ -232,7 +232,8 @@ def main() -> int:
 
             # Check 2: full two-round game loop (title -> collect all -> win
             # -> restart -> collect all again -> win again)
-            r6 = rpc("play_and_verify", {"steps": full_loop_steps()}, 915)
+            r6 = rpc("play_and_verify", {"steps": full_loop_steps(),
+                "deterministic": True}, 915)
             oracle_checks.append(("full_two_round_loop", bool(r6.get("passed"))))
 
             # Check 3: no runtime errors anywhere above (the old multi-coin
