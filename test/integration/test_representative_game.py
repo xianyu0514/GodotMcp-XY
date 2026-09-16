@@ -39,14 +39,28 @@ GODOT = os.environ.get("GODOT_EXE", r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_c
 PORT = int(os.environ.get("REP_PORT", "9195"))
 
 def rpc(name, args, rid=1, timeout=300.0):
-    payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}/mcp",
-        data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
-    r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-    res = r.get("result",{})
-    if res.get("isError"):
-        raise RuntimeError(f"{name}: {res['content'][0]['text'][:300]}")
-    return res.get("structuredContent",{})
+    # 编辑器中途打嗝（503/连接重置，本机与 CI runner 均实测）不再截断整轮：
+    # 工作流状态是持久检查点，重复同一命令安全挂接不重做——退避重试。
+    import time as _t
+    last_err = None
+    for attempt in range(4):
+        try:
+            payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
+            req = urllib.request.Request(f"http://127.0.0.1:{PORT}/mcp",
+                data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
+            r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+            res = r.get("result",{})
+            if res.get("isError"):
+                raise RuntimeError(f"{name}: {res['content'][0]['text'][:300]}")
+            return res.get("structuredContent",{})
+        except (urllib.error.HTTPError, urllib.error.URLError, ConnectionError) as exc:
+            last_err = exc
+            if attempt < 3:
+                wait_s = 10 * (attempt + 1)
+                print(f"  [rpc hiccup on {name}: {exc}] retrying in {wait_s}s "
+                      f"({attempt + 1}/3) — durable workflow state makes this safe")
+                _t.sleep(wait_s)
+    raise last_err
 
 def wait_server():
     deadline = time.time() + 120

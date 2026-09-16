@@ -287,4 +287,5 @@ jobs:
         with:
           name: representative-game-evidence
           path: tmp_representative_game/.mcp/**
+          include-hidden-files: true
           if-no-files-found: warn

@@ -1831,6 +1831,12 @@ func _enemy_play_legs() -> Dictionary:
 ## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
 func _save_play_steps() -> Array:
 	var steps: Array = []
+	# 先锚定原点（真根因修复：存档位置落在敌带击杀窗 [196,404] 内时，
+	# 恢复进程一启动就被击杀重置回原点——"未恢复"实为死亡重置）。
+	# 锚定后存档值 ≈ 80-104，恢复落点在安全区。
+	steps.append({"action": "move_left", "pressed": true, "wait_ms": 1200,
+		"description": "anchor at the origin so the saved position is safe to restore"})
+	steps.append({"action": "move_left", "pressed": false, "wait_ms": 100})
 	# 位移先自证（帧步进 24 帧 = 恰好 104px，确定性）——保证写入磁盘的
 	# 状态非平凡，恢复腿的断言才有意义。
 	steps.append({
@@ -2050,6 +2056,12 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 	var run_startup_error: String = ""
 	if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
 		run_startup_error = String((run_discard as Dictionary)["error"])
+	# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
+	# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
+	# 吸收握手，后续演练从就绪通道起测。
+	var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
+		{"steps": [{"wait_ms": 300}]},
+		_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
 	var checked: Array = []
 	const MAX_REGRESSION_FEATURES: int = 8
 	# 解锁前缀依据 = 注册表 ∪ 当前目标动词（门禁执行时本目标尚未注册——
