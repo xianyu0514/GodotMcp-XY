@@ -2040,7 +2040,11 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression_stop", "stop_project"))
 	var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
 		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
-	# stop/run 结果不判断：启动失败时首个演练自然报错（fail-closed）
+	# stop/run 结果不判断：启动失败时首个演练自然报错（fail-closed）——
+	# 但把 run 的启动错误留档，失败时并入诊断（区分"游戏没起来"与"演练失败"）。
+	var run_startup_error: String = ""
+	if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
+		run_startup_error = String((run_discard as Dictionary)["error"])
 	var checked: Array = []
 	const MAX_REGRESSION_FEATURES: int = 8
 	# 解锁前缀依据 = 注册表 ∪ 当前目标动词（门禁执行时本目标尚未注册——
@@ -2086,6 +2090,8 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 		if not passed:
 			var reason: String = "prior feature '%s' (%s) failed re-verification" % [
 				String(prior.get("feature_id", "")), prior_goal]
+			if not run_startup_error.is_empty():
+				reason += " [game startup: %s]" % run_startup_error
 			if result is Dictionary:
 				if (result as Dictionary).has("error"):
 					reason += ": %s" % String((result as Dictionary)["error"])

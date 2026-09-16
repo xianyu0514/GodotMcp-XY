@@ -281,10 +281,10 @@ jobs:
           REP_PORT: "9299"
         run: python test/integration/test_representative_game.py
 
-      - name: Upload scratch evidence on failure
-        if: failure()
+      - name: Upload scratch evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: representative-game-evidence
-          path: |
-            tmp_representative_game/.mcp/
+          path: tmp_representative_game/.mcp/**
+          if-no-files-found: warn
