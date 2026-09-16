@@ -2123,6 +2123,10 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 			# 会让轨迹起点偏到左墙 −24，delta 余量从 87 掉到 63 闪断）。
 			{"action": "move_left", "pressed": true, "wait_ms": 2000,
 				"description": "regression: return to the safe origin anchor"},
+			# 释放发送两次：释放事件偶发丢失时，演练的 move_right 与残留的
+			# move_left 在 get_vector 里相互抵消 → 零位移（CI 实证：06/09 的
+			# movement+wall 重验零位移同源于此）。双发让单事件丢失无害。
+			{"action": "move_left", "pressed": false, "wait_ms": 100},
 			{"action": "move_left", "pressed": false, "wait_ms": 100},
 		]
 		var play_args: Dictionary = {"steps": steps}
