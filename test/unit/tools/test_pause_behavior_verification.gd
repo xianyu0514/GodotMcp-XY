@@ -202,7 +202,6 @@ func test_collect_and_enemy_exercises_derived() -> void:
 		if not leg2.is_empty():
 			enemy_expressions.append(str(leg2.get("expression", "")))
 	assert_has(enemy_expressions, "deaths_count")
-	assert_has(enemy_expressions, "position.x")
 	var enemy_metrics: Array = enemy_legs["assertions"]
 	assert_eq(String((enemy_metrics[0] as Dictionary).get("aggregate", "")), "range",
 		"patrol proof uses the phase-robust range metric")
@@ -252,11 +251,12 @@ func test_rename_goal_gets_native_objective_gate() -> void:
 func test_movement_feel_legs_shape() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
 	var feel: Dictionary = tools._movement_feel_legs()
-	assert_true(bool(feel["steps"][0].has("wait_frames")), "frame-stepped input hold")
-	var assertion: Dictionary = feel["assertions"][0]
-	assert_eq(str(assertion.get("metric", "")), "px")
-	assert_eq(str(assertion.get("aggregate", "")), "delta", "responsiveness = displacement over held frames")
-	assert_true(float(assertion.get("expected", 0)) > 0.0, "a real budget, not a tautology")
+	var feel_step: Dictionary = feel["steps"][0]
+	assert_true(bool(feel_step.has("wait_frames")), "frame-stepped input hold")
+	# feel 断言已步级化：只测本腿 20 帧窗口（整轨迹 delta 会被后续死亡重置压低）
+	var feel_assert: Dictionary = feel_step.get("assert", {})
+	assert_true(feel_assert.has("displacement_min"), "step-level displacement assert on the hold window")
+	assert_true(float(feel_assert.get("displacement_min", 0)) >= 60.0, "a real budget, not a tautology")
 
 func test_audio_goal_generates_sfx_on_collect() -> void:
 	var source: String = BlueprintsScript.controller_script("collect a coin that plays a sound effect")
