@@ -77,8 +77,9 @@ func test_save_play_steps_shape() -> void:
 		var step: Dictionary = step_value
 		if bool(step.get("pressed", false)):
 			actions.append(step.get("action"))
-	assert_eq(actions, ["move_right", "save_game"], "move to make state, then save")
-	var save_step: Dictionary = steps[2]
+	# 锚定腿（safe-save 修复）在前：left 锚定 → right 制造状态 → save
+	assert_eq(actions, ["move_left", "move_right", "save_game"], "anchor, move to make state, then save")
+	var save_step: Dictionary = steps[4]
 	assert_true(save_step.has("assert"), "save press asserts write success")
 	assert_eq(str((save_step["assert"] as Dictionary).get("expression", "")), "last_save_ok")
 
