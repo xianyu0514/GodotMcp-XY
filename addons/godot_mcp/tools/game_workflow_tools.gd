@@ -1657,16 +1657,21 @@ func _pause_play_steps() -> Array:
 ## position.x——delta ≥ 60px 证明输入→响应延迟 ≤ ~3 帧（20 帧全速理论
 ## 86px）。非确定性墙钟等待测不了延迟，只有帧步进能。
 func _movement_feel_legs() -> Dictionary:
+	# 手感腿改为步级位移断言（真缺陷：整轨迹 last-first 的 delta 会被后续
+	# 步骤压低——movement+enemy 演练里敌人腿的死亡重置把末样本拉回原点，
+	# delta 随死亡落点漂移闪断）。步级快照只测本腿的 20 帧窗口，语义不变：
+	# 保持 20 帧 ≥60px = 输入→响应延迟 ≤ ~3 帧。
 	return {
 		"steps": [
-			{"action": "move_right", "pressed": true, "wait_frames": 20},
+			{
+				"action": "move_right", "pressed": true, "wait_frames": 20,
+				"assert": {"expression": "position.x", "displacement_min": 60,
+					"description": "input->response feel: 20 held physics frames displace >= 60px (response within ~3 frames)"}
+			},
 			{"action": "move_right", "pressed": false, "wait_ms": 80},
 		],
-		"sample": [{"label": "px", "expression": "position.x"}],
-		"assertions": [{
-			"metric": "px", "aggregate": "delta", "operator": "gt", "expected": 60,
-			"description": "input->response feel: 20 held physics frames displace >= 60px (response within ~3 frames)"
-		}],
+		"sample": [],
+		"assertions": [],
 	}
 
 ## 收集腿（评测 N1 收集面）：走到金币（蓝图固定 (180,120)）→ 断言

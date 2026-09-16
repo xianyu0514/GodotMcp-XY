@@ -924,10 +924,9 @@ func test_movement_goal_derives_displacement_assertions() -> void:
 					assert_count += 1
 		assert_eq(leg_actions, ["move_right", "move_left", "move_up", "move_down", "move_right"],
 			"four directions + the feel hold leg")
-		assert_eq(assert_count, 4, "all four displacement legs assert")
+		# 5 个步级位移断言：四向腿 + feel 腿（feel 改步级后不受后续死亡重置影响）
+		assert_eq(assert_count, 5, "all four displacement legs + the feel leg assert")
 		assert_true(bool(arguments.get("deterministic", false)), "feel sampling enables deterministic mode")
-		var final_assertions: Array = arguments.get("assertions", [])
-		assert_gt(final_assertions.size(), 0, "feel metric assertion appended")
 		return
 	fail_test("play_and_verify task not found for movement goal")
 
