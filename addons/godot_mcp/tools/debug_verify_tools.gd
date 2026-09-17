@@ -179,13 +179,15 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			if step.has("strength"):
 				input_params["strength"] = float(step["strength"])
 			var action_result: Dictionary = await _get_runtime_tools()._tool_simulate_runtime_input_action(input_params)
-			if action_result.has("error"):
-				errors.append({"step": i, "phase": "input", "error": action_result["error"]})
+			# 非成功状态（timeout/no_active_sessions）以前被静默放过——输入
+			# 步假完成，后续断言在错误状态下测量。非 success 一律记为步错误。
+			if action_result.has("error") or String(action_result.get("status", "success")) != "success":
+				errors.append({"step": i, "phase": "input", "error": str(action_result.get("error", "input step status: " + str(action_result.get("status", ""))))})
 		elif step.has("event"):
 			var event_params: Dictionary = _merge_runtime_params(params, {"event": step["event"]})
 			var event_result: Dictionary = await _get_runtime_tools()._tool_simulate_runtime_input_event(event_params)
-			if event_result.has("error"):
-				errors.append({"step": i, "phase": "input", "error": event_result["error"]})
+			if event_result.has("error") or String(event_result.get("status", "success")) != "success":
+				errors.append({"step": i, "phase": "input", "error": str(event_result.get("error", "input step status: " + str(event_result.get("status", ""))))})
 
 		var wait_ms: int = int(step.get("wait_ms", 0))
 		if deterministic and step.has("wait_frames"):

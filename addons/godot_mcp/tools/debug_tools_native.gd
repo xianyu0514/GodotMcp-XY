@@ -205,6 +205,14 @@ static func _make_runtime_probe_request_key(command: String, payload: Array, ses
 		key += "|" + str(match_fields)
 	return key
 
+static func _purge_runtime_probe_request(command: String, payload: Array, response_messages: Array, params: Dictionary, match_fields: Dictionary = {}) -> void:
+	# 投递确认支持：清除挂起的探针请求缓存，强制下一次调用重新派发命令。
+	# simulate_input_action 的命令/应答往返偶发丢失（陈旧回退或超时）靠
+	# 清缓存重发恢复——探针侧 action_press/release 本身是幂等直写。
+	var session_id: int = int(params.get("session_id", -1))
+	_pending_runtime_probe_requests.erase(
+		_make_runtime_probe_request_key(command, payload, session_id, response_messages, match_fields))
+
 static func _extract_pending_runtime_probe_response(bridge: RefCounted, pending_entry: Dictionary, response_messages: Array, match_fields: Dictionary) -> Dictionary:
 	# Force the debugger bridge to refresh captured message visibility before querying
 	# for the latest runtime payload. Without this, headless editor sessions can leave

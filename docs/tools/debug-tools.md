@@ -74,7 +74,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `create_runtime_node` | advanced | Create a node in the running game. |
 | `delete_runtime_node` | advanced | Delete a node in the running game. |
 | `simulate_runtime_input_event` | advanced | Simulate an input event in the running game. |
-| `simulate_runtime_input_action` | advanced | Simulate an input action in the running game. |
+| `simulate_runtime_input_action` | advanced | Simulate an input action in the running game; delivery is confirmed by reading back `runtime_pressed` (resends on lost acks, fails loudly with evidence instead of silently faking completion). |
 | `list_runtime_input_actions` | advanced | List input actions available in the running game. |
 | `upsert_runtime_input_action` | advanced | Create or update an input action in the running game. |
 | `remove_runtime_input_action` | advanced | Remove an input action from the running game. |
