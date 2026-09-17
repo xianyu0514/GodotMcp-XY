@@ -1151,7 +1151,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						on_demand.append_array(_state_play_steps())
 					if bool(goal_verbs.get("movement", false)) and not bool(reg_verbs.get("movement", false)):
 						on_demand.append_array(_movement_play_steps())
-					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false))) \
+					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false)) \
+							or bool(goal_verbs.get("juice", false))) \
 							and not bool(reg_verbs.get("collectible", false)):
 						on_demand.append_array(_collect_play_steps())
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
@@ -1395,6 +1396,8 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 		parts.append("title screen game flow restart")
 	if bool(merged_verbs.get("audio", false)):
 		parts.append("sound effect")
+	if bool(merged_verbs.get("juice", false)):
+		parts.append("coin pickup particle burst")
 	if bool(merged_verbs.get("wall", false)):
 		parts.append("walls")
 	if bool(merged_verbs.get("three_d", false)):
@@ -1402,138 +1405,6 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 	if parts.is_empty():
 		return original_goal
 	return ", ".join(parts)
-
-## Phase B 增量代码块生成：只为尚未注册的动词生成功能块，追加到现有
-## 控制器末尾（不覆盖已有功能）。返回空串表示无需追加。
-func _generate_incremental_blocks(new_verbs: Dictionary, current_source: String) -> String:
-	var blocks: String = ""
-	# 收集动词（需要收集代码块）
-	if bool(new_verbs.get("collectible", false)) and not current_source.contains("_coin_area"):
-		blocks += "\n# --- incremental: collectible ---\n"
-		blocks += "var _coin_area: Area2D\n"
-		blocks += "const COINS_TO_WIN: int = 1\n"
-		blocks += "var coins_collected: int = 0\n"
-		blocks += "\nfunc _spawn_coin() -> void:\n"
-		blocks += "\t_coin_area = Area2D.new()\n"
-		blocks += "\t_coin_area.name = \"Coin\"\n"
-		blocks += "\t_coin_area.position = Vector2(200, 0)\n"
-		blocks += "\tvar coin_col := CollisionShape2D.new()\n"
-		blocks += "\tvar coin_shape := CircleShape2D.new()\n"
-		blocks += "\tcoin_shape.radius = 90\n"
-		blocks += "\tcoin_col.shape = coin_shape\n"
-		blocks += "\t_coin_area.add_child(coin_col)\n"
-		blocks += "\t_coin_area.body_entered.connect(_on_coin_touched)\n"
-		blocks += "\tget_parent().add_child.call_deferred(_coin_area)\n"
-		blocks += "\nfunc _on_coin_touched(body: Node) -> void:\n"
-		blocks += "\tif body != self:\n"
-		blocks += "\t\treturn\n"
-		blocks += "\tcoins_collected += 1\n"
-		blocks += "\t_coin_area.queue_free()\n"
-	# 暂停动词
-	if bool(new_verbs.get("pause", false)) and not current_source.contains("set_paused"):
-		blocks += "\n# --- incremental: pause ---\n"
-		blocks += "var _pause_label: Label\n"
-		blocks += "\nfunc _setup_pause() -> void:\n"
-		blocks += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
-		blocks += "\tvar pause_layer := CanvasLayer.new()\n"
-		blocks += "\tpause_layer.name = \"PauseLayer\"\n"
-		blocks += "\tadd_child(pause_layer)\n"
-		blocks += "\t_pause_label = Label.new()\n"
-		blocks += "\t_pause_label.name = \"PauseLabel\"\n"
-		blocks += "\t_pause_label.text = \"Paused - press Esc to resume\"\n"
-		blocks += "\t_pause_label.visible = false\n"
-		blocks += "\tpause_layer.add_child(_pause_label)\n"
-		blocks += "\nfunc set_paused(value: bool) -> void:\n"
-		blocks += "\tget_tree().paused = value\n"
-		blocks += "\tif _pause_label != null:\n"
-		blocks += "\t\t_pause_label.visible = value\n"
-	# 敌人动词
-	if bool(new_verbs.get("enemy", false)) and not current_source.contains("_enemy"):
-		blocks += "\n# --- incremental: enemy ---\n"
-		blocks += "var _enemy: Area2D\n"
-		blocks += "var deaths_count: int = 0\n"
-		blocks += "var _enemy_time: float = 0.0\n"
-		blocks += "const ENEMY_HOME_X: float = 300.0\n"
-		blocks += "const ENEMY_RANGE: float = 80.0\n"
-		blocks += "\nfunc _setup_enemy() -> void:\n"
-		blocks += "\t_enemy = Area2D.new()\n"
-		blocks += "\t_enemy.name = \"Enemy\"\n"
-		blocks += "\t_enemy.position = Vector2(ENEMY_HOME_X, 0)\n"
-		blocks += "\tvar enemy_col := CollisionShape2D.new()\n"
-		blocks += "\tvar enemy_shape := RectangleShape2D.new()\n"
-		blocks += "\tenemy_shape.size = Vector2(16, 240)\n"
-		blocks += "\tenemy_col.shape = enemy_shape\n"
-		blocks += "\t_enemy.add_child(enemy_col)\n"
-		blocks += "\t_enemy.body_entered.connect(_on_enemy_touched)\n"
-		blocks += "\tget_parent().add_child.call_deferred(_enemy)\n"
-		blocks += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
-		blocks += "\tif body != self:\n"
-		blocks += "\t\treturn\n"
-		blocks += "\tdeaths_count += 1\n"
-		blocks += "\tposition = Vector2.ZERO\n"
-	# 存档动词
-	if bool(new_verbs.get("save", false)) and not current_source.contains("save_game"):
-		blocks += "\n# --- incremental: save/load ---\n"
-		blocks += "const SAVE_PATH := \"user://save_game.json\"\n"
-		blocks += "var last_save_ok: bool = false\n"
-		blocks += "\nfunc save_game() -> bool:\n"
-		blocks += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
-		blocks += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)\n"
-		blocks += "\tif file == null:\n"
-		blocks += "\t\treturn false\n"
-		blocks += "\tfile.store_string(JSON.stringify(data))\n"
-		blocks += "\treturn true\n"
-		blocks += "\nfunc load_game() -> bool:\n"
-		blocks += "\tif not FileAccess.file_exists(SAVE_PATH):\n"
-		blocks += "\t\treturn false\n"
-		blocks += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.READ)\n"
-		blocks += "\tif file == null:\n"
-		blocks += "\t\treturn false\n"
-		blocks += "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())\n"
-		blocks += "\tif not (parsed is Dictionary):\n"
-		blocks += "\t\treturn false\n"
-		blocks += "\tcoins_collected = int(parsed.get(\"coins\", 0))\n"
-		blocks += "\tposition = Vector2(float(parsed.get(\"x\", 0.0)), float(parsed.get(\"y\", 0.0)))\n"
-		blocks += "\treturn true\n"
-	# 音效动词
-	if bool(new_verbs.get("audio", false)) and not current_source.contains("_sfx_player"):
-		blocks += "\n# --- incremental: audio ---\n"
-		blocks += "var sfx_played_count: int = 0\n"
-		blocks += "var _sfx_player: AudioStreamPlayer\n"
-		blocks += "\nfunc _setup_sfx() -> void:\n"
-		blocks += "\t_sfx_player = AudioStreamPlayer.new()\n"
-		blocks += "\t_sfx_player.name = \"SfxPlayer\"\n"
-		blocks += "\tadd_child(_sfx_player)\n"
-		blocks += "\t_sfx_player.stream = _generate_blip()\n"
-		blocks += "\nfunc _generate_blip() -> AudioStreamWAV:\n"
-		blocks += "\tvar sample_rate: int = 22050\n"
-		blocks += "\tvar frames: int = int(0.4 * sample_rate)\n"
-		blocks += "\tvar pcm := PackedByteArray()\n"
-		blocks += "\tpcm.resize(frames * 2)\n"
-		blocks += "\tfor i in range(frames):\n"
-		blocks += "\t\tvar decay: float = 1.0 - float(i) / float(frames)\n"
-		blocks += "\t\tvar square: float = 1.0 if fmod(float(i) * 880.0 / float(sample_rate), 2.0) < 1.0 else -1.0\n"
-		blocks += "\t\tpcm.encode_s16(i * 2, int(square * decay * 12000.0))\n"
-		blocks += "\tvar wav := AudioStreamWAV.new()\n"
-		blocks += "\twav.format = AudioStreamWAV.FORMAT_16_BITS\n"
-		blocks += "\twav.mix_rate = sample_rate\n"
-		blocks += "\twav.data = pcm\n"
-		blocks += "\treturn wav\n"
-	# 墙动词
-	if bool(new_verbs.get("wall", false)) and not current_source.contains("WallRight"):
-		blocks += "\n# --- incremental: walls ---\n"
-		blocks += "\nfunc _setup_walls() -> void:\n"
-		blocks += "\tfor wall_spec in [{\"name\": \"WallRight\", \"x\": 500.0}, {\"name\": \"WallLeft\", \"x\": -40.0}]:\n"
-		blocks += "\t\tvar wall_node := StaticBody2D.new()\n"
-		blocks += "\t\twall_node.name = wall_spec[\"name\"]\n"
-		blocks += "\t\twall_node.position = Vector2(wall_spec[\"x\"], 0)\n"
-		blocks += "\t\tvar wall_col := CollisionShape2D.new()\n"
-		blocks += "\t\tvar wall_shape := RectangleShape2D.new()\n"
-		blocks += "\t\twall_shape.size = Vector2(16, 240)\n"
-		blocks += "\t\twall_col.shape = wall_shape\n"
-		blocks += "\t\twall_node.add_child(wall_col)\n"
-		blocks += "\t\tget_parent().add_child.call_deferred(wall_node)\n"
-	return blocks
 
 ## 标题解锁前缀（P1-6 配套）：注册表已有 state_machine 时，游戏从标题
 ## （或上一轮演练留下的 win 态）启动——调参/存档等演练先双 Enter 进入
@@ -1742,13 +1613,35 @@ static func parse_tuning_goal(goal: String) -> Dictionary:
 
 ## 音效腿（P3 juice）：收集事件后断言声音确实播放过（可观测计数器，
 ## 不依赖声音时序窗口）。
-func _audio_play_steps() -> Array:
-	var steps: Array = []
-	steps.append({
-		"assert": {"expression": "sfx_played_count", "operator": "gt", "expected": 0,
-			"description": "collecting the coin played a sound effect"}
-	})
-	return steps
+## 音效证据腿（质量维度：听觉反馈）：两条断言——至少响过一次 +
+## 每次拾取都响了（sfx_played_count == coins_collected；蓝图在重开
+## 重置块同步清零两个计数器，等值在每一轮都成立）。coin_expression
+## 跟随改名（rename 已落盘后旧符号不存在，断言旧名必失败）。
+func _audio_play_steps(coin_expression: String = "coins_collected") -> Array:
+	return [
+		{
+			"assert": {"expression": "sfx_played_count", "operator": "gt", "expected": 0,
+				"description": "collecting the coin played a sound effect"}
+		},
+		{
+			"assert": {"expression": "sfx_played_count == %s" % coin_expression, "expected": true,
+				"description": "every pickup sounded (no silent collections)"}
+		},
+	]
+
+## 粒子证据腿（质量维度：视觉反馈/juice）：至少爆过一次 + 每次拾取
+## 都爆了。与音效同构——burst_count 在重开重置块同步清零。
+func _juice_play_steps(coin_expression: String = "coins_collected") -> Array:
+	return [
+		{
+			"assert": {"expression": "burst_count", "operator": "gt", "expected": 0,
+				"description": "collecting the coin fired a particle burst"}
+		},
+		{
+			"assert": {"expression": "burst_count == %s" % coin_expression, "expected": true,
+				"description": "every pickup burst (no feedback-less collections)"}
+		},
+	]
 
 ## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
 ## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
@@ -1910,9 +1803,16 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_enemy: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.ENEMY_KEYWORDS)
 		var wants_state: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
 		var wants_audio: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.AUDIO_KEYWORDS)
+		var wants_juice: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.JUICE_KEYWORDS)
 		var wants_3d: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.THREE_D_KEYWORDS)
-		if wants_audio:
+		if wants_audio or wants_juice:
 			wants_collect = true
+		# 更名目标若改的就是计数字段，所有拾取相关腿的表达式跟随新符号名
+		# （rename 已落盘，旧名不再存在——断言旧名必失败）。
+		var coin_expression: String = "coins_collected"
+		if not rename_info.is_empty() \
+				and String(rename_info.get("symbol_name", "")) == "coins_collected":
+			coin_expression = String(rename_info.get("new_name", "coins_collected"))
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
 			var play_steps: Array = []
 			# 上下文感知：注册表已有 state_machine（或当前目标本身带状态机——
@@ -1958,12 +1858,6 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			if wants_state:
 				play_steps.append_array(_state_play_steps())
 			elif wants_collect:
-				# 更名目标若改的就是计数字段，演练表达式跟随新符号名
-				# （rename 已落盘，旧名不再存在——断言旧名必失败）。
-				var coin_expression: String = "coins_collected"
-				if not rename_info.is_empty() \
-						and String(rename_info.get("symbol_name", "")) == "coins_collected":
-					coin_expression = String(rename_info.get("new_name", "coins_collected"))
 				play_steps.append_array(_collect_play_steps(coin_expression))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
@@ -1982,7 +1876,10 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			if wants_pause:
 				play_steps.append_array(_pause_play_steps())
 			if wants_audio:
-				play_steps.append_array(_audio_play_steps())
+				play_steps.append_array(_audio_play_steps(coin_expression))
+			# 粒子腿仅 2D 蓝图（3D 控制器尚无 burst 接线——断言必假）。
+			if wants_juice and not wants_3d:
+				play_steps.append_array(_juice_play_steps(coin_expression))
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
@@ -1997,6 +1894,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				labels.append("pause")
 			if wants_audio:
 				labels.append("audio")
+			if wants_juice and not wants_3d:
+				labels.append("juice")
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
 		else:

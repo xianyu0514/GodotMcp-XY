@@ -60,6 +60,12 @@ const AUDIO_KEYWORDS: Array[String] = [
 	"音效", "声音", "提示音",
 ]
 
+# 打磨动词（juice）：拾取粒子爆闪——视觉反馈的质量维度。
+const JUICE_KEYWORDS: Array[String] = [
+	"particle", "sparkle", "confetti", "burst effect", "visual effect",
+	"粒子", "特效", "爆闪",
+]
+
 # 游戏流状态机动词：标题→玩法→胜利→重开，状态转移可断言（P4）。
 const STATE_MACHINE_KEYWORDS: Array[String] = [
 	"title screen", "start menu", "game state", "game flow", "restart", "state machine",
@@ -139,6 +145,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"enemy": _mentions(objective, ENEMY_KEYWORDS),
 		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
 		"audio": _mentions(objective, AUDIO_KEYWORDS),
+		"juice": _mentions(objective, JUICE_KEYWORDS),
 		"wall": _mentions(objective, WALL_KEYWORDS),
 		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
@@ -152,6 +159,7 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("enemy", false)) \
 		or bool(verbs.get("state_machine", false)) \
 		or bool(verbs.get("audio", false)) \
+		or bool(verbs.get("juice", false)) \
 		or bool(verbs.get("wall", false)) \
 		or bool(verbs.get("three_d", false))
 
@@ -251,9 +259,10 @@ static func controller_script(objective: String) -> String:
 	# 3D 目标走独立蓝图（引擎/坐标/输入轴都不同）
 	if bool(verbs.get("three_d", false)):
 		return controller_script_3d(objective)
-	# 状态机暗含收集（胜利条件）与移动（玩法本体）——在 needs_* 计算前
-	# 改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
-	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)):
+	# 状态机/音效/粒子暗含收集（胜利条件）与移动（玩法本体）——在 needs_*
+	# 计算前改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
+	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)) \
+			or bool(verbs.get("juice", false)):
 		verbs["collectible"] = true
 		verbs["movement"] = true
 	var needs_pickup: bool = bool(verbs.get("collectible", false)) or bool(verbs.get("win", false))
@@ -286,6 +295,9 @@ static func controller_script(objective: String) -> String:
 	if bool(verbs.get("audio", false)):
 		source += "var sfx_played_count: int = 0\n"
 		source += "var _sfx_player: AudioStreamPlayer\n"
+	if bool(verbs.get("juice", false)):
+		source += "var burst_count: int = 0\n"
+		source += "var _burst_player: CPUParticles2D\n"
 	if needs_state:
 		source += "var game_state: String = \"title\"\n"
 		source += "var _title_label: Label\n"
@@ -396,6 +408,26 @@ static func controller_script(objective: String) -> String:
 		source += "\twav.stereo = false\n"
 		source += "\twav.data = pcm\n"
 		source += "\t_sfx_player.stream = wav\n"
+	if bool(verbs.get("juice", false)):
+		# 拾取粒子爆闪（一次性）：世界坐标挂载——爆闪留在拾取点，不跟
+		# 随玩家移动。触发时 restart() 重发（one_shot 粒子完成后
+		# emitting=true 不会重发）。
+		source += "\t_burst_player = CPUParticles2D.new()\n"
+		source += "\t_burst_player.name = \"PickupBurst\"\n"
+		source += "\t_burst_player.emitting = false\n"
+		source += "\t_burst_player.one_shot = true\n"
+		source += "\t_burst_player.amount = 24\n"
+		source += "\t_burst_player.lifetime = 0.45\n"
+		source += "\t_burst_player.explosiveness = 1.0\n"
+		source += "\t_burst_player.direction = Vector2(0, -1)\n"
+		source += "\t_burst_player.spread = 180.0\n"
+		source += "\t_burst_player.gravity = Vector2(0, 420)\n"
+		source += "\t_burst_player.initial_velocity_min = 120.0\n"
+		source += "\t_burst_player.initial_velocity_max = 260.0\n"
+		source += "\t_burst_player.scale_amount_min = 3.0\n"
+		source += "\t_burst_player.scale_amount_max = 6.0\n"
+		source += "\t_burst_player.color = Color(1.0, 0.85, 0.2)\n"
+		source += "\tget_parent().add_child.call_deferred(_burst_player)\n"
 	if bool(verbs.get("wall", false)):
 		source += "\t# 边界墙（世界坐标，延迟挂载）：右墙在 +250，左墙在 -40——\n"
 		source += "\t# CharacterBody2D + 碰撞体天然被 StaticBody2D 阻挡。\n"
@@ -459,6 +491,13 @@ static func controller_script(objective: String) -> String:
 			source += "\t\t\tgame_state = \"title\"\n"
 			source += "\t\t\tposition = Vector2.ZERO\n"
 			source += "\t\t\tcoins_collected = 0\n"
+			# 反馈计数器随回合清零：保持"每拾取一次响一声/爆一次"的
+			# 等值证据在重开后的新一轮里依然成立（计数跨回合累积会让
+			# sfx_played_count == coins_collected 永假）。
+			if bool(verbs.get("audio", false)):
+				source += "\t\t\tsfx_played_count = 0\n"
+			if bool(verbs.get("juice", false)):
+				source += "\t\t\tburst_count = 0\n"
 			source += "\t\t\tif _title_label != null:\n"
 			source += "\t\t\t\t_title_label.visible = true\n"
 			# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
@@ -511,6 +550,11 @@ static func controller_script(objective: String) -> String:
 				source += "\tif _sfx_player != null:\n"
 				source += "\t\t_sfx_player.play()\n"
 				source += "\t\tsfx_played_count += 1\n"
+			if bool(verbs.get("juice", false)):
+				source += "\tif _burst_player != null and _burst_player.is_inside_tree():\n"
+				source += "\t\t_burst_player.global_position = coin.global_position\n"
+				source += "\t\t_burst_player.restart()\n"
+				source += "\t\tburst_count += 1\n"
 			source += "\tcoin.queue_free()\n"
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
 			source += "\t\t_win_label.text = \"You Win!\"\n"
