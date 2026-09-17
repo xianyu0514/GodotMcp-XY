@@ -75,13 +75,14 @@ def wait_server():
             time.sleep(1)
     return False
 
-# The 10-goal game-building sequence
+# The 11-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
     ("02-coins", "Add 3 collectible coins."),
     ("03-enemy", "Add a patrolling enemy that kills the player on touch."),
     ("04-pause", "Add an Esc pause menu that pauses the world."),
     ("05-sound", "Add a sound effect when collecting a coin."),
+    ("05b-particles", "Add a coin pickup particle burst."),
     ("06-save", "Add save/load so progress persists after closing and relaunching."),
     ("07-tune-enemy", "Make the enemy slower so the game is easier."),
     ("08-second-enemy", "Add another patrolling enemy."),
@@ -140,6 +141,11 @@ def full_loop_steps():
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
             "description": "round one: every coin collected (identity-safe pickup)"}},
+        # 反馈等值（质量维度）：每个拾取都响了一声、爆了一次——重开重置
+        # 块同步清零两个反馈计数器，等值在每一轮独立成立。
+        {"assert": {"expression": "sfx_played_count == coins_collected and burst_count == coins_collected",
+            "expected": True,
+            "description": "round one: every pickup sounded and burst (no feedback-less collections)"}},
         {"assert": {"expression": "_win_label.text", "expected": "You Win!",
             "description": "round one: win label shows"}},
         {"assert": {"expression": "game_state", "expected": "win",
@@ -163,6 +169,9 @@ def full_loop_steps():
          "assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"",
             "expected": True,
             "description": "second round: full win achieved again after restart"}},
+        {"assert": {"expression": "sfx_played_count == coins_collected and burst_count == coins_collected",
+            "expected": True,
+            "description": "second round: feedback re-fired after the restart reset"}},
     ]
 
 def death_check_steps():
@@ -296,6 +305,16 @@ def main() -> int:
                 {"action": "ui_cancel", "pressed": False, "wait_ms": 100},
             ]}, 913)
             oracle_checks.append(("pause_resume", bool(r4.get("passed"))))
+
+            # Check 8: both feedback systems survived every later merge
+            # (goals 05/05b added sfx + particles; 06-10 each regenerate the
+            # full controller — the wiring must still be there at the end)
+            r9 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 200, "assert": {"expression": "_sfx_player != null and _burst_player != null",
+                    "expected": True,
+                    "description": "sfx + particle feedback wiring survived all merges (goals 05/05b)"}},
+            ]}, 918)
+            oracle_checks.append(("feedback_wiring", bool(r9.get("passed"))))
 
         except Exception as exc:
             oracle_checks.append(("oracle_error", False))

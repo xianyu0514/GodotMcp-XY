@@ -110,3 +110,24 @@ func test_merged_feedback_objective_regenerates_full_wiring() -> void:
 	assert_true(source.contains("CPUParticles2D"), "regenerated source keeps burst wiring")
 	assert_true(source.contains("_sfx_player.play()"), "pickup still triggers playback")
 	assert_true(source.contains("_burst_player.restart()"), "pickup still triggers the burst")
+
+# ============================================================================
+# 规划路由：粒子目标走 gameplay_feature，产出可验证任务集
+# ============================================================================
+
+func test_juice_objective_compiles_into_verifiable_plan() -> void:
+	# "coin pickup" 命中 gameplay_feature 词表（与音效目标同路由）——
+	# 规划必须产出 write_script（蓝图合并落盘）+ play_and_verify（证据门禁）。
+	var EngineScriptT = preload("res://addons/godot_mcp/native_mcp/game_workflow_engine.gd")
+	var ManifestScriptT = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+	var available: Array[String] = []
+	for tool_name in ManifestScriptT.tool_names():
+		available.append(tool_name)
+	var result: Dictionary = EngineScriptT.new().compile(
+		"Add a coin pickup particle burst.", {"profiles": ["gameplay_feature"]}, available)
+	assert_false(result.has("error"), str(result.get("error", "")))
+	var tool_names: Array = []
+	for task_value in result["plan"].get("tasks", []):
+		tool_names.append(String((task_value as Dictionary).get("tool_name", "")))
+	assert_has(tool_names, "create_script", "juice goal writes the controller (blueprint source)")
+	assert_has(tool_names, "play_and_verify", "juice goal gates on runtime evidence")
