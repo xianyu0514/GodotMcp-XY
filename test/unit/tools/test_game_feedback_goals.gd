@@ -73,6 +73,23 @@ func test_audio_legs_now_assert_per_pickup_equality() -> void:
 		"every pickup sounded (no silent collections)")
 
 # ============================================================================
+# 存档语境降级：等值断言的分母保护
+# ============================================================================
+
+func test_feedback_legs_drop_equality_under_save_semantics() -> void:
+	# CI 实证（run 35188924615）：save 目标落盘 coins=1，此后每次全新进程
+	# 读档恢复 coins_collected=1 而 sfx 计数从 0 起算——等值断言必假。
+	# 存档语境下必须降级为"至少一次"腿。
+	var tools: RefCounted = WorkflowToolsScript.new()
+	var audio_legs: Array = tools._audio_play_steps("coins_collected", false)
+	assert_eq(audio_legs.size(), 1, "save context: audio keeps only the at-least-once leg")
+	var juice_legs: Array = tools._juice_play_steps("coins_collected", false)
+	assert_eq(juice_legs.size(), 1, "save context: juice keeps only the at-least-once leg")
+	var leg: Dictionary = audio_legs[0].get("assert", {})
+	assert_eq(str(leg.get("expression", "")), "sfx_played_count",
+		"the surviving leg still proves a sound played")
+
+# ============================================================================
 # 重开重置：反馈计数器随回合清零
 # ============================================================================
 

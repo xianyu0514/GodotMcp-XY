@@ -141,11 +141,9 @@ def full_loop_steps():
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
             "description": "round one: every coin collected (identity-safe pickup)"}},
-        # 反馈等值（质量维度）：每个拾取都响了一声、爆了一次——重开重置
-        # 块同步清零两个反馈计数器，等值在每一轮独立成立。
-        {"assert": {"expression": "sfx_played_count == coins_collected and burst_count == coins_collected",
-            "expected": True,
-            "description": "round one: every pickup sounded and burst (no feedback-less collections)"}},
+        # 反馈等值断言只放第二轮：第一轮受读档影响（save 目标落盘
+        # coins=1，恢复后 sfx 计数与本轮拾取分母不同——等值必假）；
+        # 第二轮在 win->title 重置之后，两个计数器同从 0 起算。
         {"assert": {"expression": "_win_label.text", "expected": "You Win!",
             "description": "round one: win label shows"}},
         {"assert": {"expression": "game_state", "expected": "win",

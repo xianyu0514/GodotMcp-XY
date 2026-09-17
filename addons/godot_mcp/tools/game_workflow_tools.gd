@@ -1617,31 +1617,40 @@ static func parse_tuning_goal(goal: String) -> Dictionary:
 ## 每次拾取都响了（sfx_played_count == coins_collected；蓝图在重开
 ## 重置块同步清零两个计数器，等值在每一轮都成立）。coin_expression
 ## 跟随改名（rename 已落盘后旧符号不存在，断言旧名必失败）。
-func _audio_play_steps(coin_expression: String = "coins_collected") -> Array:
-	return [
+## include_equality=false 时只保留"至少一次"腿：**存档动词注册后等值
+## 必假**——全新进程读档恢复 coins_collected=N（磁盘值）而 sfx 计数
+## 从 0 起算，两个计数器分母不同（CI 实证：save 落盘 coins=1，此后
+## 每次恢复 sfx==coins 恒差 N）。等值证据只在无存档语境下诚实。
+func _audio_play_steps(coin_expression: String = "coins_collected", include_equality: bool = true) -> Array:
+	var legs: Array = [
 		{
 			"assert": {"expression": "sfx_played_count", "operator": "gt", "expected": 0,
 				"description": "collecting the coin played a sound effect"}
 		},
-		{
+	]
+	if include_equality:
+		legs.append({
 			"assert": {"expression": "sfx_played_count == %s" % coin_expression, "expected": true,
 				"description": "every pickup sounded (no silent collections)"}
-		},
-	]
+		})
+	return legs
 
 ## 粒子证据腿（质量维度：视觉反馈/juice）：至少爆过一次 + 每次拾取
-## 都爆了。与音效同构——burst_count 在重开重置块同步清零。
-func _juice_play_steps(coin_expression: String = "coins_collected") -> Array:
-	return [
+## 都爆了。与音效同构——burst_count 在重开重置块同步清零；存档语境
+## 下同样只保留"至少一次"腿（分母错位，见 _audio_play_steps 注释）。
+func _juice_play_steps(coin_expression: String = "coins_collected", include_equality: bool = true) -> Array:
+	var legs: Array = [
 		{
 			"assert": {"expression": "burst_count", "operator": "gt", "expected": 0,
 				"description": "collecting the coin fired a particle burst"}
 		},
-		{
+	]
+	if include_equality:
+		legs.append({
 			"assert": {"expression": "burst_count == %s" % coin_expression, "expected": true,
 				"description": "every pickup burst (no feedback-less collections)"}
-		},
-	]
+		})
+	return legs
 
 ## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
 ## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
@@ -1875,11 +1884,15 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				arguments["assertions"] = enemy_assertions
 			if wants_pause:
 				play_steps.append_array(_pause_play_steps())
+			# 反馈等值腿仅在无存档语境下诚实：读档恢复的 coins 与本进程
+			# sfx/burst 计数分母不同（注册表或本目标含存档动词即降级）。
+			var feedback_equality: bool = not bool(context_verbs.get("save", false)) \
+				and not GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)
 			if wants_audio:
-				play_steps.append_array(_audio_play_steps(coin_expression))
+				play_steps.append_array(_audio_play_steps(coin_expression, feedback_equality))
 			# 粒子腿仅 2D 蓝图（3D 控制器尚无 burst 接线——断言必假）。
 			if wants_juice and not wants_3d:
-				play_steps.append_array(_juice_play_steps(coin_expression))
+				play_steps.append_array(_juice_play_steps(coin_expression, feedback_equality))
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
