@@ -65,7 +65,14 @@ class FakeRuntimeTools extends RefCounted:
 		var expression: String = str(params.get("expression", ""))
 		assert_calls.append(expression)
 		if scripted_results.has(expression):
-			return scripted_results[expression]
+			var scripted: Variant = scripted_results[expression]
+			# 序列脚本化：数组按调用次序弹出（前读/后读需不同结果的场景）
+			if scripted is Array:
+				if (scripted as Array).is_empty():
+					return {"passed": true, "actual": true, "expected": params.get("expected", null)}
+				var next: Variant = (scripted as Array).pop_front()
+				return next if next is Dictionary else {"passed": true, "actual": true, "expected": params.get("expected", null)}
+			return scripted
 		return {"passed": true, "actual": true, "expected": params.get("expected", null)}
 
 	func _tool_get_runtime_screenshot(params: Dictionary) -> Dictionary:
@@ -309,3 +316,73 @@ func test_multi_param_tuning_parses() -> void:
 	assert_eq(str(enemy_tune.get("param", "")), "ENEMY_SPEED")
 	var magnet_tune: Dictionary = tools.parse_tuning_goal("make the pickup magnet radius bigger, snappier")
 	assert_eq(str(magnet_tune.get("param", "")), "MAGNET")
+
+# ============================================================================
+# 位移快照防污染（CI run 35343562660：手感腿 "按右键左移 110px" 实为
+# 陈旧 before 缓存与新鲜 after 的差值——测量造假）
+# ============================================================================
+
+func test_displacement_assert_rejects_stale_pre_snapshot() -> void:
+	# 前读返回带 error 的超时载荷（携带 last_value）——不得用该值算 delta
+	_fake.scripted_results["position.x"] = {
+		"passed": false, "status": "failed",
+		"error": "Timeout waiting for runtime condition: position.x",
+		"last_value": 114.73}
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	var has_snapshot_error: bool = false
+	for err_value in report.get("errors", []):
+		if str((err_value as Dictionary).get("error", "")).contains("snapshot not fresh"):
+			has_snapshot_error = true
+	assert_true(has_snapshot_error, "stale pre-read records a loud step error")
+	assert_false(bool(report.get("passed", true)), "the gate fails instead of computing a poisoned delta")
+	var has_skip: bool = false
+	for a_value in report.get("assertions", []):
+		var a: Dictionary = a_value
+		if not bool(a.get("passed", true)) and str(a.get("error", "")).contains("snapshot unavailable"):
+			has_skip = true
+	assert_true(has_skip, "the displacement assert is recorded as failed, not vacuously passed")
+
+func test_displacement_assert_rejects_stale_post_snapshot() -> void:
+	# 前读新鲜（100.0）、后读超时携带陈旧值（4.33）——失败断言带证据，
+	# 不得用陈旧 after 算出 -95.67 的假 delta
+	_fake.scripted_results["position.x"] = [
+		{"passed": true, "status": "success", "last_value": 100.0},
+		{"passed": false, "status": "failed",
+			"error": "Timeout waiting for runtime condition: position.x",
+			"last_value": 4.33},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	assert_false(bool(report.get("passed", true)), "the gate fails on a stale post-read")
+	var has_post_error: bool = false
+	for a_value in report.get("assertions", []):
+		var a: Dictionary = a_value
+		if not bool(a.get("passed", true)) and str(a.get("error", "")).contains("post-step snapshot not fresh"):
+			has_post_error = true
+	assert_true(has_post_error, "the failed assertion carries the stale-post evidence")
+
+func test_displacement_assert_computes_delta_from_fresh_reads() -> void:
+	# 正常路径回归保护：两读都新鲜 → delta 计算与阈值判定不变
+	_fake.scripted_results["position.x"] = [
+		{"passed": true, "status": "success", "last_value": 100.0},
+		{"passed": true, "status": "success", "last_value": 186.7},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	assert_true(bool(report.get("passed", false)), str(report.get("errors", "")))
+	var delta_result: Dictionary = {}
+	for a_value in report.get("assertions", []):
+		if (a_value as Dictionary).has("displacement"):
+			delta_result = a_value
+	assert_almost_eq(float(delta_result.get("displacement", 0.0)), 86.7, 0.01,
+		"fresh delta = 186.7 - 100.0")

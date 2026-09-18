@@ -236,7 +236,9 @@ def main() -> int:
             })
             status = "✅" if state == "completed" else f"❌({state})"
             if state != "completed":
-                reason = str(d.get("blocked_reason", ""))[:220]
+                # 500 宽度：位移/指标断言的取证值（before/after/displacement/
+                # actual）必须完整可见——220 截断吃掉过手感腿的实际位移值。
+                reason = str(d.get("blocked_reason", ""))[:500]
                 print(f"      reason: {reason}")
             print(f"  [{goal_id}] {status} {elapsed:.0f}s ledger={ledger.get('recorded_goals',0)} "
                   f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'} "

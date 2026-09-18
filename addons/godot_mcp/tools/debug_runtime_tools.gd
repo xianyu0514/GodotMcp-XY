@@ -1344,7 +1344,11 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 		var result: Dictionary = await _tool_evaluate_runtime_expression(params)
 		if result.has("error"):
 			return result
-		if result.get("status", "") == "success":
+		# 陈旧应答不算成功（CI run 35343562660 取证：手感腿 before=114.73
+		# 是陈旧缓存、after=4.33 是新值——"按右键左移 110px"实为测量造假，
+		# 位移 delta 被陈旧快照污染）。陈旧 → 等待后重试（下一次求值会
+		# 重新派发探针命令）；超时走尾部错误路径（诚实失败）。
+		if result.get("status", "") == "success" and not bool(result.get("stale", false)):
 			var last_value: Variant = result.get("value", null)
 			var condition_met: bool = _is_truthy_runtime_value(last_value)
 			return {
