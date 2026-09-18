@@ -1147,14 +1147,17 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 						on_demand.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 						on_demand.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+					# 关卡感知（注册表 ∪ 本目标动词）：第一轮胜利文案跟随。
+					var on_demand_levels: bool = bool(goal_verbs.get("level", false)) \
+						or bool(reg_verbs.get("level", false))
 					if bool(goal_verbs.get("state_machine", false)):
-						on_demand.append_array(_state_play_steps())
+						on_demand.append_array(_state_play_steps(on_demand_levels))
 					if bool(goal_verbs.get("movement", false)) and not bool(reg_verbs.get("movement", false)):
 						on_demand.append_array(_movement_play_steps())
 					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false)) \
 							or bool(goal_verbs.get("juice", false))) \
 							and not bool(reg_verbs.get("collectible", false)):
-						on_demand.append_array(_collect_play_steps())
+						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels))
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
 						var enemy_legs: Dictionary = _enemy_play_legs()
 						on_demand.append_array(enemy_legs["steps"])
@@ -1165,6 +1168,14 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						on_demand.append_array(_pause_play_steps())
 					if bool(goal_verbs.get("save", false)) and not bool(reg_verbs.get("save", false)):
 						on_demand.append_array(_save_play_steps())
+					# 新目标自身的证据腿（game over/多关卡）：非首目标的完成
+					# 门禁此前只测"新功能的收集面"——gameover/level 腿缺失，
+					# 目标自己的门禁空转（09a/09b 的真机实证：证据全靠后续
+					# 目标的回归重推补课）。
+					if bool(goal_verbs.get("game_over", false)) and not bool(reg_verbs.get("game_over", false)):
+						on_demand.append_array(_gameover_play_steps())
+					if bool(goal_verbs.get("level", false)) and not bool(reg_verbs.get("level", false)):
+						on_demand.append_array(_level_play_steps())
 					arguments["steps"] = on_demand
 					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 					task["derived_inputs"]["steps"] = "on-demand" if on_demand.size() > 1 else "revisit-boot-settle"
