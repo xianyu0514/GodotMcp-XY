@@ -1176,6 +1176,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 						on_demand.append_array(_gameover_play_steps())
 					if bool(goal_verbs.get("level", false)) and not bool(reg_verbs.get("level", false)):
 						on_demand.append_array(_level_play_steps())
+					if bool(goal_verbs.get("bgm", false)) and not bool(reg_verbs.get("bgm", false)):
+						on_demand.append_array(_bgm_play_steps())
 					arguments["steps"] = on_demand
 					task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 					task["derived_inputs"]["steps"] = "on-demand" if on_demand.size() > 1 else "revisit-boot-settle"
@@ -1409,6 +1411,8 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 		parts.append("game over screen with lives when the player dies")
 	if bool(merged_verbs.get("level", false)):
 		parts.append("a second level after the first win")
+	if bool(merged_verbs.get("bgm", false)):
+		parts.append("background music")
 	if bool(merged_verbs.get("audio", false)):
 		parts.append("sound effect")
 	if bool(merged_verbs.get("juice", false)):
@@ -1787,6 +1791,26 @@ func _level_play_steps() -> Array:
 	})
 	return steps
 
+## 背景音乐证据腿（质量维度：声音的另一半）：常开音乐在播放、播放头
+## 在前进（非卡死）、音量在可听范围。纯叠加层——任何游戏状态下都成立
+## （_ready 自动播放，不随状态门控），无存档/关卡交互。
+func _bgm_play_steps() -> Array:
+	var steps: Array = []
+	steps.append({
+		"wait_ms": 600,
+		"assert": {"expression": "_bgm_player.playing", "expected": true,
+			"description": "the background music is playing"}
+	})
+	steps.append({
+		"assert": {"expression": "_bgm_player.get_playback_position() > 0.05", "expected": true,
+			"description": "the playback head is advancing (not stuck at zero)"}
+	})
+	steps.append({
+		"assert": {"expression": "_bgm_player.volume_db > -60.0", "expected": true,
+			"description": "the music is configured in the audible range"}
+	})
+	return steps
+
 ## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
 ## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
 ## 金币聚簇在敌人巡逻带之前（蓝图 80+i*60，全在 x<210 走廊），一次右扫
@@ -1954,6 +1978,7 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_juice: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.JUICE_KEYWORDS)
 		var wants_game_over: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.GAME_OVER_KEYWORDS)
 		var wants_level: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.LEVEL_KEYWORDS)
+		var wants_bgm: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.BGM_KEYWORDS)
 		var wants_3d: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.THREE_D_KEYWORDS)
 		# 关卡感知 = 注册表 ∪ 当前目标动词 ∪ 目标句关键词——关卡合并后
 		# 第一轮胜利文案变为 "Level 1 Clear!"（收集/状态腿的标签断言跟随），
@@ -1970,7 +1995,7 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				and String(rename_info.get("symbol_name", "")) == "coins_collected":
 			coin_expression = String(rename_info.get("new_name", "coins_collected"))
 		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state \
-				or wants_game_over or wants_level:
+				or wants_game_over or wants_level or wants_bgm:
 			var play_steps: Array = []
 			# 上下文感知：注册表已有 state_machine（或当前目标本身带状态机——
 			# 完成前回归重推旧功能演练时，注册表还没记入本目标）时，游戏从
@@ -2052,6 +2077,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 多关卡腿（内容深度）：L1 通关 → L2 → 最终胜利 → 回 L1——仅 2D。
 			if wants_level and not wants_3d:
 				play_steps.append_array(_level_play_steps())
+			# 背景音乐腿（声音的另一半）：常开播放证据。
+			if wants_bgm:
+				play_steps.append_array(_bgm_play_steps())
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
@@ -2072,6 +2100,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				labels.append("gameover")
 			if wants_level and not wants_3d:
 				labels.append("levels")
+			if wants_bgm:
+				labels.append("bgm")
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
 		else:

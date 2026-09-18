@@ -75,7 +75,7 @@ def wait_server():
             time.sleep(1)
     return False
 
-# The 13-goal game-building sequence
+# The 14-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
     ("02-coins", "Add 3 collectible coins."),
@@ -83,6 +83,7 @@ GOALS = [
     ("04-pause", "Add an Esc pause menu that pauses the world."),
     ("05-sound", "Add a sound effect when collecting a coin."),
     ("05b-particles", "Add a coin pickup particle burst."),
+    ("05c-music", "Add looping background music."),
     ("06-save", "Add save/load so progress persists after closing and relaunching."),
     ("07-tune-enemy", "Make the enemy slower so the game is easier."),
     ("08-second-enemy", "Add another patrolling enemy."),
@@ -308,6 +309,14 @@ def main() -> int:
                 {"action": "ui_cancel", "pressed": False, "wait_ms": 100},
             ]}, 913)
             oracle_checks.append(("pause_resume", bool(r4.get("passed"))))
+
+            # Check 9: the background music is playing in the final game
+            # (goal 05c; pure overlay — must survive every later merge)
+            r10 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 400, "assert": {"expression": "_bgm_player.playing", "expected": True,
+                    "description": "background music survived all merges (goal 05c)"}},
+            ]}, 919)
+            oracle_checks.append(("bgm_playing", bool(r10.get("passed"))))
 
             # Check 8: both feedback systems survived every later merge
             # (goals 05/05b added sfx + particles; 06-10 each regenerate the

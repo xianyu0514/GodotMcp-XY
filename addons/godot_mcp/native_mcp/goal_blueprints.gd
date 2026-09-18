@@ -92,6 +92,13 @@ const LEVEL_KEYWORDS: Array[String] = [
 	"关卡", "第二关", "下一关", "多关卡",
 ]
 
+# 背景音乐动词：程序生成 chiptune 循环（零外部资产），_ready 自动播放。
+# 纯叠加层——不与任何计数器/状态语义交互（关卡/存档/反馈等值不受影响）。
+const BGM_KEYWORDS: Array[String] = [
+	"background music", "bgm", "soundtrack", "music",
+	"背景音乐", "配乐", "音乐",
+]
+
 ## 解析目标中的金币数量："3 coins" / "3 collectible coins" / "three coins" /
 ## "3 金币" / "再加 3 个金币"。数字与名词之间允许一个常见修饰词
 ## （collectible/golden/gold/more）——差距分析：旧正则要求数字紧贴
@@ -176,6 +183,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"juice": _mentions(objective, JUICE_KEYWORDS),
 		"game_over": _mentions(objective, GAME_OVER_KEYWORDS),
 		"level": _mentions(objective, LEVEL_KEYWORDS),
+		"bgm": _mentions(objective, BGM_KEYWORDS),
 		"wall": _mentions(objective, WALL_KEYWORDS),
 		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
@@ -192,6 +200,7 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("juice", false)) \
 		or bool(verbs.get("game_over", false)) \
 		or bool(verbs.get("level", false)) \
+		or bool(verbs.get("bgm", false)) \
 		or bool(verbs.get("wall", false)) \
 		or bool(verbs.get("three_d", false))
 
@@ -349,6 +358,8 @@ static func controller_script(objective: String) -> String:
 	if bool(verbs.get("level", false)):
 		source += "const LEVEL_COUNT: int = %d\n" % _level_count(objective)
 		source += "var current_level: int = 1\n"
+	if bool(verbs.get("bgm", false)):
+		source += "var _bgm_player: AudioStreamPlayer\n"
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
@@ -475,6 +486,35 @@ static func controller_script(objective: String) -> String:
 		source += "\t_burst_player.scale_amount_max = 6.0\n"
 		source += "\t_burst_player.color = Color(1.0, 0.85, 0.2)\n"
 		source += "\tget_parent().add_child.call_deferred(_burst_player)\n"
+	if bool(verbs.get("bgm", false)):
+		# 程序生成 chiptune 循环（C 大调琶音 + 包络方波，2 秒无缝循环）
+		# ——零外部资产；_ready 自动播放（常开：不随游戏状态门控）。
+		source += "\t_bgm_player = AudioStreamPlayer.new()\n"
+		source += "\t_bgm_player.name = \"BgmPlayer\"\n"
+		source += "\tadd_child(_bgm_player)\n"
+		source += "\tvar bgm_rate: int = 22050\n"
+		source += "\tvar bgm_notes: Array = [261.63, 329.63, 392.0, 523.25, 392.0, 329.63, 261.63, 196.0]\n"
+		source += "\tvar bgm_frames: int = int(2.0 * bgm_rate)\n"
+		source += "\tvar bgm_pcm := PackedByteArray()\n"
+		source += "\tbgm_pcm.resize(bgm_frames * 2)\n"
+		source += "\tfor i in range(bgm_frames):\n"
+		source += "\t\tvar note: float = bgm_notes[int(float(i) / float(bgm_frames) * float(bgm_notes.size()))]\n"
+		source += "\t\tvar phase: float = fmod(float(i) * note / float(bgm_rate), 1.0)\n"
+		source += "\t\tvar square: float = 1.0 if phase < 0.5 else -1.0\n"
+		source += "\t\tvar note_pos: float = fmod(float(i), float(bgm_frames) / float(bgm_notes.size())) / (float(bgm_frames) / float(bgm_notes.size()))\n"
+		source += "\t\tvar envelope: float = 0.55 + 0.45 * (1.0 - note_pos)\n"
+		source += "\t\tbgm_pcm.encode_s16(i * 2, int(square * envelope * 7000.0))\n"
+		source += "\tvar bgm_wav := AudioStreamWAV.new()\n"
+		source += "\tbgm_wav.format = AudioStreamWAV.FORMAT_16_BITS\n"
+		source += "\tbgm_wav.mix_rate = bgm_rate\n"
+		source += "\tbgm_wav.stereo = false\n"
+		source += "\tbgm_wav.data = bgm_pcm\n"
+		source += "\tbgm_wav.loop_mode = AudioStreamWAV.LOOP_FORWARD\n"
+		source += "\tbgm_wav.loop_begin = 0\n"
+		source += "\tbgm_wav.loop_end = bgm_frames\n"
+		source += "\t_bgm_player.stream = bgm_wav\n"
+		source += "\t_bgm_player.volume_db = -6.0\n"
+		source += "\t_bgm_player.play()\n"
 	if bool(verbs.get("wall", false)):
 		source += "\t# 边界墙（世界坐标，延迟挂载）：右墙在 +250，左墙在 -40——\n"
 		source += "\t# CharacterBody2D + 碰撞体天然被 StaticBody2D 阻挡。\n"
