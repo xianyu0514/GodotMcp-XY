@@ -2133,24 +2133,7 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 	var priors: Array = FeatureRegistryScript.prior_exercises(current_verbs)
 	if priors.is_empty():
 		return {}
-	# 先停再启（新鲜会话）：直接 run_project 会复用残留游戏——旧场景/旧
-	# 控制器 + 可能卡住的输入（真机复现：回归在 x=4782 的陈旧会话上执行，
-	# 金币"永不拾取"）。stop→run 保证回归测的是当前场景与最新控制器。
-	var stop_discard: Variant = await _server_core.invoke_planned_tool("stop_project",
-		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression_stop", "stop_project"))
-	var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
-		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
-	# stop/run 结果不判断：启动失败时首个演练自然报错（fail-closed）——
-	# 但把 run 的启动错误留档，失败时并入诊断（区分"游戏没起来"与"演练失败"）。
 	var run_startup_error: String = ""
-	if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
-		run_startup_error = String((run_discard as Dictionary)["error"])
-	# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
-	# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
-	# 吸收握手，后续演练从就绪通道起测。
-	var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
-		{"steps": [{"wait_ms": 300}]},
-		_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
 	var checked: Array = []
 	const MAX_REGRESSION_FEATURES: int = 8
 	# 解锁前缀依据 = 注册表 ∪ 当前目标动词（门禁执行时本目标尚未注册——
@@ -2164,6 +2147,26 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 		var prior_goal: String = String(prior.get("goal", ""))
 		if prior_goal.is_empty():
 			continue
+		# **每个 prior 演练独立全新会话**（stop→run + 探针预热）：共享会话
+		# 的跨演练状态渗漏是一整类缺陷的温床——本地复现实锤：前一演练把
+		# 会话留在 L1-win，下一演练的解锁 Enter 第一对就 win(L1)→L2 playing
+		# （非最终关进的是下一关不是 title），扫的是 L2 金币 → 断言在错误的
+		# 关卡上求值。全新启动对齐"每个旧功能从干净状态重验"的证据语义
+		# （关卡/胜利态/残留位置/存档恢复一次归零）。
+		var stop_discard: Variant = await _server_core.invoke_planned_tool("stop_project",
+			{"allow_window": true}, _synthetic_authorization(plan, "prior_regression_stop", "stop_project"))
+		var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
+			{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
+		# stop/run 结果不判断：启动失败时本演练自然报错（fail-closed）——
+		# 但把 run 的启动错误留档，失败时并入诊断。
+		if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
+			run_startup_error = String((run_discard as Dictionary)["error"])
+		# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
+		# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
+		# 吸收握手，演练从就绪通道起测。
+		var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
+			{"steps": [{"wait_ms": 300}]},
+			_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
 		var exercise_args: Dictionary = {}
 		# merged_verbs=当前目标动词：完成门禁回归时当前目标尚未注册——
 		# 但其代码已合并进游戏（如 06-save 的读档在每次全新进程生效），
