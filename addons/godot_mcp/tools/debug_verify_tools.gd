@@ -166,7 +166,12 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 					or (step["assert"] as Dictionary).has("displacement_max"):
 				displacement_mode = "delta"
 		if not displacement_mode.is_empty():
-			var pre_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+			# 快照用 await_condition 而非 assert_condition：快照只关心"读到了
+			# 新鲜值"——表达式为假值（如原点 position.x == 0.0）是合法快照，
+			# assert_condition 会把假值包装成 error（"not met"），守卫会误伤
+			# （CI run 35346032733：每个位移腿在原点起步全部误判读取失败）。
+			# await_condition 的 error 才是真读取失败（超时/无会话）。
+			var pre_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 				_merge_runtime_params(params, {
 					"expression": String((step["assert"] as Dictionary).get("expression", "")),
 					"timeout_ms": 3000}))
@@ -228,7 +233,8 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			if displacement_mode == "delta" and inert_pre_value != null:
 				# 位移相对断言：步前快照 + 步后差值比较——起点无关（E4 校准
 				# 实测：残留游戏从 x=+810 起步时原点绝对阈值必败）。
-				var post_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+				# 同 pre-read：await_condition 语义（假值是合法读，error 才是失败）。
+				var post_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 					_merge_runtime_params(params, {
 						"expression": String(step_assert.get("expression", "")),
 						"timeout_ms": 3000}))

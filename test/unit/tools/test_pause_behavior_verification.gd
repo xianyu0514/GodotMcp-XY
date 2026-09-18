@@ -61,7 +61,7 @@ class FakeRuntimeTools extends RefCounted:
 	func _tool_simulate_runtime_input_event(_params: Dictionary) -> Dictionary:
 		return {"status": "success"}
 
-	func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
+	func _scripted_condition(params: Dictionary) -> Dictionary:
 		var expression: String = str(params.get("expression", ""))
 		assert_calls.append(expression)
 		if scripted_results.has(expression):
@@ -74,6 +74,21 @@ class FakeRuntimeTools extends RefCounted:
 				return next if next is Dictionary else {"passed": true, "actual": true, "expected": params.get("expected", null)}
 			return scripted
 		return {"passed": true, "actual": true, "expected": params.get("expected", null)}
+
+	func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
+		return _scripted_condition(params)
+
+	# 快照路径（位移 delta 前后读）走 await 语义：假值是合法读，只有
+	# error/stale 才是读取失败。
+	func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
+		var result: Dictionary = _scripted_condition(params)
+		if not result.has("error") and result.has("last_value"):
+			var truthy: bool = result.get("last_value") != null \
+				and str(result.get("last_value")) != "false" \
+				and str(result.get("last_value")) != "0"
+			result["status"] = "success" if truthy else "failed"
+			result["condition_met"] = truthy
+		return result
 
 	func _tool_get_runtime_screenshot(params: Dictionary) -> Dictionary:
 		return {"status": "success", "save_path": str(params.get("save_path", "")), "size": "100x100"}
@@ -386,3 +401,24 @@ func test_displacement_assert_computes_delta_from_fresh_reads() -> void:
 			delta_result = a_value
 	assert_almost_eq(float(delta_result.get("displacement", 0.0)), 86.7, 0.01,
 		"fresh delta = 186.7 - 100.0")
+
+func test_falsy_snapshot_at_origin_is_a_legal_read() -> void:
+	# CI run 35346032733 的误伤回归：原点起步 position.x == 0.0 是假值
+	# 但是**合法快照**——不得被判为"读取失败"（assert_condition 会把假值
+	# 包装成 error；快照路径必须用 await 语义区分）。
+	_fake.scripted_results["position.x"] = [
+		{"status": "failed", "condition_met": false, "last_value": 0.0},
+		{"status": "success", "last_value": 86.7},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window from the origin"}},
+	])
+	assert_true(bool(report.get("passed", false)), str(report.get("errors", "")))
+	var delta_result: Dictionary = {}
+	for a_value in report.get("assertions", []):
+		if (a_value as Dictionary).has("displacement"):
+			delta_result = a_value
+	assert_almost_eq(float(delta_result.get("displacement", -1.0)), 86.7, 0.01,
+		"falsy origin snapshot still measures a real delta")
