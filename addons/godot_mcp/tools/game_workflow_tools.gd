@@ -1834,7 +1834,9 @@ func _bgm_play_steps() -> Array:
 ## levels_merged：关卡动词合并进游戏时，第一轮胜利显示的是关卡通关文案
 ## （"Level 1 Clear!"）而非 "You Win!"——其余断言（计数/状态/重置效果）
 ## 在关卡语义下原样成立（换关重置只发生在 Enter 转移，见蓝图注释）。
-func _state_play_steps(levels_merged: bool = false) -> Array:
+## game_over_merged：生命系统合并时附加取证断言（lives|deaths）——run #10/11
+## 的 true|gameover 指纹（收满金币却终局 gameover）需要生命消耗序列定位。
+func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = false) -> Array:
 	var first_win_text: String = "Level 1 Clear!" if levels_merged else "You Win!"
 	var steps: Array = []
 	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
@@ -1896,6 +1898,12 @@ func _state_play_steps(levels_merged: bool = false) -> Array:
 			"expected": "true|win",
 			"description": "second round: full win achieved again after restart (all-collected/state)"}
 	})
+	if game_over_merged:
+		steps.append({
+			"assert": {"expression": "str(lives) + \"|\" + str(deaths_count)",
+				"expected": "3|0",
+				"description": "second round cost no lives (lives|deaths — forensic for the gameover race)"}
+		})
 	return steps
 
 ## 敌人腿（评测 P3 内容深度）：敌人巡逻位置随时间可解算（正弦往返）→
@@ -2054,7 +2062,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				feel_assertions.append_array(feel["assertions"])
 				arguments["assertions"] = feel_assertions
 			if wants_state:
-				play_steps.append_array(_state_play_steps(levels_merged))
+				play_steps.append_array(_state_play_steps(levels_merged,
+					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false))))
 			elif wants_collect:
 				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged))
 			if wants_enemy:
