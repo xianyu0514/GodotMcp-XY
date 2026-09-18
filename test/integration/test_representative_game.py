@@ -75,7 +75,7 @@ def wait_server():
             time.sleep(1)
     return False
 
-# The 11-goal game-building sequence
+# The 12-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
     ("02-coins", "Add 3 collectible coins."),
@@ -87,6 +87,7 @@ GOALS = [
     ("07-tune-enemy", "Make the enemy slower so the game is easier."),
     ("08-second-enemy", "Add another patrolling enemy."),
     ("09-state-flow", "Add a title screen with start, gameplay, win state and restart."),
+    ("09a-gameover", "Add a game over screen with 3 lives when the player dies."),
     ("10-final-tune", "Make the player movement snappier and more responsive."),
 ]
 

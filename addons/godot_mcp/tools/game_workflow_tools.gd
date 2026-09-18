@@ -1394,6 +1394,8 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 		parts.append("%d patrolling enemies" % enemy_total)
 	if bool(merged_verbs.get("state_machine", false)):
 		parts.append("title screen game flow restart")
+	if bool(merged_verbs.get("game_over", false)):
+		parts.append("game over screen with lives when the player dies")
 	if bool(merged_verbs.get("audio", false)):
 		parts.append("sound effect")
 	if bool(merged_verbs.get("juice", false)):
@@ -1652,6 +1654,57 @@ func _juice_play_steps(coin_expression: String = "coins_collected", include_equa
 		})
 	return legs
 
+## 游戏结束证据腿（质量维度：死亡有意义）：
+## 1) 自带三重 Enter 解锁（独立目标语境注册表可能还没有 state——
+##    game_over 蕴含状态机，解锁对 playing 态无副作用）；
+## 2) **站桩式击杀**：按住右键 15s——玩家从原点反复进入敌带 [220,380]，
+##    敌人慢速正弦巡逻必然相遇（横穿式对相位敏感，站桩式每个半周期
+##    必杀一次），3 命耗尽 → gameover；
+## 3) 失败画面证据：game_state/lives/label 可见性；
+## 4) Enter×2 重开 → 全重置效果断言（生命满/金币清零/画面隐藏/playing）。
+func _gameover_play_steps() -> Array:
+	var steps: Array = []
+	for pair_index in 3:
+		steps.append({
+			"action": "ui_accept", "pressed": true, "wait_ms": 300,
+			"description": "enter playing before the death run"})
+		steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	steps.append({
+		"action": "move_right", "pressed": true, "wait_ms": 15000,
+		"description": "hold right through the patrol band until lives run out"})
+	steps.append({"action": "move_right", "pressed": false, "wait_ms": 200})
+	steps.append({
+		"assert": {"expression": "game_state", "expected": "gameover",
+			"description": "three deaths exhausted the lives and ended the game"}
+	})
+	steps.append({
+		"assert": {"expression": "lives", "operator": "lte", "expected": 0,
+			"description": "the lives counter reached zero"}
+	})
+	steps.append({
+		"assert": {"expression": "_gameover_label.visible", "expected": true,
+			"description": "the game over screen is showing"}
+	})
+	# 重开：gameover →(Enter)→ title →(Enter)→ playing，全重置生效。
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "game_state", "expected": "playing",
+			"description": "Enter restarted into a fresh playing round"}
+	})
+	steps.append({
+		"assert": {"expression": "lives == STARTING_LIVES and coins_collected == 0",
+			"expected": true,
+			"description": "the restart fully reset lives and coins"}
+	})
+	steps.append({
+		"assert": {"expression": "_gameover_label.visible", "expected": false,
+			"description": "the game over screen is cleared"}
+	})
+	return steps
+
 ## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
 ## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
 ## 金币聚簇在敌人巡逻带之前（蓝图 80+i*60，全在 x<210 走廊），一次右扫
@@ -1813,6 +1866,7 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_state: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
 		var wants_audio: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.AUDIO_KEYWORDS)
 		var wants_juice: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.JUICE_KEYWORDS)
+		var wants_game_over: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.GAME_OVER_KEYWORDS)
 		var wants_3d: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.THREE_D_KEYWORDS)
 		if wants_audio or wants_juice:
 			wants_collect = true
@@ -1822,7 +1876,7 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		if not rename_info.is_empty() \
 				and String(rename_info.get("symbol_name", "")) == "coins_collected":
 			coin_expression = String(rename_info.get("new_name", "coins_collected"))
-		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state:
+		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state or wants_game_over:
 			var play_steps: Array = []
 			# 上下文感知：注册表已有 state_machine（或当前目标本身带状态机——
 			# 完成前回归重推旧功能演练时，注册表还没记入本目标）时，游戏从
@@ -1898,6 +1952,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 粒子腿仅 2D 蓝图（3D 控制器尚无 burst 接线——断言必假）。
 			if wants_juice and not wants_3d:
 				play_steps.append_array(_juice_play_steps(coin_expression, feedback_equality))
+			# 游戏结束腿（死亡有意义）：自带解锁与站桩式击杀——仅 2D。
+			if wants_game_over and not wants_3d:
+				play_steps.append_array(_gameover_play_steps())
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
@@ -1914,6 +1971,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				labels.append("audio")
 			if wants_juice and not wants_3d:
 				labels.append("juice")
+			if wants_game_over and not wants_3d:
+				labels.append("gameover")
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
 		else:

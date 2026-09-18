@@ -78,6 +78,13 @@ const ENEMY_KEYWORDS: Array[String] = [
 	"敌人", "巡逻", "危险", "死亡", "重生",
 ]
 
+# 游戏结束动词：死亡有意义——生命数、失败画面、Enter 重开（全重置）。
+# 蕴含状态机（游戏结束是一个状态）与敌人（要有东西能杀）。
+const GAME_OVER_KEYWORDS: Array[String] = [
+	"game over", "gameover", "game-over", "death screen", "lose condition", "lives",
+	"游戏结束", "失败画面", "生命数",
+]
+
 ## 解析目标中的金币数量："3 coins" / "3 collectible coins" / "three coins" /
 ## "3 金币" / "再加 3 个金币"。数字与名词之间允许一个常见修饰词
 ## （collectible/golden/gold/more）——差距分析：旧正则要求数字紧贴
@@ -146,6 +153,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"state_machine": _mentions(objective, STATE_MACHINE_KEYWORDS),
 		"audio": _mentions(objective, AUDIO_KEYWORDS),
 		"juice": _mentions(objective, JUICE_KEYWORDS),
+		"game_over": _mentions(objective, GAME_OVER_KEYWORDS),
 		"wall": _mentions(objective, WALL_KEYWORDS),
 		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
@@ -160,6 +168,7 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("state_machine", false)) \
 		or bool(verbs.get("audio", false)) \
 		or bool(verbs.get("juice", false)) \
+		or bool(verbs.get("game_over", false)) \
 		or bool(verbs.get("wall", false)) \
 		or bool(verbs.get("three_d", false))
 
@@ -259,6 +268,11 @@ static func controller_script(objective: String) -> String:
 	# 3D 目标走独立蓝图（引擎/坐标/输入轴都不同）
 	if bool(verbs.get("three_d", false)):
 		return controller_script_3d(objective)
+	# 游戏结束是一个状态（失败画面+Enter 重开），且要有东西能杀玩家：
+	# game_over 蕴含 enemy + state_machine（后者再蕴含收集/移动）。
+	if bool(verbs.get("game_over", false)):
+		verbs["enemy"] = true
+		verbs["state_machine"] = true
 	# 状态机/音效/粒子暗含收集（胜利条件）与移动（玩法本体）——在 needs_*
 	# 计算前改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
 	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)) \
@@ -302,6 +316,10 @@ static func controller_script(objective: String) -> String:
 		source += "var game_state: String = \"title\"\n"
 		source += "var _title_label: Label\n"
 		source += "var _enter_was_down: bool = false\n"
+	if bool(verbs.get("game_over", false)):
+		source += "const STARTING_LIVES: int = 3\n"
+		source += "var lives: int = STARTING_LIVES\n"
+		source += "var _gameover_label: Label\n"
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
@@ -450,6 +468,14 @@ static func controller_script(objective: String) -> String:
 		source += "\t_title_label.text = \"Press Enter to Start\"\n"
 		source += "\t_title_label.position = Vector2(40, 100)\n"
 		source += "\ttitle_layer.add_child(_title_label)\n"
+		if bool(verbs.get("game_over", false)):
+			# 失败画面挂在标题层上（同一 UI 层，互不干扰）。
+			source += "\t_gameover_label = Label.new()\n"
+			source += "\t_gameover_label.name = \"GameOverLabel\"\n"
+			source += "\t_gameover_label.text = \"Game Over - press Enter to Restart\"\n"
+			source += "\t_gameover_label.position = Vector2(40, 140)\n"
+			source += "\t_gameover_label.visible = false\n"
+			source += "\ttitle_layer.add_child(_gameover_label)\n"
 	if needs_enemy:
 		# 敌人数参数化（ENEMY_COUNT）："再加一个敌人"由合并层把数量写进
 		# 合成目标，这里循环生成。首敌保持原相位/位置（既有断言校准过）。
@@ -487,7 +513,27 @@ static func controller_script(objective: String) -> String:
 			source += "\t\t\tgame_state = \"playing\"\n"
 			source += "\t\t\tif _title_label != null:\n"
 			source += "\t\t\t\t_title_label.visible = false\n"
-			source += "\t\telif game_state == \"win\":\n"
+			if bool(verbs.get("game_over", false)):
+				# gameover + Enter → title（全重置：位置/金币/生命/画面/金币重生
+				# /反馈计数）——再一对 Enter 进 playing（与 win→title 同构）。
+				source += "\t\telif game_state == \"gameover\":\n"
+				source += "\t\t\tgame_state = \"title\"\n"
+				source += "\t\t\tposition = Vector2.ZERO\n"
+				source += "\t\t\tcoins_collected = 0\n"
+				source += "\t\t\tlives = STARTING_LIVES\n"
+				source += "\t\t\tif _gameover_label != null:\n"
+				source += "\t\t\t\t_gameover_label.visible = false\n"
+				source += "\t\t\tif _title_label != null:\n"
+				source += "\t\t\t\t_title_label.visible = true\n"
+				if bool(verbs.get("audio", false)):
+					source += "\t\t\tsfx_played_count = 0\n"
+				if bool(verbs.get("juice", false)):
+					source += "\t\t\tburst_count = 0\n"
+				if needs_pickup:
+					source += "\t\t\t_respawn_coins()\n"
+				source += "\t\telif game_state == \"win\":\n"
+			else:
+				source += "\t\telif game_state == \"win\":\n"
 			source += "\t\t\tgame_state = \"title\"\n"
 			source += "\t\t\tposition = Vector2.ZERO\n"
 			source += "\t\t\tcoins_collected = 0\n"
@@ -498,6 +544,12 @@ static func controller_script(objective: String) -> String:
 				source += "\t\t\tsfx_played_count = 0\n"
 			if bool(verbs.get("juice", false)):
 				source += "\t\t\tburst_count = 0\n"
+			if bool(verbs.get("game_over", false)):
+				# 胜利换轮同样恢复生命并盖掉失败画面（防御性：gameover 期间
+				# 不可能胜利，但状态语义保持完备）。
+				source += "\t\t\tlives = STARTING_LIVES\n"
+				source += "\t\t\tif _gameover_label != null:\n"
+				source += "\t\t\t\t_gameover_label.visible = false\n"
 			source += "\t\t\tif _title_label != null:\n"
 			source += "\t\t\t\t_title_label.visible = true\n"
 			# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
@@ -601,7 +653,17 @@ static func controller_script(objective: String) -> String:
 		source += "\tif body != self:\n"
 		source += "\t\treturn\n"
 		source += "\tdeaths_count += 1\n"
-		source += "\tposition = Vector2.ZERO\n"
+		if bool(verbs.get("game_over", false)):
+			# 死亡有意义：命 -1；命尽 → gameover 态（画面+世界冻结，
+			# 移动被状态门挡住）。未死亡尽仍回原点（既有断言校准）。
+			source += "\tlives -= 1\n"
+			source += "\tif lives <= 0:\n"
+			source += "\t\tgame_state = \"gameover\"\n"
+			source += "\t\tif _gameover_label != null:\n"
+			source += "\t\t\t_gameover_label.visible = true\n"
+			source += "\tposition = Vector2.ZERO\n"
+		else:
+			source += "\tposition = Vector2.ZERO\n"
 	if needs_save:
 		source += "\nfunc save_game() -> bool:\n"
 		source += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
