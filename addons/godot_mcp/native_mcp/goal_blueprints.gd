@@ -782,6 +782,12 @@ static func controller_script(objective: String) -> String:
 		source += "\treturn fresh\n"
 	if needs_state and needs_pickup:
 		source += "\nfunc _respawn_coins() -> void:\n"
+		source += "\t# 等一个物理帧：换关/重开转移里 position 传送后，物理体到下一\n"
+		source += "\t# 个物理步才同步——不等的话新金币 Area2D 的重叠判定会用滞后\n"
+		source += "\t# 物理体位置（CI 取证：三笔拾取记录在节点位 0，物理体实在\n"
+		source += "\t# L1 拾取点 ≈92，落在新币窗 [60,240]——幽灵拾取瞬间清空 L2）。\n"
+		source += "\t# call_deferred 只隔 idle 帧，不够；必须隔物理帧。\n"
+		source += "\tawait get_tree().physics_frame\n"
 		source += "\tvar parent := get_parent()\n"
 		source += "\tvar dying_index: int = 0\n"
 		source += "\tfor child in parent.get_children():\n"
