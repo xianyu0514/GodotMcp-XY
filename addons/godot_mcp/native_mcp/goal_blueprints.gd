@@ -625,7 +625,11 @@ static func controller_script(objective: String) -> String:
 				if bool(verbs.get("juice", false)):
 					source += "\t\t\tburst_count = 0\n"
 				if needs_pickup:
-					source += "\t\t\t_respawn_coins()\n"
+					# 延迟一帧重生：position 传送后 CharacterBody2D 的物理体
+					# 下一帧才同步——同帧生成的金币 Area2D 会用**滞后物理体
+					# 位置**判定重叠（取证：三笔幽灵拾取全记录在节点位 0，
+					# 物理体实际停在 L1 拾取点 ≈92，恰落新币区 [60,240]）。
+					source += "\t\t\tcall_deferred(\"_respawn_coins\")\n"
 				source += "\t\telif game_state == \"win\":\n"
 			else:
 				# 无 game_over 也必须发射 elif 行——win 分支体（关卡感知/
@@ -650,7 +654,7 @@ static func controller_script(objective: String) -> String:
 				if needs_pickup:
 					source += "\t\t\t\tif _hud_label != null:\n"
 					source += "\t\t\t\t\t_hud_label.text = \"Coins: 0/%d\" % COINS_TO_WIN\n"
-					source += "\t\t\t\t_respawn_coins()\n"
+					source += "\t\t\t\tcall_deferred(\"_respawn_coins\")\n"
 				source += "\t\t\telse:\n"
 				source += "\t\t\t\t_pickup_log = \"\"\n"
 				source += "\t\t\t\tcurrent_level = 1\n"
@@ -668,7 +672,7 @@ static func controller_script(objective: String) -> String:
 				source += "\t\t\t\tif _title_label != null:\n"
 				source += "\t\t\t\t\t_title_label.visible = true\n"
 				if needs_pickup:
-					source += "\t\t\t\t_respawn_coins()\n"
+					source += "\t\t\t\tcall_deferred(\"_respawn_coins\")\n"
 			else:
 				source += "\t\t\tgame_state = \"title\"\n"
 				source += "\t\t\tposition = Vector2.ZERO\n"
@@ -689,8 +693,9 @@ static func controller_script(objective: String) -> String:
 				source += "\t\t\tif _title_label != null:\n"
 				source += "\t\t\t\t_title_label.visible = true\n"
 				# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
+				# （延迟一帧——物理体同步后再生成，防幽灵拾取）
 				if needs_pickup:
-					source += "\t\t\t_respawn_coins()\n"
+					source += "\t\t\tcall_deferred(\"_respawn_coins\")\n"
 			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
 			source += "\t\treturn\n"
 		if needs_save:
