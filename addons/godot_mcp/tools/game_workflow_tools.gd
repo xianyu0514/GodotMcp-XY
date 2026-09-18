@@ -1385,15 +1385,22 @@ static func parse_remap_goal(goal: String) -> Dictionary:
 func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) -> String:
 	var parts: Array = []
 	var additive: bool = GoalBlueprintsScript.is_additive_request(original_goal)
+	var reduce: bool = GoalBlueprintsScript.is_reduce_request(original_goal)
 	var additive_coins: bool = additive \
 		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS)
 	var additive_enemies: bool = additive \
+		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.ENEMY_KEYWORDS)
+	# 减量同样按种类限定："减少金币"不改敌人数。
+	var reduce_coins: bool = reduce \
+		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS)
+	var reduce_enemies: bool = reduce \
 		and GoalBlueprintsScript._mentions(original_goal, GoalBlueprintsScript.ENEMY_KEYWORDS)
 	if bool(merged_verbs.get("movement", false)):
 		parts.append("arrow-key movement")
 	if bool(merged_verbs.get("collectible", false)):
 		var coin_total: int = GameModelStoreScript.merged_count("coins",
-			GoalBlueprintsScript._coin_count(original_goal), additive_coins)
+			GoalBlueprintsScript._coin_count(original_goal), additive_coins, GameModelStoreScript.MODEL_PATH,
+			reduce_coins)
 		parts.append("collect %d coins" % coin_total)
 	if bool(merged_verbs.get("win", false)):
 		parts.append("win label")
@@ -1403,7 +1410,8 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 		parts.append("save/load")
 	if bool(merged_verbs.get("enemy", false)):
 		var enemy_total: int = GameModelStoreScript.merged_count("enemies",
-			GoalBlueprintsScript._enemy_count(original_goal), additive_enemies)
+			GoalBlueprintsScript._enemy_count(original_goal), additive_enemies, GameModelStoreScript.MODEL_PATH,
+			reduce_enemies)
 		parts.append("%d patrolling enemies" % enemy_total)
 	if bool(merged_verbs.get("state_machine", false)):
 		parts.append("title screen game flow restart")
@@ -1755,13 +1763,20 @@ func _level_play_steps() -> Array:
 		"assert": {"expression": "game_state", "expected": "win",
 			"description": "level one clear reached the win state"}
 	})
-	# Enter → L2
+	# Enter → L2（带即时采样显微镜：CI 取证 actual="2|3|win" —— 500ms 窗口
+	# 内无输入却收满三币即胜。50ms 级采样区分"转移即错"与"转移后劣化"，
+	# 位置一并编码，复发时证据自含）。
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
-		"action": "ui_accept", "pressed": false, "wait_ms": 200,
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state",
-			"expected": "2|0|playing",
-			"description": "Enter advanced to level two with a fresh board (level/coins/state)"}
+		"action": "ui_accept", "pressed": false, "wait_ms": 50,
+		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x))",
+			"expected": "2|0|playing|0",
+			"description": "immediately after the level transition (level/coins/state/x)"}
+	})
+	steps.append({
+		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x))",
+			"expected": "2|0|playing|0",
+			"description": "the L2 board is still fresh a moment later"}
 	})
 	steps.append({
 		"assert": {"expression": "abs(position.x) < 20", "expected": true,

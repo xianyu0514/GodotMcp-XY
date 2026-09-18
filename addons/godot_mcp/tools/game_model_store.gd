@@ -128,11 +128,15 @@ static func apply_completion(goal: String, verbs: Dictionary,
 
 ## 合并数量：增量请求（"再加 N 个"）= existing + requested；
 ## 总量请求（"要 N 个"）= max(existing, requested)——数量只增不减，
-## 已有成果不因新目标而丢失。
+## 已有成果不因新目标而丢失；**减量请求（"减少到 N 个"）= requested**
+## （集合语义——用户明确要更少时，取最大等于无视指令，真机差距：
+## "把三个敌人减少到一个"无法表达）。
 static func merged_count(kind: String, requested: int,
-		additive: bool, path: String = MODEL_PATH) -> int:
+		additive: bool, path: String = MODEL_PATH, reduce: bool = false) -> int:
 	var model: Dictionary = load_model(path)
 	var existing: int = int((model.get("counts", {}) as Dictionary).get(kind, 0))
+	if reduce:
+		return clampi(requested, 1, maxi(existing, 1))
 	if additive:
 		return existing + maxi(requested, 1)
 	return maxi(existing, requested)

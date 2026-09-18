@@ -162,6 +162,16 @@ static func is_additive_request(objective: String) -> bool:
 		or text.contains("更多") or text.contains(" more ") or text.contains("another ") \
 		or text.contains("extra ") or text.contains("additional ")
 
+## 减量请求："把敌人减少到一个"/"reduce to one enemy"——数量语义是
+## **集合**（设为请求数）而非相加/取最大。合并层据此走 merged_count
+## 的 reduce 模式（差距：合并只有相加/取最大，"减少"无法表达）。
+static func is_reduce_request(objective: String) -> bool:
+	var text: String = " " + objective.to_lower() + " "
+	# 中文词不加空格前缀（"敌人减少到"中间无空格——首版 " 减少" 匹配不到）
+	return text.contains("减少") or text.contains("减到") \
+		or text.contains(" fewer ") or text.contains(" less ") \
+		or text.contains("reduce ") or text.contains("down to ") or text.contains("only ")
+
 static func _mentions(objective: String, keywords: Array[String]) -> bool:
 	var text: String = objective.to_lower()
 	for keyword in keywords:
@@ -379,6 +389,13 @@ static func controller_script(objective: String) -> String:
 	source += "\tbody_shape.shape = body_circle\n"
 	source += "\tadd_child(body_shape)\n"
 	ready_body_emitted = true
+	if needs_save:
+		# **读档先行**：恢复 current_level/lives 必须发生在任何生成之前
+		# （初始金币按恢复后的关卡布局摆位——差距分析：蓝图存档曾只存
+		# 金币数与位置，退出后无法准确继续关卡/生命状态）。
+		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
+		source += "\tload_game()\n"
+		ready_body_emitted = true
 	if needs_pause:
 		# 控制器必须在暂停期间继续接收输入，否则 Esc 无法恢复游戏。
 		source += "\tprocess_mode = Node.PROCESS_MODE_ALWAYS\n"
@@ -399,15 +416,25 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 金币聚簇在敌人巡逻带之前（80 + i*60，全部落在 x<210 走廊）：\n"
 		source += "\t# 敌人带 [220,380] 会让任何穿越死亡——旧布局 200/380/560 的\n"
 		source += "\t# 第二、三枚永远不可达，带敌人的完整通关从几何上不可能。\n"
+		if bool(verbs.get("level", false)):
+			# 初始布局随恢复后的关卡走（读档已先行）——与 _respawn_coins
+			# 的 base_x 公式一致。
+			source += "\tvar base_x: float = 110.0 + (current_level - 1) * 40.0\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
-		source += "\t_coin_area.position = Vector2(110.0, 0)\n"
+		if bool(verbs.get("level", false)):
+			source += "\t_coin_area.position = Vector2(base_x, 0)\n"
+		else:
+			source += "\t_coin_area.position = Vector2(110.0, 0)\n"
 		# 多金币：运行时循环生成（避免生成器侧变量泄漏到产物——
 		# 真实审计发现生成代码含非法缩进和 _extra_coin 残留）。
 		source += "\tfor coin_index in range(1, COINS_TO_WIN):\n"
 		source += "\t\tvar extra_coin := Area2D.new()\n"
 		source += "\t\textra_coin.name = \"Coin%d\" % coin_index\n"
-		source += "\t\textra_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
+		if bool(verbs.get("level", false)):
+			source += "\t\textra_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+		else:
+			source += "\t\textra_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar extra_col := CollisionShape2D.new()\n"
 		source += "\t\tvar extra_shape := CircleShape2D.new()\n"
 		source += "\t\textra_shape.radius = COIN_RADIUS\n"
@@ -441,10 +468,6 @@ static func controller_script(objective: String) -> String:
 		source += "\t_hud_label.position = Vector2(10, 10)\n"
 		source += "\t_hud_label.text = \"Coins: 0/%d\" % COINS_TO_WIN\n"
 		source += "\tcanvas.add_child(_hud_label)\n"
-		ready_body_emitted = true
-	if needs_save:
-		source += "\t# 自动读档：完全重启进程后状态从磁盘恢复（N3 语义）。\n"
-		source += "\tload_game()\n"
 		ready_body_emitted = true
 	if bool(verbs.get("audio", false)):
 		source += "\t# 生成 880Hz 方波提示音（0.4s 衰减）——零外部资产。\n"
@@ -794,6 +817,10 @@ static func controller_script(objective: String) -> String:
 	if needs_save:
 		source += "\nfunc save_game() -> bool:\n"
 		source += "\tvar data := {\"coins\": coins_collected, \"x\": position.x, \"y\": position.y}\n"
+		if bool(verbs.get("game_over", false)):
+			source += "\tdata[\"lives\"] = lives\n"
+		if bool(verbs.get("level", false)):
+			source += "\tdata[\"level\"] = current_level\n"
 		source += "\tvar file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)\n"
 		source += "\tif file == null:\n"
 		source += "\t\treturn false\n"
@@ -810,5 +837,9 @@ static func controller_script(objective: String) -> String:
 		source += "\t\treturn false\n"
 		source += "\tcoins_collected = int(parsed.get(\"coins\", 0))\n"
 		source += "\tposition = Vector2(float(parsed.get(\"x\", 0.0)), float(parsed.get(\"y\", 0.0)))\n"
+		if bool(verbs.get("game_over", false)):
+			source += "\tlives = int(parsed.get(\"lives\", STARTING_LIVES))\n"
+		if bool(verbs.get("level", false)):
+			source += "\tcurrent_level = int(parsed.get(\"level\", 1))\n"
 		source += "\treturn true\n"
 	return source
