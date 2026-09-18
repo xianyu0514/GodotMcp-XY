@@ -1886,24 +1886,24 @@ func _enemy_play_legs() -> Dictionary:
 ## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
 func _save_play_steps() -> Array:
 	var steps: Array = []
-	# 先锚定原点（真根因修复：存档位置落在敌带击杀窗 [196,404] 内时，
-	# 恢复进程一启动就被击杀重置回原点——"未恢复"实为死亡重置）。
-	# 锚定后存档值 ≈ 80-104，恢复落点在安全区。
+	# 先锚定左墙（真根因修复链）：
+	# 1) 存档位置落在敌带击杀窗 [196,404] 内 → 恢复进程一启动就被击杀；
+	# 2) **在金币区内存档会毒化一切下游全新启动**（本地复现）：恢复的
+	#    玩家就在金币拾取窗内 → 开机自动拾取 → coins≥3 → 开机瞬间
+	#    L1 通关冻结（关卡合并后）或计数污染——解锁 Enter 第一对就
+	#    win(L1)→L2，所有"假设 L1 起步"的演练全错。左墙 = coins=0 +
+	#    位置远离金币窗与敌带，恢复后一切干净。
 	steps.append({"action": "move_left", "pressed": true, "wait_ms": 1200,
-		"description": "anchor at the origin so the saved position is safe to restore"})
-	steps.append({"action": "move_left", "pressed": false, "wait_ms": 100})
-	# 位移先自证（帧步进 24 帧 = 恰好 104px，确定性）——保证写入磁盘的
-	# 状态非平凡，恢复腿的断言才有意义。
+		"description": "anchor at the left wall so the saved state is safe to restore"})
 	steps.append({
-		"action": "move_right", "pressed": true, "wait_frames": 24,
-		"assert": {"expression": "position.x", "operator": "gt", "expected": 40,
-			"description": "player moved right, creating non-trivial state to save"}
+		"action": "move_left", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "position.x", "operator": "lt", "expected": -20,
+			"description": "player pinned near the left wall — non-trivial state, zero coins"}
 	})
-	steps.append({"action": "move_right", "pressed": false, "wait_ms": 80})
 	steps.append({
 		"action": "save_game", "pressed": true, "wait_ms": 300, "screenshot": true,
-		"assert": {"expression": "last_save_ok", "expected": true,
-			"description": "save_game wrote the state to disk"}
+		"assert": {"expression": "last_save_ok and coins_collected == 0", "expected": true,
+			"description": "save_game wrote the wall-pinned, coin-free state to disk"}
 	})
 	steps.append({"action": "save_game", "pressed": false, "wait_ms": 80})
 	return steps
@@ -1914,8 +1914,8 @@ func _restore_play_steps() -> Array:
 	var steps: Array = []
 	steps.append({
 		"wait_ms": 900,
-		"assert": {"expression": "position.x", "operator": "gt", "expected": 30,
-			"description": "position restored from the save file after a full process restart"}
+		"assert": {"expression": "position.x", "operator": "lt", "expected": -10,
+			"description": "position restored to the saved wall pin after a full process restart"}
 	})
 	steps.append({
 		"assert": {"expression": "last_save_ok", "expected": false,
@@ -2163,9 +2163,12 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 			run_startup_error = String((run_discard as Dictionary)["error"])
 		# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
 		# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
-		# 吸收握手，演练从就绪通道起测。
+		# 吸收握手，演练从就绪通道起测。**必须带一次表达式断言**：纯等待步
+		# 不碰探针，握手没被吸收，首个条件读付握手成本（陈旧快照防线生效
+		# 后不再有缓存兜底，直接超时失败——本地复现：09 的手感腿快照）。
 		var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
-			{"steps": [{"wait_ms": 300}]},
+			{"steps": [{"wait_ms": 300, "assert": {"expression": "true", "expected": true,
+				"description": "probe handshake warmup"}}]},
 			_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
 		var exercise_args: Dictionary = {}
 		# merged_verbs=当前目标动词：完成门禁回归时当前目标尚未注册——

@@ -984,7 +984,7 @@ func test_save_goal_derives_save_and_restore_exercises() -> void:
 		var step: Dictionary = step_value
 		if bool(step.get("pressed", false)):
 			save_actions.append(step.get("action"))
-	assert_eq(save_actions, ["move_left", "move_right", "save_game"])
+	assert_eq(save_actions, ["move_left", "save_game"])
 
 	var restore_args: Dictionary = _tools._derive_step_arguments(
 		loaded, by_key["restore_play"], "play_and_verify",
