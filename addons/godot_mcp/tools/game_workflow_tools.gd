@@ -2017,21 +2017,7 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 		# 引导稳定（冷启动）：回归门禁每次 stop→run 全新会话——冷游戏的
 		# 前几百毫秒物理帧稀疏，位移断言会闪断（真机复现：04/05 的完成
 		# 回归在冷游戏上丢帧）。先等 800ms 让物理稳定再执行演练。
-		steps = [{"wait_ms": 800}] + steps
-		# 合并控制器含状态机而旧功能自身不含时，先双 Enter 进入 playing
-		# （win→title→playing / title→playing；playing 态 Enter 无副作用）。
-		if context_has_state \
-				and not GoalBlueprintsScript._mentions(prior_goal, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS):
-			steps += [
-				{"action": "ui_accept", "pressed": true, "wait_ms": 300,
-					"description": "regression: enter playing state"},
-				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
-				{"action": "ui_accept", "pressed": true, "wait_ms": 300},
-				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
-				# 第三对：吸收存档恢复+自动拾取插入的额外转移
-				{"action": "ui_accept", "pressed": true, "wait_ms": 300},
-				{"action": "ui_accept", "pressed": false, "wait_ms": 100},
-			]
+		steps = _assemble_regression_steps(steps, prior_goal, context_has_state)
 		# 回归安全锚点（真根因修复：连续 play"输入失效"其实是敌人击杀重置）：
 		# 上一演练可能把玩家留在敌带击杀窗内（收集演练结束于 x≈392，敌右
 		# 极值 380 的击杀窗覆盖它）——下一演练的移动腿在窗口内遭遇死亡重置，
@@ -2074,6 +2060,37 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 							break
 			return {"failed": true, "reason": reason, "checked": checked}
 	return {"failed": false, "checked": checked}
+
+
+## 回归演练步组装：引导稳定 → 解锁前缀 → 演练本体 → 安全锚点。
+## 解锁 Enter 必须在演练**之前**（旧实现追加在尾部——注册表还没有
+## state 的语境（09 自己的完成门禁）下派发步不含解锁前缀，第一条演练
+## 在标题门控下空转 → 移动腿零位移，CI run 35189295410/35190923900
+## 的 09❌ 同签名）。playing 态 Enter 无副作用，前置对已解锁语境无害。
+static func _assemble_regression_steps(derived_steps: Array, prior_goal: String,
+		context_has_state: bool) -> Array:
+	var steps: Array = [{"wait_ms": 800}] + derived_steps
+	if context_has_state \
+			and not GoalBlueprintsScript._mentions(prior_goal, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS):
+		var unlock_pairs: Array = []
+		for pair_index in 3:
+			# 第三对：吸收存档恢复+自动拾取插入的额外转移
+			unlock_pairs.append({
+				"action": "ui_accept", "pressed": true, "wait_ms": 300,
+				"description": ("regression: enter playing state" if pair_index == 0
+					else "regression: absorb restore/auto-pickup transition")})
+			unlock_pairs.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+		steps = [steps[0]] + unlock_pairs + steps.slice(1)
+	# 回归安全锚点（真根因修复：连续 play"输入失效"其实是敌人击杀重置）：
+	# 下一演练可能把玩家留在敌带击杀窗内——左扫回原点，释放双发防
+	# 残留反向键抵消。
+	steps += [
+		{"action": "move_left", "pressed": true, "wait_ms": 2000,
+			"description": "regression: return to the safe origin anchor"},
+		{"action": "move_left", "pressed": false, "wait_ms": 100},
+		{"action": "move_left", "pressed": false, "wait_ms": 100},
+	]
+	return steps
 
 
 ## 断言失败取证摘要：位移断言载荷是 before/after/displacement（无
