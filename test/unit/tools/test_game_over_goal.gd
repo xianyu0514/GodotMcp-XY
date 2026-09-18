@@ -86,7 +86,7 @@ func test_gameover_legs_unlock_then_death_run_then_restart() -> void:
 			descriptions.append(String(leg.get("expression", "")))
 	assert_has(descriptions, "game_state")
 	assert_has(descriptions, "_gameover_label.visible")
-	assert_has(descriptions, "str(lives) + \"/\" + str(coins_collected)",
+	assert_has(descriptions, "str(lives) + \"|\" + str(coins_collected)",
 		"the restart reset is forensically encoded (values visible on failure)")
 
 # ============================================================================

@@ -90,9 +90,9 @@ func test_level_legs_walk_both_levels() -> void:
 		var leg: Dictionary = (step_value as Dictionary).get("assert", {})
 		if not leg.is_empty():
 			expressions.append(String(leg.get("expression", "")))
-	assert_has(expressions, "str(current_level) + \"/\" + str(coins_collected == COINS_TO_WIN)",
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN)",
 		"level one completes without advancing (forensic encoding)")
-	assert_has(expressions, "str(current_level) + \"/\" + str(coins_collected) + \"/\" + game_state",
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state",
 		"Enter advances to a fresh level two (values visible on failure)")
 
 func test_state_legs_are_level_aware() -> void:
