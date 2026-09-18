@@ -1769,13 +1769,13 @@ func _level_play_steps() -> Array:
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
 		"action": "ui_accept", "pressed": false, "wait_ms": 50,
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x))",
-			"expected": "2|0|playing|0",
-			"description": "immediately after the level transition (level/coins/state/x)"}
+		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
+			"expected": "2|0|playing|0|",
+			"description": "immediately after the level transition (level/coins/state/x/pickup-log)"}
 	})
 	steps.append({
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x))",
-			"expected": "2|0|playing|0",
+		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
+			"expected": "2|0|playing|0|",
 			"description": "the L2 board is still fresh a moment later"}
 	})
 	steps.append({

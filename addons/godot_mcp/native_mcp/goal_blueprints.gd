@@ -368,6 +368,7 @@ static func controller_script(objective: String) -> String:
 	if bool(verbs.get("level", false)):
 		source += "const LEVEL_COUNT: int = %d\n" % _level_count(objective)
 		source += "var current_level: int = 1\n"
+		source += "var _pickup_log: String = \"\"\n"
 	if bool(verbs.get("bgm", false)):
 		source += "var _bgm_player: AudioStreamPlayer\n"
 	if needs_enemy:
@@ -637,6 +638,7 @@ static func controller_script(objective: String) -> String:
 				# title（关卡归 1，全重置同既有语义）。elif 行由 game_over
 				# 条件块（两个分支）统一发射，这里只发分支体。
 				source += "\t\t\tif current_level < LEVEL_COUNT:\n"
+				source += "\t\t\t\t_pickup_log = \"\"\n"
 				source += "\t\t\t\tcurrent_level += 1\n"
 				source += "\t\t\t\tgame_state = \"playing\"\n"
 				source += "\t\t\t\tposition = Vector2.ZERO\n"
@@ -650,6 +652,7 @@ static func controller_script(objective: String) -> String:
 					source += "\t\t\t\t\t_hud_label.text = \"Coins: 0/%d\" % COINS_TO_WIN\n"
 					source += "\t\t\t\t_respawn_coins()\n"
 				source += "\t\t\telse:\n"
+				source += "\t\t\t\t_pickup_log = \"\"\n"
 				source += "\t\t\t\tcurrent_level = 1\n"
 				source += "\t\t\t\tgame_state = \"title\"\n"
 				source += "\t\t\t\tposition = Vector2.ZERO\n"
@@ -727,6 +730,10 @@ static func controller_script(objective: String) -> String:
 			source += "\t# 保证每枚只计一次。\n"
 			source += "\tif coin == null or not is_instance_valid(coin) or coin.is_queued_for_deletion():\n"
 			source += "\t\treturn\n"
+			if bool(verbs.get("level", false)):
+				# 拾取取证（CI 显微镜：L2 进入后 50ms 内 3|win 无输入）——
+				# 每笔拾取记录玩家位置，换关清零；失败断言顺带打出。
+				source += "\t_pickup_log += str(int(position.x)) + \";\"\n"
 			source += "\tcoins_collected += 1\n"
 			source += "\tcoins_changed.emit(coins_collected)\n"
 			source += "\tif _hud_label != null:\n"
