@@ -89,6 +89,36 @@ func test_feedback_legs_drop_equality_under_save_semantics() -> void:
 	assert_eq(str(leg.get("expression", "")), "sfx_played_count",
 		"the surviving leg still proves a sound played")
 
+func test_regression_derivation_drops_equality_for_unregistered_save_goal() -> void:
+	# CI 实证（run 35190923900）：06-save 完成门禁的回归重推 05b 粒子
+	# 演练——注册表还没有 save（当前目标完成前不注册），但存档代码已
+	# 合并进游戏、存档文件已在磁盘（06 自己的演练刚写入）。等值腿必须
+	# 通过 merged_verbs（当前目标动词）感知存档语境。
+	var tools: RefCounted = WorkflowToolsScript.new()
+	var args_with_save: Dictionary = {}
+	tools._derive_generic_play_steps(
+		{"goal": "Add a coin pickup particle burst."}, {}, "play_and_verify",
+		args_with_save, {"save": true})
+	var with_save_steps: Array = args_with_save.get("steps", [])
+	var has_equality: bool = false
+	for step_value in with_save_steps:
+		var leg: Dictionary = (step_value as Dictionary).get("assert", {})
+		if str(leg.get("expression", "")).contains("burst_count == "):
+			has_equality = true
+	assert_false(has_equality, "unregistered-but-merged save goal degrades the equality leg")
+
+	var args_no_save: Dictionary = {}
+	tools._derive_generic_play_steps(
+		{"goal": "Add a coin pickup particle burst."}, {}, "play_and_verify",
+		args_no_save, {})
+	var no_save_steps: Array = args_no_save.get("steps", [])
+	var has_equality_plain: bool = false
+	for step_value in no_save_steps:
+		var leg2: Dictionary = (step_value as Dictionary).get("assert", {})
+		if str(leg2.get("expression", "")).contains("burst_count == "):
+			has_equality_plain = true
+	assert_true(has_equality_plain, "without save semantics the equality leg stays")
+
 # ============================================================================
 # 重开重置：反馈计数器随回合清零
 # ============================================================================

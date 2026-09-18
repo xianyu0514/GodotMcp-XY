@@ -1788,7 +1788,7 @@ func _restore_play_steps() -> Array:
 ## 恢复断言）按动词组合；存档目标暗含移动（蓝图口径）。都没有时退化为
 ## 启动等待窗口（此时门禁只证明"发起过运行"，启动期脚本错误仍会被捕获）。
 func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: String,
-		arguments: Dictionary) -> void:
+		arguments: Dictionary, merged_verbs: Dictionary = {}) -> void:
 	var play_objective: String = String(plan.get("goal", ""))
 	var wants_movement: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.MOVEMENT_KEYWORDS) \
 		or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)
@@ -1885,8 +1885,13 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			if wants_pause:
 				play_steps.append_array(_pause_play_steps())
 			# 反馈等值腿仅在无存档语境下诚实：读档恢复的 coins 与本进程
-			# sfx/burst 计数分母不同（注册表或本目标含存档动词即降级）。
+			# sfx/burst 计数分母不同。存档感知 = 注册表 ∪ 当前目标动词 ∪
+			# 目标句关键词——**完成门禁的回归重推旧功能时，当前目标（如
+			# 06-save）的动词还没注册但代码已在游戏里、存档已在磁盘上**
+			# （06 自己的演练刚写入），只查注册表会漏（CI run 35190923900：
+			# 05b 粒子等值在 06 完成回归里错位失败）。
 			var feedback_equality: bool = not bool(context_verbs.get("save", false)) \
+				and not bool(merged_verbs.get("save", false)) \
 				and not GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)
 			if wants_audio:
 				play_steps.append_array(_audio_play_steps(coin_expression, feedback_equality))
@@ -2002,7 +2007,10 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 		if prior_goal.is_empty():
 			continue
 		var exercise_args: Dictionary = {}
-		_derive_generic_play_steps({"goal": prior_goal}, {}, "play_and_verify", exercise_args)
+		# merged_verbs=当前目标动词：完成门禁回归时当前目标尚未注册——
+		# 但其代码已合并进游戏（如 06-save 的读档在每次全新进程生效），
+		# 反馈等值腿的存档感知必须看到它。
+		_derive_generic_play_steps({"goal": prior_goal}, {}, "play_and_verify", exercise_args, current_verbs)
 		var steps: Array = exercise_args.get("steps", [])
 		if steps.is_empty():
 			continue
