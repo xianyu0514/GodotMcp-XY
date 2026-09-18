@@ -1300,8 +1300,8 @@ func test_state_play_steps_cover_full_two_round_loop() -> void:
 		"the origin reset is asserted (racy counter observable replaced)")
 	assert_true(joined.contains("game_state == playing"),
 		"the second-round start is asserted")
-	assert_true(joined.to_lower().contains("and game_state"),
-		"the second-round full win is asserted")
+	assert_true(joined.contains("str(coins_collected == COINS_TO_WIN) + \"|\" + game_state"),
+		"the second-round full win is asserted (forensic encoding)")
 
 func test_tune_steps_unlock_title_when_state_machine_registered() -> void:
 	FeatureRegistryScript.record_feature("title screen game flow",

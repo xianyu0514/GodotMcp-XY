@@ -1892,8 +1892,9 @@ func _state_play_steps(levels_merged: bool = false) -> Array:
 	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "coins_collected == COINS_TO_WIN and game_state == \"win\"", "expected": true,
-			"description": "second round: full win achieved again after restart"}
+		"assert": {"expression": "str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
+			"expected": "true|win",
+			"description": "second round: full win achieved again after restart (all-collected/state)"}
 	})
 	return steps
 
