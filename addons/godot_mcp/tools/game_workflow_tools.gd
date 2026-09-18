@@ -1715,9 +1715,9 @@ func _gameover_play_steps() -> Array:
 			"description": "Enter restarted into a fresh playing round"}
 	})
 	steps.append({
-		"assert": {"expression": "lives == STARTING_LIVES and coins_collected == 0",
-			"expected": true,
-			"description": "the restart fully reset lives and coins"}
+		"assert": {"expression": "str(lives) + \"/\" + str(coins_collected)",
+			"expected": "3/0",
+			"description": "the restart fully reset lives and coins (lives/coins)"}
 	})
 	steps.append({
 		"assert": {"expression": "_gameover_label.visible", "expected": false,
@@ -1743,9 +1743,9 @@ func _level_play_steps() -> Array:
 	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "current_level == 1 and coins_collected == COINS_TO_WIN",
-			"expected": true,
-			"description": "level one: every coin collected, still on level one"}
+		"assert": {"expression": "str(current_level) + \"/\" + str(coins_collected == COINS_TO_WIN)",
+			"expected": "1/true",
+			"description": "level one: every coin collected, still on level one (level/all-collected)"}
 	})
 	steps.append({
 		"assert": {"expression": "_win_label.text", "expected": "Level 1 Clear!",
@@ -1759,9 +1759,9 @@ func _level_play_steps() -> Array:
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
 		"action": "ui_accept", "pressed": false, "wait_ms": 200,
-		"assert": {"expression": "current_level == 2 and coins_collected == 0 and game_state == \"playing\"",
-			"expected": true,
-			"description": "Enter advanced to level two with a fresh board"}
+		"assert": {"expression": "str(current_level) + \"/\" + str(coins_collected) + \"/\" + game_state",
+			"expected": "2/0/playing",
+			"description": "Enter advanced to level two with a fresh board (level/coins/state)"}
 	})
 	steps.append({
 		"assert": {"expression": "abs(position.x) < 20", "expected": true,
@@ -1771,9 +1771,9 @@ func _level_play_steps() -> Array:
 	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "current_level == LEVEL_COUNT and coins_collected == COINS_TO_WIN and game_state == \"win\"",
-			"expected": true,
-			"description": "level two: full win achieved on the final level"}
+		"assert": {"expression": "str(current_level) + \"/\" + str(coins_collected == COINS_TO_WIN) + \"/\" + game_state",
+			"expected": "2/true/win",
+			"description": "level two: full win achieved on the final level (level/all-collected/state)"}
 	})
 	steps.append({
 		"assert": {"expression": "_win_label.text", "expected": "You Win!",
@@ -1785,9 +1785,9 @@ func _level_play_steps() -> Array:
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({
 		"action": "ui_accept", "pressed": false, "wait_ms": 200,
-		"assert": {"expression": "current_level == 1 and coins_collected == 0 and game_state == \"playing\"",
-			"expected": true,
-			"description": "restart cycles back to level one playing"}
+		"assert": {"expression": "str(current_level) + \"/\" + str(coins_collected) + \"/\" + game_state",
+			"expected": "1/0/playing",
+			"description": "restart cycles back to level one playing (level/coins/state)"}
 	})
 	return steps
 
