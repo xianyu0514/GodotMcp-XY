@@ -241,6 +241,11 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 					"displacement": delta_value,
 					"step": i,
 				}
+				# 阈值随载荷下发：失败取证摘要需要（区分零位移 vs 部分位移）。
+				if step_assert.has("displacement_min"):
+					delta_result["displacement_min"] = float(step_assert["displacement_min"])
+				if step_assert.has("displacement_max"):
+					delta_result["displacement_max"] = float(step_assert["displacement_max"])
 				if bool(delta_passed):
 					passed_count += 1
 				assertion_results.append(delta_result)

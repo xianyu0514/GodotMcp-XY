@@ -2062,14 +2062,38 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 					for assertion_value in (result as Dictionary).get("assertions", []):
 						var assertion: Dictionary = assertion_value
 						if not bool(assertion.get("passed", true)):
-							reason += ": %s (expected %s, got %s%s)" % [
-								String(assertion.get("description", "assertion failed")),
-								str(assertion.get("expected", "?")),
-								str(assertion.get("actual", "?")),
-								(" at " + String(assertion.get("context", ""))) if assertion.has("context") else ""]
+							reason += ": %s" % _assertion_failure_summary(assertion)
 							break
 			return {"failed": true, "reason": reason, "checked": checked}
 	return {"failed": false, "checked": checked}
+
+
+## 断言失败取证摘要：位移断言载荷是 before/after/displacement（无
+## expected/actual 键），旧格式化对它们打出 "expected ?, got ?" ——
+## 零取证，CI 失败原因无法区分零位移（输入/门控问题）与部分位移
+## （死亡重置截断）。位移断言展开实际位移与前后值；常规断言保持
+## expected/actual（+ context/step）格式。
+static func _assertion_failure_summary(assertion: Dictionary) -> String:
+	var summary: String = String(assertion.get("description", assertion.get("expression", "assertion failed")))
+	if assertion.has("displacement"):
+		var threshold_text: String = "?"
+		if assertion.has("displacement_min"):
+			threshold_text = ">= %s px" % str(assertion.get("displacement_min"))
+		elif assertion.has("displacement_max"):
+			threshold_text = "<= %s px" % str(assertion.get("displacement_max"))
+		summary += " (expected %s, got %s px, before %s -> after %s)" % [
+			threshold_text,
+			str(assertion.get("displacement", "?")),
+			str(assertion.get("before_value", "?")),
+			str(assertion.get("after_value", "?"))]
+	else:
+		summary += " (expected %s, got %s%s)" % [
+			str(assertion.get("expected", "?")),
+			str(assertion.get("actual", "?")),
+			(" at " + String(assertion.get("context", ""))) if assertion.has("context") else ""]
+	if assertion.has("step"):
+		summary += " at step %d" % int(assertion.get("step", -1))
+	return summary
 
 ## 从 tune_apply 的 modify_script 参数解析计划值（runner 记入工件，
 ## 敌速/磁吸半径验证步断言新值在运行中的游戏里生效）。
