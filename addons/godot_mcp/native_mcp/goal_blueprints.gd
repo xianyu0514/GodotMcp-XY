@@ -85,6 +85,13 @@ const GAME_OVER_KEYWORDS: Array[String] = [
 	"游戏结束", "失败画面", "生命数",
 ]
 
+# 多关卡动词：通关第一关后进入下一关（不同金币布局），最终关胜利才是
+# 完整通关。蕴含状态机（关卡切换走 win 态的 Enter 转移）。
+const LEVEL_KEYWORDS: Array[String] = [
+	"level", "levels", "stage", "second level", "next level",
+	"关卡", "第二关", "下一关", "多关卡",
+]
+
 ## 解析目标中的金币数量："3 coins" / "3 collectible coins" / "three coins" /
 ## "3 金币" / "再加 3 个金币"。数字与名词之间允许一个常见修饰词
 ## （collectible/golden/gold/more）——差距分析：旧正则要求数字紧贴
@@ -105,6 +112,20 @@ static func _coin_count(objective: String) -> int:
 	if text.contains("five coins") or text.contains("五个金币"):
 		return 5
 	return 1
+
+## 解析目标中的关卡数："a second level" / "2 levels" / "three levels" /
+## "第二关"。无数字默认 2（最小可验证的关卡递进）。
+static func _level_count(objective: String) -> int:
+	var text: String = objective.to_lower()
+	if text.contains("third") or text.contains("3 levels") or text.contains("第三关"):
+		return 3
+	var number_regex: RegEx = RegEx.new()
+	if number_regex.compile("(\\d+)\\s*levels?") != OK:
+		return 2
+	var match_result: RegExMatch = number_regex.search(text)
+	if match_result:
+		return clampi(int(match_result.get_string(1)), 2, 5)
+	return 2
 
 ## 解析目标中的敌人数量："2 enemies" / "2 patrolling enemies" / "两个敌人"。
 ## 无数字默认 1；"再加一个敌人"这类增量语义由 is_additive_request() 表达，
@@ -154,6 +175,7 @@ static func match_verbs(objective: String) -> Dictionary:
 		"audio": _mentions(objective, AUDIO_KEYWORDS),
 		"juice": _mentions(objective, JUICE_KEYWORDS),
 		"game_over": _mentions(objective, GAME_OVER_KEYWORDS),
+		"level": _mentions(objective, LEVEL_KEYWORDS),
 		"wall": _mentions(objective, WALL_KEYWORDS),
 		"three_d": _mentions(objective, THREE_D_KEYWORDS),
 	}
@@ -169,6 +191,7 @@ static func has_any_verb(verbs: Dictionary) -> bool:
 		or bool(verbs.get("audio", false)) \
 		or bool(verbs.get("juice", false)) \
 		or bool(verbs.get("game_over", false)) \
+		or bool(verbs.get("level", false)) \
 		or bool(verbs.get("wall", false)) \
 		or bool(verbs.get("three_d", false))
 
@@ -273,6 +296,9 @@ static func controller_script(objective: String) -> String:
 	if bool(verbs.get("game_over", false)):
 		verbs["enemy"] = true
 		verbs["state_machine"] = true
+	# 多关卡：通关切换走 win 态的 Enter 转移——level 蕴含状态机。
+	if bool(verbs.get("level", false)):
+		verbs["state_machine"] = true
 	# 状态机/音效/粒子暗含收集（胜利条件）与移动（玩法本体）——在 needs_*
 	# 计算前改写动词，保证 _ready 的金币/胜利结构与移动块同步生成。
 	if bool(verbs.get("state_machine", false)) or bool(verbs.get("audio", false)) \
@@ -320,6 +346,9 @@ static func controller_script(objective: String) -> String:
 		source += "const STARTING_LIVES: int = 3\n"
 		source += "var lives: int = STARTING_LIVES\n"
 		source += "var _gameover_label: Label\n"
+	if bool(verbs.get("level", false)):
+		source += "const LEVEL_COUNT: int = %d\n" % _level_count(objective)
+		source += "var current_level: int = 1\n"
 	if needs_enemy:
 		source += "var deaths_count: int = 0\n"
 		source += "var _enemy: Area2D\n"
@@ -521,6 +550,8 @@ static func controller_script(objective: String) -> String:
 				source += "\t\t\tposition = Vector2.ZERO\n"
 				source += "\t\t\tcoins_collected = 0\n"
 				source += "\t\t\tlives = STARTING_LIVES\n"
+				if bool(verbs.get("level", false)):
+					source += "\t\t\tcurrent_level = 1\n"
 				source += "\t\t\tif _gameover_label != null:\n"
 				source += "\t\t\t\t_gameover_label.visible = false\n"
 				source += "\t\t\tif _title_label != null:\n"
@@ -533,28 +564,67 @@ static func controller_script(objective: String) -> String:
 					source += "\t\t\t_respawn_coins()\n"
 				source += "\t\telif game_state == \"win\":\n"
 			else:
+				# 无 game_over 也必须发射 elif 行——win 分支体（关卡感知/
+				# 朴素）挂在它后面（丢失会让状态机目标的 Enter 换重开整条
+				# 转移消失：编译仍过、语义断——单测 contains 断言抓的）。
 				source += "\t\telif game_state == \"win\":\n"
-			source += "\t\t\tgame_state = \"title\"\n"
-			source += "\t\t\tposition = Vector2.ZERO\n"
-			source += "\t\t\tcoins_collected = 0\n"
-			# 反馈计数器随回合清零：保持"每拾取一次响一声/爆一次"的
-			# 等值证据在重开后的新一轮里依然成立（计数跨回合累积会让
-			# sfx_played_count == coins_collected 永假）。
-			if bool(verbs.get("audio", false)):
-				source += "\t\t\tsfx_played_count = 0\n"
-			if bool(verbs.get("juice", false)):
-				source += "\t\t\tburst_count = 0\n"
-			if bool(verbs.get("game_over", false)):
-				# 胜利换轮同样恢复生命并盖掉失败画面（防御性：gameover 期间
-				# 不可能胜利，但状态语义保持完备）。
-				source += "\t\t\tlives = STARTING_LIVES\n"
-				source += "\t\t\tif _gameover_label != null:\n"
-				source += "\t\t\t\t_gameover_label.visible = false\n"
-			source += "\t\t\tif _title_label != null:\n"
-			source += "\t\t\t\t_title_label.visible = true\n"
-			# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
-			if needs_pickup:
-				source += "\t\t\t_respawn_coins()\n"
+			if bool(verbs.get("level", false)):
+				# win + Enter：非最终关 → 下一关 playing（换关重置在此发生：
+				# 关卡递进/位置/金币/反馈计数/金币按新关布局重生）；最终关 →
+				# title（关卡归 1，全重置同既有语义）。elif 行由 game_over
+				# 条件块（两个分支）统一发射，这里只发分支体。
+				source += "\t\t\tif current_level < LEVEL_COUNT:\n"
+				source += "\t\t\t\tcurrent_level += 1\n"
+				source += "\t\t\t\tgame_state = \"playing\"\n"
+				source += "\t\t\t\tposition = Vector2.ZERO\n"
+				source += "\t\t\t\tcoins_collected = 0\n"
+				if bool(verbs.get("audio", false)):
+					source += "\t\t\t\tsfx_played_count = 0\n"
+				if bool(verbs.get("juice", false)):
+					source += "\t\t\t\tburst_count = 0\n"
+				if needs_pickup:
+					source += "\t\t\t\tif _hud_label != null:\n"
+					source += "\t\t\t\t\t_hud_label.text = \"Coins: 0/%d\" % COINS_TO_WIN\n"
+					source += "\t\t\t\t_respawn_coins()\n"
+				source += "\t\t\telse:\n"
+				source += "\t\t\t\tcurrent_level = 1\n"
+				source += "\t\t\t\tgame_state = \"title\"\n"
+				source += "\t\t\t\tposition = Vector2.ZERO\n"
+				source += "\t\t\t\tcoins_collected = 0\n"
+				if bool(verbs.get("audio", false)):
+					source += "\t\t\t\tsfx_played_count = 0\n"
+				if bool(verbs.get("juice", false)):
+					source += "\t\t\t\tburst_count = 0\n"
+				if bool(verbs.get("game_over", false)):
+					source += "\t\t\t\tlives = STARTING_LIVES\n"
+					source += "\t\t\t\tif _gameover_label != null:\n"
+					source += "\t\t\t\t\t_gameover_label.visible = false\n"
+				source += "\t\t\t\tif _title_label != null:\n"
+				source += "\t\t\t\t\t_title_label.visible = true\n"
+				if needs_pickup:
+					source += "\t\t\t\t_respawn_coins()\n"
+			else:
+				source += "\t\t\tgame_state = \"title\"\n"
+				source += "\t\t\tposition = Vector2.ZERO\n"
+				source += "\t\t\tcoins_collected = 0\n"
+				# 反馈计数器随回合清零：保持"每拾取一次响一声/爆一次"的
+				# 等值证据在重开后的新一轮里依然成立（计数跨回合累积会让
+				# sfx_played_count == coins_collected 永假）。
+				if bool(verbs.get("audio", false)):
+					source += "\t\t\tsfx_played_count = 0\n"
+				if bool(verbs.get("juice", false)):
+					source += "\t\t\tburst_count = 0\n"
+				if bool(verbs.get("game_over", false)):
+					# 胜利换轮同样恢复生命并盖掉失败画面（防御性：gameover 期间
+					# 不可能胜利，但状态语义保持完备）。
+					source += "\t\t\tlives = STARTING_LIVES\n"
+					source += "\t\t\tif _gameover_label != null:\n"
+					source += "\t\t\t\t_gameover_label.visible = false\n"
+				source += "\t\t\tif _title_label != null:\n"
+				source += "\t\t\t\t_title_label.visible = true\n"
+				# 重开重建金币：收集后的金币被 queue_free，不重建则重开后无物可收
+				if needs_pickup:
+					source += "\t\t\t_respawn_coins()\n"
 			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
 			source += "\t\treturn\n"
 		if needs_save:
@@ -609,7 +679,17 @@ static func controller_script(objective: String) -> String:
 				source += "\t\tburst_count += 1\n"
 			source += "\tcoin.queue_free()\n"
 			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
-			source += "\t\t_win_label.text = \"You Win!\"\n"
+			if bool(verbs.get("level", false)):
+				# 非最终关：显示关卡通关，**不重置任何计数**——收集/反馈
+				# 等值断言在关卡合并后的回归语境里必须原样成立（重置会让
+				# coins==COINS_TO_WIN 与 sfx==coins 永假）。换关的重置只发
+				# 生在 Enter 转移（win→下一关 playing）。
+				source += "\t\tif current_level < LEVEL_COUNT:\n"
+				source += "\t\t\t_win_label.text = \"Level %d Clear!\" % current_level\n"
+				source += "\t\telse:\n"
+				source += "\t\t\t_win_label.text = \"You Win!\"\n"
+			else:
+				source += "\t\t_win_label.text = \"You Win!\"\n"
 			if needs_state:
 				source += "\t\tgame_state = \"win\"\n"
 	if needs_pause:
@@ -635,10 +715,17 @@ static func controller_script(objective: String) -> String:
 		source += "\t\t\tchild.name = \"_coin_dying_%d\" % dying_index\n"
 		source += "\t\t\tdying_index += 1\n"
 		source += "\t\t\tchild.queue_free()\n"
+		if bool(verbs.get("level", false)):
+			# 关卡布局：每关聚簇基址右移 40px（L1=110 与既有校准一致；
+			# L2=150——拾取半径 90 下全簇仍在敌带 [220,380] 前可收）。
+			source += "\tvar base_x: float = 110.0 + (current_level - 1) * 40.0\n"
 		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
 		source += "\t\tvar new_coin := Area2D.new()\n"
 		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"
-		source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
+		if bool(verbs.get("level", false)):
+			source += "\t\tnew_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+		else:
+			source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar coin_col := CollisionShape2D.new()\n"
 		source += "\t\tvar coin_shape := CircleShape2D.new()\n"
 		source += "\t\tcoin_shape.radius = COIN_RADIUS\n"

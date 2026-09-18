@@ -75,7 +75,7 @@ def wait_server():
             time.sleep(1)
     return False
 
-# The 12-goal game-building sequence
+# The 13-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
     ("02-coins", "Add 3 collectible coins."),
@@ -88,6 +88,7 @@ GOALS = [
     ("08-second-enemy", "Add another patrolling enemy."),
     ("09-state-flow", "Add a title screen with start, gameplay, win state and restart."),
     ("09a-gameover", "Add a game over screen with 3 lives when the player dies."),
+    ("09b-levels", "Add a second level after the first win."),
     ("10-final-tune", "Make the player movement snappier and more responsive."),
 ]
 
@@ -142,11 +143,10 @@ def full_loop_steps():
         {"action": "move_right", "pressed": False, "wait_ms": 300,
          "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
             "description": "round one: every coin collected (identity-safe pickup)"}},
-        # 反馈等值断言只放第二轮：第一轮受读档影响（save 目标落盘
-        # coins=1，恢复后 sfx 计数与本轮拾取分母不同——等值必假）；
-        # 第二轮在 win->title 重置之后，两个计数器同从 0 起算。
-        {"assert": {"expression": "_win_label.text", "expected": "You Win!",
-            "description": "round one: win label shows"}},
+        # 关卡语义（09b 合并后）：第一轮胜利是 L1 通关文案而非最终胜利；
+        # 换关的重置只发生在 Enter 转移——收集计数原样成立。
+        {"assert": {"expression": "_win_label.text", "expected": "Level 1 Clear!",
+            "description": "round one: level one clear (not the final win)"}},
         {"assert": {"expression": "game_state", "expected": "win",
             "description": "round one: win state reached"}},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
@@ -156,9 +156,11 @@ def full_loop_steps():
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
          "assert": {"expression": "coins_collected == 0", "expected": True,
-            "description": "the restart cycle reset the counter (win->title->playing)"}},
+            "description": "the restart cycle reset the counter (win->next-level playing)"}},
         {"assert": {"expression": "abs(position.x) < 20", "expected": True,
             "description": "restart reset the player to the origin"}},
+        {"assert": {"expression": "current_level == 2", "expected": True,
+            "description": "the restart cycle advanced to level two (goal 09b)"}},
         {"action": "ui_accept", "pressed": True, "wait_ms": 300},
         {"action": "ui_accept", "pressed": False, "wait_ms": 200,
          "assert": {"expression": "game_state", "expected": "playing",

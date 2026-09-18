@@ -1396,6 +1396,8 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 		parts.append("title screen game flow restart")
 	if bool(merged_verbs.get("game_over", false)):
 		parts.append("game over screen with lives when the player dies")
+	if bool(merged_verbs.get("level", false)):
+		parts.append("a second level after the first win")
 	if bool(merged_verbs.get("audio", false)):
 		parts.append("sound effect")
 	if bool(merged_verbs.get("juice", false)):
@@ -1554,7 +1556,9 @@ func _movement_feel_legs() -> Dictionary:
 
 ## 收集腿（评测 N1 收集面）：走到金币（蓝图固定 (180,120)）→ 断言
 ## 金币已消失、计数已增、胜利标签已显示——收集/胜利的行为证据。
-func _collect_play_steps(coin_count_expression: String = "coins_collected") -> Array:
+## levels_merged：关卡动词合并时收集满 L1 显示关卡通关文案（换关不重置
+## 计数——收集断言原样成立，只有标签文案不同）。
+func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false) -> Array:
 	var steps: Array = []
 	# 先回归原点：save 恢复或上一轮演练可能把玩家留在金币右侧——从右侧
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
@@ -1576,7 +1580,8 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected") -> A
 			"description": "the collected coin is gone from the tree"}
 	})
 	steps.append({
-		"assert": {"expression": "_win_label.text", "expected": "You Win!",
+		"assert": {"expression": "_win_label.text",
+			"expected": ("Level 1 Clear!" if levels_merged else "You Win!"),
 			"description": "the win label shows after collection"}
 	})
 	return steps
@@ -1705,12 +1710,82 @@ func _gameover_play_steps() -> Array:
 	})
 	return steps
 
+## 多关卡证据腿（质量维度：内容深度）：
+## 1) 三重 Enter 解锁；
+## 2) L1 右扫全收 → win 态 + "Level 1 Clear!" + current_level==1（换关
+##    不重置计数——蓝图语义，收集断言原样成立）；
+## 3) Enter → L2：关卡递进 + 计数清零 + 原点 + playing；
+## 4) L2 右扫全收 → 最终胜利 "You Win!" + current_level==LEVEL_COUNT；
+## 5) Enter×2 → 回到 L1 playing（最终关胜利 → title 关卡归 1 → playing）。
+func _level_play_steps() -> Array:
+	var steps: Array = []
+	for pair_index in 3:
+		steps.append({
+			"action": "ui_accept", "pressed": true, "wait_ms": 300,
+			"description": "enter playing before the level run"})
+		steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	# L1：全收 → 关卡通关（非最终关的胜利形态）
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 300,
+		"assert": {"expression": "current_level == 1 and coins_collected == COINS_TO_WIN",
+			"expected": true,
+			"description": "level one: every coin collected, still on level one"}
+	})
+	steps.append({
+		"assert": {"expression": "_win_label.text", "expected": "Level 1 Clear!",
+			"description": "level one clear shows the level text (not the final win)"}
+	})
+	steps.append({
+		"assert": {"expression": "game_state", "expected": "win",
+			"description": "level one clear reached the win state"}
+	})
+	# Enter → L2
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "current_level == 2 and coins_collected == 0 and game_state == \"playing\"",
+			"expected": true,
+			"description": "Enter advanced to level two with a fresh board"}
+	})
+	steps.append({
+		"assert": {"expression": "abs(position.x) < 20", "expected": true,
+			"description": "level two starts from the origin"}
+	})
+	# L2：全收 → 最终胜利
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+	steps.append({
+		"action": "move_right", "pressed": false, "wait_ms": 300,
+		"assert": {"expression": "current_level == LEVEL_COUNT and coins_collected == COINS_TO_WIN and game_state == \"win\"",
+			"expected": true,
+			"description": "level two: full win achieved on the final level"}
+	})
+	steps.append({
+		"assert": {"expression": "_win_label.text", "expected": "You Win!",
+			"description": "the final level shows the real win text"}
+	})
+	# Enter×2：最终胜利 → title（关卡归 1）→ playing L1
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+	steps.append({
+		"action": "ui_accept", "pressed": false, "wait_ms": 200,
+		"assert": {"expression": "current_level == 1 and coins_collected == 0 and game_state == \"playing\"",
+			"expected": true,
+			"description": "restart cycles back to level one playing"}
+	})
+	return steps
+
 ## 状态机腿（P4 游戏流 / P2-3 完整循环验收器）：
 ## 标题→玩法→收集全部金币→胜利→重开（计数清零+金币重生）→第二轮→再次胜利。
 ## 金币聚簇在敌人巡逻带之前（蓝图 80+i*60，全在 x<210 走廊），一次右扫
 ## 即可全收——"带敌人的完整通关"几何可达（旧布局 200/380/560 的第二、
 ## 三枚落在死亡带 [220,380] 内，完整通关不可能发生）。
-func _state_play_steps() -> Array:
+## levels_merged：关卡动词合并进游戏时，第一轮胜利显示的是关卡通关文案
+## （"Level 1 Clear!"）而非 "You Win!"——其余断言（计数/状态/重置效果）
+## 在关卡语义下原样成立（换关重置只发生在 Enter 转移，见蓝图注释）。
+func _state_play_steps(levels_merged: bool = false) -> Array:
+	var first_win_text: String = "Level 1 Clear!" if levels_merged else "You Win!"
 	var steps: Array = []
 	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
 	# playing（Enter 无副作用）——save 恢复导致的 win 起步也被覆盖。
@@ -1733,7 +1808,7 @@ func _state_play_steps() -> Array:
 			"description": "first round: every coin collected (identity-safe pickup)"}
 	})
 	steps.append({
-		"assert": {"expression": "_win_label.text", "expected": "You Win!",
+		"assert": {"expression": "_win_label.text", "expected": first_win_text,
 			"description": "first round: the win label shows"}
 	})
 	steps.append({
@@ -1867,7 +1942,14 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		var wants_audio: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.AUDIO_KEYWORDS)
 		var wants_juice: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.JUICE_KEYWORDS)
 		var wants_game_over: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.GAME_OVER_KEYWORDS)
+		var wants_level: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.LEVEL_KEYWORDS)
 		var wants_3d: bool = GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.THREE_D_KEYWORDS)
+		# 关卡感知 = 注册表 ∪ 当前目标动词 ∪ 目标句关键词——关卡合并后
+		# 第一轮胜利文案变为 "Level 1 Clear!"（收集/状态腿的标签断言跟随），
+		# 其余断言在关卡语义下原样成立（换关重置只在 Enter 转移发生）。
+		var levels_merged: bool = wants_level \
+			or bool(FeatureRegistryScript.registered_verbs().get("level", false)) \
+			or bool(merged_verbs.get("level", false))
 		if wants_audio or wants_juice:
 			wants_collect = true
 		# 更名目标若改的就是计数字段，所有拾取相关腿的表达式跟随新符号名
@@ -1876,7 +1958,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 		if not rename_info.is_empty() \
 				and String(rename_info.get("symbol_name", "")) == "coins_collected":
 			coin_expression = String(rename_info.get("new_name", "coins_collected"))
-		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state or wants_game_over:
+		if wants_movement or wants_pause or wants_collect or wants_enemy or wants_state \
+				or wants_game_over or wants_level:
 			var play_steps: Array = []
 			# 上下文感知：注册表已有 state_machine（或当前目标本身带状态机——
 			# 完成前回归重推旧功能演练时，注册表还没记入本目标）时，游戏从
@@ -1919,9 +2002,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				feel_assertions.append_array(feel["assertions"])
 				arguments["assertions"] = feel_assertions
 			if wants_state:
-				play_steps.append_array(_state_play_steps())
+				play_steps.append_array(_state_play_steps(levels_merged))
 			elif wants_collect:
-				play_steps.append_array(_collect_play_steps(coin_expression))
+				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
 				play_steps.append_array(enemy_legs_generic["steps"])
@@ -1955,6 +2038,9 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 游戏结束腿（死亡有意义）：自带解锁与站桩式击杀——仅 2D。
 			if wants_game_over and not wants_3d:
 				play_steps.append_array(_gameover_play_steps())
+			# 多关卡腿（内容深度）：L1 通关 → L2 → 最终胜利 → 回 L1——仅 2D。
+			if wants_level and not wants_3d:
+				play_steps.append_array(_level_play_steps())
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
@@ -1973,6 +2059,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				labels.append("juice")
 			if wants_game_over and not wants_3d:
 				labels.append("gameover")
+			if wants_level and not wants_3d:
+				labels.append("levels")
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "+".join(labels) + "-exercise"
 		else:
