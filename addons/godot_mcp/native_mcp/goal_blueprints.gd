@@ -352,6 +352,7 @@ static func controller_script(objective: String) -> String:
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
 		source += "var _save_log: String = \"\"\n"
+		source += "var _save_was_down: bool = false\n"
 	if bool(verbs.get("audio", false)):
 		source += "var sfx_played_count: int = 0\n"
 		source += "var _sfx_player: AudioStreamPlayer\n"
@@ -700,8 +701,13 @@ static func controller_script(objective: String) -> String:
 			source += "\tif game_state != \"playing\" and game_state != \"win\":\n"
 			source += "\t\treturn\n"
 		if needs_save:
-			source += "\tif Input.is_action_just_pressed(\"save_game\"):\n"
+			# 状态轮询 + 锁存（与 _enter_edge 同模式）：is_action_just_pressed 的
+			# 边沿在探针 action_press 直接状态下会双重触发（写入日志实锤：一次
+			# F5 按压 = 2 次落盘）——锁存保证每次按住恰好一次写入。
+			source += "\tvar save_down: bool = Input.is_action_pressed(\"save_game\")\n"
+			source += "\tif save_down and not _save_was_down:\n"
 			source += "\t\tlast_save_ok = save_game()\n"
+			source += "\t_save_was_down = save_down\n"
 		if needs_enemy:
 			source += "\t# 敌人巡逻：相位从生成起累积（墙钟正弦会在整周期处过零，\n"
 			source += "\t# 断言窗口踩到过零点会闪断——真机 E2E 抓到）。\n"
