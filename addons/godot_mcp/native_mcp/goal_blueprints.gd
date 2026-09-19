@@ -828,19 +828,17 @@ static func controller_script(objective: String) -> String:
 		source += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
 		source += "\tif body != self:\n"
 		source += "\t\treturn\n"
-		if needs_state:
-			# 胜利即回合结束：win 态不冻结移动（既有手感语义），收集扫在
-			# 收满后继续穿越巡逻带到窗口末尾——赛后死亡若计入会耗尽生命
-			# 并用 gameover 覆写刚取得的 win（CI 35416409614 的 true|gameover）。
-			# 非 playing 态（win/gameover/title）一律不计死亡。
-			source += "\tif game_state != \"playing\":\n"
-			source += "\t\treturn\n"
 		source += "\tdeaths_count += 1\n"
 		if bool(verbs.get("game_over", false)):
 			# 死亡有意义：命 -1；命尽 → gameover 态（画面+世界冻结，
-			# 移动被状态门挡住）。未死亡尽仍回原点（既有断言校准）。
+			# 移动被状态门挡住）。**gameover 转移只在 playing 态发生**——
+			# win 是回合终局，赛后死亡（收集扫收满后继续穿带）计死亡数
+			# 但不得用 gameover 覆写刚取得的 win（CI 35416409614）。
+			# 反例教训（CI 35417454763）：整块拦掉 win 态死亡会把敌人
+			# 演练的证据（扫带致死）一起拦掉——死亡永远计数，只有状态
+			# 转移被门控。
 			source += "\tlives -= 1\n"
-			source += "\tif lives <= 0:\n"
+			source += "\tif lives <= 0 and game_state == \"playing\":\n"
 			source += "\t\tgame_state = \"gameover\"\n"
 			source += "\t\tif _gameover_label != null:\n"
 			source += "\t\t\t_gameover_label.visible = true\n"
