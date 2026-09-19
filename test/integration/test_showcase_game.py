@@ -139,7 +139,7 @@ def showcase_oracle():
             steps.append({"action": "ui_accept", "pressed": True, "wait_ms": 300})
             steps.append({"action": "ui_accept", "pressed": False, "wait_ms": 100})
         for level in (1, 2, 3):
-            steps.append({"action": "move_right", "pressed": True, "wait_frames": 96})
+            steps.append({"action": "move_right", "pressed": True, "wait_frames": 50})
             steps.append({
                 "action": "move_right", "pressed": False, "wait_ms": 300,
                 "assert": {"expression":
