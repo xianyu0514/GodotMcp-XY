@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (64 advanced)
+### Project-Advanced (65 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -48,6 +48,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `inspect_csharp_project_support` | advanced | Inspect C# / Mono project support files such as .csproj and .sln, including target frameworks, assembly metadata, and references. |
 | `compare_render_screenshots` | advanced | Compare two screenshot images and report pixel differences, RMSE, and threshold-based match status. |
 | `apply_change_set` | advanced | Apply a recoverable cross-file change set over text resources (.gd/.cs/.tscn/.tres/.cfg/.json...): preview pins every file's read version (`expected_content_hash`), then per-file write->readback->journal-mark. Journal-unwritable refuses to start. Interrupted sets are re-submitted with the same `change_set_id` and operations — applied files are skipped, untouched files are resumed, manually-edited files stop at an explicit conflict and are never overwritten. Committed sets replay as a receipt. `dry_run=true` previews without touching disk. |
+| `run_verification_queue` | advanced | Create, advance, inspect, record into, or abandon a persistent sliced verification queue: each advance consumes at most `budget` pending items (the rest retained, never dropped), evidence is fingerprinted against `watch_paths` (file drift pushes stale verdicts back to pending), `completed` only when every item passed. `script_check` items run the built-in GDScript compile check; `external` items run out-of-band and verdicts come back via `command=record`. Restart-safe. |
 | `gather_task_context` | advanced | Assemble a bounded, sourced task context for a natural-language modification goal (EN/ZH, e.g. 'add a dash to the player'): entry scripts (name/symbol keyword matches with content hashes), scenes referencing them, related InputMap actions, resources preloaded by those scripts, and tests referencing them. Deterministic keyword filtering with an explainable zh→en term map; every bucket is budgeted with truncated flags and exact follow-up reads. Read-only. |
 | `assert_visual_baseline` | advanced | Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and returns `passed=false` with status `baseline_created`/`baseline_updated` — capturing a golden image is never a comparison pass; rerun to compare against it. Optionally writes a diff heatmap PNG. Dimension mismatches fail. |
 | `inspect_tileset_resource` | advanced | Inspect a TileSet resource and summarize its sources, atlas tiles, and scene tiles. |

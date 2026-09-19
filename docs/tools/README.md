@@ -1,6 +1,6 @@
 # Tools Reference
 
-Godot MCP Native registers **235 MCP tools**: 28 core tools, 201 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
+Godot MCP Native registers **236 MCP tools**: 28 core tools, 202 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
 
 ## Category summary
 
@@ -11,9 +11,9 @@ Godot MCP Native registers **235 MCP tools**: 28 core tools, 201 advanced tools 
 | Scene | 12 | 4 | 8 | [scene-tools.md](scene-tools.md) |
 | Editor | 27 | 3 | 24 | [editor-tools.md](editor-tools.md) |
 | Debug & Runtime | 74 | 3 | 71 | [debug-tools.md](debug-tools.md) |
-| Project | 72 | 3 | 69 | [project-tools.md](project-tools.md) |
+| Project | 73 | 3 | 70 | [project-tools.md](project-tools.md) |
 | Meta | 6 | — | — | [meta-tools.md](meta-tools.md) |
-| **Total** | **235** | **28** | **201** | |
+| **Total** | **236** | **28** | **202** | |
 
 Meta tools are counted separately because they are always enabled and exist to manage the visible tool surface.
 
@@ -68,11 +68,11 @@ Each category page lists every tool with tier and description:
 | Scene | `addons/godot_mcp/tools/scene_tools_native.gd` |
 | Editor | `addons/godot_mcp/tools/editor_tools_native.gd` |
 | Debug & Runtime | `debug_tools_native.gd`（主）+ `debug_bridge_tools.gd` / `debug_runtime_tools.gd` / `debug_verify_tools.gd` |
-| Project | `project_tools_native.gd`（主）+ `project_resources_tools.gd` / `project_assets_tools.gd` / `project_tileset_tools.gd` / `project_verification_tools.gd` / `project_workflow_tools.gd` / `dependency_impact_tools.gd` / `change_set_tools.gd` |
+| Project | `project_tools_native.gd`（主）+ `project_resources_tools.gd` / `project_assets_tools.gd` / `project_tileset_tools.gd` / `project_verification_tools.gd` / `project_workflow_tools.gd` / `dependency_impact_tools.gd` / `change_set_tools.gd` / `verification_queue_tools.gd` |
 | Meta | `addons/godot_mcp/tools/meta_tools_native.gd` |
 
 To add or change a tool, follow [Contributing → Adding a new MCP tool](../contributing.md#adding-a-new-mcp-tool).
 
 Script writes include immediate compiler diagnostics; run/stop results expose observed readiness and shutdown; batch scene edits preserve original nodes across undo/redo. See [Script](script-tools.md), [Editor](editor-tools.md) and [Node](node-tools.md) for response contracts. These changes add no tools or groups.
 
-Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 235 tools (28 core, 201 advanced, 6 meta).
+Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 236 tools (28 core, 202 advanced, 6 meta).

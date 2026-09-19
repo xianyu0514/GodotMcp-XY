@@ -180,8 +180,9 @@ static func refresh_stale(queue: Dictionary) -> int:
 	queue["updated_at"] = _now()
 	return staled
 
-## 分片推进：按序消费最多 budget 个 pending 项；executor(detail) ->
-## {"passed": bool, "evidence": {...}}。失败不中断本轮（一次看全貌），
+## 分片推进：按序消费最多 budget 个 pending 项；executor(item) ->
+## {"passed": bool, "evidence": {...}}，或 {"defer": true} 表示该项等待
+## 外部执行器（保持 pending、不消耗预算）。失败不中断本轮（一次看全貌），
 ## 但 outcome 永远不会在有失败或未收齐时报 completed。返回：
 ## {processed, passed_count, failed_count, pending_count, has_more,
 ##  outcome: completed|failed|pending_more, items: 本轮判定}
@@ -204,7 +205,9 @@ static func advance(queue: Dictionary, budget: int,
 		var item: Dictionary = item_value
 		if String(item.get("status", "")) != "pending":
 			continue
-		var verdict: Variant = executor.call(item.get("detail", {}))
+		var verdict: Variant = executor.call(item)
+		if verdict is Dictionary and (verdict as Dictionary).get("defer", false):
+			continue
 		var passed: bool = verdict is Dictionary and bool((verdict as Dictionary).get("passed", false))
 		var evidence: Dictionary = {}
 		if verdict is Dictionary:

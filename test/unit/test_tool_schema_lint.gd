@@ -37,6 +37,7 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/project_context_tools.gd",
 	"res://addons/godot_mcp/tools/dependency_impact_tools.gd",
 	"res://addons/godot_mcp/tools/change_set_tools.gd",
+	"res://addons/godot_mcp/tools/verification_queue_tools.gd",
 	"res://addons/godot_mcp/tools/project_assets_tools.gd",
 	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"res://addons/godot_mcp/tools/project_verification_tools.gd",

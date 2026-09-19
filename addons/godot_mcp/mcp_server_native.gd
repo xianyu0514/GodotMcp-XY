@@ -126,6 +126,7 @@ const TOOL_SCRIPT_PATHS: Dictionary = {
 	"ProjectContextTools": "res://addons/godot_mcp/tools/project_context_tools.gd",
 	"DependencyImpactTools": "res://addons/godot_mcp/tools/dependency_impact_tools.gd",
 	"ChangeSetTools": "res://addons/godot_mcp/tools/change_set_tools.gd",
+	"VerificationQueueTools": "res://addons/godot_mcp/tools/verification_queue_tools.gd",
 	"ProjectAssetsTools": "res://addons/godot_mcp/tools/project_assets_tools.gd",
 	"ProjectTilesetTools": "res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"ProjectVerificationTools": "res://addons/godot_mcp/tools/project_verification_tools.gd",
