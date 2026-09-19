@@ -2171,6 +2171,14 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 背景音乐腿（声音的另一半）：常开播放证据。
 			if wants_bgm:
 				play_steps.append_array(_bgm_play_steps())
+			# 帧步进兜底（与 _derive_step_arguments 尾部同契约）：任何腿含
+			# wait_frames 时必须 deterministic=true——否则退化为墙钟等待
+			# （50 帧 → 850ms → 2200px 过冲），扫描冲进敌带、死亡重置、
+			# 相位敏感闪断（showcase CI 7/13 回归的根源：收集腿漏设）。
+			for leg_value in play_steps:
+				if (leg_value as Dictionary).has("wait_frames"):
+					arguments["deterministic"] = true
+					break
 			arguments["steps"] = play_steps
 			var labels: Array = []
 			if wants_movement:
