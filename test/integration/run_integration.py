@@ -27,6 +27,10 @@ SLOW_TESTS = {
     "test_game_goal_resume_flow.py",
     "test_game_goal_crash_midstep_flow.py",
     "test_game_goal_crash_nonidempotent_flow.py",
+    # 代表游戏升级为每演练独立会话后 ~20 分钟——专属 CI 腿（40 分钟
+    # 预算 + [rep-ci]/dispatch 触发）是它的家；fast 套件的 420 秒上限
+    # 只会产生必然超时（CI run 35413164926 实证）。
+    "test_representative_game.py",
 }
 
 DEFAULT_TIMEOUT = 600
