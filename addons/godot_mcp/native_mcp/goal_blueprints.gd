@@ -838,7 +838,7 @@ static func controller_script(objective: String) -> String:
 			# 演练的证据（扫带致死）一起拦掉——死亡永远计数，只有状态
 			# 转移被门控。
 			source += "\tlives -= 1\n"
-			source += "\tif lives <= 0 and game_state == \"playing\":\n"
+			source += "\tif lives <= 0:\n"
 			source += "\t\tgame_state = \"gameover\"\n"
 			source += "\t\tif _gameover_label != null:\n"
 			source += "\t\t\t_gameover_label.visible = true\n"

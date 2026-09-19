@@ -1848,7 +1848,10 @@ func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = fal
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
 	# 第一轮：右扫聚簇金币 → 全部收集（身份安全拾取）→ 胜利
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+	# 收金足够窗（30 帧 = 130px > 最后一窗 100px）：收满即止、不进敌带
+	# [220+]——赛后零死亡，win 态稳定（长窗会穿带致死，gameover 可从
+	# win 触发覆写——那是 gameover 演练的专属路径）。
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": true,
@@ -1886,7 +1889,7 @@ func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = fal
 		"assert": {"expression": "game_state", "expected": "playing",
 			"description": "the second round starts in playing"}
 	})
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
