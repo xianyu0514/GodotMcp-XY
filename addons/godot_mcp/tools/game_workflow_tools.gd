@@ -1752,11 +1752,9 @@ func _gameover_play_steps() -> Array:
 ##    蓝图 _level_count 同源，"3 levels"/"third level" → 3）。
 func _level_play_steps(level_count: int = 2) -> Array:
 	var steps: Array = []
-	for pair_index in 3:
-		steps.append({
-			"action": "ui_accept", "pressed": true, "wait_ms": 300,
-			"description": "enter playing before the level run"})
-		steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
+	# 不自带解锁（本地 run #21 取证：收集腿先收满金币 → win 态；此处盲发
+	# Enter 会从 win 触发 L1→L2 换关，后续 L1 断言拿到 2|true|win）。
+	# 解锁统一由调用方前缀负责（generic 三源感知 / on-demand 注册表感知）。
 	for level_index in range(1, level_count + 1):
 		var is_final: bool = level_index == level_count
 		steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
