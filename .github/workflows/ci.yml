@@ -251,6 +251,48 @@ jobs:
   # 引擎对齐 4.7.2（项目目标版本 + 本机验证版本；此前 pin 4.6.3 与本机
   # 9/10 vs CI 8/10 的差异是首要嫌疑——Input.action_press 等行为跨版本
   # 不保证一致，集成腿继续 4.6.3 是刻意的跨版本覆盖，不代表本腿应对齐旧版）。
+  showcase-game:
+    name: Showcase three-level game E2E (manual)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    if: (github.event_name == 'workflow_dispatch' && inputs.representative_game) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[rep-ci]'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 (Windows build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p godot
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip
+          unzip -o godot.zip -d godot
+          rm godot.zip
+
+      - name: Warm the import cache (cold checkout imports on first boot)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
+        run: |
+          set -euo pipefail
+          "$GODOT_EXE" --headless --path . --import
+
+      - name: Run the showcase 13-goal three-level game build + oracle
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
+          SHOWCASE_PORT: "9300"
+        run: python test/integration/test_showcase_game.py
+
+      - name: Upload scratch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: showcase-game-evidence
+          path: tmp_showcase_game/.mcp/**
+          include-hidden-files: true
+          if-no-files-found: warn
+
   representative-game:
     name: Representative game E2E (manual, honest completion gates)
     runs-on: windows-latest
