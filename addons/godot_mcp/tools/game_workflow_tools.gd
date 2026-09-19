@@ -1612,8 +1612,16 @@ func _movement_feel_legs() -> Dictionary:
 ## 收金足够窗按金币数缩放：3 枚 = 30 帧（130px > 末窗 100px）；
 ## 每加一枚 +10 帧（40px）。**封顶 50 帧**（205px < 敌带 220px——
 ## 保住"收满即止、不穿带"的几何：更多金币的布局已越带，属布局问题）。
+## 扫描帧数 = 需要的像素 ÷ 实际速度（**含调参**——final-tune 调快玩家后
+## 同样帧数跑更远，CI run #11 实证：50 帧 @390px/s = 325px 扫进敌带，
+## 赛后死亡 gameover 覆写。速度取游戏模型的调参覆盖，缺省 260）。
 static func _coin_sweep_frames(coin_total: int) -> int:
-	return clampi(30 + maxi(coin_total - 3, 0) * 10, 30, 50)
+	var window_px: float = 110.0 + maxi(coin_total - 1, 0) * 40.0 - 90.0 + 12.0
+	var speed: float = float(GameModelStoreScript.load_model().get("params", {}).get("SPEED", 260.0))
+	if speed < 130.0:
+		speed = 130.0
+	var frames: int = ceili(window_px / (speed / 60.0))
+	return clampi(frames, 24, 50)
 
 ## 上下文自取（单一事实来源）：币数 = 目标句解析 ∪ 注册表最大——
 ## 在生成器内部计算，调用点无法忘传（run 5-8 连修三个漏点的结构性

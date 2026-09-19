@@ -83,7 +83,8 @@ func test_sweep_window_matches_coin_request() -> void:
 			var step: Dictionary = s
 			if str(step.get("action", "")) == "move_right" and step.has("wait_frames"):
 				sweep_frames = int(step["wait_frames"])
-		var expected: int = clampi(30 + maxi(coins_wanted - 3, 0) * 10, 30, 50)
+		# 帧数 = 像素窗 ÷ 速度（缺省 260）——与 _coin_sweep_frames 同式
+		var expected: int = clampi(ceili((110.0 + (coins_wanted - 1) * 40.0 - 90.0 + 12.0) / (260.0 / 60.0)), 24, 50)
 		if sweep_frames > 0:
 			assert_eq(sweep_frames, expected,
 				"%d coins → %d-frame sweep (got %d)" % [coins_wanted, expected, sweep_frames])
