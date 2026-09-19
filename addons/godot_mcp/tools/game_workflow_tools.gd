@@ -1429,7 +1429,9 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 	if bool(merged_verbs.get("game_over", false)):
 		parts.append("game over screen with lives when the player dies")
 	if bool(merged_verbs.get("level", false)):
-		parts.append("a second level after the first win")
+		# 关卡数随请求（"3 levels" → 3）：写死 "a second level" 会把三关
+		# 样板降成两关（showcase run 2 实证：腿按 3 校验、游戏按 2 生成）。
+		parts.append("%d levels after each win" % GoalBlueprintsScript._level_count(original_goal))
 	if bool(merged_verbs.get("bgm", false)):
 		parts.append("background music")
 	if bool(merged_verbs.get("audio", false)):
