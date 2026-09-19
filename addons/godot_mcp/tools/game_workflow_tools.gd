@@ -1429,9 +1429,15 @@ func _build_merged_objective(merged_verbs: Dictionary, original_goal: String) ->
 	if bool(merged_verbs.get("game_over", false)):
 		parts.append("game over screen with lives when the player dies")
 	if bool(merged_verbs.get("level", false)):
-		# 关卡数随请求（"3 levels" → 3）：写死 "a second level" 会把三关
-		# 样板降成两关（showcase run 2 实证：腿按 3 校验、游戏按 2 生成）。
-		parts.append("%d levels after each win" % GoalBlueprintsScript._level_count(original_goal))
+		# 关卡数取**注册的关卡目标原文**（showcase CI 实证：调参目标无 level
+		# 关键词，从当前句解析会回落默认 2，把已注册的三关降回两关——
+		# 目标 10 按 3 生成，12/13 的合并却按 2，证据腿在错误的关卡数上失败）。
+		var level_request: int = GoalBlueprintsScript._level_count(original_goal)
+		for feature_value in FeatureRegistryScript.prior_exercises():
+			var feature_goal: String = String((feature_value as Dictionary).get("goal", ""))
+			if GoalBlueprintsScript._mentions(feature_goal, GoalBlueprintsScript.LEVEL_KEYWORDS):
+				level_request = maxi(level_request, GoalBlueprintsScript._level_count(feature_goal))
+		parts.append("%d levels after each win" % level_request)
 	if bool(merged_verbs.get("bgm", false)):
 		parts.append("background music")
 	if bool(merged_verbs.get("audio", false)):
