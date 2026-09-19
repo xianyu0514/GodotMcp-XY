@@ -1600,8 +1600,10 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected", leve
 	steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
 	# 磁吸金币聚簇在 (110..190)：从原点右扫横扫必然穿越全部拾取窗
-	# （开环 + 宽恕半径 = 确定性收集）。96 帧 = 416px，远超最后一窗 (292)。
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 96})
+	# （开环 + 宽恕半径 = 确定性收集）。**收金足够窗**（30 帧 = 130px >
+	# 最后一窗 100px）：收满即止、不进敌带 [220+]——长窗的赛后死亡会
+	# 耗尽生命用 gameover 覆写 win（穿带致死是 gameover 演练的专属路径）。
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
