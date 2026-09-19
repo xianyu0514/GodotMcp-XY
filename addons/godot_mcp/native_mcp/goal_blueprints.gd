@@ -761,18 +761,25 @@ static func controller_script(objective: String) -> String:
 				source += "\t\t_burst_player.restart()\n"
 				source += "\t\tburst_count += 1\n"
 			source += "\tcoin.queue_free()\n"
-			source += "\tif coins_collected >= COINS_TO_WIN and _win_label != null:\n"
+			# 胜利转移与 UI 解耦（单元测试实锤的耦合缺陷：win 被 _win_label
+			# 存在性门着——无标签的实例收满不 win。状态转移无条件，标签
+			# 赋值各自守卫）。
 			if bool(verbs.get("level", false)):
 				# 非最终关：显示关卡通关，**不重置任何计数**——收集/反馈
 				# 等值断言在关卡合并后的回归语境里必须原样成立（重置会让
 				# coins==COINS_TO_WIN 与 sfx==coins 永假）。换关的重置只发
 				# 生在 Enter 转移（win→下一关 playing）。
+				source += "\tif coins_collected >= COINS_TO_WIN:\n"
 				source += "\t\tif current_level < LEVEL_COUNT:\n"
-				source += "\t\t\t_win_label.text = \"Level %d Clear!\" % current_level\n"
+				source += "\t\t\tif _win_label != null:\n"
+				source += "\t\t\t\t_win_label.text = \"Level %d Clear!\" % current_level\n"
 				source += "\t\telse:\n"
-				source += "\t\t\t_win_label.text = \"You Win!\"\n"
+				source += "\t\t\tif _win_label != null:\n"
+				source += "\t\t\t\t_win_label.text = \"You Win!\"\n"
 			else:
-				source += "\t\t_win_label.text = \"You Win!\"\n"
+				source += "\tif coins_collected >= COINS_TO_WIN:\n"
+				source += "\t\tif _win_label != null:\n"
+				source += "\t\t\t_win_label.text = \"You Win!\"\n"
 			if needs_state:
 				source += "\t\tgame_state = \"win\"\n"
 	if needs_pause:

@@ -1759,7 +1759,9 @@ func _level_play_steps(level_count: int = 2) -> Array:
 	# 解锁统一由调用方前缀负责（generic 三源感知 / on-demand 注册表感知）。
 	for level_index in range(1, level_count + 1):
 		var is_final: bool = level_index == level_count
-		steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+		# 收金足够窗（同收集/状态腿的几何规则）：换关不重置生命——
+		# 长窗的赛后死亡跨关累积会耗尽生命覆写最终关的 win。
+		steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
 		steps.append({
 			"action": "move_right", "pressed": false, "wait_ms": 300,
 			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state + \"|\" + str(int(_last_restored.get(\"level\", 1))) + \"|\" + str(int(_last_restored.get(\"coins\", 0)))",
