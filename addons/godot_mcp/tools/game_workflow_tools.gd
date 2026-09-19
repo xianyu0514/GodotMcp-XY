@@ -1762,9 +1762,9 @@ func _level_play_steps(level_count: int = 2) -> Array:
 		steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
 		steps.append({
 			"action": "move_right", "pressed": false, "wait_ms": 300,
-			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
-				"expected": "%d|true|win" % level_index,
-				"description": "level %d: every coin collected and the win state reached (level/all-collected/state)" % level_index}
+			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state + \"|\" + str(_last_restored.get(\"level\", 1)) + \"|\" + str(_last_restored.get(\"coins\", 0))",
+				"expected": "%d|true|win|1|0" % level_index,
+				"description": "level %d cleared + boot-restore evidence (level/all-collected/state/restored-level/restored-coins)" % level_index}
 		})
 		steps.append({
 			"assert": {"expression": "_win_label.text",

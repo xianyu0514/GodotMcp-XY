@@ -353,6 +353,7 @@ static func controller_script(objective: String) -> String:
 		source += "var last_save_ok: bool = false\n"
 		source += "var _save_log: String = \"\"\n"
 		source += "var _save_was_down: bool = false\n"
+		source += "var _last_restored: Dictionary = {}\n"
 	if bool(verbs.get("audio", false)):
 		source += "var sfx_played_count: int = 0\n"
 		source += "var _sfx_player: AudioStreamPlayer\n"
@@ -863,6 +864,7 @@ static func controller_script(objective: String) -> String:
 		source += "\tvar parsed: Variant = JSON.parse_string(file.get_as_text())\n"
 		source += "\tif not (parsed is Dictionary):\n"
 		source += "\t\treturn false\n"
+		source += "\t_last_restored = parsed\n"
 		source += "\tcoins_collected = int(parsed.get(\"coins\", 0))\n"
 		source += "\tposition = Vector2(float(parsed.get(\"x\", 0.0)), float(parsed.get(\"y\", 0.0)))\n"
 		if bool(verbs.get("game_over", false)):
