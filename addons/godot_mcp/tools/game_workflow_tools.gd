@@ -1205,7 +1205,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 							and not bool(reg_verbs.get("collectible", false)):
 						# 金币数 = 解析 ∪ 注册表（同 generic 分支——02 金币目标走这里，
 						# CI 实证：漏接缩放窗导致 5 币收集不满）
-						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_total))
+						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_total,
+						bool(goal_verbs.get("wall", false)) or bool(reg_verbs.get("wall", false))))
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
 						var enemy_legs: Dictionary = _enemy_play_legs()
 						on_demand.append_array(enemy_legs["steps"])
@@ -1671,7 +1672,9 @@ func _resolved_coin_total(objective: String = "") -> int:
 			total = maxi(total, GoalBlueprintsScript._coin_count(feature_goal))
 	return total
 
-func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false, coin_total: int = -1) -> Array:
+func _collect_play_steps(coin_count_expression: String = "coins_collected",
+		levels_merged: bool = false, coin_total: int = -1,
+		has_walls: bool = true) -> Array:
 	var steps: Array = []
 	if coin_total < 0:
 		coin_total = _resolved_coin_total()
@@ -1679,8 +1682,12 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected", leve
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
 	# 左扫最多撞左墙（或死于敌带重置回原点）——两种结局都锚定原点附近。
 	# 帧步进（72 帧 = 312px）：与机器负载无关的确定性锚定。
-	steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
-	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
+	# **只在有墙语境**：无墙游戏（如 "Arrow-key player movement." 变体）
+	# 没有左墙兜底，72 帧左扫飞到 -312，右扫窗（~112px）只回到 -200，
+	# 永远进不了金币磁吸区——accum 腿 goal2/goal5 的实锤失败模式。
+	if has_walls:
+		steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
+		steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
 	# 磁吸金币聚簇：收金足够窗按金币数缩放（showcase CI 实证：5 枚的
 	# 末窗在 180px，30 帧只扫 130px——收不满、win 不触发、标签空）。
 	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total, levels_merged)})
@@ -2174,7 +2181,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				})
 				play_steps.append({"action": "move_back", "pressed": false, "wait_ms": 80})
 				if wants_collect:
-					play_steps.append_array(_collect_play_steps())
+					play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, -1,
+						bool(context_verbs.get("wall", false)) or bool(merged_verbs.get("wall", false))))
 			elif wants_movement:
 				play_steps.append_array(_movement_play_steps())
 				# 手感预算：确定性采样 + 帧步进响应断言（只在移动目标激活）
@@ -2199,7 +2207,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false)),
 					coin_request))
 			elif wants_collect:
-				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request))
+				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request,
+					bool(context_verbs.get("wall", false)) or bool(merged_verbs.get("wall", false))))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
 				play_steps.append_array(enemy_legs_generic["steps"])

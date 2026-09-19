@@ -1279,6 +1279,9 @@ func test_prior_regression_beyond_budget_defers_to_queue() -> void:
 	_core.responses["run_project"] = {"status": "ok"}
 	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
 	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
 	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
 	var regression: Dictionary = await _tools._run_prior_feature_regression(plan, queue_path)
 	assert_false(bool(regression.get("failed", true)), str(regression))
@@ -1307,6 +1310,9 @@ func test_prior_regression_resumes_deferred_queue_to_completion() -> void:
 	_core.responses["run_project"] = {"status": "ok"}
 	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
 	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
 	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
 	await _tools._run_prior_feature_regression(plan, queue_path)
 
@@ -1333,6 +1339,9 @@ func test_prior_regression_queue_failure_blocks() -> void:
 	_core.responses["run_project"] = {"status": "ok"}
 	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
 	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
 	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
 	await _tools._run_prior_feature_regression(plan, queue_path)
 

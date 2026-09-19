@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -22,7 +23,18 @@ def rpc(name, args, rid=1, timeout=240.0):
     payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
     req = urllib.request.Request(f"http://127.0.0.1:{PORT}/mcp",
         data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
-    r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    # 503 = 派发看门狗：前一个长请求（如 run_game_workflow 演练）还占着
+    # 编辑器主线程时，排队请求超时被回 503（CI 实证 65s 处 HTTPError）。
+    # 工作流状态持久化使重发安全——与 representative 腿的 hiccup 重试同型。
+    for attempt in range(5):
+        try:
+            r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503 and attempt < 4:
+                time.sleep(10 + attempt * 10)
+                continue
+            raise
     res = r.get("result",{})
     if res.get("isError"):
         raise RuntimeError(f"{name}: {res['content'][0]['text'][:200]}")
