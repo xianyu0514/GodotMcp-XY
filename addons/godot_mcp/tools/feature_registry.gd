@@ -111,7 +111,11 @@ static func prior_exercises(exclude_verbs: Dictionary = {},
 
 static func _feature_id_from_verbs(verbs: Dictionary) -> String:
 	var active: Array = []
-	for verb_key in ["movement", "collectible", "win", "pause", "save", "enemy", "state_machine", "audio", "wall", "three_d"]:
+	# 动词表必须与蓝图的 match_verbs 全集同步（CI 实证：juice/game_over/
+	# level/bgm 缺席时，"金币拾取粒子爆闪"与"加 5 金币"塌缩成同一 id
+	# "collectible"——后者覆盖前者的注册条目，币数查找拿到粒子句 → 3 币窗
+	# → 5 币收不满的整个级联）。
+	for verb_key in ["movement", "collectible", "win", "pause", "save", "enemy", "state_machine", "audio", "juice", "game_over", "level", "bgm", "wall", "three_d"]:
 		if bool(verbs.get(verb_key, false)):
 			active.append(verb_key)
 	return "+".join(active) if not active.is_empty() else "unknown"
