@@ -422,8 +422,9 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 第二、三枚永远不可达，带敌人的完整通关从几何上不可能。\n"
 		if bool(verbs.get("level", false)):
 			# 初始布局随恢复后的关卡走（读档已先行）——与 _respawn_coins
-			# 的 base_x 公式一致。
-			source += "\tvar base_x: float = 110.0 + (current_level - 1) * 40.0\n"
+			# 的 base_x 公式一致。夹紧上限让末枚金币永不越过敌带安全线
+			# （CI 实证：偏移 +40/关后 L2 末枚 230 落进巡逻带 [220,380]）。
+			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
 		if bool(verbs.get("level", false)):
@@ -812,9 +813,10 @@ static func controller_script(objective: String) -> String:
 		source += "\t\t\tdying_index += 1\n"
 		source += "\t\t\tchild.queue_free()\n"
 		if bool(verbs.get("level", false)):
-			# 关卡布局：每关聚簇基址右移 40px（L1=110 与既有校准一致；
-			# L2=150——拾取半径 90 下全簇仍在敌带 [220,380] 前可收）。
-			source += "\tvar base_x: float = 110.0 + (current_level - 1) * 40.0\n"
+			# 关卡布局：每关聚簇基址右移 40px（L1=110 与既有校准一致），
+			# 夹紧上限保证末枚金币 ≤200px（敌带危险缘 ~212px 前留余量）——
+			# 偏移不夹紧时 L2 末枚 230 已进带，扫描收满从几何上不可能。
+			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
 		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
 		source += "\t\tvar new_coin := Area2D.new()\n"
 		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"

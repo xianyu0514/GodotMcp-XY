@@ -1647,8 +1647,13 @@ func _movement_feel_legs() -> Dictionary:
 ## 扫描帧数 = 需要的像素 ÷ 实际速度（**含调参**——final-tune 调快玩家后
 ## 同样帧数跑更远，CI run #11 实证：50 帧 @390px/s = 325px 扫进敌带，
 ## 赛后死亡 gameover 覆写。速度取游戏模型的调参覆盖，缺省 260）。
-static func _coin_sweep_frames(coin_total: int) -> int:
+static func _coin_sweep_frames(coin_total: int, levels_merged: bool = false) -> int:
 	var window_px: float = 110.0 + maxi(coin_total - 1, 0) * 40.0 - 90.0 + 12.0
+	if levels_merged:
+		# 关卡合并后的金币簇逐关右移（base_x 随 current_level 偏移再夹紧），
+		# 扫描窗同步加宽一档——CI 实证：09b 的 L2 末枚在簇 +40px 处，
+		# 按 L1 窗扫描停在磁吸半径之外，coins_collected 永远差一枚。
+		window_px += 40.0
 	var speed: float = float(GameModelStoreScript.load_model().get("params", {}).get("SPEED", 260.0))
 	if speed < 130.0:
 		speed = 130.0
@@ -1678,7 +1683,7 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected", leve
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
 	# 磁吸金币聚簇：收金足够窗按金币数缩放（showcase CI 实证：5 枚的
 	# 末窗在 180px，30 帧只扫 130px——收不满、win 不触发、标签空）。
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total, levels_merged)})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
@@ -1838,7 +1843,9 @@ func _level_play_steps(level_count: int = 2, save_merged: bool = false, coin_tot
 		var is_final: bool = level_index == level_count
 		# 收金足够窗（同收集/状态腿的几何规则，随币数缩放）：换关不重置
 		# 生命——长窗的赛后死亡跨关累积会耗尽生命覆写最终关的 win。
-		steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
+		# 关卡感知窗口：多关布局的聚簇基址随关偏移（夹紧后 ≥L1 一档），
+		# 按 L1 窗扫描会停在末枚磁吸半径外（CI 实证：09b L2 差一枚）。
+		steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total, true)})
 		# boot-restore 取证后缀只在存档合并时携带（_last_restored 是存档
 		# 域变量——样板把存档排在关卡之后，无存档语境下表达式必炸）。
 		var clear_expr: String = "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state"
