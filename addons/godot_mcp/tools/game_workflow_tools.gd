@@ -1157,8 +1157,15 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 					# 关卡感知（注册表 ∪ 本目标动词）：第一轮胜利文案跟随。
 					var on_demand_levels: bool = bool(goal_verbs.get("level", false)) \
 						or bool(reg_verbs.get("level", false))
+					# 币数 = 解析 ∪ 注册表（提升共享——state 腿也要；本地 run #7
+					# 实证：on-demand 的 state 调用漏传币数，08 自己的门禁 30 帧收不满）
+					var od_coin_total: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
+					for od_state_feature in FeatureRegistryScript.prior_exercises():
+						var od_state_goal: String = String((od_state_feature as Dictionary).get("goal", ""))
+						if GoalBlueprintsScript._mentions(od_state_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
+							od_coin_total = maxi(od_coin_total, GoalBlueprintsScript._coin_count(od_state_goal))
 					if bool(goal_verbs.get("state_machine", false)):
-						on_demand.append_array(_state_play_steps(on_demand_levels))
+						on_demand.append_array(_state_play_steps(on_demand_levels, false, od_coin_total))
 					if bool(goal_verbs.get("movement", false)) and not bool(reg_verbs.get("movement", false)):
 						on_demand.append_array(_movement_play_steps())
 					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false)) \
@@ -1166,12 +1173,7 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 							and not bool(reg_verbs.get("collectible", false)):
 						# 金币数 = 解析 ∪ 注册表（同 generic 分支——02 金币目标走这里，
 						# CI 实证：漏接缩放窗导致 5 币收集不满）
-						var od_coin_request: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
-						for od_feature in FeatureRegistryScript.prior_exercises():
-							var od_goal: String = String((od_feature as Dictionary).get("goal", ""))
-							if GoalBlueprintsScript._mentions(od_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
-								od_coin_request = maxi(od_coin_request, GoalBlueprintsScript._coin_count(od_goal))
-						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_request))
+						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_total))
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
 						var enemy_legs: Dictionary = _enemy_play_legs()
 						on_demand.append_array(enemy_legs["steps"])
@@ -1613,8 +1615,21 @@ func _movement_feel_legs() -> Dictionary:
 static func _coin_sweep_frames(coin_total: int) -> int:
 	return clampi(30 + maxi(coin_total - 3, 0) * 10, 30, 50)
 
-func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false, coin_total: int = 3) -> Array:
+## 上下文自取（单一事实来源）：币数 = 目标句解析 ∪ 注册表最大——
+## 在生成器内部计算，调用点无法忘传（run 5-8 连修三个漏点的结构性
+## 终解：参数靠传递就永远有漏网调用点）。
+func _resolved_coin_total(objective: String = "") -> int:
+	var total: int = maxi(GoalBlueprintsScript._coin_count(objective), 3)
+	for feature_value in FeatureRegistryScript.prior_exercises():
+		var feature_goal: String = String((feature_value as Dictionary).get("goal", ""))
+		if GoalBlueprintsScript._mentions(feature_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
+			total = maxi(total, GoalBlueprintsScript._coin_count(feature_goal))
+	return total
+
+func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false, coin_total: int = -1) -> Array:
 	var steps: Array = []
+	if coin_total < 0:
+		coin_total = _resolved_coin_total()
 	# 先回归原点：save 恢复或上一轮演练可能把玩家留在金币右侧——从右侧
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
 	# 左扫最多撞左墙（或死于敌带重置回原点）——两种结局都锚定原点附近。
@@ -1772,7 +1787,9 @@ func _gameover_play_steps() -> Array:
 ## 3) 最终关 → 真胜利 "You Win!"；
 ## 4) Enter×2 → 回 L1 playing。level_count 由目标句解析（默认 2——与
 ##    蓝图 _level_count 同源，"3 levels"/"third level" → 3）。
-func _level_play_steps(level_count: int = 2, save_merged: bool = false, coin_total: int = 3) -> Array:
+func _level_play_steps(level_count: int = 2, save_merged: bool = false, coin_total: int = -1) -> Array:
+	if coin_total < 0:
+		coin_total = _resolved_coin_total()
 	var steps: Array = []
 	# 不自带解锁（本地 run #21 取证：收集腿先收满金币 → win 态；此处盲发
 	# Enter 会从 win 触发 L1→L2 换关，后续 L1 断言拿到 2|true|win）。
@@ -1864,7 +1881,9 @@ func _bgm_play_steps() -> Array:
 ## 在关卡语义下原样成立（换关重置只发生在 Enter 转移，见蓝图注释）。
 ## game_over_merged：生命系统合并时附加取证断言（lives|deaths）——run #10/11
 ## 的 true|gameover 指纹（收满金币却终局 gameover）需要生命消耗序列定位。
-func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = false, coin_total: int = 3) -> Array:
+func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = false, coin_total: int = -1) -> Array:
+	if coin_total < 0:
+		coin_total = _resolved_coin_total()
 	var first_win_text: String = "Level 1 Clear!" if levels_merged else "You Win!"
 	var steps: Array = []
 	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
