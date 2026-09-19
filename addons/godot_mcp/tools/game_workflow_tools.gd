@@ -2121,15 +2121,18 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 					feel_assertions = []
 				feel_assertions.append_array(feel["assertions"])
 				arguments["assertions"] = feel_assertions
+			# 币数 = 解析 ∪ 注册表最大（本地复现实证：state/level 腿此前只用
+			# 当前句解析——标题句→3，而 02 已注册 5 币 → 状态腿 30 帧收不满）。
+			var coin_request: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
+			for feature_value in FeatureRegistryScript.prior_exercises():
+				var feature_goal: String = String((feature_value as Dictionary).get("goal", ""))
+				if GoalBlueprintsScript._mentions(feature_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
+					coin_request = maxi(coin_request, GoalBlueprintsScript._coin_count(feature_goal))
 			if wants_state:
 				play_steps.append_array(_state_play_steps(levels_merged,
-					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false))))
+					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false)),
+					coin_request))
 			elif wants_collect:
-				var coin_request: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
-				for feature_value in FeatureRegistryScript.prior_exercises():
-					var feature_goal: String = String((feature_value as Dictionary).get("goal", ""))
-					if GoalBlueprintsScript._mentions(feature_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
-						coin_request = maxi(coin_request, GoalBlueprintsScript._coin_count(feature_goal))
 				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
@@ -2169,7 +2172,7 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				play_steps.append_array(_level_play_steps(
 					GoalBlueprintsScript._level_count(play_objective),
 					bool(context_verbs.get("save", false)) or bool(merged_verbs.get("save", false)) 						or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS),
-					maxi(GoalBlueprintsScript._coin_count(play_objective), 3)))
+					coin_request))
 			# 背景音乐腿（声音的另一半）：常开播放证据。
 			if wants_bgm:
 				play_steps.append_array(_bgm_play_steps())
