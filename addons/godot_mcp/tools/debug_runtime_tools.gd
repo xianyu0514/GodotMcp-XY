@@ -73,6 +73,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_list_runtime_tilemap_layers(server_core)
 	_register_get_runtime_tilemap_cell(server_core)
 	_register_set_runtime_tilemap_cell(server_core)
+	_register_get_runtime_tilemap_region(server_core)
+	_register_set_runtime_tilemap_cells(server_core)
 	_register_list_runtime_audio_buses(server_core)
 	_register_get_runtime_audio_bus(server_core)
 	_register_update_runtime_audio_bus(server_core)
@@ -1189,6 +1191,67 @@ func _tool_set_runtime_tilemap_cell(params: Dictionary) -> Dictionary:
 	if params.has("alternative_tile"):
 		updates["alternative_tile"] = int(params.get("alternative_tile"))
 	return await DebugToolsNative._request_runtime_probe_poll("set_tilemap_cell", [node_path, int(params.get("layer", 0)), params.get("coords", {}), updates], ["mcp:tilemap_cell_updated"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
+
+func _register_get_runtime_tilemap_region(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_runtime_tilemap_region",
+		"Read non-empty cells of one TileMap/TileMapLayer inside a rectangle region (large maps are never returned whole): row-major scan with lossless offset/max_cells paging; rects above the scan limit must be split.",
+		{
+			"type": "object",
+			"properties": {
+				"node_path": {"type": "string"},
+				"layer": {"type": "integer", "default": 0},
+				"rect": {"type": "object", "properties": {"position": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}}, "size": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}}}, "required": ["position", "size"]},
+				"max_cells": {"type": "integer", "default": 512},
+				"offset": {"type": "integer", "default": 0},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 1500}
+			},
+			"required": ["node_path", "layer", "rect"]
+		},
+		Callable(self, "_tool_get_runtime_tilemap_region"),
+		{"type": "object", "properties": {"node_path": {"type": "string"}, "layer": {"type": "integer"}, "rect": {"type": "object"}, "cells": {"type": "array"}, "returned_count": {"type": "integer"}, "has_more": {"type": "boolean"}, "next_offset": {"type": "integer"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_get_runtime_tilemap_region(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	if not (params.get("rect", {}) is Dictionary) or not ((params.get("rect", {}) as Dictionary).get("size", {}) is Dictionary):
+		return {"error": "Missing required parameter: rect {position, size}"}
+	return await DebugToolsNative._request_runtime_probe_poll("get_tilemap_region", [node_path, int(params.get("layer", 0)), params.get("rect", {}), int(params.get("max_cells", 512)), int(params.get("offset", 0))], ["mcp:tilemap_region"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
+
+func _register_set_runtime_tilemap_cells(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_runtime_tilemap_cells",
+		"Batch-write or erase runtime TileMap/TileMapLayer cells: every cell is written then read back, and update_internals() runs after the batch (engine's immediate physics/navigation rebuild). The receipt carries physics_wait_hint — assert physics/navigation changes only after advance_frames(1) to respect the engine's end-of-frame batching.",
+		{
+			"type": "object",
+			"properties": {
+				"node_path": {"type": "string"},
+				"layer": {"type": "integer", "default": 0},
+				"cells": {"type": "array", "items": {"type": "object"}, "description": "[{coords: {x, y}, updates: {erase: bool, source_id: int, atlas_coords: {x, y}, alternative_tile: int}}]"},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 1500}
+			},
+			"required": ["node_path", "layer", "cells"]
+		},
+		Callable(self, "_tool_set_runtime_tilemap_cells"),
+		{"type": "object", "properties": {"node_path": {"type": "string"}, "layer": {"type": "integer"}, "applied_count": {"type": "integer"}, "cells": {"type": "array"}, "internals_updated": {"type": "boolean"}, "physics_wait_hint": {"type": "string"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_set_runtime_tilemap_cells(params: Dictionary) -> Dictionary:
+	var node_path: String = params.get("node_path", "")
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	var cells: Variant = params.get("cells", [])
+	if not (cells is Array) or (cells as Array).is_empty():
+		return {"error": "Missing required parameter: cells (non-empty array)"}
+	return await DebugToolsNative._request_runtime_probe_poll("set_tilemap_cells", [node_path, int(params.get("layer", 0)), cells], ["mcp:tilemap_cells_updated"], params, {"node_path": node_path, "layer": int(params.get("layer", 0))})
 
 func _register_list_runtime_audio_buses(server_core: RefCounted) -> void:
 	server_core.register_tool(

@@ -35,7 +35,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_run_verification_queue(server_core: RefCounted) -> void:
 	var tool_name: String = "run_verification_queue"
-	var description: String = "Create, advance, inspect, record into, or abandon a persistent sliced verification queue. The queue keeps required checks as durable items: each advance consumes at most `budget` pending items (the rest are retained, never dropped), evidence is fingerprinted against watch_paths (file drift pushes stale verdicts back to pending), and `completed` only appears when every item passed. kind=script_check items run the built-in GDScript compile check; kind=external items are executed out-of-band (play_and_verify, GUT...) and their verdicts are recorded back with command=record. Restart-safe: queues persist across editor restarts and resume from remaining items."
+	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; external verdicts come back via command=record. Restart-safe."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -43,7 +43,7 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 			"command": {
 				"type": "string",
 				"enum": ["create", "advance", "inspect", "record", "abandon"],
-				"description": "create: new queue (+first slice); advance: run the next budget slice; inspect: statuses without running; record: backfill one external item's verdict; abandon: terminal-abandon an open queue."
+				"description": "create: new queue (+first slice); advance: next budget slice; inspect: statuses only; record: backfill one external verdict; abandon: terminal."
 			},
 			"goal": {
 				"type": "string",
@@ -52,12 +52,12 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 			"items": {
 				"type": "array",
 				"items": {"type": "object"},
-				"description": "create only: [{id?, kind: 'script_check'|'external', label, detail}]. script_check detail: {scripts: [res://...]}; external detail is free-form context for the out-of-band runner."
+				"description": "create only: [{id?, kind: 'script_check'|'external', label, detail}]. script_check detail: {scripts: [...]}; external detail is free-form."
 			},
 			"watch_paths": {
 				"type": "array",
 				"items": {"type": "string"},
-				"description": "create only: files whose content fingerprints guard the evidence — any drift invalidates recorded verdicts back to pending."
+				"description": "create only: files whose fingerprints guard evidence — drift re-opens verdicts."
 			},
 			"budget": {
 				"type": "integer",
@@ -78,7 +78,7 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 			},
 			"evidence": {
 				"type": "object",
-				"description": "record only: evidence payload from the external runner (assertions, logs...)."
+				"description": "record only: evidence payload from the external runner."
 			}
 		},
 		"required": ["command"]
