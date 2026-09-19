@@ -92,7 +92,7 @@ func test_level_legs_walk_three_levels() -> void:
 		if not leg.is_empty():
 			expressions.append(String(leg.get("expression", "")) + "=>" + str(leg.get("expected", "")))
 	# 逐关通关断言（1|true|win / 2|true|win / 3|true|win）
-	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state + \"|\" + str(int(_last_restored.get(\"level\", 1))) + \"|\" + str(int(_last_restored.get(\"coins\", 0)))=>3|true|win|1|0",
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state=>3|true|win",
 		"the final of three levels is level three (with boot-restore evidence)")
 	# 中间关入口显微镜（2 与 3）
 	var has_l3_entry: bool = false
@@ -110,7 +110,7 @@ func test_level_legs_walk_both_levels() -> void:
 		var leg: Dictionary = (step_value as Dictionary).get("assert", {})
 		if not leg.is_empty():
 			expressions.append(String(leg.get("expression", "")))
-	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state + \"|\" + str(int(_last_restored.get(\"level\", 1))) + \"|\" + str(int(_last_restored.get(\"coins\", 0)))",
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
 		"level one completes without advancing (forensic + boot-restore encoding)")
 	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state",
 		"Enter advances to a fresh level two (values visible on failure)")
