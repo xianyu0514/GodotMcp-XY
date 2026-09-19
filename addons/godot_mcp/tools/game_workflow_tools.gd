@@ -2045,9 +2045,12 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 上下文感知：注册表已有 state_machine（或当前目标本身带状态机——
 			# 完成前回归重推旧功能演练时，注册表还没记入本目标）时，游戏从
 			# 标题屏（或上一轮演练留下的 win 态）启动——所有演练先双 Enter
-			# 进入 playing 再执行（否则移动被门控空转）。
+			# 进入 playing 再执行（否则移动被门控空转）。**三源感知**（CI
+			# 35417454763：09 完成门禁时 state 已合并进游戏但未注册——敌人/
+			# 移动 prior 演练没解锁，title 下敌人冻结零死亡、移动 0px 三连败）。
 			var context_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
 			var context_has_state: bool = bool(context_verbs.get("state_machine", false)) \
+				or bool(merged_verbs.get("state_machine", false)) \
 				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
 			if context_has_state and not wants_state:
 				play_steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300,
