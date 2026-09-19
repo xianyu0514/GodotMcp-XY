@@ -75,6 +75,17 @@ def wait_server():
             time.sleep(1)
     return False
 
+def wait_server_quick():
+    # 目标间的快速健康探测（1 秒内答即活）
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{PORT}/mcp",
+            data=json.dumps({"jsonrpc":"2.0","method":"tools/list","id":0}).encode(),
+            headers={"Content-Type":"application/json"}), timeout=2).read()
+        return True
+    except Exception:
+        return False
+
 # The 14-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
@@ -207,10 +218,12 @@ def main() -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     setup_scratch()
-    editor = subprocess.Popen(
-        [GODOT, "--editor", "--headless", "--path", str(SCRATCH),
-         "--", "--mcp-server", f"--mcp-port={PORT}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(SCRATCH))
+    def launch_editor():
+        return subprocess.Popen(
+            [GODOT, "--editor", "--headless", "--path", str(SCRATCH),
+             "--", "--mcp-server", f"--mcp-port={PORT}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(SCRATCH))
+    editor = launch_editor()
     try:
         if not wait_server():
             print("ERROR: server not up"); return 1
@@ -221,6 +234,19 @@ def main() -> int:
 
         results = []
         for goal_id, objective in GOALS:
+            # 编辑器韧性（真机实证：游戏进程拆除偶发连带编辑器硬崩——
+            # 每演练 stop→run 放大启停次数，2/3 run 中途死连）：目标间探测
+            # 服务器，死了就重启编辑器。工作流状态全在磁盘（.mcp 计划/
+            # 账本/注册表），续跑即"中断后恢复"的真实演练（北极星语义）。
+            if not wait_server_quick():
+                print(f"  [editor died before {goal_id}] relaunching — durable state resumes")
+                try:
+                    editor.terminate()
+                except Exception:
+                    pass
+                editor = launch_editor()
+                if not wait_server():
+                    print(f"ERROR: editor relaunch failed before {goal_id}"); return 1
             started = time.time()
             state, d = run_goal(goal_id, objective, 100 + len(results) * 10)
             elapsed = time.time() - started
