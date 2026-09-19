@@ -1114,7 +1114,14 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "tune-verify"
 		elif play_step_key == "save_play":
-			arguments["steps"] = _title_unlock_prefix() + _save_play_steps()
+			# 归一化感知（注册表 ∪ 当前合并语境）：存档步必须存"归一化状态"
+			# （ok|coins=0|level=1|lives=3）——毒档（run #12 取证：磁盘被写成
+			# level=2/coins=3）会在写入源头显式失败并自报状态，而非下游蔓延。
+			var save_levels: bool = bool(FeatureRegistryScript.registered_verbs().get("level", false)) \
+				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.LEVEL_KEYWORDS)
+			var save_gameover: bool = bool(FeatureRegistryScript.registered_verbs().get("game_over", false)) \
+				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.GAME_OVER_KEYWORDS)
+			arguments["steps"] = _title_unlock_prefix() + _save_play_steps(save_levels, save_gameover)
 			task["derived_inputs"] = (task.get("derived_inputs", {}) if task.get("derived_inputs", {}) is Dictionary else {})
 			task["derived_inputs"]["steps"] = "save-exercise"
 		elif play_step_key == "restore_play":
@@ -1167,7 +1174,9 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 					if bool(goal_verbs.get("pause", false)) and not bool(reg_verbs.get("pause", false)):
 						on_demand.append_array(_pause_play_steps())
 					if bool(goal_verbs.get("save", false)) and not bool(reg_verbs.get("save", false)):
-						on_demand.append_array(_save_play_steps())
+						on_demand.append_array(_save_play_steps(
+							bool(goal_verbs.get("level", false)) or bool(reg_verbs.get("level", false)),
+							bool(goal_verbs.get("game_over", false)) or bool(reg_verbs.get("game_over", false))))
 					# 新目标自身的证据腿（game over/多关卡）：非首目标的完成
 					# 门禁此前只测"新功能的收集面"——gameover/level 腿缺失，
 					# 目标自己的门禁空转（09a/09b 的真机实证：证据全靠后续
@@ -1932,7 +1941,10 @@ func _enemy_play_legs() -> Dictionary:
 
 ## 存档腿（评测 N3）：右移制造非平凡状态 → 按 save_game（F5）→ 断言写盘
 ## 成功（蓝图暴露 last_save_ok 作为可轮询证据）。
-func _save_play_steps() -> Array:
+## levels_merged/game_over_merged：存档步断言归一化状态（取证编码）——
+## ok|coins|level|lives，期望 true|0|1|3。毒档（磁盘被写成 level=2/coins=3，
+## run #12 实锤）在此显式失败并自报被存的状态，不再下游蔓延成谜。
+func _save_play_steps(levels_merged: bool = false, game_over_merged: bool = false) -> Array:
 	var steps: Array = []
 	# 先锚定左墙（真根因修复链）：
 	# 1) 存档位置落在敌带击杀窗 [196,404] 内 → 恢复进程一启动就被击杀；
@@ -1948,10 +1960,18 @@ func _save_play_steps() -> Array:
 		"assert": {"expression": "position.x", "operator": "lt", "expected": -20,
 			"description": "player pinned near the left wall — non-trivial state, zero coins"}
 	})
+	var save_expr: String = "str(last_save_ok) + \"|\" + str(coins_collected)"
+	var save_expected: String = "true|0"
+	if levels_merged:
+		save_expr += " + \"|\" + str(current_level)"
+		save_expected += "|1"
+	if game_over_merged:
+		save_expr += " + \"|\" + str(lives)"
+		save_expected += "|3"
 	steps.append({
 		"action": "save_game", "pressed": true, "wait_ms": 300, "screenshot": true,
-		"assert": {"expression": "last_save_ok and coins_collected == 0", "expected": true,
-			"description": "save_game wrote the wall-pinned, coin-free state to disk"}
+		"assert": {"expression": save_expr, "expected": save_expected,
+			"description": "save_game wrote a NORMALIZED state (ok/coins/level/lives)"}
 	})
 	steps.append({"action": "save_game", "pressed": false, "wait_ms": 80})
 	return steps

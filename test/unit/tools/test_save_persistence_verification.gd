@@ -84,7 +84,7 @@ func test_save_play_steps_shape() -> void:
 	var save_step: Dictionary = steps[2]
 	assert_true(save_step.has("assert"), "save press asserts write success")
 	assert_eq(str((save_step["assert"] as Dictionary).get("expression", "")),
-		"last_save_ok and coins_collected == 0", "the saved state is coin-free")
+		"str(last_save_ok) + \"|\" + str(coins_collected)", "the saved state is forensically normalized (ok/coins)")
 
 func test_restore_play_steps_assert_disk_state_and_fresh_session() -> void:
 	var steps: Array = WorkflowToolsScript.new()._restore_play_steps()
