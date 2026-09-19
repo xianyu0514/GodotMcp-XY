@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (62 advanced)
+### Project-Advanced (63 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -60,6 +60,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `detect_broken_scripts` | advanced | Detect broken scripts in the project. Default scans user code only (skips `addons/`, `test/`, `docs/`); `include_tooling=true` or a tooling `search_path` audits third-party internals. Per-file results are memoized on mtime+size, so rescans recompile only changed scripts. |
 | `audit_project_health` | advanced | Audit project health and integrity. |
 | `find_resource_usages` | advanced | Find resources that reference a target, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
+| `query_change_impact` | advanced | Query the transitive change impact of project files over an incrementally maintained dependency index (full res:// path + UID identity; same-name files never conflate). dependents answers 'what does changing these files affect' (nested scene chains included, evidence chain per entry); dependencies answers 'what do these files need'. Non-literal load() calls inside the affected set are surfaced as dynamic_unknowns. Losslessly paged. Read-only. |
 | `list_unused_resources` | advanced | List unreferenced resources with lossless `limit`/`offset` pages backed by one revision-safe scan. |
 | `scan_migration_compatibility` | advanced | Scan `.gd`/`.cs` for target-version migration issues, with lossless `limit`/`offset` pages backed by one revision-safe scan. |
 | `apply_migration_fixes` | advanced | Apply the safe mechanical migration rewrites (e.g. enum/identifier renames) for a target Godot release. Defaults to a dry-run preview. |

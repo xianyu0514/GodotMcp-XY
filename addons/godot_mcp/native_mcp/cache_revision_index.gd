@@ -37,6 +37,7 @@ const CACHEABLE_READ_TOOLS: Array[String] = [
 	"read_script", "batch_read_scripts", "get_project_info",
 	"get_project_settings", "read_resource_properties", "get_resource_dependencies",
 	"find_resource_usages", "list_unused_resources",
+	"query_change_impact",
 	"scan_migration_compatibility", "find_deprecated_api_usage",
 	# Whole-project script reads: the workflow engine re-runs these after every
 	# script repair round, so caching them by SCRIPT_AGGREGATE (advanced by any
@@ -82,6 +83,10 @@ const STATIC_READ_TAGS: Dictionary = {
 	"list_unused_resources": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
 		TAG_RESOURCE_CATALOG, TAG_PROJECT_SETTINGS, TAG_SCRIPT_AGGREGATE],
 	"find_resource_usages": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
+		TAG_RESOURCE_CATALOG, TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE],
+	# 依赖索引读：任何资源/脚本域变化都可能改写影响闭包（索引自身由
+	# server_core 的外部变更路径日志做增量维护）。
+	"query_change_impact": [TAG_RESOURCE_ALL, TAG_RESOURCE_AGGREGATE,
 		TAG_RESOURCE_CATALOG, TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE],
 	"scan_migration_compatibility": [TAG_SCRIPT_ALL, TAG_SCRIPT_AGGREGATE,
 		TAG_SCRIPT_CATALOG],

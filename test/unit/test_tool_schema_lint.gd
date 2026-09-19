@@ -11,7 +11,7 @@ extends "res://addons/gut/test.gd"
 #
 # 基线（首次诊断快照，Godot 4.7.2 headless；数字随 schema 演进变化，
 # 本测试不锁定具体出现次数，只锁定“关键字集合 ⊆ 白名单”）：
-#   - 218+ 个工具全部注册成功（当前仓库 233 个）
+#   - 218+ 个工具全部注册成功（当前仓库 234 个）
 #   - 实际用到的关键字只有 7 个：
 #       type properties description required default items enum
 #   - 全部 input_schema 均为 {type:"object", properties:{...}}（含 17 个无参工具
@@ -35,6 +35,7 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/project_tools_native.gd",
 	"res://addons/godot_mcp/tools/project_resources_tools.gd",
 	"res://addons/godot_mcp/tools/project_context_tools.gd",
+	"res://addons/godot_mcp/tools/dependency_impact_tools.gd",
 	"res://addons/godot_mcp/tools/project_assets_tools.gd",
 	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"res://addons/godot_mcp/tools/project_verification_tools.gd",

@@ -432,3 +432,57 @@ func test_route_cache_eviction_counter_and_hard_cap() -> void:
 	assert_lte(int(diag.get("route_cache_entries", 999999)), int(diag.get("route_cache_capacity", 0)),
 		"Route LRU is hard-capped")
 	assert_eq(diag.get("route_cache_evictions", -1), 10, "Ten insertions beyond capacity evict ten oldest routes")
+
+
+# ============================================================================
+# 外部变更路径日志（增量依赖索引的游标数据源）
+# ============================================================================
+
+func test_change_log_merges_batches_by_cursor() -> void:
+	_core.notify_external_changes({
+		"paths": PackedStringArray(["res://a.gd"]), "has_changes": true})
+	_core.notify_external_changes({
+		"paths": PackedStringArray(["res://b.tscn"]),
+		"structural_paths": PackedStringArray(["res://b.tscn"]),
+		"has_changes": true})
+	var since_start: Dictionary = _core.external_changes_since(0)
+	assert_true(bool(since_start["available"]))
+	assert_eq((since_start["paths"] as Array).size(), 2)
+	assert_eq((since_start["structural_paths"] as Array).size(), 1)
+	var next_index: int = int(since_start["next_index"])
+
+	var since_cursor: Dictionary = _core.external_changes_since(next_index)
+	assert_true(bool(since_cursor["available"]))
+	assert_eq((since_cursor["paths"] as Array).size(), 0, "no new batches since the cursor")
+
+	_core.notify_external_changes({
+		"paths": PackedStringArray(["res://c.gd"]), "has_changes": true})
+	var since_after: Dictionary = _core.external_changes_since(next_index)
+	assert_eq((since_after["paths"] as Array), ["res://c.gd"])
+	assert_eq(int(since_after["next_index"]), next_index + 1)
+
+func test_change_log_fallback_batches_mark_rebuild() -> void:
+	_core.notify_external_changes({
+		"paths": PackedStringArray(["res://a.gd"]), "has_changes": true})
+	_core.notify_external_changes({
+		"filesystem_fallback": true, "has_changes": true})
+	var since: Dictionary = _core.external_changes_since(0)
+	assert_true(bool(since["available"]))
+	assert_true(bool(since["fallback"]), "pathless fallback forces consumers to rebuild")
+
+func test_change_log_ring_drops_old_cursors_honestly() -> void:
+	for index in range(_core.EXTERNAL_CHANGE_LOG_MAX + 10):
+		_core.notify_external_changes({
+			"paths": PackedStringArray(["res://f%d.gd" % index]), "has_changes": true})
+	var oldest: Dictionary = _core.external_changes_since(0)
+	assert_false(bool(oldest["available"]), "cursor older than the ring is unavailable")
+	var newest: int = int(oldest["next_index"])
+	var fresh: Dictionary = _core.external_changes_since(newest - 1)
+	assert_true(bool(fresh["available"]))
+	assert_eq((fresh["paths"] as Array).size(), 1, "the newest batch is still readable")
+
+func test_change_log_rejects_future_cursors() -> void:
+	_core.notify_external_changes({
+		"paths": PackedStringArray(["res://a.gd"]), "has_changes": true})
+	var future: Dictionary = _core.external_changes_since(99)
+	assert_false(bool(future["available"]))

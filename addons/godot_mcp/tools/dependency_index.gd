@@ -139,6 +139,13 @@ func has_file(path: String) -> bool:
 	return _file_hashes.has(normalize_path(path))
 
 
+## 目标是否被索引认知：是已索引文件，或至少被某个文件引用（如纯纹理
+## 资源不是 owner，但场景对它的引用边使影响查询仍有意义）。
+func is_known(path: String) -> bool:
+	var normalized: String = normalize_path(path)
+	return _file_hashes.has(normalized) or _in_edges.has(normalized)
+
+
 func direct_edges(owner: String) -> Array:
 	var edges: Array = (_out_edges.get(normalize_path(owner), []) as Array)
 	return edges.duplicate()

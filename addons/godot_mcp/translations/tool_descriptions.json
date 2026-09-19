@@ -231,5 +231,6 @@
   "update_export_preset": "Update fields/options of an existing export preset. Only provided keys change.",
   "remove_export_preset": "Remove an export preset section (and its options) from export_presets.cfg.",
   "duplicate_export_preset": "Duplicate an existing export preset under a new name (options copied, export_path suffix adjusted).",
-  "get_cache_diagnostics": "Read shared tool-result cache telemetry: hit/reuse rates, entries vs capacity, byte pressure, single-flight merges, tool-list and read-snapshot caches, external-change invalidation and spill counters."
+  "get_cache_diagnostics": "Read shared tool-result cache telemetry: hit/reuse rates, entries vs capacity, byte pressure, single-flight merges, tool-list and read-snapshot caches, external-change invalidation and spill counters.",
+  "query_change_impact": "Query the transitive change impact of project files over an incrementally maintained dependency index (full res:// path + UID identity; same-name files never conflate). dependents answers 'what does changing these files affect' (nested scene chains included, evidence chain per entry); dependencies answers 'what do these files need'. Non-literal load() calls inside the affected set are surfaced as dynamic_unknowns. Results are losslessly paged. Read-only."
 }
