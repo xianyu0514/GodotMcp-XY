@@ -182,8 +182,10 @@ static func refresh_stale(queue: Dictionary) -> int:
 
 ## 分片推进：按序消费最多 budget 个 pending 项；executor(item) ->
 ## {"passed": bool, "evidence": {...}}，或 {"defer": true} 表示该项等待
-## 外部执行器（保持 pending、不消耗预算）。失败不中断本轮（一次看全貌），
-## 但 outcome 永远不会在有失败或未收齐时报 completed。返回：
+## 外部执行器（保持 pending、不消耗预算）。执行器可异步（内部 await 的
+## 闭包，如 play_and_verify 演练）——advance 因此是协程，同步 executor
+## 的 await 立即返回，向后兼容。失败不中断本轮（一次看全貌），但 outcome
+## 永远不会在有失败或未收齐时报 completed。返回：
 ## {processed, passed_count, failed_count, pending_count, has_more,
 ##  outcome: completed|failed|pending_more, items: 本轮判定}
 static func advance(queue: Dictionary, budget: int,
@@ -205,7 +207,7 @@ static func advance(queue: Dictionary, budget: int,
 		var item: Dictionary = item_value
 		if String(item.get("status", "")) != "pending":
 			continue
-		var verdict: Variant = executor.call(item)
+		var verdict: Variant = await executor.call(item)
 		if verdict is Dictionary and (verdict as Dictionary).get("defer", false):
 			continue
 		var passed: bool = verdict is Dictionary and bool((verdict as Dictionary).get("passed", false))

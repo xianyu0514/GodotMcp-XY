@@ -116,9 +116,9 @@ func _tool_run_verification_queue(params: Dictionary) -> Dictionary:
 	var command: String = str(params.get("command", "")).strip_edges()
 	match command:
 		"create":
-			return _command_create(params)
+			return await _command_create(params)
 		"advance":
-			return _command_advance(params)
+			return await _command_advance(params)
 		"inspect":
 			return _command_inspect(params)
 		"record":
@@ -156,7 +156,7 @@ func _command_create(params: Dictionary) -> Dictionary:
 	var response: Dictionary = _queue_summary(queue, "open")
 	response["command"] = "create"
 	if not bool(params.get("defer_first_slice", false)):
-		var advanced: Dictionary = _advance_and_save(store, queue, int(params.get("budget", 4)))
+		var advanced: Dictionary = await _advance_and_save(store, queue, int(params.get("budget", 4)))
 		for key in advanced:
 			response[key] = advanced[key]
 	return response
@@ -167,7 +167,7 @@ func _command_advance(params: Dictionary) -> Dictionary:
 		return queue_ref
 	var store: Dictionary = queue_ref["store"]
 	var queue: Dictionary = queue_ref["queue"]
-	var advanced: Dictionary = _advance_and_save(store, queue, int(params.get("budget", 4)))
+	var advanced: Dictionary = await _advance_and_save(store, queue, int(params.get("budget", 4)))
 	advanced["command"] = "advance"
 	advanced["queue_id"] = String(queue.get("queue_id", ""))
 	return advanced
@@ -255,7 +255,7 @@ func _command_abandon(params: Dictionary) -> Dictionary:
 
 func _advance_and_save(store: Dictionary, queue: Dictionary, budget: int) -> Dictionary:
 	var staled: int = StoreScript.refresh_stale(queue)
-	var advanced: Dictionary = StoreScript.advance(queue, maxi(0, budget),
+	var advanced: Dictionary = await StoreScript.advance(queue, maxi(0, budget),
 		func(item: Dictionary) -> Dictionary: return _execute_item(item))
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):

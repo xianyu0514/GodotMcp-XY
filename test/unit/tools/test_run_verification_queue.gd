@@ -28,15 +28,15 @@ func after_each() -> void:
 # ============================================================================
 
 func test_create_validates_input() -> void:
-	assert_has(_tools._tool_run_verification_queue({"command": "create"}), "error")
-	assert_has(_tools._tool_run_verification_queue({
+	assert_has(await _tools._tool_run_verification_queue({"command": "create"}), "error")
+	assert_has(await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "x"}), "error")
-	assert_has(_tools._tool_run_verification_queue({
+	assert_has(await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "x", "items": [{"kind": "mystery"}]}), "error")
-	assert_has(_tools._tool_run_verification_queue({"command": "wat"}), "error")
+	assert_has(await _tools._tool_run_verification_queue({"command": "wat"}), "error")
 
 func test_create_runs_first_slice_of_script_checks() -> void:
-	var result: Dictionary = _tools._tool_run_verification_queue({
+	var result: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "compile health",
 		"items": [
 			{"kind": "script_check", "label": "game compiles",
@@ -49,7 +49,7 @@ func test_create_runs_first_slice_of_script_checks() -> void:
 	assert_eq(String(result["outcome"]), "completed")
 
 func test_missing_script_fails_the_check() -> void:
-	var result: Dictionary = _tools._tool_run_verification_queue({
+	var result: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "compile health",
 		"items": [
 			{"kind": "script_check", "label": "gone",
@@ -63,7 +63,7 @@ func test_missing_script_fails_the_check() -> void:
 # ============================================================================
 
 func test_external_items_defer_and_complete_via_record() -> void:
-	var result: Dictionary = _tools._tool_run_verification_queue({
+	var result: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "mixed verification",
 		"items": [
 			{"kind": "script_check", "label": "compiles",
@@ -78,7 +78,7 @@ func test_external_items_defer_and_complete_via_record() -> void:
 	assert_eq(String(result["outcome"]), "pending_more", "uncollected evidence is not completed")
 
 	var queue_id: String = String(result["queue_id"])
-	var recorded: Dictionary = _tools._tool_run_verification_queue({
+	var recorded: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "record", "queue_id": queue_id, "item_id": "item_2",
 		"passed": true, "evidence": {"runner": "play_and_verify", "assertions": 3},
 	})
@@ -86,7 +86,7 @@ func test_external_items_defer_and_complete_via_record() -> void:
 	assert_eq(int(recorded["passed_count"]), 2)
 
 	# 已有判定的项不能再改。
-	assert_has(_tools._tool_run_verification_queue({
+	assert_has(await _tools._tool_run_verification_queue({
 		"command": "record", "queue_id": queue_id, "item_id": "item_2", "passed": false,
 	}), "error")
 
@@ -99,23 +99,23 @@ func test_advance_resumes_slices() -> void:
 	for index in 5:
 		items.append({"kind": "script_check", "label": "c%d" % index,
 			"detail": {"scripts": [WATCH]}})
-	var created: Dictionary = _tools._tool_run_verification_queue({
+	var created: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "five", "items": items, "budget": 2,
 	})
 	assert_eq(int(created["processed"]), 2)
 	assert_true(bool(created["has_more"]))
 
-	var advanced: Dictionary = _tools._tool_run_verification_queue({
+	var advanced: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "advance", "queue_id": created["queue_id"], "budget": 2,
 	})
 	assert_eq(int(advanced["processed"]), 2)
-	var last: Dictionary = _tools._tool_run_verification_queue({
+	var last: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "advance", "queue_id": created["queue_id"], "budget": 2,
 	})
 	assert_eq(String(last["outcome"]), "completed")
 
 func test_inspect_invalidates_stale_evidence_on_drift() -> void:
-	var created: Dictionary = _tools._tool_run_verification_queue({
+	var created: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "drift watch",
 		"items": [{"kind": "script_check", "label": "c",
 			"detail": {"scripts": [WATCH]}}],
@@ -124,7 +124,7 @@ func test_inspect_invalidates_stale_evidence_on_drift() -> void:
 	assert_eq(String(created["outcome"]), "completed")
 
 	_write(WATCH, "extends Node\nvar speed := 99\n")
-	var inspected: Dictionary = _tools._tool_run_verification_queue({
+	var inspected: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "inspect", "queue_id": created["queue_id"],
 	})
 	assert_gt(int(inspected["stale_refreshed"]), 0, "drift pushes the verdict back to pending")
@@ -132,16 +132,16 @@ func test_inspect_invalidates_stale_evidence_on_drift() -> void:
 	assert_eq(String(inspected["outcome"]), "open")
 
 func test_abandon_then_advance_refuses() -> void:
-	var created: Dictionary = _tools._tool_run_verification_queue({
+	var created: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "x",
 		"items": [{"kind": "external", "label": "e", "detail": {}}],
 		"defer_first_slice": true,
 	})
-	var abandoned: Dictionary = _tools._tool_run_verification_queue({
+	var abandoned: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "abandon", "queue_id": created["queue_id"],
 	})
 	assert_eq(String(abandoned["outcome"]), "abandoned")
-	assert_has(_tools._tool_run_verification_queue({
+	assert_has(await _tools._tool_run_verification_queue({
 		"command": "advance", "queue_id": created["queue_id"],
 	}), "error")
 
