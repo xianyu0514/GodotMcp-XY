@@ -1164,7 +1164,14 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 					if (bool(goal_verbs.get("collectible", false)) or bool(goal_verbs.get("audio", false)) \
 							or bool(goal_verbs.get("juice", false))) \
 							and not bool(reg_verbs.get("collectible", false)):
-						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels))
+						# 金币数 = 解析 ∪ 注册表（同 generic 分支——02 金币目标走这里，
+						# CI 实证：漏接缩放窗导致 5 币收集不满）
+						var od_coin_request: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
+						for od_feature in FeatureRegistryScript.prior_exercises():
+							var od_goal: String = String((od_feature as Dictionary).get("goal", ""))
+							if GoalBlueprintsScript._mentions(od_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
+								od_coin_request = maxi(od_coin_request, GoalBlueprintsScript._coin_count(od_goal))
+						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_request))
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
 						var enemy_legs: Dictionary = _enemy_play_legs()
 						on_demand.append_array(enemy_legs["steps"])
