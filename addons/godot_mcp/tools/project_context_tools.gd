@@ -279,6 +279,13 @@ func _tool_gather_task_context(params: Dictionary) -> Dictionary:
 		follow_up.append("get_scene_structure %s" % scene["path"])
 	if not entry_scripts.is_empty():
 		follow_up.append("find_script_symbol_references for the symbols you plan to change before editing")
+		# 本工具的桶是有界候选摘要；完整传递影响（含嵌套场景链与动态 load
+		# 疑点）必须走索引化的 query_change_impact —— 扫描上限截断时同样
+		# 只有它能把结果续查完整。
+		var impact_targets: Array = []
+		for entry in entry_scripts:
+			impact_targets.append(String(entry["path"]))
+		follow_up.append("query_change_impact {\"target_paths\": %s} for the complete transitive impact set (index-backed, no scan cap; page with limit/offset)" % JSON.stringify(impact_targets))
 
 	var result: Dictionary = {
 		"goal": goal,
@@ -369,6 +376,14 @@ static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Ar
 		max_items: int) -> Array:
 	if entry_paths.is_empty():
 		return []
+	# 完整 res:// 路径 + UID 双匹配：场景 ext_resource 的 path="res://<完整路径>"
+	# 才算引用。文件名子串匹配会让不同目录的同名脚本（actors/player.gd vs
+	# ui/player.gd）互相混淆——大型 2D 审计（2026-09-19）确认的第一缺口。
+	var entry_uids: Array = []
+	for entry_value in entry_paths:
+		var uid: String = ResourceUID.path_to_uid(String(entry_value))
+		if uid.begins_with("uid://"):
+			entry_uids.append(uid)
 	var matches: Array = []
 	for scene_path in scene_paths:
 		if matches.size() >= max_items:
@@ -380,13 +395,19 @@ static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Ar
 		file.close()
 		var referenced: Array = []
 		for entry_value in entry_paths:
-			if content.contains(String(entry_value).get_file()):
+			if content.contains(String(entry_value)):
 				referenced.append(String(entry_value))
+				continue
+			for uid in entry_uids:
+				if content.contains(String(uid)):
+					referenced.append(String(entry_value))
+					break
 		if referenced.is_empty():
 			continue
 		matches.append({
 			"path": String(scene_path),
 			"references_scripts": referenced,
+			"match": "exact_path_or_uid",
 		})
 	return matches
 
