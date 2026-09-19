@@ -1600,7 +1600,13 @@ func _movement_feel_legs() -> Dictionary:
 ## 金币已消失、计数已增、胜利标签已显示——收集/胜利的行为证据。
 ## levels_merged：关卡动词合并时收集满 L1 显示关卡通关文案（换关不重置
 ## 计数——收集断言原样成立，只有标签文案不同）。
-func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false) -> Array:
+## 收金足够窗按金币数缩放：3 枚 = 30 帧（130px > 末窗 100px）；
+## 每加一枚 +10 帧（40px）。**封顶 50 帧**（205px < 敌带 220px——
+## 保住"收满即止、不穿带"的几何：更多金币的布局已越带，属布局问题）。
+static func _coin_sweep_frames(coin_total: int) -> int:
+	return clampi(30 + maxi(coin_total - 3, 0) * 10, 30, 50)
+
+func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false, coin_total: int = 3) -> Array:
 	var steps: Array = []
 	# 先回归原点：save 恢复或上一轮演练可能把玩家留在金币右侧——从右侧
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
@@ -1608,11 +1614,9 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected", leve
 	# 帧步进（72 帧 = 312px）：与机器负载无关的确定性锚定。
 	steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
 	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
-	# 磁吸金币聚簇在 (110..190)：从原点右扫横扫必然穿越全部拾取窗
-	# （开环 + 宽恕半径 = 确定性收集）。**收金足够窗**（30 帧 = 130px >
-	# 最后一窗 100px）：收满即止、不进敌带 [220+]——长窗的赛后死亡会
-	# 耗尽生命用 gameover 覆写 win（穿带致死是 gameover 演练的专属路径）。
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
+	# 磁吸金币聚簇：收金足够窗按金币数缩放（showcase CI 实证：5 枚的
+	# 末窗在 180px，30 帧只扫 130px——收不满、win 不触发、标签空）。
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
@@ -2112,7 +2116,12 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				play_steps.append_array(_state_play_steps(levels_merged,
 					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false))))
 			elif wants_collect:
-				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged))
+				var coin_request: int = maxi(GoalBlueprintsScript._coin_count(play_objective), 3)
+				for feature_value in FeatureRegistryScript.prior_exercises():
+					var feature_goal: String = String((feature_value as Dictionary).get("goal", ""))
+					if GoalBlueprintsScript._mentions(feature_goal, GoalBlueprintsScript.COLLECTIBLE_KEYWORDS):
+						coin_request = maxi(coin_request, GoalBlueprintsScript._coin_count(feature_goal))
+				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
 				play_steps.append_array(enemy_legs_generic["steps"])
