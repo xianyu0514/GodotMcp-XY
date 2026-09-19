@@ -1772,16 +1772,16 @@ func _gameover_play_steps() -> Array:
 ## 3) 最终关 → 真胜利 "You Win!"；
 ## 4) Enter×2 → 回 L1 playing。level_count 由目标句解析（默认 2——与
 ##    蓝图 _level_count 同源，"3 levels"/"third level" → 3）。
-func _level_play_steps(level_count: int = 2, save_merged: bool = false) -> Array:
+func _level_play_steps(level_count: int = 2, save_merged: bool = false, coin_total: int = 3) -> Array:
 	var steps: Array = []
 	# 不自带解锁（本地 run #21 取证：收集腿先收满金币 → win 态；此处盲发
 	# Enter 会从 win 触发 L1→L2 换关，后续 L1 断言拿到 2|true|win）。
 	# 解锁统一由调用方前缀负责（generic 三源感知 / on-demand 注册表感知）。
 	for level_index in range(1, level_count + 1):
 		var is_final: bool = level_index == level_count
-		# 收金足够窗（同收集/状态腿的几何规则）：换关不重置生命——
-		# 长窗的赛后死亡跨关累积会耗尽生命覆写最终关的 win。
-		steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
+		# 收金足够窗（同收集/状态腿的几何规则，随币数缩放）：换关不重置
+		# 生命——长窗的赛后死亡跨关累积会耗尽生命覆写最终关的 win。
+		steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
 		# boot-restore 取证后缀只在存档合并时携带（_last_restored 是存档
 		# 域变量——样板把存档排在关卡之后，无存档语境下表达式必炸）。
 		var clear_expr: String = "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state"
@@ -1864,7 +1864,7 @@ func _bgm_play_steps() -> Array:
 ## 在关卡语义下原样成立（换关重置只发生在 Enter 转移，见蓝图注释）。
 ## game_over_merged：生命系统合并时附加取证断言（lives|deaths）——run #10/11
 ## 的 true|gameover 指纹（收满金币却终局 gameover）需要生命消耗序列定位。
-func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = false) -> Array:
+func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = false, coin_total: int = 3) -> Array:
 	var first_win_text: String = "Level 1 Clear!" if levels_merged else "You Win!"
 	var steps: Array = []
 	# 双 Enter 处理任意起步态：win→title→playing、title→playing、
@@ -1884,7 +1884,7 @@ func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = fal
 	# 收金足够窗（30 帧 = 130px > 最后一窗 100px）：收满即止、不进敌带
 	# [220+]——赛后零死亡，win 态稳定（长窗会穿带致死，gameover 可从
 	# win 触发覆写——那是 gameover 演练的专属路径）。
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": true,
@@ -1922,7 +1922,7 @@ func _state_play_steps(levels_merged: bool = false, game_over_merged: bool = fal
 		"assert": {"expression": "game_state", "expected": "playing",
 			"description": "the second round starts in playing"}
 	})
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 30})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 300,
 		"assert": {"expression": "str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
@@ -2083,9 +2083,11 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			# 35417454763：09 完成门禁时 state 已合并进游戏但未注册——敌人/
 			# 移动 prior 演练没解锁，title 下敌人冻结零死亡、移动 0px 三连败）。
 			var context_verbs: Dictionary = FeatureRegistryScript.registered_verbs()
-			var context_has_state: bool = bool(context_verbs.get("state_machine", false)) \
-				or bool(merged_verbs.get("state_machine", false)) \
-				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS)
+			# 蕴含感知：level/game_over 蕴含 state_machine（蕴含只发生在
+			# controller_script 的动词改写——裸 match_verbs 看不到；本地复现：
+			# 08 失败后 state 未注册，关卡/游戏结束目标自己的演练不解锁，
+			# title 门控下 1|false|title + 0 币）。
+			var context_has_state: bool = bool(context_verbs.get("state_machine", false)) 				or bool(merged_verbs.get("state_machine", false)) 				or bool(merged_verbs.get("level", false)) 				or bool(merged_verbs.get("game_over", false)) 				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.STATE_MACHINE_KEYWORDS) 				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.LEVEL_KEYWORDS) 				or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.GAME_OVER_KEYWORDS)
 			if context_has_state and not wants_state:
 				play_steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300,
 					"description": "enter playing state (win or title start)"})
@@ -2166,8 +2168,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 			if wants_level and not wants_3d:
 				play_steps.append_array(_level_play_steps(
 					GoalBlueprintsScript._level_count(play_objective),
-					bool(context_verbs.get("save", false)) or bool(merged_verbs.get("save", false)) \
-						or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS)))
+					bool(context_verbs.get("save", false)) or bool(merged_verbs.get("save", false)) 						or GoalBlueprintsScript._mentions(play_objective, GoalBlueprintsScript.SAVE_KEYWORDS),
+					maxi(GoalBlueprintsScript._coin_count(play_objective), 3)))
 			# 背景音乐腿（声音的另一半）：常开播放证据。
 			if wants_bgm:
 				play_steps.append_array(_bgm_play_steps())
