@@ -351,6 +351,7 @@ static func controller_script(objective: String) -> String:
 		source += "var _pause_label: Label\n"
 	if needs_save:
 		source += "var last_save_ok: bool = false\n"
+		source += "var _save_log: String = \"\"\n"
 	if bool(verbs.get("audio", false)):
 		source += "var sfx_played_count: int = 0\n"
 		source += "var _sfx_player: AudioStreamPlayer\n"
@@ -843,6 +844,9 @@ static func controller_script(objective: String) -> String:
 		source += "\tif file == null:\n"
 		source += "\t\treturn false\n"
 		source += "\tfile.store_string(JSON.stringify(data))\n"
+		# 写入取证（毒档猎手）：本会话全部落盘记录（level/coins/lives/x）——
+		# 存档演练打印；幽灵写入（重复 F5 边沿等）自报时刻与状态。
+		source += "\t_save_log += JSON.stringify(data) + \";\"\n"
 		source += "\treturn true\n"
 		source += "\nfunc load_game() -> bool:\n"
 		source += "\tif not FileAccess.file_exists(SAVE_PATH):\n"

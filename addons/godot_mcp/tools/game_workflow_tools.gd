@@ -1973,6 +1973,13 @@ func _save_play_steps(levels_merged: bool = false, game_over_merged: bool = fals
 		"assert": {"expression": save_expr, "expected": save_expected,
 			"description": "save_game wrote a NORMALIZED state (ok/coins/level/lives)"}
 	})
+	# 写入次数守卫：本会话恰好一次落盘——幽灵写入（重复 F5 边沿/投递重发
+	# 造成的再按压）在此显式失败（actual 打印实际次数与全部写入内容）。
+	steps.append({
+		"assert": {"expression": "str(_save_log.count(\";\"))",
+			"expected": "1",
+			"description": "exactly one save write this session (count; log rides in the artifact)"}
+	})
 	steps.append({"action": "save_game", "pressed": false, "wait_ms": 80})
 	return steps
 
