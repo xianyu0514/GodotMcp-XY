@@ -82,6 +82,26 @@ func test_gameover_resets_to_level_one() -> void:
 # 证据腿与关卡感知
 # ============================================================================
 
+func test_level_legs_walk_three_levels() -> void:
+	# 三关样板支撑：level_count=3 时腿走 L1→L2→L3 全弧线
+	var tools: RefCounted = WorkflowToolsScript.new()
+	var steps: Array = tools._level_play_steps(3)
+	var expressions: Array = []
+	for step_value in steps:
+		var leg: Dictionary = (step_value as Dictionary).get("assert", {})
+		if not leg.is_empty():
+			expressions.append(String(leg.get("expression", "")) + "=>" + str(leg.get("expected", "")))
+	# 逐关通关断言（1|true|win / 2|true|win / 3|true|win）
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state=>3|true|win",
+		"the final of three levels is level three")
+	# 中间关入口显微镜（2 与 3）
+	var has_l3_entry: bool = false
+	for e_value in expressions:
+		var e: String = str(e_value)
+		if e.contains("_pickup_log") and e.ends_with("3|0|playing|0|"):
+			has_l3_entry = true
+	assert_true(has_l3_entry, "the level-3 entry microscope exists")
+
 func test_level_legs_walk_both_levels() -> void:
 	var tools: RefCounted = WorkflowToolsScript.new()
 	var steps: Array = tools._level_play_steps()
@@ -90,7 +110,7 @@ func test_level_legs_walk_both_levels() -> void:
 		var leg: Dictionary = (step_value as Dictionary).get("assert", {})
 		if not leg.is_empty():
 			expressions.append(String(leg.get("expression", "")))
-	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN)",
+	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
 		"level one completes without advancing (forensic encoding)")
 	assert_has(expressions, "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state",
 		"Enter advances to a fresh level two (values visible on failure)")

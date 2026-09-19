@@ -1184,7 +1184,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 					if bool(goal_verbs.get("game_over", false)) and not bool(reg_verbs.get("game_over", false)):
 						on_demand.append_array(_gameover_play_steps())
 					if bool(goal_verbs.get("level", false)) and not bool(reg_verbs.get("level", false)):
-						on_demand.append_array(_level_play_steps())
+						on_demand.append_array(_level_play_steps(
+						GoalBlueprintsScript._level_count(play_objective)))
 					if bool(goal_verbs.get("bgm", false)) and not bool(reg_verbs.get("bgm", false)):
 						on_demand.append_array(_bgm_play_steps())
 					arguments["steps"] = on_demand
@@ -1742,67 +1743,54 @@ func _gameover_play_steps() -> Array:
 	})
 	return steps
 
-## 多关卡证据腿（质量维度：内容深度）：
+## 多关卡证据腿（质量维度：内容深度）——N 关泛化（三关样板需要）：
 ## 1) 三重 Enter 解锁；
-## 2) L1 右扫全收 → win 态 + "Level 1 Clear!" + current_level==1（换关
-##    不重置计数——蓝图语义，收集断言原样成立）；
-## 3) Enter → L2：关卡递进 + 计数清零 + 原点 + playing；
-## 4) L2 右扫全收 → 最终胜利 "You Win!" + current_level==LEVEL_COUNT；
-## 5) Enter×2 → 回到 L1 playing（最终关胜利 → title 关卡归 1 → playing）。
-func _level_play_steps() -> Array:
+## 2) 逐关右扫全收：非最终关 → "Level N Clear!" + Enter 进下一关（fresh
+##    board：计数清零/原点/playing，即时采样显微镜保留在每关入口）；
+## 3) 最终关 → 真胜利 "You Win!"；
+## 4) Enter×2 → 回 L1 playing。level_count 由目标句解析（默认 2——与
+##    蓝图 _level_count 同源，"3 levels"/"third level" → 3）。
+func _level_play_steps(level_count: int = 2) -> Array:
 	var steps: Array = []
 	for pair_index in 3:
 		steps.append({
 			"action": "ui_accept", "pressed": true, "wait_ms": 300,
 			"description": "enter playing before the level run"})
 		steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
-	# L1：全收 → 关卡通关（非最终关的胜利形态）
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
-	steps.append({
-		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN)",
-			"expected": "1|true",
-			"description": "level one: every coin collected, still on level one (level/all-collected)"}
-	})
-	steps.append({
-		"assert": {"expression": "_win_label.text", "expected": "Level 1 Clear!",
-			"description": "level one clear shows the level text (not the final win)"}
-	})
-	steps.append({
-		"assert": {"expression": "game_state", "expected": "win",
-			"description": "level one clear reached the win state"}
-	})
-	# Enter → L2（带即时采样显微镜：CI 取证 actual="2|3|win" —— 500ms 窗口
-	# 内无输入却收满三币即胜。50ms 级采样区分"转移即错"与"转移后劣化"，
-	# 位置一并编码，复发时证据自含）。
-	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
-	steps.append({
-		"action": "ui_accept", "pressed": false, "wait_ms": 50,
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
-			"expected": "2|0|playing|0|",
-			"description": "immediately after the level transition (level/coins/state/x/pickup-log)"}
-	})
-	steps.append({
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
-			"expected": "2|0|playing|0|",
-			"description": "the L2 board is still fresh a moment later"}
-	})
-	steps.append({
-		"assert": {"expression": "abs(position.x) < 20", "expected": true,
-			"description": "level two starts from the origin"}
-	})
-	# L2：全收 → 最终胜利
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
-	steps.append({
-		"action": "move_right", "pressed": false, "wait_ms": 300,
-		"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
-			"expected": "2|true|win",
-			"description": "level two: full win achieved on the final level (level/all-collected/state)"}
-	})
-	steps.append({
-		"assert": {"expression": "_win_label.text", "expected": "You Win!",
-			"description": "the final level shows the real win text"}
-	})
+	for level_index in range(1, level_count + 1):
+		var is_final: bool = level_index == level_count
+		steps.append({"action": "move_right", "pressed": true, "wait_frames": 90})
+		steps.append({
+			"action": "move_right", "pressed": false, "wait_ms": 300,
+			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state",
+				"expected": "%d|true|win" % level_index,
+				"description": "level %d: every coin collected and the win state reached (level/all-collected/state)" % level_index}
+		})
+		steps.append({
+			"assert": {"expression": "_win_label.text",
+				"expected": ("You Win!" if is_final else "Level %d Clear!" % level_index),
+				"description": "level %d shows the %s" % [level_index, ("final win text" if is_final else "level-clear text")]}
+		})
+		if is_final:
+			break
+		# Enter → 下一关（即时采样显微镜：区分"转移即错"与"落地后劣化"，
+		# 位置与拾取日志随证据自含）。
+		steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
+		steps.append({
+			"action": "ui_accept", "pressed": false, "wait_ms": 50,
+			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
+				"expected": "%d|0|playing|0|" % (level_index + 1),
+				"description": "immediately after the level-%d transition (level/coins/state/x/pickup-log)" % (level_index + 1)}
+		})
+		steps.append({
+			"assert": {"expression": "str(current_level) + \"|\" + str(coins_collected) + \"|\" + game_state + \"|\" + str(int(position.x)) + \"|\" + _pickup_log",
+				"expected": "%d|0|playing|0|" % (level_index + 1),
+				"description": "the level-%d board is still fresh a moment later" % (level_index + 1)}
+		})
+		steps.append({
+			"assert": {"expression": "abs(position.x) < 20", "expected": true,
+				"description": "level %d starts from the origin" % (level_index + 1)}
+		})
 	# Enter×2：最终胜利 → title（关卡归 1）→ playing L1
 	steps.append({"action": "ui_accept", "pressed": true, "wait_ms": 300})
 	steps.append({"action": "ui_accept", "pressed": false, "wait_ms": 100})
@@ -2128,7 +2116,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				play_steps.append_array(_gameover_play_steps())
 			# 多关卡腿（内容深度）：L1 通关 → L2 → 最终胜利 → 回 L1——仅 2D。
 			if wants_level and not wants_3d:
-				play_steps.append_array(_level_play_steps())
+				play_steps.append_array(_level_play_steps(
+				GoalBlueprintsScript._level_count(play_objective)))
 			# 背景音乐腿（声音的另一半）：常开播放证据。
 			if wants_bgm:
 				play_steps.append_array(_bgm_play_steps())
