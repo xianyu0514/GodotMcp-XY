@@ -828,6 +828,13 @@ static func controller_script(objective: String) -> String:
 		source += "\nfunc _on_enemy_touched(body: Node) -> void:\n"
 		source += "\tif body != self:\n"
 		source += "\t\treturn\n"
+		if needs_state:
+			# 胜利即回合结束：win 态不冻结移动（既有手感语义），收集扫在
+			# 收满后继续穿越巡逻带到窗口末尾——赛后死亡若计入会耗尽生命
+			# 并用 gameover 覆写刚取得的 win（CI 35416409614 的 true|gameover）。
+			# 非 playing 态（win/gameover/title）一律不计死亡。
+			source += "\tif game_state != \"playing\":\n"
+			source += "\t\treturn\n"
 		source += "\tdeaths_count += 1\n"
 		if bool(verbs.get("game_over", false)):
 			# 死亡有意义：命 -1；命尽 → gameover 态（画面+世界冻结，
