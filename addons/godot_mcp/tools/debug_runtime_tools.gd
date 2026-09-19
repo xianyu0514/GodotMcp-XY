@@ -600,7 +600,7 @@ func _register_simulate_runtime_input_action(server_core: RefCounted) -> void:
 			"required": ["action_name"]
 		},
 		Callable(self, "_tool_simulate_runtime_input_action"),
-		{"type": "object", "properties": {"action_name": {"type": "string"}, "action_exists": {"type": "boolean"}, "pressed": {"type": "boolean"}, "strength": {"type": "number"}, "runtime_pressed": {"type": "boolean"}}},
+		{"type": "object", "properties": {"action_name": {"type": "string"}, "action_exists": {"type": "boolean"}, "pressed": {"type": "boolean"}, "strength": {"type": "number"}, "runtime_pressed": {"type": "boolean"}, "delivery_confirmed": {"type": "boolean"}, "delivery_attempts": {"type": "integer"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
 		"supplementary", "Debug-Advanced"
 	)
@@ -611,7 +611,50 @@ func _tool_simulate_runtime_input_action(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: action_name"}
 	var pressed: bool = bool(params.get("pressed", true))
 	var strength: float = float(params.get("strength", 1.0 if pressed else 0.0))
-	return await DebugToolsNative._request_runtime_probe_poll("simulate_input_action", [action_name, pressed, strength], ["mcp:input_action_simulated"], params, {"action_name": action_name})
+	# 投递确认（证据链往返层）：match 带 pressed，防止应答丢失时的陈旧
+	# 回退把一次释放错配成缓存的按下应答（残留按住态 → 反向键在
+	# get_vector 抵消 → 零位移，代表游戏 08/10 轮换的根因）。应答陈旧/
+	# 超时或 runtime_pressed 与期望不符时清除挂起缓存重发；三次后仍
+	# 无法确认则带证据报错——宁可显式失败，不可静默假完成。
+	var match_fields: Dictionary = {"action_name": action_name, "pressed": pressed}
+	var command_payload: Array = [action_name, pressed, strength]
+	var response_messages: Array = ["mcp:input_action_simulated"]
+	var result: Dictionary = await DebugToolsNative._request_runtime_probe_poll(
+		"simulate_input_action", command_payload, response_messages, params, match_fields)
+	var attempts: int = 1
+	while attempts < 3 and _simulate_delivery_state(result, pressed) != "confirmed":
+		DebugToolsNative._purge_runtime_probe_request(
+			"simulate_input_action", command_payload, response_messages, params, match_fields)
+		result = await DebugToolsNative._request_runtime_probe_poll(
+			"simulate_input_action", command_payload, response_messages, params, match_fields)
+		attempts += 1
+	if _simulate_delivery_state(result, pressed) != "confirmed":
+		return {
+			"error": "simulate_input_action delivery unconfirmed after %d attempts: %s" % [
+				attempts,
+				JSON.stringify({
+					"action_name": action_name,
+					"expected_pressed": pressed,
+					"last_status": str(result.get("status", "")),
+					"stale": bool(result.get("stale", false)),
+					"runtime_pressed": result.get("runtime_pressed", null),
+				})
+			]
+		}
+	result["delivery_confirmed"] = true
+	result["delivery_attempts"] = attempts
+	return result
+
+
+# 单次应答的投递判定：confirmed = 新鲜成功且回读状态与期望一致。
+static func _simulate_delivery_state(result: Dictionary, pressed: bool) -> String:
+	if result.get("status") != "success":
+		return "unconfirmed"
+	if bool(result.get("stale", false)):
+		return "stale"
+	if bool(result.get("runtime_pressed", not pressed)) != pressed:
+		return "mismatch"
+	return "confirmed"
 
 func _register_list_runtime_input_actions(server_core: RefCounted) -> void:
 	server_core.register_tool(
@@ -1301,7 +1344,11 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 		var result: Dictionary = await _tool_evaluate_runtime_expression(params)
 		if result.has("error"):
 			return result
-		if result.get("status", "") == "success":
+		# 陈旧应答不算成功（CI run 35343562660 取证：手感腿 before=114.73
+		# 是陈旧缓存、after=4.33 是新值——"按右键左移 110px"实为测量造假，
+		# 位移 delta 被陈旧快照污染）。陈旧 → 等待后重试（下一次求值会
+		# 重新派发探针命令）；超时走尾部错误路径（诚实失败）。
+		if result.get("status", "") == "success" and not bool(result.get("stale", false)):
 			var last_value: Variant = result.get("value", null)
 			var condition_met: bool = _is_truthy_runtime_value(last_value)
 			return {

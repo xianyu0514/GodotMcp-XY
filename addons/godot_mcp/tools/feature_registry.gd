@@ -83,7 +83,9 @@ static func registered_verbs(path: String = REGISTRY_PATH) -> Dictionary:
 	return combined
 
 ## 既往功能的验收步骤（用于旧行为重验）。exclude_verbs 中的动词跳过
-## （新目标正在修改的功能不重验自己）。
+## （新目标正在修改的功能不重验自己）。返回携带原始 goal——完成前回归
+## 按"当前"语境重新推导演练（而非回放录制步骤），更名/调参后的符号
+## 变化不会让旧步骤失配。
 static func prior_exercises(exclude_verbs: Dictionary = {},
 		path: String = REGISTRY_PATH) -> Array:
 	var registry: Dictionary = load_registry(path)
@@ -102,13 +104,18 @@ static func prior_exercises(exclude_verbs: Dictionary = {},
 		if not exercise.is_empty():
 			exercises.append({
 				"feature_id": feature.get("id", ""),
+				"goal": feature.get("goal", ""),
 				"steps": exercise,
 			})
 	return exercises
 
 static func _feature_id_from_verbs(verbs: Dictionary) -> String:
 	var active: Array = []
-	for verb_key in ["movement", "collectible", "win", "pause", "save", "enemy", "state_machine", "audio", "wall", "three_d"]:
+	# 动词表必须与蓝图的 match_verbs 全集同步（CI 实证：juice/game_over/
+	# level/bgm 缺席时，"金币拾取粒子爆闪"与"加 5 金币"塌缩成同一 id
+	# "collectible"——后者覆盖前者的注册条目，币数查找拿到粒子句 → 3 币窗
+	# → 5 币收不满的整个级联）。
+	for verb_key in ["movement", "collectible", "win", "pause", "save", "enemy", "state_machine", "audio", "juice", "game_over", "level", "bgm", "wall", "three_d"]:
 		if bool(verbs.get(verb_key, false)):
 			active.append(verb_key)
 	return "+".join(active) if not active.is_empty() else "unknown"

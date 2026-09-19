@@ -57,7 +57,13 @@ def wait_server(port):
             time.sleep(1)
     return False
 
+def purge_user_saves():
+    # user:// 存档跨运行残留会毒化 N3（恢复到上一时代的漂移位置）
+    appdata = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata")
+    shutil.rmtree(os.path.join(appdata, "Benchmark"), ignore_errors=True)
+
 def setup_scratch(port):
+    purge_user_saves()
     if SCRATCH.exists():
         shutil.rmtree(SCRATCH, ignore_errors=True)
     (SCRATCH / "addons").mkdir(parents=True)
@@ -76,11 +82,18 @@ def setup_scratch(port):
     return editor
 
 def run_task(task_id, goal, port, rep):
-    """Execute one benchmark task as the agent; return outcome."""
+    """Execute one benchmark task as the agent; return outcome.
+
+    Every event carries a unique run_id — the JSONL files append across
+    batches, and the report is recomputed per run_id (never mixed across
+    code states without disclosure).
+    """
     events_file = RUNS / f"benchmark_{task_id}_r{rep}.jsonl"
+    run_id = f"{task_id}-r{rep}-{time.strftime('%Y%m%dT%H%M%S')}"
     def ev(kind, payload):
         with events_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "run_id": run_id,
                 "task_id": task_id, "rep": rep, "event": kind,
                 "payload": payload}, ensure_ascii=False) + "\n")
 
@@ -113,15 +126,53 @@ def run_task(task_id, goal, port, rep):
         return {"task": task_id, "rep": rep, "outcome": "error",
                 "error": str(exc)[:200], "elapsed_s": round(elapsed, 1)}
 
+def archive_prior_runs():
+    """--fresh: rotate existing JSONLs to .bak<N> so each formal batch is a
+    single code state (the 2026-09-15 incident mixed pre-fix and regression
+    runs in one file — the report could not be recomputed honestly)."""
+    archived = 0
+    for events_file in RUNS.glob("benchmark_*.jsonl"):
+        suffix = 2
+        while events_file.with_suffix(f".jsonl.bak{suffix}").exists():
+            suffix += 1
+        events_file.rename(events_file.with_suffix(f".jsonl.bak{suffix}"))
+        archived += 1
+    return archived
+
+def recompute_report(results):
+    """Aggregate with a stated rule so the report is recomputable from raw
+    JSONL events (honesty rule 6): latest run per (task_id, rep) by file
+    order; each run's outcome is its run_ended event."""
+    by_task = {}
+    for r in results:
+        by_task.setdefault(r["task"], []).append(r)
+    report = {
+        "total_runs": len(results),
+        "aggregation_rule": "one run per (task_id, rep); outcome = the run_ended event; every event carries a unique run_id",
+        "by_task": {},
+    }
+    for task_id, runs in sorted(by_task.items()):
+        passes = sum(1 for r in runs if r["outcome"] == "pass")
+        avg_time = sum(r["elapsed_s"] for r in runs) / len(runs)
+        report["by_task"][task_id] = {"pass": passes, "total": len(runs), "avg_s": round(avg_time,1)}
+    total_pass = sum(1 for r in results if r["outcome"] == "pass")
+    report["overall_pass_rate"] = f"{100*total_pass/len(results):.0f}%" if results else "n/a"
+    return report
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks", default="N1,N2,N3,N4,E1,E4,R3")
     parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--port", type=int, default=9191)
+    parser.add_argument("--fresh", action="store_true",
+        help="archive prior JSONL batches first (one report = one code state)")
     args = parser.parse_args()
 
     task_ids = args.tasks.split(",")
     RUNS.mkdir(exist_ok=True)
+    if args.fresh:
+        archived = archive_prior_runs()
+        print(f"archived {archived} prior event files")
     results = []
     editor = None
     try:
@@ -156,22 +207,16 @@ def main():
             editor.kill()
             subprocess.run(["taskkill","/PID",str(editor.pid),"/T","/F"], capture_output=True)
 
-    # Summary
-    by_task = {}
-    for r in results:
-        by_task.setdefault(r["task"], []).append(r)
-    report = {"total_runs": len(results), "by_task": {}}
+    # Summary（重算规则见 recompute_report——报告可由原始 JSONL 复算）
+    report = recompute_report(results)
     print(f"\n{'='*60}")
     print(f"BENCHMARK RESULTS ({len(results)} runs)")
     print(f"{'='*60}")
-    for task_id, runs in sorted(by_task.items()):
-        passes = sum(1 for r in runs if r["outcome"] == "pass")
-        avg_time = sum(r["elapsed_s"] for r in runs) / len(runs)
-        report["by_task"][task_id] = {"pass": passes, "total": len(runs), "avg_s": round(avg_time,1)}
-        print(f"  {task_id}: {passes}/{len(runs)} pass, avg {avg_time:.0f}s")
+    for task_id, runs in sorted(report["by_task"].items()):
+        print(f"  {task_id}: {runs['pass']}/{runs['total']} pass, avg {runs['avg_s']:.0f}s")
     total_pass = sum(1 for r in results if r["outcome"] == "pass")
-    print(f"  OVERALL: {total_pass}/{len(results)} ({100*total_pass/len(results):.0f}%)")
-    report["overall_pass_rate"] = f"{100*total_pass/len(results):.0f}%"
+    if results:
+        print(f"  OVERALL: {total_pass}/{len(results)} ({100*total_pass/len(results):.0f}%)")
 
     (RUNS / "formal_comparison_report.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8")

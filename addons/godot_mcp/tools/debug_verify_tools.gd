@@ -166,11 +166,23 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 					or (step["assert"] as Dictionary).has("displacement_max"):
 				displacement_mode = "delta"
 		if not displacement_mode.is_empty():
-			var pre_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+			# 快照用 await_condition 而非 assert_condition：快照只关心"读到了
+			# 新鲜值"——表达式为假值（如原点 position.x == 0.0）是合法快照，
+			# assert_condition 会把假值包装成 error（"not met"），守卫会误伤
+			# （CI run 35346032733：每个位移腿在原点起步全部误判读取失败）。
+			# await_condition 的 error 才是真读取失败（超时/无会话）。
+			var pre_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 				_merge_runtime_params(params, {
 					"expression": String((step["assert"] as Dictionary).get("expression", "")),
 					"timeout_ms": 3000}))
-			inert_pre_value = pre_read.get("last_value", null)
+			# 快照必须新鲜：陈旧/超时的 last_value 会污染位移 delta
+			# （CI run 35343562660："按右键左移 110px"实为陈旧 before 与
+			# 新鲜 after 的差值——测量造假）。拿不到新鲜快照就大声失败。
+			if pre_read.has("error") or bool(pre_read.get("stale", false)):
+				errors.append({"step": i, "phase": "assert",
+					"error": "displacement snapshot not fresh: %s" % str(pre_read.get("error", "stale cached value"))})
+			else:
+				inert_pre_value = pre_read.get("last_value", null)
 		if step.has("action"):
 			var input_params: Dictionary = _merge_runtime_params(params, {
 				"action_name": String(step.get("action", "")),
@@ -179,13 +191,15 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			if step.has("strength"):
 				input_params["strength"] = float(step["strength"])
 			var action_result: Dictionary = await _get_runtime_tools()._tool_simulate_runtime_input_action(input_params)
-			if action_result.has("error"):
-				errors.append({"step": i, "phase": "input", "error": action_result["error"]})
+			# 非成功状态（timeout/no_active_sessions）以前被静默放过——输入
+			# 步假完成，后续断言在错误状态下测量。非 success 一律记为步错误。
+			if action_result.has("error") or String(action_result.get("status", "success")) != "success":
+				errors.append({"step": i, "phase": "input", "error": str(action_result.get("error", "input step status: " + str(action_result.get("status", ""))))})
 		elif step.has("event"):
 			var event_params: Dictionary = _merge_runtime_params(params, {"event": step["event"]})
 			var event_result: Dictionary = await _get_runtime_tools()._tool_simulate_runtime_input_event(event_params)
-			if event_result.has("error"):
-				errors.append({"step": i, "phase": "input", "error": event_result["error"]})
+			if event_result.has("error") or String(event_result.get("status", "success")) != "success":
+				errors.append({"step": i, "phase": "input", "error": str(event_result.get("error", "input step status: " + str(event_result.get("status", ""))))})
 
 		var wait_ms: int = int(step.get("wait_ms", 0))
 		if deterministic and step.has("wait_frames"):
@@ -219,29 +233,57 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			if displacement_mode == "delta" and inert_pre_value != null:
 				# 位移相对断言：步前快照 + 步后差值比较——起点无关（E4 校准
 				# 实测：残留游戏从 x=+810 起步时原点绝对阈值必败）。
-				var post_read: Dictionary = await _get_runtime_tools()._tool_assert_runtime_condition(
+				# 同 pre-read：await_condition 语义（假值是合法读，error 才是失败）。
+				var post_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 					_merge_runtime_params(params, {
 						"expression": String(step_assert.get("expression", "")),
 						"timeout_ms": 3000}))
-				var post_value: float = float(post_read.get("last_value", inert_pre_value))
-				var delta_value: float = post_value - float(inert_pre_value)
-				var delta_passed: bool = true
-				if step_assert.has("displacement_min"):
-					delta_passed = delta_passed and delta_value >= float(step_assert["displacement_min"])
-				if step_assert.has("displacement_max"):
-					delta_passed = delta_passed and delta_value <= float(step_assert["displacement_max"])
-				var delta_result: Dictionary = {
+				if post_read.has("error") or bool(post_read.get("stale", false)):
+					# 步后读同样必须新鲜——陈旧 after 配新鲜 before 是同一种
+					# 测量造假。记失败断言（带证据描述），不静默跳过。
+					assertion_results.append({
+						"description": String(step_assert.get("description", step_assert.get("expression", ""))),
+						"expression": String(step_assert.get("expression", "")),
+						"passed": false,
+						"error": "post-step snapshot not fresh: %s" % str(post_read.get("error", "stale cached value")),
+						"step": i,
+					})
+				else:
+					var post_value: float = float(post_read.get("last_value", inert_pre_value))
+					var delta_value: float = post_value - float(inert_pre_value)
+					var delta_passed: bool = true
+					if step_assert.has("displacement_min"):
+						delta_passed = delta_passed and delta_value >= float(step_assert["displacement_min"])
+					if step_assert.has("displacement_max"):
+						delta_passed = delta_passed and delta_value <= float(step_assert["displacement_max"])
+					var delta_result: Dictionary = {
+						"description": String(step_assert.get("description", step_assert.get("expression", ""))),
+						"expression": String(step_assert.get("expression", "")),
+						"passed": delta_passed,
+						"before_value": inert_pre_value,
+						"after_value": post_value,
+						"displacement": delta_value,
+						"step": i,
+					}
+					# 阈值随载荷下发：失败取证摘要需要（区分零位移 vs 部分位移）。
+					if step_assert.has("displacement_min"):
+						delta_result["displacement_min"] = float(step_assert["displacement_min"])
+					if step_assert.has("displacement_max"):
+						delta_result["displacement_max"] = float(step_assert["displacement_max"])
+					if bool(delta_passed):
+						passed_count += 1
+					assertion_results.append(delta_result)
+			elif displacement_mode == "delta" and inert_pre_value == null \
+					and (step_assert.has("displacement_min") or step_assert.has("displacement_max")):
+				# 快照不可用（前读失败已记步错误）——位移断言不得退化成
+				# truthiness 求值（position.x 非零即"通过"的空洞）。
+				assertion_results.append({
 					"description": String(step_assert.get("description", step_assert.get("expression", ""))),
 					"expression": String(step_assert.get("expression", "")),
-					"passed": delta_passed,
-					"before_value": inert_pre_value,
-					"after_value": post_value,
-					"displacement": delta_value,
+					"passed": false,
+					"error": "displacement assert skipped: pre-step snapshot unavailable",
 					"step": i,
-				}
-				if bool(delta_passed):
-					passed_count += 1
-				assertion_results.append(delta_result)
+				})
 			else:
 				if displacement_mode == "inert" and inert_pre_value != null:
 					step_assert = step_assert.duplicate()

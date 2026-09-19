@@ -447,11 +447,15 @@ func _handle_simulate_input_action(data: Array) -> bool:
 	var action: StringName = StringName(action_name)
 	var action_exists: bool = InputMap.has_action(action)
 
-	var event := InputEventAction.new()
-	event.action = action
-	event.pressed = pressed
-	event.strength = strength
-	Input.parse_input_event(event)
+	# 直接状态设置（真根因修复）：parse_input_event 走事件队列——依赖帧
+	# 刷新，负载下事件偶发丢失（释放丢失 → 残留按下态与后续反向输入在
+	# get_vector 里抵消 → 演练零位移，CI 多轮实证）。action_press/release
+	# 直接写 Input 状态（is_action_pressed/get_vector 所读的同一状态），
+	# 幂等且与帧刷新解耦——本地调试挂具用此路径从未丢失。
+	if pressed:
+		Input.action_press(action, strength)
+	else:
+		Input.action_release(action)
 
 	EngineDebugger.send_message("mcp:input_action_simulated", [{
 		"action_name": action_name,

@@ -5,19 +5,24 @@ then verifies the final product with independent oracle checks.
 
 Game spec (from gap analysis Phase D):
 - 4-direction movement with walls
-- 3 collectible coins
-- Patrolling enemy with death/respawn
+- 3 collectible coins (each with its own identity — one-shot pickup)
+- Patrolling enemy with death/respawn (a second one from goal 08)
 - Esc pause menu
 - Save/load across process restart
 - Sound effect on collection
 - Score HUD
 - Win condition (collect all coins)
-- Tune difficulty (enemy speed)
+- Tune difficulty (enemy speed — direction must be PROVEN vs baseline)
 - Visual polish (walls)
 
-This is the proof that "the same game gets more complete with each change" —
-not just that individual features work, but that the accumulated game is
-playable end-to-end.
+Honesty rules (gap analysis 2026-09-15, P0-2):
+- The final verdict gates on BOTH goal completion AND independent oracle
+  checks. "10/10 goals completed" alone is not success.
+- Oracle checks assert real behavior (full two-round game loop, meaningful
+  enemy patrol and death, exact coin count) — not config presence
+  (the old `COINS_TO_WIN >= 1` / `deaths_count >= 0` checks were vacuous).
+- Windows console cannot encode emoji/UTF-8 by default: stdout is
+  reconfigured up-front so the run cannot die mid-report (the CI break).
 """
 import json
 import os
@@ -31,17 +36,31 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SCRATCH = REPO / "tmp_representative_game"
 GODOT = os.environ.get("GODOT_EXE", r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe")
-PORT = 9195
+PORT = int(os.environ.get("REP_PORT", "9195"))
 
 def rpc(name, args, rid=1, timeout=300.0):
-    payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
-    req = urllib.request.Request(f"http://127.0.0.1:{PORT}/mcp",
-        data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
-    r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
-    res = r.get("result",{})
-    if res.get("isError"):
-        raise RuntimeError(f"{name}: {res['content'][0]['text'][:300]}")
-    return res.get("structuredContent",{})
+    # 编辑器中途打嗝（503/连接重置，本机与 CI runner 均实测）不再截断整轮：
+    # 工作流状态是持久检查点，重复同一命令安全挂接不重做——退避重试。
+    import time as _t
+    last_err = None
+    for attempt in range(4):
+        try:
+            payload = {"jsonrpc":"2.0","method":"tools/call","id":rid,"params":{"name":name,"arguments":args}}
+            req = urllib.request.Request(f"http://127.0.0.1:{PORT}/mcp",
+                data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"})
+            r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+            res = r.get("result",{})
+            if res.get("isError"):
+                raise RuntimeError(f"{name}: {res['content'][0]['text'][:300]}")
+            return res.get("structuredContent",{})
+        except (urllib.error.HTTPError, urllib.error.URLError, ConnectionError) as exc:
+            last_err = exc
+            if attempt < 3:
+                wait_s = 10 * (attempt + 1)
+                print(f"  [rpc hiccup on {name}: {exc}] retrying in {wait_s}s "
+                      f"({attempt + 1}/3) — durable workflow state makes this safe")
+                _t.sleep(wait_s)
+    raise last_err
 
 def wait_server():
     deadline = time.time() + 120
@@ -56,27 +75,51 @@ def wait_server():
             time.sleep(1)
     return False
 
-# The 10-goal game-building sequence
+def wait_server_quick():
+    # 目标间的快速健康探测（1 秒内答即活）
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{PORT}/mcp",
+            data=json.dumps({"jsonrpc":"2.0","method":"tools/list","id":0}).encode(),
+            headers={"Content-Type":"application/json"}), timeout=2).read()
+        return True
+    except Exception:
+        return False
+
+# The 14-goal game-building sequence
 GOALS = [
     ("01-movement-walls", "Arrow-key player movement with walls that block the player."),
     ("02-coins", "Add 3 collectible coins."),
     ("03-enemy", "Add a patrolling enemy that kills the player on touch."),
     ("04-pause", "Add an Esc pause menu that pauses the world."),
     ("05-sound", "Add a sound effect when collecting a coin."),
+    ("05b-particles", "Add a coin pickup particle burst."),
+    ("05c-music", "Add looping background music."),
     ("06-save", "Add save/load so progress persists after closing and relaunching."),
     ("07-tune-enemy", "Make the enemy slower so the game is easier."),
     ("08-second-enemy", "Add another patrolling enemy."),
     ("09-state-flow", "Add a title screen with start, gameplay, win state and restart."),
+    ("09a-gameover", "Add a game over screen with 3 lives when the player dies."),
+    ("09b-levels", "Add a second level after the first win."),
     ("10-final-tune", "Make the player movement snappier and more responsive."),
 ]
 
+def purge_user_saves():
+    # user:// 存档跨运行残留（真机复现：漂移时代的 {"x":4812} 毒化每次
+    # 全新启动——恢复位置远离金币，收集重验永远失败）。游戏进程实际
+    # 落在 "[unnamed project]"，两个名字都清。
+    appdata = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata")
+    for name in ("[unnamed project]", "RepresentativeGame"):
+        shutil.rmtree(os.path.join(appdata, name), ignore_errors=True)
+
 def setup_scratch():
+    purge_user_saves()
     if SCRATCH.exists():
         shutil.rmtree(SCRATCH, ignore_errors=True)
     (SCRATCH / "addons").mkdir(parents=True)
     shutil.copytree(REPO / "addons/godot_mcp", SCRATCH / "addons/godot_mcp")
     (SCRATCH / "project.godot").write_text(
-        'config_version=5\n\n[application]\n\nconfig_name="RepresentativeGame"\n\n'
+        'config_version=5\n\n[application]\n\nconfig/name="RepresentativeGame"\n\n'
         '[editor_plugins]\n\nenabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")\n',
         encoding="utf-8", newline="\n")
 
@@ -86,7 +129,9 @@ def run_goal(goal_id, objective, iteration_base):
         "profiles":["gameplay_feature"],"replace":True,"plan_path":plan_path})
     state = "?"
     d = {}
-    for i in range(15):
+    # 旧行为回归门禁让每个完成多花 ~10-60s（受影响旧功能逐个重验）——
+    # 轮询预算相应放大。
+    for i in range(25):
         d = rpc("run_game_workflow", {"plan_path":plan_path,"max_steps":8}, iteration_base+i)
         state = d.get("state", d.get("status","?"))
         if state in ("completed","needs_input","recovery_required","replan_required"):
@@ -95,12 +140,90 @@ def run_goal(goal_id, objective, iteration_base):
     rpc("stop_project", {"allow_window":True}, iteration_base+90)
     return state, d
 
+# ---- Oracle step sequences (mirror the workflow's own exercise semantics) ----
+
+def full_loop_steps():
+    """Title -> playing -> collect ALL coins -> win -> restart -> win again."""
+    return [
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "move_right", "pressed": True, "wait_frames": 30},
+        {"action": "move_right", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "coins_collected == COINS_TO_WIN", "expected": True,
+            "description": "round one: every coin collected (identity-safe pickup)"}},
+        # 关卡语义（09b 合并后）：第一轮胜利是 L1 通关文案而非最终胜利；
+        # 换关的重置只发生在 Enter 转移——收集计数原样成立。
+        {"assert": {"expression": "_win_label.text", "expected": "Level 1 Clear!",
+            "description": "round one: level one clear (not the final win)"}},
+        {"assert": {"expression": "game_state", "expected": "win",
+            "description": "round one: win state reached"}},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 200,
+         "assert": {"expression": "coins_collected == 0", "expected": True,
+            "description": "the restart cycle reset the counter (win->next-level playing)"}},
+        {"assert": {"expression": "abs(position.x) < 20", "expected": True,
+            "description": "restart reset the player to the origin"}},
+        {"assert": {"expression": "current_level == 2", "expected": True,
+            "description": "the restart cycle advanced to level two (goal 09b)"}},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 200,
+         "assert": {"expression": "game_state", "expected": "playing",
+            "description": "second round starts"}},
+        {"action": "move_right", "pressed": True, "wait_frames": 30},
+        {"action": "move_right", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "str(coins_collected == COINS_TO_WIN) + '|' + game_state + '|' + str(current_level) + '|' + str(lives) + '|' + str(deaths_count)",
+            "expected": "true|win|2|3|0",
+            "description": "second round: L2 full win (all-collected/state/level — values visible on failure)"}},
+        {"assert": {"expression": "sfx_played_count == coins_collected and burst_count == coins_collected",
+            "expected": True,
+            "description": "second round: feedback re-fired after the restart reset"}},
+    ]
+
+def death_check_steps():
+    """Dodge below the enemy band, pass it, return to y=0, sweep back left
+    through the band: a death must occur and the player must respawn."""
+    return [
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "ui_accept", "pressed": True, "wait_ms": 300},
+        {"action": "ui_accept", "pressed": False, "wait_ms": 100},
+        {"action": "move_down", "pressed": True, "wait_ms": 1000},
+        {"action": "move_down", "pressed": False, "wait_ms": 100},
+        {"action": "move_right", "pressed": True, "wait_ms": 2000},
+        {"action": "move_right", "pressed": False, "wait_ms": 100},
+        {"action": "move_up", "pressed": True, "wait_ms": 1000},
+        {"action": "move_up", "pressed": False, "wait_ms": 100},
+        {"action": "move_left", "pressed": True, "wait_ms": 1500},
+        {"action": "move_left", "pressed": False, "wait_ms": 300,
+         "assert": {"expression": "deaths_count > 0", "expected": True,
+            "description": "crossing the patrol band killed the player at least once"}},
+        {"assert": {"expression": "position.x < 220", "expected": True,
+            "description": "the player respawned left of the enemy band"}},
+    ]
+
 def main() -> int:
+    # P0-1: Windows 控制台默认 GBK 无法编码 emoji/长破折号——CI 曾在
+    # 输出勾号时 UnicodeEncodeError 中断整轮测试。先重配 stdout/stderr。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     setup_scratch()
-    editor = subprocess.Popen(
-        [GODOT, "--editor", "--headless", "--path", str(SCRATCH),
-         "--", "--mcp-server", f"--mcp-port={PORT}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(SCRATCH))
+    def launch_editor():
+        return subprocess.Popen(
+            [GODOT, "--editor", "--headless", "--path", str(SCRATCH),
+             "--", "--mcp-server", f"--mcp-port={PORT}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=str(SCRATCH))
+    editor = launch_editor()
     try:
         if not wait_server():
             print("ERROR: server not up"); return 1
@@ -111,56 +234,98 @@ def main() -> int:
 
         results = []
         for goal_id, objective in GOALS:
+            # 编辑器韧性（真机实证：游戏进程拆除偶发连带编辑器硬崩——
+            # 每演练 stop→run 放大启停次数，2/3 run 中途死连）：目标间探测
+            # 服务器，死了就重启编辑器。工作流状态全在磁盘（.mcp 计划/
+            # 账本/注册表），续跑即"中断后恢复"的真实演练（北极星语义）。
+            if not wait_server_quick():
+                print(f"  [editor died before {goal_id}] relaunching — durable state resumes")
+                try:
+                    editor.terminate()
+                except Exception:
+                    pass
+                editor = launch_editor()
+                if not wait_server():
+                    print(f"ERROR: editor relaunch failed before {goal_id}"); return 1
             started = time.time()
             state, d = run_goal(goal_id, objective, 100 + len(results) * 10)
             elapsed = time.time() - started
             ledger = d.get("goal_ledger", {})
             regression = d.get("ledger_regression", {})
+            prior = d.get("prior_regression", {})
+            model = d.get("game_model", {})
             results.append({
                 "goal": goal_id, "state": state, "elapsed_s": round(elapsed, 1),
                 "ledger_goals": ledger.get("recorded_goals", 0),
                 "regression_clean": regression.get("regression_clean", None),
+                "prior_checked": len(prior.get("checked", [])) if prior else None,
+                "model_counts": model.get("counts", {}),
             })
             status = "✅" if state == "completed" else f"❌({state})"
+            if state != "completed":
+                # 500 宽度：位移/指标断言的取证值（before/after/displacement/
+                # actual）必须完整可见——220 截断吃掉过手感腿的实际位移值。
+                reason = str(d.get("blocked_reason", ""))[:500]
+                print(f"      reason: {reason}")
             print(f"  [{goal_id}] {status} {elapsed:.0f}s ledger={ledger.get('recorded_goals',0)} "
-                  f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'}")
+                  f"regression={'✅' if regression.get('regression_clean') else '⚠️' if regression else 'n/a'} "
+                  f"prior_reverified={len(prior.get('checked', [])) if prior else 0} "
+                  f"model={model.get('counts', {})}")
 
-        # Summary
         completed = sum(1 for r in results if r["state"] == "completed")
         print(f"\n{'='*60}")
         print(f"GAME BUILD RESULT: {completed}/{len(GOALS)} goals completed")
         print(f"{'='*60}")
 
-        # Independent oracle: verify the final game is playable
+        # Independent oracle: verify the final game is actually playable.
         print("\nORACLE: Independent verification of final game")
         oracle_checks = []
         try:
-            # Start the game
             rpc("enable_tools", {"tools": ["play_and_verify", "run_project",
                 "install_runtime_probe", "stop_project"]}, 900)
             rpc("run_project", {"allow_window": True}, 901)
             time.sleep(3)
 
-            # Check 1: Movement works
-            r = rpc("play_and_verify", {"steps": [
-                {"action": "move_right", "pressed": True, "wait_ms": 400,
-                 "assert": {"expression": "position.x", "displacement_min": 10}},
-                {"action": "move_right", "pressed": False, "wait_ms": 80},
-            ]}, 910)
-            oracle_checks.append(("movement", bool(r.get("passed"))))
-
-            # Check 2: No runtime errors
-            r2 = rpc("play_and_verify", {"steps": [{"wait_ms": 500}]}, 911)
-            oracle_checks.append(("no_runtime_errors", bool(r2.get("passed")) and not r2.get("runtime_errors")))
-
-            # Check 3: Coins exist (controller has coins_collected)
+            # Check 1: exact coin count (goal 02 asked for three — the count
+            # must survive every later merge; the old >= 1 check was vacuous)
             r3 = rpc("play_and_verify", {"steps": [
-                {"wait_ms": 200, "assert": {"expression": "COINS_TO_WIN >= 1", "expected": True,
-                    "description": "coins are configured"}},
+                {"wait_ms": 200, "assert": {"expression": "COINS_TO_WIN == 3", "expected": True,
+                    "description": "three coins configured (count survived all merges)"}},
             ]}, 912)
-            oracle_checks.append(("coins_configured", bool(r3.get("passed"))))
+            oracle_checks.append(("coins_configured_exact", bool(r3.get("passed"))))
 
-            # Check 4: Pause works (if controller has set_paused)
+            # Check 2: full two-round game loop (title -> collect all -> win
+            # -> restart -> collect all again -> win again)
+            r6 = rpc("play_and_verify", {"steps": full_loop_steps(),
+                "deterministic": True}, 915)
+            oracle_checks.append(("full_two_round_loop", bool(r6.get("passed"))))
+
+            # Check 3: no runtime errors anywhere above (the old multi-coin
+            # double-free would surface here)
+            oracle_checks.append(("no_runtime_errors",
+                bool(r6.get("passed")) and not r6.get("runtime_errors")))
+
+            # Check 4: enemy patrol is meaningful (moves away from home)
+            r5 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 800, "assert": {"expression": "abs(_enemy.position.x - 300.0) > 10",
+                    "expected": True,
+                    "description": "the first enemy patrols away from its home"}},
+            ]}, 914)
+            oracle_checks.append(("enemy_patrols", bool(r5.get("passed"))))
+
+            # Check 5: touching the enemy actually kills (deaths > 0 via a
+            # deliberate band crossing, not the vacuous >= 0)
+            r7 = rpc("play_and_verify", {"steps": death_check_steps()}, 916)
+            oracle_checks.append(("enemy_kills", bool(r7.get("passed"))))
+
+            # Check 6: two enemies really exist (goal 08 added a second one)
+            r8 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 200, "assert": {"expression": "ENEMY_COUNT == 2", "expected": True,
+                    "description": "the second enemy survived later merges (goal 08)"}},
+            ]}, 917)
+            oracle_checks.append(("two_enemies", bool(r8.get("passed"))))
+
+            # Check 7: pause works
             r4 = rpc("play_and_verify", {"steps": [
                 {"action": "ui_cancel", "pressed": True, "wait_ms": 300,
                  "assert": {"expression": "get_tree().paused", "expected": True}},
@@ -171,12 +336,23 @@ def main() -> int:
             ]}, 913)
             oracle_checks.append(("pause_resume", bool(r4.get("passed"))))
 
-            # Check 5: Enemy exists
-            r5 = rpc("play_and_verify", {"steps": [
-                {"wait_ms": 500, "assert": {"expression": "deaths_count >= 0", "expected": True,
-                    "description": "enemy system present (deaths_count accessible)"}},
-            ]}, 914)
-            oracle_checks.append(("enemy_system", bool(r5.get("passed"))))
+            # Check 9: the background music is playing in the final game
+            # (goal 05c; pure overlay — must survive every later merge)
+            r10 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 400, "assert": {"expression": "_bgm_player.playing", "expected": True,
+                    "description": "background music survived all merges (goal 05c)"}},
+            ]}, 919)
+            oracle_checks.append(("bgm_playing", bool(r10.get("passed"))))
+
+            # Check 8: both feedback systems survived every later merge
+            # (goals 05/05b added sfx + particles; 06-10 each regenerate the
+            # full controller — the wiring must still be there at the end)
+            r9 = rpc("play_and_verify", {"steps": [
+                {"wait_ms": 200, "assert": {"expression": "_sfx_player != null and _burst_player != null",
+                    "expected": True,
+                    "description": "sfx + particle feedback wiring survived all merges (goals 05/05b)"}},
+            ]}, 918)
+            oracle_checks.append(("feedback_wiring", bool(r9.get("passed"))))
 
         except Exception as exc:
             oracle_checks.append(("oracle_error", False))
@@ -199,8 +375,11 @@ def main() -> int:
         print(f"  Scripts: {len(scripts)}")
         print(f"  Scenes: {len(scenes)}")
         print(f"  Ledger entries: {results[-1]['ledger_goals'] if results else 0}")
+        print(f"  Game model counts: {results[-1]['model_counts'] if results else {}}")
 
-        overall = completed == len(GOALS)
+        # P0-2: independent oracle checks gate the final verdict — completed
+        # goals alone are a claim, not evidence.
+        overall = completed == len(GOALS) and oracle_pass == len(oracle_checks)
         print(f"\n{'='*60}")
         print(f"OVERALL: {'PASS' if overall else 'PARTIAL'} — "
               f"{completed}/{len(GOALS)} goals, {oracle_pass}/{len(oracle_checks)} oracle checks")

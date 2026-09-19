@@ -61,12 +61,34 @@ class FakeRuntimeTools extends RefCounted:
 	func _tool_simulate_runtime_input_event(_params: Dictionary) -> Dictionary:
 		return {"status": "success"}
 
-	func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
+	func _scripted_condition(params: Dictionary) -> Dictionary:
 		var expression: String = str(params.get("expression", ""))
 		assert_calls.append(expression)
 		if scripted_results.has(expression):
-			return scripted_results[expression]
+			var scripted: Variant = scripted_results[expression]
+			# 序列脚本化：数组按调用次序弹出（前读/后读需不同结果的场景）
+			if scripted is Array:
+				if (scripted as Array).is_empty():
+					return {"passed": true, "actual": true, "expected": params.get("expected", null)}
+				var next: Variant = (scripted as Array).pop_front()
+				return next if next is Dictionary else {"passed": true, "actual": true, "expected": params.get("expected", null)}
+			return scripted
 		return {"passed": true, "actual": true, "expected": params.get("expected", null)}
+
+	func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
+		return _scripted_condition(params)
+
+	# 快照路径（位移 delta 前后读）走 await 语义：假值是合法读，只有
+	# error/stale 才是读取失败。
+	func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
+		var result: Dictionary = _scripted_condition(params)
+		if not result.has("error") and result.has("last_value"):
+			var truthy: bool = result.get("last_value") != null \
+				and str(result.get("last_value")) != "false" \
+				and str(result.get("last_value")) != "0"
+			result["status"] = "success" if truthy else "failed"
+			result["condition_met"] = truthy
+		return result
 
 	func _tool_get_runtime_screenshot(params: Dictionary) -> Dictionary:
 		return {"status": "success", "save_path": str(params.get("save_path", "")), "size": "100x100"}
@@ -195,22 +217,29 @@ func test_collect_and_enemy_exercises_derived() -> void:
 			descriptions.append(str(leg.get("expression", "")))
 	assert_has(descriptions, "coins_collected")
 	assert_has(descriptions, "_win_label.text")
-	var enemy_steps: Array = tools._enemy_play_steps()
+	var enemy_legs: Dictionary = tools._enemy_play_legs()
 	var enemy_expressions: Array = []
-	for step_value in enemy_steps:
+	for step_value in enemy_legs["steps"]:
 		var leg2: Dictionary = (step_value.get("assert", {}) as Dictionary)
 		if not leg2.is_empty():
 			enemy_expressions.append(str(leg2.get("expression", "")))
 	assert_has(enemy_expressions, "deaths_count")
-	assert_has(enemy_expressions, "position.x")
+	var enemy_metrics: Array = enemy_legs["assertions"]
+	assert_eq(String((enemy_metrics[0] as Dictionary).get("aggregate", "")), "range",
+		"patrol proof uses the phase-robust range metric")
 
 func test_state_machine_goal_generates_flow() -> void:
 	var source: String = BlueprintsScript.controller_script("a title screen with start, gameplay, win state and restart")
 	assert_true(source.contains("var game_state: String = \"title\""), "observable state variable")
-	assert_true(source.contains("\"title\" and Input.is_action_just_pressed(\"ui_accept\")"), "title->playing transition")
+	assert_true(source.contains("if _enter_edge():"), "transitions use the state-polled enter edge (probe-safe)")
+	assert_true(source.contains("if game_state == \"title\":"), "title->playing transition")
+	assert_true(source.contains("elif game_state == \"win\":"), "win->title restart transition")
 	assert_true(source.contains("game_state = \"win\""), "collect reaches win state")
 	assert_true(source.contains("coins_collected = 0"), "restart resets run state")
 	assert_true(source.contains("_coin_area"), "state implies collectible (win condition)")
+	assert_true(source.contains("func _enter_edge() -> bool:"), "edge latch helper emitted")
+	assert_false(source.contains("is_action_just_pressed(\"ui_accept\")"),
+		"the unreliable just_pressed edge is gone for ui_accept")
 
 func test_state_play_steps_assert_all_four_transitions() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
@@ -219,7 +248,10 @@ func test_state_play_steps_assert_all_four_transitions() -> void:
 		var leg: Dictionary = step_value.get("assert", {}) if step_value.has("assert") else {}
 		if str(leg.get("expression", "")) == "game_state":
 			states.append(leg.get("expected"))
-	assert_eq(states, ["playing"], "playing state reached (minimal state verify)")
+	# 效果断言替代瞬态 title 断言后，直接的 game_state 断言序列为 win → playing
+	#（title 由重置效果 coins==0 + 原点间接证明，见 _state_play_steps）
+	assert_eq(states, ["win", "playing"],
+		"direct state asserts: win -> playing (title proven via reset effects)")
 
 func test_rename_goal_gets_native_objective_gate() -> void:
 	# E4：更名目标无需显式 required_capabilities——引擎按语义插入
@@ -243,11 +275,12 @@ func test_rename_goal_gets_native_objective_gate() -> void:
 func test_movement_feel_legs_shape() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
 	var feel: Dictionary = tools._movement_feel_legs()
-	assert_true(bool(feel["steps"][0].has("wait_frames")), "frame-stepped input hold")
-	var assertion: Dictionary = feel["assertions"][0]
-	assert_eq(str(assertion.get("metric", "")), "px")
-	assert_eq(str(assertion.get("aggregate", "")), "delta", "responsiveness = displacement over held frames")
-	assert_true(float(assertion.get("expected", 0)) > 0.0, "a real budget, not a tautology")
+	var feel_step: Dictionary = feel["steps"][0]
+	assert_true(bool(feel_step.has("wait_frames")), "frame-stepped input hold")
+	# feel 断言已步级化：只测本腿 20 帧窗口（整轨迹 delta 会被后续死亡重置压低）
+	var feel_assert: Dictionary = feel_step.get("assert", {})
+	assert_true(feel_assert.has("displacement_min"), "step-level displacement assert on the hold window")
+	assert_true(float(feel_assert.get("displacement_min", 0)) >= 60.0, "a real budget, not a tautology")
 
 func test_audio_goal_generates_sfx_on_collect() -> void:
 	var source: String = BlueprintsScript.controller_script("collect a coin that plays a sound effect")
@@ -289,7 +322,8 @@ func test_multi_coin_goal_generates_correct_count() -> void:
 	var source: String = BlueprintsScript.controller_script("collect 3 coins and show a win label")
 	assert_true(source.contains("const COINS_TO_WIN: int = 3"), "3 coins parsed from goal")
 	assert_true(source.contains("Coin%d"), "extra coin generation loop present")
-	assert_true(source.contains("180"), "coins spread across positions")
+	assert_true(source.contains("110.0 + coin_index * 40.0"),
+		"coins cluster before the enemy patrol band (P0-3 geometry fix)")
 
 func test_multi_param_tuning_parses() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
@@ -297,3 +331,94 @@ func test_multi_param_tuning_parses() -> void:
 	assert_eq(str(enemy_tune.get("param", "")), "ENEMY_SPEED")
 	var magnet_tune: Dictionary = tools.parse_tuning_goal("make the pickup magnet radius bigger, snappier")
 	assert_eq(str(magnet_tune.get("param", "")), "MAGNET")
+
+# ============================================================================
+# 位移快照防污染（CI run 35343562660：手感腿 "按右键左移 110px" 实为
+# 陈旧 before 缓存与新鲜 after 的差值——测量造假）
+# ============================================================================
+
+func test_displacement_assert_rejects_stale_pre_snapshot() -> void:
+	# 前读返回带 error 的超时载荷（携带 last_value）——不得用该值算 delta
+	_fake.scripted_results["position.x"] = {
+		"passed": false, "status": "failed",
+		"error": "Timeout waiting for runtime condition: position.x",
+		"last_value": 114.73}
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	var has_snapshot_error: bool = false
+	for err_value in report.get("errors", []):
+		if str((err_value as Dictionary).get("error", "")).contains("snapshot not fresh"):
+			has_snapshot_error = true
+	assert_true(has_snapshot_error, "stale pre-read records a loud step error")
+	assert_false(bool(report.get("passed", true)), "the gate fails instead of computing a poisoned delta")
+	var has_skip: bool = false
+	for a_value in report.get("assertions", []):
+		var a: Dictionary = a_value
+		if not bool(a.get("passed", true)) and str(a.get("error", "")).contains("snapshot unavailable"):
+			has_skip = true
+	assert_true(has_skip, "the displacement assert is recorded as failed, not vacuously passed")
+
+func test_displacement_assert_rejects_stale_post_snapshot() -> void:
+	# 前读新鲜（100.0）、后读超时携带陈旧值（4.33）——失败断言带证据，
+	# 不得用陈旧 after 算出 -95.67 的假 delta
+	_fake.scripted_results["position.x"] = [
+		{"passed": true, "status": "success", "last_value": 100.0},
+		{"passed": false, "status": "failed",
+			"error": "Timeout waiting for runtime condition: position.x",
+			"last_value": 4.33},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	assert_false(bool(report.get("passed", true)), "the gate fails on a stale post-read")
+	var has_post_error: bool = false
+	for a_value in report.get("assertions", []):
+		var a: Dictionary = a_value
+		if not bool(a.get("passed", true)) and str(a.get("error", "")).contains("post-step snapshot not fresh"):
+			has_post_error = true
+	assert_true(has_post_error, "the failed assertion carries the stale-post evidence")
+
+func test_displacement_assert_computes_delta_from_fresh_reads() -> void:
+	# 正常路径回归保护：两读都新鲜 → delta 计算与阈值判定不变
+	_fake.scripted_results["position.x"] = [
+		{"passed": true, "status": "success", "last_value": 100.0},
+		{"passed": true, "status": "success", "last_value": 186.7},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window"}},
+	])
+	assert_true(bool(report.get("passed", false)), str(report.get("errors", "")))
+	var delta_result: Dictionary = {}
+	for a_value in report.get("assertions", []):
+		if (a_value as Dictionary).has("displacement"):
+			delta_result = a_value
+	assert_almost_eq(float(delta_result.get("displacement", 0.0)), 86.7, 0.01,
+		"fresh delta = 186.7 - 100.0")
+
+func test_falsy_snapshot_at_origin_is_a_legal_read() -> void:
+	# CI run 35346032733 的误伤回归：原点起步 position.x == 0.0 是假值
+	# 但是**合法快照**——不得被判为"读取失败"（assert_condition 会把假值
+	# 包装成 error；快照路径必须用 await 语义区分）。
+	_fake.scripted_results["position.x"] = [
+		{"status": "failed", "condition_met": false, "last_value": 0.0},
+		{"status": "success", "last_value": 86.7},
+	]
+	var report: Dictionary = await _run([
+		{"action": "move_right", "pressed": true, "wait_ms": 10, "assert": {
+			"expression": "position.x", "displacement_min": 60,
+			"description": "feel window from the origin"}},
+	])
+	assert_true(bool(report.get("passed", false)), str(report.get("errors", "")))
+	var delta_result: Dictionary = {}
+	for a_value in report.get("assertions", []):
+		if (a_value as Dictionary).has("displacement"):
+			delta_result = a_value
+	assert_almost_eq(float(delta_result.get("displacement", -1.0)), 86.7, 0.01,
+		"falsy origin snapshot still measures a real delta")

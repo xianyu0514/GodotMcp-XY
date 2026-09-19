@@ -77,16 +77,21 @@ func test_save_play_steps_shape() -> void:
 		var step: Dictionary = step_value
 		if bool(step.get("pressed", false)):
 			actions.append(step.get("action"))
-	assert_eq(actions, ["move_right", "save_game"], "move to make state, then save")
+	# 锚定腿（safe-save 修复链）在前：left 锚到左墙 → save。**存档必须
+	# coins=0 且远离金币窗**——在金币区内存档会毒化一切下游全新启动
+	# （恢复位置就在拾取窗内 → 开机自动拾取 → 计数/关卡状态全错）。
+	assert_eq(actions, ["move_left", "save_game"], "anchor at the wall, then save coin-free")
 	var save_step: Dictionary = steps[2]
 	assert_true(save_step.has("assert"), "save press asserts write success")
-	assert_eq(str((save_step["assert"] as Dictionary).get("expression", "")), "last_save_ok")
+	assert_eq(str((save_step["assert"] as Dictionary).get("expression", "")),
+		"str(last_save_ok) + \"|\" + str(coins_collected)", "the saved state is forensically normalized (ok/coins)")
 
 func test_restore_play_steps_assert_disk_state_and_fresh_session() -> void:
 	var steps: Array = WorkflowToolsScript.new()._restore_play_steps()
 	assert_eq(str(((steps[0] as Dictionary).get("assert", {}) as Dictionary).get("expression", "")),
 		"position.x", "restored position asserted")
-	assert_eq(str(((steps[0] as Dictionary).get("assert", {}) as Dictionary).get("operator", "")), "gt")
+	assert_eq(str(((steps[0] as Dictionary).get("assert", {}) as Dictionary).get("operator", "")), "lt",
+		"the restore lands at the saved wall pin")
 	assert_eq(str(((steps[1] as Dictionary).get("assert", {}) as Dictionary).get("expression", "")),
 		"last_save_ok", "fresh-session proof asserted")
 	assert_eq((steps[1] as Dictionary).get("assert", {}).get("expected"), false)
