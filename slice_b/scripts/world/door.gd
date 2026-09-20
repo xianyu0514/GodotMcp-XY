@@ -13,6 +13,8 @@ func _on_body_entered(body: Node2D) -> void:
 	if target_scene.is_empty() or not ResourceLoader.exists(target_scene):
 		push_warning("Door target missing: " + target_scene)
 		return
+	if SoundBus != null:
+		SoundBus.play_sfx(SoundBus.SFX_DOOR)
 	# 出生点先入存档（change_scene 只是排队到帧末，同帧内先写先得）。
 	GameSave.current["pending_spawn"] = {"x": target_spawn.x, "y": target_spawn.y}
 	GameSave.record_map_visit(target_scene)
