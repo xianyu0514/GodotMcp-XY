@@ -1,0 +1,10 @@
+[gd_resource type="Resource" script_class="ItemDef" load_steps=2 format=3 uid="uid://slicebitemheart001"]
+
+[ext_resource type="Script" path="res://scripts/items/item_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+item_id = "heart"
+display_name = "Heart"
+heal_amount = 30
+quest_item = true

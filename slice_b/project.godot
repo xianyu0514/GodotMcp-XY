@@ -17,6 +17,7 @@ config/features=PackedStringArray("4.7")
 [autoload]
 
 GameSave="*res://scripts/world/game_save.gd"
+SliceHUD="*res://scripts/ui/hud.gd"
 MCPRuntimeProbe="*res://addons/godot_mcp/runtime/mcp_runtime_probe.gd"
 
 [display]

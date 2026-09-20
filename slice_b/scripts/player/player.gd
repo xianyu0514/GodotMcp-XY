@@ -33,8 +33,17 @@ func take_hit(damage: int, knockback: Vector2) -> void:
 	hp = int(verdict["hp"])
 	_invuln_left = INVULN_SECONDS
 	_knockback_velocity = knockback
+	if GameSave != null:
+		GameSave.record_combat_state(hp, GameSave.coins)
 	if bool(verdict["dead"]):
 		global_position = _respawn_at
 		hp = MAX_HP
 		_knockback_velocity = Vector2.ZERO
 		_invuln_left = 0.0
+
+func heal(amount: int) -> void:
+	if amount <= 0:
+		return
+	hp = mini(MAX_HP, hp + amount)
+	if GameSave != null:
+		GameSave.record_combat_state(hp, GameSave.coins)

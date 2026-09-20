@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://slicebmapl1aaaa00001"]
+[gd_scene load_steps=12 format=3 uid="uid://slicebmapl1aaaa00001"]
 
 [ext_resource type="Script" path="res://scripts/world/map_root.gd" id="1_root"]
 [ext_resource type="Script" path="res://scripts/world/door.gd" id="2_door"]
@@ -6,6 +6,8 @@
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="4_player"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="5_enemy"]
 [ext_resource type="Resource" path="res://data/grunt_stats.tres" id="6_grunt"]
+[ext_resource type="PackedScene" path="res://scenes/item_pickup.tscn" id="7_item"]
+[ext_resource type="PackedScene" path="res://scenes/shrine.tscn" id="8_shrine"]
 
 [sub_resource type="RectangleShape2D" id="shape_wall_h"]
 size = Vector2(960, 40)
@@ -56,6 +58,15 @@ shape = SubResource("shape_wall_v")
 position = Vector2(500, 280)
 stats = ExtResource("6_grunt")
 
+
+[node name="Heart1" parent="." instance=ExtResource("7_item")]
+position = Vector2(320, 400)
+
+[node name="Heart2" parent="." instance=ExtResource("7_item")]
+position = Vector2(640, 130)
+
+[node name="QuestShrine" parent="." instance=ExtResource("8_shrine")]
+position = Vector2(150, 120)
 
 [node name="SpawnMarker" type="Marker2D" parent="."]
 position = Vector2(120, 280)
