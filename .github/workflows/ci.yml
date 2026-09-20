@@ -319,11 +319,13 @@ jobs:
           set -euo pipefail
           "$GODOT_EXE" --headless --path . --import
 
-      # 资产前置：素材清单自检（缺失即红——不再有隐藏的本机生成依赖）。
+      # 资产前置：幂等合成（本身就是"全新检出可复现"的证明），随后
+      # --check 验证清单完整——缺失即红，不再有隐藏的本机生成依赖。
       - name: Prepare slice assets (tracked skies + synthesized audio)
         shell: bash
         run: |
           set -euo pipefail
+          python slice_b/prepare_assets.py
           python slice_b/prepare_assets.py --check
 
       # 六类切片证据流经统一 runner（--filter slice_b --slow 精确命中）。
