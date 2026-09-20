@@ -10,6 +10,8 @@ func _ready() -> void:
 func _on_body_entered(body: Node2D) -> void:
 	if item == null or not body.is_in_group("player"):
 		return
+	if SoundBus != null:
+		SoundBus.play_sfx(SoundBus.SFX_PICKUP)
 	if item.quest_item:
 		if GameSave != null:
 			GameSave.inventory.add(item.item_id)
