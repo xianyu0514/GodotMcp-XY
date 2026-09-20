@@ -325,6 +325,10 @@ def main() -> int:
         info2 = tool_call("get_project_info")
         check("editor restart reconnects to the same project",
               info2.get("project_name") == "FirstPlayableScratch")
+        # Enablement is session-scoped: a fresh editor starts from the last
+        # PERSISTED state (a prior test's minimal_core reset), so the atomic
+        # toolset must be re-enabled for the persistence checks.
+        tool_call("enable_tools", {"tools": ATOMIC_TOOLS})
         tool_call("open_scene", {"scene_path": SCENE, "allow_ui_focus": True})
         structure = json.dumps(tool_call("get_scene_structure"))
         for expected in ("Player", "Visual", "Shape", "WallLeft", "WallRight"):
