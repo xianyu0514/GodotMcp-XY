@@ -105,6 +105,44 @@ func test_extraction_catches_phantom_tool() -> void:
 		"Phantom control name must not be in the manifest (gate would never fire)")
 
 
+func test_prompt_prose_slash_lists_reference_real_tools() -> void:
+	# 散文体漂移防线：模板曾写 "write_script / execute_editor_script" —— JSON 调用形
+	# 门禁抓不到散文。规则：斜杠列表中任一段是真实工具名时，所有 snake_case 段都
+	# 必须是真实工具（或注册 prompt）；纯单词段（verify / assert 等）不受限。
+	var slash_regex: RegEx = RegEx.create_from_string("([a-z0-9_]+)\\s*/\\s*([a-z0-9_]+)")
+	var rendered: String = _render_all_prompts()
+	var prompt_names: Dictionary = _prompt_names()
+	var drift: Array[String] = []
+	for match_result in slash_regex.search_all(rendered):
+		var left: String = String(match_result.get_string(1))
+		var right: String = String(match_result.get_string(2))
+		var anchors_real: bool = _manifest_names.has(left) or _manifest_names.has(right)
+		if not anchors_real:
+			continue
+		for segment in [left, right]:
+			if segment.contains("_") and not _manifest_names.has(segment) \
+					and not prompt_names.has(segment) and not (segment in drift):
+				drift.append(segment)
+	assert_eq(drift.size(), 0,
+		"Slash lists anchored by a real tool must not name phantom tools: %s" % ", ".join(drift))
+
+
+func test_slash_list_gate_catches_the_original_drift() -> void:
+	# 阳性对照：write_script 曾与真实工具 execute_editor_script 并列而漏网。
+	var synthetic: String = "edit the script (write_script / execute_editor_script)."
+	var slash_regex: RegEx = RegEx.create_from_string("([a-z0-9_]+)\\s*/\\s*([a-z0-9_]+)")
+	var caught: bool = false
+	for match_result in slash_regex.search_all(synthetic):
+		var left: String = String(match_result.get_string(1))
+		var right: String = String(match_result.get_string(2))
+		if _manifest_names.has(left) or _manifest_names.has(right):
+			for segment in [left, right]:
+				if segment.contains("_") and not _manifest_names.has(segment):
+					caught = true
+	assert_true(caught, "The gate must catch a phantom listed next to a real tool")
+	assert_false(_manifest_names.has("write_script"), "Control: write_script must not be a real tool")
+
+
 func test_guide_docs_call_shaped_references_exist() -> void:
 	var prompt_names: Dictionary = _prompt_names()
 	var total_calls: int = 0

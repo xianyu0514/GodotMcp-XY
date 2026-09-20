@@ -62,7 +62,7 @@ Reported error:
 3. Diagnose — {"tool": "validate_script", "args": {"script_path": "<script path>"}}:
    confirm there are no parse errors, then identify the root cause (null instance, wrong
    type, out-of-range access, missing signal connection, ...).
-4. Fix — apply the smallest coherent edit to the script (write_script / execute_editor_script).
+4. Fix — apply the smallest coherent edit to the script (modify_script on the read content / create_script for a new file / execute_editor_script).
    Keep the change backward compatible and consistent with project conventions.
 5. Re-verify — re-run validate_script on the edited script, then {"tool": "run_project", "args": {}}
    and pull get_editor_logs again. Confirm the original error is gone and no new error appeared.
@@ -154,7 +154,7 @@ Script paths: {{script_paths_block}}
    collect structured errors with line numbers (and warnings).
 2. Read — {"tool": "read_script", "args": {"script_path": "<path>"}} — read the script around
    each reported error line to understand the failing construct.
-3. Fix — apply the smallest coherent edit (write_script / execute_editor_script), keeping the
+3. Fix — apply the smallest coherent edit (modify_script on the read content / create_script for a new file / execute_editor_script), keeping the
    change backward compatible and consistent with project conventions.
 4. Re-validate — re-run validate_script on the edited script until it reports valid with no errors.
 5. Check for cascade — validate any scripts that depend on the fixed one, then run the project
