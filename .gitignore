@@ -55,9 +55,10 @@ releases/
 tmp_benchmark_project/
 tmp_representative_game/
 
-# Slice B：插件同步物与编辑器缓存不入库（setup.ps1 负责同步）
+# Slice B：插件同步物、编辑器缓存与合成音频不入库；天空纹理（小文本
+# .tres）入库——全新检出开箱即玩，音频由 prepare_assets.py 幂等合成。
 slice_b/addons/
 slice_b/.godot/
-slice_b/art/*.tres
+slice_b/build/
 slice_b/audio/*.wav
 slice_b/audio/*.import
