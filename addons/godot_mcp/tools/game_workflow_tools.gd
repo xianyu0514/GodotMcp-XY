@@ -17,6 +17,7 @@ const ChangeJournalScript = preload("res://addons/godot_mcp/tools/change_journal
 const LayoutVerifierScript = preload("res://addons/godot_mcp/tools/layout_verifier.gd")
 const FeatureRegistryScript = preload("res://addons/godot_mcp/tools/feature_registry.gd")
 const GameModelStoreScript = preload("res://addons/godot_mcp/tools/game_model_store.gd")
+const VerificationQueueStoreScript = preload("res://addons/godot_mcp/tools/verification_queue_store.gd")
 
 const DEFAULT_PLAN_PATH: String = "res://.mcp/task_plan.json"
 const PLAN_ACTIONS: Array[String] = ["plan", "status", "replan", "cancel"]
@@ -539,8 +540,29 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			return _runner_response(plan, plan_path, "blocked", executed, verdict)
 		if String(verdict.get("status", "")) in ["waiting", "blocked", "recovery_required", "replan_required"]:
 			return _runner_response(plan, plan_path, String(verdict.get("status", "")), executed, verdict)
-		# repair_required is handled at the start of the next loop iteration if
-		# this round still has atomic-call budget; otherwise it remains durable.
+	# repair_required is handled at the start of the next loop iteration if
+	# this round still has atomic-call budget; otherwise it remains durable.
+
+	# 分片回归续跑（审计 #3）：完成门禁留下的回归队列在本轮先推进一片。
+	# 收齐后 state 恢复 completed，由下方门禁经 regression_last_verified
+	# 放行；仍未收齐则本轮如实返回 running（绝不带着未收齐的证据宣布完成）。
+	if not String((plan.get("workflow", {}) as Dictionary).get("regression_queue_id", "")).is_empty():
+		var queue_advance: Dictionary = await _run_prior_feature_regression(plan)
+		if bool(queue_advance.get("failed", false)):
+			workflow["state"] = "replan_required"
+			workflow["blocked_reason"] = "prior feature regression failed: %s" % String(queue_advance.get("reason", "unknown"))
+			var queue_fail_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if queue_fail_save.has("error"):
+				return queue_fail_save
+			return _runner_response(plan, plan_path, "replan_required", executed, {"prior_regression": queue_advance})
+		if int(queue_advance.get("deferred_count", 0)) > 0:
+			var queue_pending_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if queue_pending_save.has("error"):
+				return queue_pending_save
+			return _runner_response(plan, plan_path, "running", executed, {"prior_regression": queue_advance})
+		if bool(queue_advance.get("queue_completed", false)):
+			# 队列收齐（演练已全部通过），恢复 completed 走正常完成收尾。
+			workflow["state"] = "completed"
 
 	var final_state: String = String((plan.get("workflow", {}) as Dictionary).get("state", "running"))
 	var final_status: String = "completed" if final_state == "completed" else final_state
@@ -550,6 +572,7 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 	if final_status == "completed":
 		# 旧行为回归门禁（P1-4）：完成前重验受影响的旧功能——回归失败
 		# 阻止宣布完成（"错误完成声明"的核心来源：completed ≠ 十项需求完成）。
+		# 超预算项入持久队列分片续跑（审计 #3）：证据未收齐同样阻止完成。
 		var prior_regression: Dictionary = await _run_prior_feature_regression(plan)
 		if bool(prior_regression.get("failed", false)):
 			workflow["state"] = "replan_required"
@@ -558,6 +581,15 @@ func _tool_run_game_workflow(params: Dictionary) -> Dictionary:
 			if regression_save.has("error"):
 				return regression_save
 			return _runner_response(plan, plan_path, "replan_required", executed, {"prior_regression": prior_regression})
+		if int(prior_regression.get("deferred_count", 0)) > 0:
+			# 回归证据未收齐：state 回 running，下一轮 runner 经上方钩子续跑。
+			workflow["state"] = "running"
+			workflow["blocked_reason"] = "regression verification incomplete: %d prior feature(s) pending in queue %s — the next run_game_workflow slice continues automatically" % [
+				int(prior_regression["deferred_count"]), String(prior_regression.get("queue_id", ""))]
+			var deferred_save: Dictionary = TaskPlanStoreScript.save_plan(plan, plan_path)
+			if deferred_save.has("error"):
+				return deferred_save
+			return _runner_response(plan, plan_path, "running", executed, {"prior_regression": prior_regression})
 		if not prior_regression.is_empty():
 			final_extra["prior_regression"] = prior_regression
 		# 真实指纹（P1-4）：控制器脚本内容 sha256——注册表与游戏模型都以
@@ -1173,7 +1205,8 @@ func _derive_step_arguments(plan: Dictionary, task: Dictionary, tool_name: Strin
 							and not bool(reg_verbs.get("collectible", false)):
 						# 金币数 = 解析 ∪ 注册表（同 generic 分支——02 金币目标走这里，
 						# CI 实证：漏接缩放窗导致 5 币收集不满）
-						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_total))
+						on_demand.append_array(_collect_play_steps("coins_collected", on_demand_levels, od_coin_total,
+						bool(goal_verbs.get("wall", false)) or bool(reg_verbs.get("wall", false))))
 					if bool(goal_verbs.get("enemy", false)) and not bool(reg_verbs.get("enemy", false)):
 						var enemy_legs: Dictionary = _enemy_play_legs()
 						on_demand.append_array(enemy_legs["steps"])
@@ -1615,8 +1648,13 @@ func _movement_feel_legs() -> Dictionary:
 ## 扫描帧数 = 需要的像素 ÷ 实际速度（**含调参**——final-tune 调快玩家后
 ## 同样帧数跑更远，CI run #11 实证：50 帧 @390px/s = 325px 扫进敌带，
 ## 赛后死亡 gameover 覆写。速度取游戏模型的调参覆盖，缺省 260）。
-static func _coin_sweep_frames(coin_total: int) -> int:
+static func _coin_sweep_frames(coin_total: int, levels_merged: bool = false) -> int:
 	var window_px: float = 110.0 + maxi(coin_total - 1, 0) * 40.0 - 90.0 + 12.0
+	if levels_merged:
+		# 关卡合并后的金币簇逐关右移（base_x 随 current_level 偏移再夹紧），
+		# 扫描窗同步加宽一档——CI 实证：09b 的 L2 末枚在簇 +40px 处，
+		# 按 L1 窗扫描停在磁吸半径之外，coins_collected 永远差一枚。
+		window_px += 40.0
 	var speed: float = float(GameModelStoreScript.load_model().get("params", {}).get("SPEED", 260.0))
 	if speed < 130.0:
 		speed = 130.0
@@ -1634,7 +1672,9 @@ func _resolved_coin_total(objective: String = "") -> int:
 			total = maxi(total, GoalBlueprintsScript._coin_count(feature_goal))
 	return total
 
-func _collect_play_steps(coin_count_expression: String = "coins_collected", levels_merged: bool = false, coin_total: int = -1) -> Array:
+func _collect_play_steps(coin_count_expression: String = "coins_collected",
+		levels_merged: bool = false, coin_total: int = -1,
+		has_walls: bool = true) -> Array:
 	var steps: Array = []
 	if coin_total < 0:
 		coin_total = _resolved_coin_total()
@@ -1642,11 +1682,15 @@ func _collect_play_steps(coin_count_expression: String = "coins_collected", leve
 	# 起扫一无所获，"金币已消失"断言闪断（真机复现：goal 06 完成前回归）。
 	# 左扫最多撞左墙（或死于敌带重置回原点）——两种结局都锚定原点附近。
 	# 帧步进（72 帧 = 312px）：与机器负载无关的确定性锚定。
-	steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
-	steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
+	# **只在有墙语境**：无墙游戏（如 "Arrow-key player movement." 变体）
+	# 没有左墙兜底，72 帧左扫飞到 -312，右扫窗（~112px）只回到 -200，
+	# 永远进不了金币磁吸区——accum 腿 goal2/goal5 的实锤失败模式。
+	if has_walls:
+		steps.append({"action": "move_left", "pressed": true, "wait_frames": 72})
+		steps.append({"action": "move_left", "pressed": false, "wait_ms": 200})
 	# 磁吸金币聚簇：收金足够窗按金币数缩放（showcase CI 实证：5 枚的
 	# 末窗在 180px，30 帧只扫 130px——收不满、win 不触发、标签空）。
-	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
+	steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total, levels_merged)})
 	steps.append({
 		"action": "move_right", "pressed": false, "wait_ms": 400, "screenshot": true,
 		"assert": {"expression": coin_count_expression, "operator": "gt", "expected": 0,
@@ -1806,7 +1850,9 @@ func _level_play_steps(level_count: int = 2, save_merged: bool = false, coin_tot
 		var is_final: bool = level_index == level_count
 		# 收金足够窗（同收集/状态腿的几何规则，随币数缩放）：换关不重置
 		# 生命——长窗的赛后死亡跨关累积会耗尽生命覆写最终关的 win。
-		steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total)})
+		# 关卡感知窗口：多关布局的聚簇基址随关偏移（夹紧后 ≥L1 一档），
+		# 按 L1 窗扫描会停在末枚磁吸半径外（CI 实证：09b L2 差一枚）。
+		steps.append({"action": "move_right", "pressed": true, "wait_frames": _coin_sweep_frames(coin_total, true)})
 		# boot-restore 取证后缀只在存档合并时携带（_last_restored 是存档
 		# 域变量——样板把存档排在关卡之后，无存档语境下表达式必炸）。
 		var clear_expr: String = "str(current_level) + \"|\" + str(coins_collected == COINS_TO_WIN) + \"|\" + game_state"
@@ -2135,7 +2181,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 				})
 				play_steps.append({"action": "move_back", "pressed": false, "wait_ms": 80})
 				if wants_collect:
-					play_steps.append_array(_collect_play_steps())
+					play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, -1,
+						bool(context_verbs.get("wall", false)) or bool(merged_verbs.get("wall", false))))
 			elif wants_movement:
 				play_steps.append_array(_movement_play_steps())
 				# 手感预算：确定性采样 + 帧步进响应断言（只在移动目标激活）
@@ -2160,7 +2207,8 @@ func _derive_generic_play_steps(plan: Dictionary, task: Dictionary, _tool_name: 
 					bool(context_verbs.get("game_over", false)) or bool(merged_verbs.get("game_over", false)),
 					coin_request))
 			elif wants_collect:
-				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request))
+				play_steps.append_array(_collect_play_steps(coin_expression, levels_merged, coin_request,
+					bool(context_verbs.get("wall", false)) or bool(merged_verbs.get("wall", false))))
 			if wants_enemy:
 				var enemy_legs_generic: Dictionary = _enemy_play_legs()
 				play_steps.append_array(enemy_legs_generic["steps"])
@@ -2289,11 +2337,26 @@ func _synthetic_authorization(plan: Dictionary, step_id: String, tool_name: Stri
 ## 与阈值变化不会让旧步骤失配；当前目标的动词被排除（新功能由本目标
 ## 的门禁覆盖）。游戏须可运行：先 run_project（已在运行则复用）。
 ## 任一旧功能失败 → {failed: true, reason} → 调用方阻止宣布完成。
-func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
+func _run_prior_feature_regression(plan: Dictionary,
+		queue_store_path: String = "") -> Dictionary:
 	var current_verbs: Dictionary = GoalBlueprintsScript.match_verbs(String(plan.get("goal", "")))
 	var priors: Array = FeatureRegistryScript.prior_exercises(current_verbs)
 	if priors.is_empty():
 		return {}
+	var workflow: Dictionary = plan.get("workflow", {})
+	if bool(workflow.get("regression_last_verified", false)):
+		# 本目标的回归证据已由队列收齐（指纹守护新鲜度），不重复重验。
+		return {"failed": false, "checked": [], "resumed_from_queue": true}
+
+	# 分片续跑（审计 #3）：上一轮门禁留下的回归队列先推进一片——
+	# 重启/断连安全，已收证据不重跑；存储被清空则回退首轮逻辑。
+	var queue_id: String = String(workflow.get("regression_queue_id", ""))
+	if not queue_id.is_empty():
+		var advanced: Dictionary = await _advance_regression_queue(plan, queue_id, queue_store_path)
+		if not advanced.has("drop_queue"):
+			return advanced
+		workflow.erase("regression_queue_id")
+
 	var run_startup_error: String = ""
 	var checked: Array = []
 	const MAX_REGRESSION_FEATURES: int = 8
@@ -2301,90 +2364,207 @@ func _run_prior_feature_regression(plan: Dictionary) -> Dictionary:
 	# 真机复现：goal 09 的移动重验在标题门控下空转，前缀没注入）。
 	var context_has_state: bool = bool(FeatureRegistryScript.registered_verbs().get("state_machine", false)) \
 		or bool(current_verbs.get("state_machine", false))
+	# 超预算的 prior 不再静默丢弃（审计 #3 验收：第九项之后不消失）——
+	# 收集进持久队列，等下一轮切片续跑。
+	var deferred_priors: Array = []
 	for prior_value in priors:
-		if checked.size() >= MAX_REGRESSION_FEATURES:
-			break
 		var prior: Dictionary = prior_value
 		var prior_goal: String = String(prior.get("goal", ""))
 		if prior_goal.is_empty():
 			continue
-		# **每个 prior 演练独立全新会话**（stop→run + 探针预热）：共享会话
-		# 的跨演练状态渗漏是一整类缺陷的温床——本地复现实锤：前一演练把
-		# 会话留在 L1-win，下一演练的解锁 Enter 第一对就 win(L1)→L2 playing
-		# （非最终关进的是下一关不是 title），扫的是 L2 金币 → 断言在错误的
-		# 关卡上求值。全新启动对齐"每个旧功能从干净状态重验"的证据语义
-		# （关卡/胜利态/残留位置/存档恢复一次归零）。
-		var stop_discard: Variant = await _server_core.invoke_planned_tool("stop_project",
-			{"allow_window": true}, _synthetic_authorization(plan, "prior_regression_stop", "stop_project"))
-		var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
-			{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
-		# stop/run 结果不判断：启动失败时本演练自然报错（fail-closed）——
-		# 但把 run 的启动错误留档，失败时并入诊断。
-		if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
-			run_startup_error = String((run_discard as Dictionary)["error"])
-		# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
-		# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
-		# 吸收握手，演练从就绪通道起测。**必须带一次表达式断言**：纯等待步
-		# 不碰探针，握手没被吸收，首个条件读付握手成本（陈旧快照防线生效
-		# 后不再有缓存兜底，直接超时失败——本地复现：09 的手感腿快照）。
-		var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
-			{"steps": [{"wait_ms": 300, "assert": {"expression": "true", "expected": true,
-				"description": "probe handshake warmup"}}]},
-			_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
-		var exercise_args: Dictionary = {}
-		# merged_verbs=当前目标动词：完成门禁回归时当前目标尚未注册——
-		# 但其代码已合并进游戏（如 06-save 的读档在每次全新进程生效），
-		# 反馈等值腿的存档感知必须看到它。
-		_derive_generic_play_steps({"goal": prior_goal}, {}, "play_and_verify", exercise_args, current_verbs)
-		var steps: Array = exercise_args.get("steps", [])
-		if steps.is_empty():
-			continue
-		# 引导稳定（冷启动）：回归门禁每次 stop→run 全新会话——冷游戏的
-		# 前几百毫秒物理帧稀疏，位移断言会闪断（真机复现：04/05 的完成
-		# 回归在冷游戏上丢帧）。先等 800ms 让物理稳定再执行演练。
-		steps = _assemble_regression_steps(steps, prior_goal, context_has_state)
-		# 回归安全锚点（真根因修复：连续 play"输入失效"其实是敌人击杀重置）：
-		# 上一演练可能把玩家留在敌带击杀窗内（收集演练结束于 x≈392，敌右
-		# 极值 380 的击杀窗覆盖它）——下一演练的移动腿在窗口内遭遇死亡重置，
-		# 位移断言随机失败（判别实验：只按右键却向左位移=死亡回原点）。左扫
-		# 90 帧回原点：死于敌带重置回 (0,0)、或贴左墙——两种结局都在安全区。
-		steps += [
-			# 墙钟左扫（非帧步进）：物理同样把玩家带回原点，但不进入采样
-			# 轨迹——feel 指标的 last-first delta 保持原点基准（帧步进锚点
-			# 会让轨迹起点偏到左墙 −24，delta 余量从 87 掉到 63 闪断）。
-			{"action": "move_left", "pressed": true, "wait_ms": 2000,
-				"description": "regression: return to the safe origin anchor"},
-			# 释放发送两次：释放事件偶发丢失时，演练的 move_right 与残留的
-			# move_left 在 get_vector 里相互抵消 → 零位移（CI 实证：06/09 的
-			# movement+wall 重验零位移同源于此）。双发让单事件丢失无害。
-			{"action": "move_left", "pressed": false, "wait_ms": 100},
-			{"action": "move_left", "pressed": false, "wait_ms": 100},
-		]
-		var play_args: Dictionary = {"steps": steps}
-		for extra_key in ["deterministic", "sample", "assertions"]:
-			if exercise_args.has(extra_key):
-				play_args[extra_key] = exercise_args[extra_key]
-		var result: Variant = await _server_core.invoke_planned_tool("play_and_verify",
-			play_args, _synthetic_authorization(plan, "prior_regression", "play_and_verify"))
-		var passed: bool = result is Dictionary and not (result as Dictionary).has("error") \
-			and bool((result as Dictionary).get("passed", false))
-		checked.append({"feature_id": prior.get("feature_id", ""), "goal": prior_goal, "passed": passed})
-		if not passed:
-			var reason: String = "prior feature '%s' (%s) failed re-verification" % [
-				String(prior.get("feature_id", "")), prior_goal]
-			if not run_startup_error.is_empty():
-				reason += " [game startup: %s]" % run_startup_error
-			if result is Dictionary:
-				if (result as Dictionary).has("error"):
-					reason += ": %s" % String((result as Dictionary)["error"])
-				else:
-					for assertion_value in (result as Dictionary).get("assertions", []):
-						var assertion: Dictionary = assertion_value
-						if not bool(assertion.get("passed", true)):
-							reason += ": %s" % _assertion_failure_summary(assertion)
-							break
-			return {"failed": true, "reason": reason, "checked": checked}
-	return {"failed": false, "checked": checked}
+		if checked.size() < MAX_REGRESSION_FEATURES:
+			var outcome: Dictionary = await _exercise_prior_feature(plan, prior, context_has_state, current_verbs)
+			if bool(outcome.get("skipped", false)):
+				continue
+			checked.append({"feature_id": prior.get("feature_id", ""), "goal": prior_goal,
+				"passed": bool(outcome.get("passed", false))})
+			if not bool(outcome.get("passed", false)):
+				return {"failed": true, "reason": String(outcome.get("reason", "unknown")), "checked": checked}
+		else:
+			deferred_priors.append(prior)
+	if deferred_priors.is_empty():
+		return {"failed": false, "checked": checked}
+	return _defer_regression_priors(plan, deferred_priors, checked, queue_store_path)
+
+## 单个 prior 功能的重验演练（原回归循环体抽出，首轮与队列续跑共用）：
+## 独立全新会话（stop→run + 探针预热）+ 引导稳定 + 解锁前缀 + 演练本体 +
+## 安全锚点。返回 {passed, reason}；checked 由调用方累计。
+func _exercise_prior_feature(plan: Dictionary, prior: Dictionary,
+		context_has_state: bool, current_verbs: Dictionary = {}) -> Dictionary:
+	var prior_goal: String = String(prior.get("goal", ""))
+	var run_startup_error: String = ""
+	# **每个 prior 演练独立全新会话**（stop→run + 探针预热）：共享会话
+	# 的跨演练状态渗漏是一整类缺陷的温床——本地复现实锤：前一演练把
+	# 会话留在 L1-win，下一演练的解锁 Enter 第一对就 win(L1)→L2 playing
+	# （非最终关进的是下一关不是 title），扫的是 L2 金币 → 断言在错误的
+	# 关卡上求值。全新启动对齐"每个旧功能从干净状态重验"的证据语义
+	# （关卡/胜利态/残留位置/存档恢复一次归零）。
+	var stop_discard: Variant = await _server_core.invoke_planned_tool("stop_project",
+		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression_stop", "stop_project"))
+	var run_discard: Variant = await _server_core.invoke_planned_tool("run_project",
+		{"allow_window": true}, _synthetic_authorization(plan, "prior_regression", "run_project"))
+	# stop/run 结果不判断：启动失败时本演练自然报错（fail-closed）——
+	# 但把 run 的启动错误留档，失败时并入诊断。
+	if run_discard is Dictionary and (run_discard as Dictionary).has("error"):
+		run_startup_error = String((run_discard as Dictionary)["error"])
+	# 探针预热：新会话的首次 play 可能撞上探针握手 pending（已知行为：
+	# _request_runtime_probe 首次调用返回 pending）——丢弃一次空转调用
+	# 吸收握手，演练从就绪通道起测。**必须带一次表达式断言**：纯等待步
+	# 不碰探针，握手没被吸收，首个条件读付握手成本（陈旧快照防线生效
+	# 后不再有缓存兜底，直接超时失败——本地复现：09 的手感腿快照）。
+	var probe_warmup: Variant = await _server_core.invoke_planned_tool("play_and_verify",
+		{"steps": [{"wait_ms": 300, "assert": {"expression": "true", "expected": true,
+			"description": "probe handshake warmup"}}]},
+		_synthetic_authorization(plan, "prior_regression_warmup", "play_and_verify"))
+	var exercise_args: Dictionary = {}
+	# merged_verbs=当前目标动词：完成门禁回归时当前目标尚未注册——
+	# 但其代码已合并进游戏（如 06-save 的读档在每次全新进程生效），
+	# 反馈等值腿的存档感知必须看到它。
+	_derive_generic_play_steps({"goal": prior_goal}, {}, "play_and_verify", exercise_args, current_verbs)
+	var steps: Array = exercise_args.get("steps", [])
+	if steps.is_empty():
+		# 原首轮语义：无可推导步的 prior 跳过（不进 checked）。
+		return {"skipped": true}
+	# 引导稳定（冷启动）：回归门禁每次 stop→run 全新会话——冷游戏的
+	# 前几百毫秒物理帧稀疏，位移断言会闪断（真机复现：04/05 的完成
+	# 回归在冷游戏上丢帧）。先等 800ms 让物理稳定再执行演练。
+	steps = _assemble_regression_steps(steps, prior_goal, context_has_state)
+	# 回归安全锚点（真根因修复：连续 play"输入失效"其实是敌人击杀重置）：
+	# 上一演练可能把玩家留在敌带击杀窗内（收集演练结束于 x≈392，敌右
+	# 极值 380 的击杀窗覆盖它）——下一演练的移动腿在窗口内遭遇死亡重置，
+	# 位移断言随机失败（判别实验：只按右键却向左位移=死亡回原点）。左扫
+	# 90 帧回原点：死于敌带重置回 (0,0)、或贴左墙——两种结局都在安全区。
+	steps += [
+		# 墙钟左扫（非帧步进）：物理同样把玩家带回原点，但不进入采样
+		# 轨迹——feel 指标的 last-first delta 保持原点基准（帧步进锚点
+		# 会让轨迹起点偏到左墙 −24，delta 余量从 87 掉到 63 闪断）。
+		{"action": "move_left", "pressed": true, "wait_ms": 2000,
+			"description": "regression: return to the safe origin anchor"},
+		# 释放发送两次：释放事件偶发丢失时，演练的 move_right 与残留的
+		# move_left 在 get_vector 里相互抵消 → 零位移（CI 实证：06/09 的
+		# movement+wall 重验零位移同源于此）。双发让单事件丢失无害。
+		{"action": "move_left", "pressed": false, "wait_ms": 100},
+		{"action": "move_left", "pressed": false, "wait_ms": 100},
+	]
+	var play_args: Dictionary = {"steps": steps}
+	for extra_key in ["deterministic", "sample", "assertions"]:
+		if exercise_args.has(extra_key):
+			play_args[extra_key] = exercise_args[extra_key]
+	var result: Variant = await _server_core.invoke_planned_tool("play_and_verify",
+		play_args, _synthetic_authorization(plan, "prior_regression", "play_and_verify"))
+	var passed: bool = result is Dictionary and not (result as Dictionary).has("error") \
+		and bool((result as Dictionary).get("passed", false))
+	if not passed:
+		var reason: String = "prior feature '%s' (%s) failed re-verification" % [
+			String(prior.get("feature_id", "")), prior_goal]
+		if not run_startup_error.is_empty():
+			reason += " [game startup: %s]" % run_startup_error
+		if result is Dictionary:
+			if (result as Dictionary).has("error"):
+				reason += ": %s" % String((result as Dictionary)["error"])
+			else:
+				for assertion_value in (result as Dictionary).get("assertions", []):
+					var assertion: Dictionary = assertion_value
+					if not bool(assertion.get("passed", true)):
+						reason += ": %s" % _assertion_failure_summary(assertion)
+						break
+		return {"passed": false, "reason": reason}
+	return {"passed": true}
+
+## 超预算 prior 入队（持久分片验证队列）：每项绑定 feature_id/goal，
+## watch_paths 为完成工件脚本（指纹漂移把已收证据打回 pending 重验）。
+## 日志/队列写不进时不降级——回归证据不可丢，直接阻塞完成并说明。
+func _defer_regression_priors(plan: Dictionary, deferred_priors: Array,
+		checked: Array, queue_store_path: String) -> Dictionary:
+	var store_path: String = queue_store_path if not queue_store_path.is_empty() \
+		else VerificationQueueStoreScript.DEFAULT_STORE_PATH
+	var queue_items: Array = []
+	for prior_value in deferred_priors:
+		var prior: Dictionary = prior_value
+		queue_items.append({
+			"kind": "external",
+			"label": String(prior.get("feature_id", prior.get("goal", ""))),
+			"detail": {
+				"feature_id": String(prior.get("feature_id", "")),
+				"goal": String(prior.get("goal", "")),
+			},
+		})
+	var store: Dictionary = VerificationQueueStoreScript.load_store(store_path)
+	if store.has("error"):
+		return {"failed": true,
+			"reason": "deferred regression queue store is not usable: %s" % String(store["error"]),
+			"checked": checked}
+	var workflow: Dictionary = plan.get("workflow", {})
+	var artifacts: Dictionary = workflow.get("artifacts", {}) if workflow.get("artifacts", {}) is Dictionary else {}
+	var watch_paths: Array = []
+	var artifact_script: String = String(artifacts.get("script", ""))
+	if not artifact_script.is_empty() and FileAccess.file_exists(artifact_script):
+		watch_paths.append(artifact_script)
+	var created: Dictionary = VerificationQueueStoreScript.create_queue(
+		"prior feature regression for '%s'" % String(plan.get("goal", "")),
+		queue_items, watch_paths, store)
+	if created.has("error"):
+		return {"failed": true,
+			"reason": "could not persist deferred regression items: %s" % String(created["error"]),
+			"checked": checked}
+	var saved: Dictionary = VerificationQueueStoreScript.save_store(store, store_path)
+	if saved.has("error"):
+		return {"failed": true,
+			"reason": "could not save deferred regression items: %s" % String(saved["error"]),
+			"checked": checked}
+	var new_queue_id: String = String((created.get("queue", {}) as Dictionary).get("queue_id", ""))
+	workflow["regression_queue_id"] = new_queue_id
+	return {"failed": false, "checked": checked,
+		"deferred_count": deferred_priors.size(), "queue_id": new_queue_id}
+
+## 续跑回归队列一片（单轮预算 = MAX_REGRESSION_FEATURES）：演练体与首轮
+## 完全一致；收齐后放行完成（regression_last_verified），失败阻塞。
+## 队列存储被清空时返回 drop_queue，调用方回退首轮逻辑。
+func _advance_regression_queue(plan: Dictionary, queue_id: String,
+		queue_store_path: String) -> Dictionary:
+	var store_path: String = queue_store_path if not queue_store_path.is_empty() \
+		else VerificationQueueStoreScript.DEFAULT_STORE_PATH
+	var store: Dictionary = VerificationQueueStoreScript.load_store(store_path)
+	if store.has("error"):
+		return {"failed": true,
+			"reason": "regression queue store is not readable: %s" % String(store["error"])}
+	var queue: Dictionary = VerificationQueueStoreScript.get_queue(store, queue_id)
+	if queue.is_empty():
+		return {"drop_queue": true}
+	var current_verbs: Dictionary = GoalBlueprintsScript.match_verbs(String(plan.get("goal", "")))
+	var context_has_state: bool = bool(FeatureRegistryScript.registered_verbs().get("state_machine", false)) \
+		or bool(current_verbs.get("state_machine", false))
+	VerificationQueueStoreScript.refresh_stale(queue)
+	var outcome: Dictionary = await VerificationQueueStoreScript.advance(queue,
+		8, func(item: Dictionary) -> Dictionary:
+			var detail: Dictionary = item.get("detail", {}) if item.get("detail", {}) is Dictionary else {}
+			var drill: Dictionary = await _exercise_prior_feature(plan,
+				{"feature_id": detail.get("feature_id", ""), "goal": detail.get("goal", "")},
+				context_has_state, current_verbs)
+			var evidence: Dictionary = {}
+			if not bool(drill.get("passed", false)):
+				evidence["reason"] = String(drill.get("reason", ""))
+			return {"passed": bool(drill.get("passed", false)), "evidence": evidence})
+	var save_result: Dictionary = VerificationQueueStoreScript.save_store(store, store_path)
+	if save_result.has("error"):
+		return {"failed": true,
+			"reason": "regression queue store is not writable: %s" % String(save_result["error"])}
+	var workflow: Dictionary = plan.get("workflow", {})
+	match String(outcome.get("outcome", "")):
+		"completed":
+			workflow.erase("regression_queue_id")
+			workflow["regression_last_verified"] = true
+			return {"failed": false, "checked": [],
+				"queue_completed": true, "queue_id": queue_id}
+		"failed":
+			workflow.erase("regression_queue_id")
+			return {"failed": true,
+				"reason": "prior feature regression queue has %d failing item(s) — run run_verification_queue inspect on '%s' for the full verdicts" % [int(outcome.get("failed_count", 0)), queue_id],
+				"queue_id": queue_id}
+		_:
+			return {"failed": false,
+				"deferred_count": int(outcome.get("pending_count", 0)),
+				"queue_id": queue_id}
 
 
 ## 回归演练步组装：引导稳定 → 解锁前缀 → 演练本体 → 安全锚点。

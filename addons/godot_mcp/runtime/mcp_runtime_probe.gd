@@ -137,6 +137,10 @@ func _capture_mcp_message(message: String, data: Array) -> bool:
 			return _handle_get_tilemap_cell(data)
 		"set_tilemap_cell":
 			return _handle_set_tilemap_cell(data)
+		"get_tilemap_region":
+			return _handle_get_tilemap_region(data)
+		"set_tilemap_cells":
+			return _handle_set_tilemap_cells(data)
 		"list_audio_buses":
 			return _handle_list_audio_buses(data)
 		"get_audio_bus":
@@ -1077,51 +1081,233 @@ func _resolve_control_node(node_path: String) -> Control:
 		return null
 	return node
 
-func _resolve_tilemap(node_path: String) -> TileMap:
+## 探针消息发送包装：EngineDebugger 未激活（headless 单测）时静默跳过，
+## 生产路径（编辑器附加调试）行为不变。
+func _send_probe_message(message: String, data: Array) -> void:
+	if not EngineDebugger.is_active():
+		return
+	_send_probe_message(message, data)
+
+## 双兼容解析：TileMap（旧多 layer 节点）或 TileMapLayer（4.x 单层节点，
+## layer 索引恒为 0）。返回的节点经下方 _tm_* 访问器统一操作。
+func _resolve_tilemap(node_path: String) -> Node:
 	var node: Node = _resolve_target_node(node_path)
 	if not node:
-		EngineDebugger.send_message("mcp:error", [{"message": "Node not found: " + node_path}])
+		_send_probe_message("mcp:error", [{"message": "Node not found: " + node_path}])
 		return null
-	if not (node is TileMap):
-		EngineDebugger.send_message("mcp:error", [{"message": "Node is not a TileMap: " + node_path, "node_type": node.get_class()}])
+	if not (node is TileMap) and not (node is TileMapLayer):
+		_send_probe_message("mcp:error", [{"message": "Node is not a TileMap or TileMapLayer: " + node_path, "node_type": node.get_class()}])
 		return null
 	return node
 
-func _is_valid_tilemap_layer(tilemap: TileMap, layer: int) -> bool:
-	if layer < 0 or layer >= tilemap.get_layers_count():
-		EngineDebugger.send_message("mcp:error", [{
+func _tm_layer_count(tilemap: Node) -> int:
+	if tilemap is TileMapLayer:
+		return 1
+	return (tilemap as TileMap).get_layers_count()
+
+func _tm_is_tilemap_layer_node(tilemap: Node) -> bool:
+	return tilemap is TileMapLayer
+
+func _is_valid_tilemap_layer(tilemap: Node, layer: int) -> bool:
+	var layer_count: int = _tm_layer_count(tilemap)
+	if layer < 0 or layer >= layer_count:
+		_send_probe_message("mcp:error", [{
 			"message": "TileMap layer is out of range",
 			"node_path": str(tilemap.get_path()),
 			"layer": layer,
-			"layer_count": tilemap.get_layers_count()
+			"layer_count": layer_count
 		}])
 		return false
 	return true
 
-func _serialize_tilemap_layer(tilemap: TileMap, layer: int) -> Dictionary:
+func _tm_get_source_id(tilemap: Node, layer: int, coords: Vector2i, use_proxies: bool) -> int:
+	if tilemap is TileMapLayer:
+		return (tilemap as TileMapLayer).get_cell_source_id(coords)
+	return (tilemap as TileMap).get_cell_source_id(layer, coords, use_proxies)
+
+func _tm_get_atlas_coords(tilemap: Node, layer: int, coords: Vector2i, use_proxies: bool) -> Vector2i:
+	if tilemap is TileMapLayer:
+		return (tilemap as TileMapLayer).get_cell_atlas_coords(coords)
+	return (tilemap as TileMap).get_cell_atlas_coords(layer, coords, use_proxies)
+
+func _tm_get_alternative_tile(tilemap: Node, layer: int, coords: Vector2i, use_proxies: bool) -> int:
+	if tilemap is TileMapLayer:
+		return (tilemap as TileMapLayer).get_cell_alternative_tile(coords)
+	return (tilemap as TileMap).get_cell_alternative_tile(layer, coords, use_proxies)
+
+func _tm_set_cell(tilemap: Node, layer: int, coords: Vector2i, source_id: int,
+		atlas_coords: Vector2i, alternative_tile: int) -> void:
+	if tilemap is TileMapLayer:
+		(tilemap as TileMapLayer).set_cell(coords, source_id, atlas_coords, alternative_tile)
+	else:
+		(tilemap as TileMap).set_cell(layer, coords, source_id, atlas_coords, alternative_tile)
+
+func _tm_erase_cell(tilemap: Node, layer: int, coords: Vector2i) -> void:
+	if tilemap is TileMapLayer:
+		(tilemap as TileMapLayer).erase_cell(coords)
+	else:
+		(tilemap as TileMap).erase_cell(layer, coords)
+
+## 引擎的立即内部更新通道（TileMapLayer.update_internals）：物理/导航
+## internals 默认在帧末批量重建，调用它强制立即更新，回执如实报告是否可用。
+func _tm_update_internals(tilemap: Node) -> bool:
+	if tilemap.has_method("update_internals"):
+		tilemap.call("update_internals")
+		return true
+	return false
+
+func _serialize_tilemap_layer(tilemap: Node, layer: int) -> Dictionary:
+	if tilemap is TileMapLayer:
+		var tilemap_layer: TileMapLayer = tilemap as TileMapLayer
+		return {
+			"node_path": str(tilemap_layer.get_path()),
+			"layer": 0,
+			"layer_node_type": "TileMapLayer",
+			"name": String(tilemap_layer.name),
+			"enabled": tilemap_layer.enabled,
+			"y_sort_enabled": tilemap_layer.y_sort_enabled,
+			"y_sort_origin": tilemap_layer.y_sort_origin,
+			"z_index": tilemap_layer.z_index,
+			"used_cell_count": tilemap_layer.get_used_cells().size()
+		}
+	var legacy: TileMap = tilemap as TileMap
 	return {
-		"node_path": str(tilemap.get_path()),
+		"node_path": str(legacy.get_path()),
 		"layer": layer,
-		"name": tilemap.get_layer_name(layer),
-		"enabled": tilemap.is_layer_enabled(layer),
-		"y_sort_enabled": tilemap.is_layer_y_sort_enabled(layer),
-		"y_sort_origin": tilemap.get_layer_y_sort_origin(layer),
-		"z_index": tilemap.get_layer_z_index(layer),
-		"used_cell_count": tilemap.get_used_cells(layer).size()
+		"layer_node_type": "TileMap",
+		"name": legacy.get_layer_name(layer),
+		"enabled": legacy.is_layer_enabled(layer),
+		"y_sort_enabled": legacy.is_layer_y_sort_enabled(layer),
+		"y_sort_origin": legacy.get_layer_y_sort_origin(layer),
+		"z_index": legacy.get_layer_z_index(layer),
+		"used_cell_count": legacy.get_used_cells(layer).size()
 	}
 
-func _serialize_tilemap_cell(tilemap: TileMap, layer: int, coords: Vector2i, use_proxies: bool) -> Dictionary:
-	var source_id: int = tilemap.get_cell_source_id(layer, coords, use_proxies)
+func _serialize_tilemap_cell(tilemap: Node, layer: int, coords: Vector2i, use_proxies: bool) -> Dictionary:
+	var source_id: int = _tm_get_source_id(tilemap, layer, coords, use_proxies)
 	return {
 		"node_path": str(tilemap.get_path()),
 		"layer": layer,
+		"layer_node_type": "TileMapLayer" if tilemap is TileMapLayer else "TileMap",
 		"coords": _serialize_value(coords),
 		"use_proxies": use_proxies,
 		"source_id": source_id,
-		"atlas_coords": _serialize_value(tilemap.get_cell_atlas_coords(layer, coords, use_proxies)),
-		"alternative_tile": tilemap.get_cell_alternative_tile(layer, coords, use_proxies),
+		"atlas_coords": _serialize_value(_tm_get_atlas_coords(tilemap, layer, coords, use_proxies)),
+		"alternative_tile": _tm_get_alternative_tile(tilemap, layer, coords, use_proxies),
 		"is_empty": source_id == -1
 	}
+
+## 区域读取（大地图不一次返回全部）：矩形内按行扫描非空格，
+## offset/max_cells 无损分页；扫描量上限防止巨型矩形拖死游戏帧。
+const TILEMAP_REGION_MAX_SCAN: int = 262144
+const TILEMAP_REGION_MAX_CELLS: int = 4096
+
+func _handle_get_tilemap_region(data: Array) -> bool:
+	if data.size() < 3:
+		_send_probe_message("mcp:error", [{"message": "get_tilemap_region requires node_path, layer, rect"}])
+		return true
+	var tilemap: Node = _resolve_tilemap(str(data[0]))
+	if not tilemap:
+		return true
+	var layer: int = int(data[1])
+	if not _is_valid_tilemap_layer(tilemap, layer):
+		return true
+	var rect_data: Dictionary = data[2] if data[2] is Dictionary else {}
+	var rect_pos: Vector2i = _variant_to_vector2i(rect_data.get("position", rect_data.get("origin", {})))
+	var rect_size: Vector2i = _variant_to_vector2i(rect_data.get("size", {}))
+	if rect_size.x <= 0 or rect_size.y <= 0:
+		_send_probe_message("mcp:error", [{"message": "rect.size must be positive"}])
+		return true
+	if rect_size.x * rect_size.y > TILEMAP_REGION_MAX_SCAN:
+		_send_probe_message("mcp:error", [{
+			"message": "rect is too large to scan in one call",
+			"cells": rect_size.x * rect_size.y,
+			"scan_limit": TILEMAP_REGION_MAX_SCAN,
+			"hint": "split the rect into smaller reads"
+		}])
+		return true
+	var max_cells: int = clampi(int(data[3]) if data.size() >= 4 else 512, 1, TILEMAP_REGION_MAX_CELLS)
+	var offset: int = maxi(0, int(data[4]) if data.size() >= 5 else 0)
+	var cells: Array = []
+	var skipped: int = 0
+	var scanned: int = 0
+	var has_more: bool = false
+	var next_offset: int = offset
+	for y in range(rect_pos.y, rect_pos.y + rect_size.y):
+		if has_more:
+			break
+		for x in range(rect_pos.x, rect_pos.x + rect_size.x):
+			scanned += 1
+			var coords: Vector2i = Vector2i(x, y)
+			if _tm_get_source_id(tilemap, layer, coords, false) == -1:
+				continue
+			if skipped < offset:
+				skipped += 1
+				continue
+			if cells.size() >= max_cells:
+				has_more = true
+				next_offset = offset + cells.size()
+				break
+			cells.append(_serialize_tilemap_cell(tilemap, layer, coords, false))
+	_send_probe_message("mcp:tilemap_region", [{
+		"node_path": str(tilemap.get_path()),
+		"layer": layer,
+		"layer_node_type": "TileMapLayer" if tilemap is TileMapLayer else "TileMap",
+		"rect": {"position": _serialize_value(rect_pos), "size": _serialize_value(rect_size)},
+		"scanned": scanned,
+		"cells": cells,
+		"returned_count": cells.size(),
+		"offset": offset,
+		"max_cells": max_cells,
+		"has_more": has_more,
+		"next_offset": next_offset,
+	}])
+	return true
+
+## 批量写入 + 修改后检查：逐格写/擦（写入即读回每格数据），全部完成后
+## 调用引擎立即内部更新（update_internals）。物理/导航断言必须遵守帧末
+## 批量更新时机——回执带 physics_wait_hint，验证前用 advance_frames 等帧。
+func _handle_set_tilemap_cells(data: Array) -> bool:
+	if data.size() < 3:
+		_send_probe_message("mcp:error", [{"message": "set_tilemap_cells requires node_path, layer, cells"}])
+		return true
+	var tilemap: Node = _resolve_tilemap(str(data[0]))
+	if not tilemap:
+		return true
+	var layer: int = int(data[1])
+	if not _is_valid_tilemap_layer(tilemap, layer):
+		return true
+	var cells_payload: Array = data[2] if data[2] is Array else []
+	if cells_payload.is_empty():
+		_send_probe_message("mcp:error", [{"message": "cells must be a non-empty array"}])
+		return true
+	var applied: Array = []
+	for cell_value in cells_payload:
+		if not (cell_value is Dictionary):
+			continue
+		var cell: Dictionary = cell_value
+		var coords: Vector2i = _variant_to_vector2i(cell.get("coords", {}))
+		var updates: Dictionary = cell.get("updates", {}) if cell.get("updates", {}) is Dictionary else {}
+		if bool(updates.get("erase", false)):
+			_tm_erase_cell(tilemap, layer, coords)
+		else:
+			_tm_set_cell(tilemap, layer, coords,
+				int(updates.get("source_id", -1)),
+				_variant_to_vector2i(updates.get("atlas_coords", {"x": -1, "y": -1})),
+				int(updates.get("alternative_tile", 0)))
+		applied.append(_serialize_tilemap_cell(tilemap, layer, coords, false))
+	var internals_updated: bool = _tm_update_internals(tilemap)
+	_send_probe_message("mcp:tilemap_cells_updated", [{
+		"node_path": str(tilemap.get_path()),
+		"layer": layer,
+		"layer_node_type": "TileMapLayer" if tilemap is TileMapLayer else "TileMap",
+		"requested_count": cells_payload.size(),
+		"applied_count": applied.size(),
+		"cells": applied,
+		"internals_updated": internals_updated,
+		"physics_wait_hint": "physics/navigation internals rebuild at end of frame (update_internals was called when available); run advance_frames(1) before asserting physics or navigation changes",
+	}])
+	return true
 
 func _serialize_animation_state(player: AnimationPlayer) -> Dictionary:
 	return {

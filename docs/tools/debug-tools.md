@@ -92,8 +92,10 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `get_runtime_shader_parameters` | advanced | Get shader parameters in the running game. |
 | `set_runtime_shader_parameter` | advanced | Set a shader parameter in the running game. |
 | `list_runtime_tilemap_layers` | advanced | List TileMap layers in the running game. |
+| `get_runtime_tilemap_region` | advanced | Read non-empty cells of one TileMap/TileMapLayer inside a rectangle region of the running game (large maps never returned whole): row-major scan with lossless `offset`/`max_cells` paging; oversized rects refused instead of scanned. Works on both legacy TileMap (layer-indexed) and modern TileMapLayer nodes. |
 | `get_runtime_tilemap_cell` | advanced | Get a TileMap cell in the running game. |
 | `set_runtime_tilemap_cell` | advanced | Set a TileMap cell in the running game. |
+| `set_runtime_tilemap_cells` | advanced | Batch-write or erase runtime TileMap/TileMapLayer cells: every cell is written then read back, then `update_internals()` runs (the engine's immediate physics/navigation rebuild). The receipt carries `physics_wait_hint` — assert physics/navigation changes only after `advance_frames(1)` to respect end-of-frame batching. |
 | `list_runtime_audio_buses` | advanced | List audio buses in the running game. |
 | `get_runtime_audio_bus` | advanced | Get an audio bus in the running game. |
 | `update_runtime_audio_bus` | advanced | Update an audio bus in the running game. |

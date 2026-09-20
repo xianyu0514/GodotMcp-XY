@@ -252,6 +252,12 @@ var _spill_reuses: int = 0                      # 相同内容复用既有不可
 var _external_change_events: int = 0            # 合并后的编辑器/文件系统失效批次
 var _external_change_precise_paths: int = 0     # 已知路径，可精确推进 dependency revision
 var _external_change_fallback_events: int = 0   # 无路径事件，安全退化到文件相关域
+# 编辑器/文件系统变更批次的路径日志（环形，仅保留最新 EXTERNAL_CHANGE_LOG_MAX
+# 条）：依赖索引等增量消费者持游标取"自上次同步以来变化过的文件"。请求的游标
+# 早于被丢弃的旧批次时 available=false，消费者据此安全退化为全量重建。
+var _external_change_log: Array = []
+var _external_change_log_dropped: int = 0
+const EXTERNAL_CHANGE_LOG_MAX: int = 512
 
 ## Requests the client asked to cancel via `notifications/cancelled`
 ## (request id -> true). Long-running tools poll `is_request_cancelled()` /
@@ -1838,6 +1844,7 @@ func notify_external_changes(batch: Dictionary) -> Array[String]:
 	var tags: Array[String] = CACHE_REVISION_INDEX_SCRIPT.external_change_tags(batch)
 	if tags.is_empty():
 		return tags
+	_record_external_change_batch(batch)
 	_external_change_events += 1
 	var unique_paths: Dictionary = {}
 	for path_value in batch.get("paths", []):
@@ -1849,6 +1856,61 @@ func notify_external_changes(batch: Dictionary) -> Array[String]:
 		_external_change_fallback_events += 1
 	_advance_result_cache_revisions(tags, "editor_file_events")
 	return tags
+
+## Record one coalesced batch's paths into the ring log for incremental
+## consumers (dependency index). Fallback batches without paths mark the
+## whole log range as "rebuild required" for cursor-based readers.
+func _record_external_change_batch(batch: Dictionary) -> void:
+	var paths: Array = []
+	for path_value in batch.get("paths", []):
+		var path: String = str(path_value).strip_edges().replace("\\", "/")
+		if not path.is_empty():
+			paths.append(path)
+	var structural: Array = []
+	for path_value in batch.get("structural_paths", []):
+		var path: String = str(path_value).strip_edges().replace("\\", "/")
+		if not path.is_empty():
+			structural.append(path)
+	var fallback: bool = bool(batch.get("filesystem_fallback", false)) and paths.is_empty()
+	_external_change_log.append({
+		"paths": paths,
+		"structural_paths": structural,
+		"fallback": fallback,
+	})
+	var overflow: int = _external_change_log.size() - EXTERNAL_CHANGE_LOG_MAX
+	if overflow > 0:
+		_external_change_log = _external_change_log.slice(overflow)
+		_external_change_log_dropped += overflow
+
+## Incremental consumers call this with the cursor returned by their last
+## sync (initially -1). Returns the merged change set since that cursor:
+## available=false means the range was dropped by the ring — rebuild fully.
+## This is not an MCP tool.
+func external_changes_since(log_index: int) -> Dictionary:
+	var newest: int = _external_change_log_dropped + _external_change_log.size()
+	var result: Dictionary = {
+		"available": false,
+		"paths": [],
+		"structural_paths": [],
+		"fallback": false,
+		"next_index": newest,
+	}
+	if log_index < _external_change_log_dropped or log_index > newest:
+		return result
+	result["available"] = true
+	var paths: Dictionary = {}
+	var structural: Dictionary = {}
+	for entry_value in _external_change_log.slice(log_index - _external_change_log_dropped):
+		var entry: Dictionary = entry_value
+		for path_value in entry.get("paths", []):
+			paths[String(path_value)] = true
+		for path_value in entry.get("structural_paths", []):
+			structural[String(path_value)] = true
+		if bool(entry.get("fallback", false)):
+			result["fallback"] = true
+	result["paths"] = paths.keys()
+	result["structural_paths"] = structural.keys()
+	return result
 
 ## Evict cache entries produced by specific tools while retaining unrelated
 ## scene/project reads. The tool-catalog revision also advances so an in-flight

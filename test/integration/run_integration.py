@@ -31,6 +31,10 @@ SLOW_TESTS = {
     # 预算 + [rep-ci]/dispatch 触发）是它的家；fast 套件的 420 秒上限
     # 只会产生必然超时（CI run 35413164926 实证）。
     "test_representative_game.py",
+    # 三关样板全链同量级（13 目标，~7 分钟）——showcase 手动腿专职跑它；
+    # fast 套件内只会 420 秒必超时（CI run 35480163068 实证：45/46 里
+    # 唯一的失败就是它）。
+    "test_showcase_game.py",
 }
 
 DEFAULT_TIMEOUT = 600

@@ -1070,6 +1070,7 @@ func test_rename_goal_parses_and_derives_step_arguments() -> void:
 
 const GameModelStoreScript = preload("res://addons/godot_mcp/tools/game_model_store.gd")
 const FeatureRegistryScript = preload("res://addons/godot_mcp/tools/feature_registry.gd")
+const VerificationQueueStoreScript = preload("res://addons/godot_mcp/tools/verification_queue_store.gd")
 
 func _create_script_task_from(plan: Dictionary) -> Dictionary:
 	for task_value in (plan as Dictionary).get("tasks", []):
@@ -1266,6 +1267,91 @@ func test_prior_regression_success_allows_completion() -> void:
 	assert_false(bool(regression.get("failed", true)),
 		"passing prior exercises do not block completion")
 	assert_eq((regression.get("checked", []) as Array).size(), 1, "one prior feature checked")
+
+func test_prior_regression_beyond_budget_defers_to_queue() -> void:
+	# 审计 #3 验收：第九项之后不再消失——超预算 prior 入持久队列。
+	# 10 个互不相同的动词 feature（动词表全集内的不同键，id 互异不合并）。
+	var verb_names: Array = ["movement", "collectible", "win", "pause", "save",
+		"enemy", "audio", "juice", "game_over", "level"]
+	for index in range(10):
+		FeatureRegistryScript.record_feature("Feature %s" % verb_names[index],
+			{verb_names[index]: true}, [{"wait_ms": 1}], "fp")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
+	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
+	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
+	var regression: Dictionary = await _tools._run_prior_feature_regression(plan, queue_path)
+	assert_false(bool(regression.get("failed", true)), str(regression))
+	assert_eq((regression.get("checked", []) as Array).size(), 8,
+		"the first slice respects the budget")
+	assert_eq(int(regression.get("deferred_count", 0)), 2,
+		"the ninth and tenth items are deferred, not dropped")
+	assert_false(String(regression.get("queue_id", "")).is_empty(),
+		"the deferred items live in a persisted queue")
+	assert_eq(String((plan["workflow"] as Dictionary).get("regression_queue_id", "")),
+		String(regression["queue_id"]),
+		"the plan carries the queue id so the next runner slice resumes it")
+	var store: Dictionary = VerificationQueueStoreScript.load_store(queue_path)
+	assert_eq(((store.get("queues", []) as Array).size()), 1,
+		"the queue is persisted for restart-safe resumption")
+	var stored_queue: Dictionary = (store["queues"] as Array)[0]
+	assert_eq(int(VerificationQueueStoreScript._count_status(stored_queue, "pending")), 2)
+
+func test_prior_regression_resumes_deferred_queue_to_completion() -> void:
+	# 10 个互不相同的动词 feature（动词表全集内的不同键，id 互异不合并）。
+	var verb_names: Array = ["movement", "collectible", "win", "pause", "save",
+		"enemy", "audio", "juice", "game_over", "level"]
+	for index in range(10):
+		FeatureRegistryScript.record_feature("Feature %s" % verb_names[index],
+			{verb_names[index]: true}, [{"wait_ms": 1}], "fp")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
+	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
+	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
+	await _tools._run_prior_feature_regression(plan, queue_path)
+
+	var resumed: Dictionary = await _tools._run_prior_feature_regression(plan, queue_path)
+	assert_false(bool(resumed.get("failed", true)), str(resumed))
+	assert_true(bool(resumed.get("queue_completed", false)),
+		"the second slice collects the remaining evidence and completes")
+	var workflow: Dictionary = plan["workflow"]
+	assert_true(bool(workflow.get("regression_last_verified", false)),
+		"the gate remembers the queue verified everything (no re-run on re-entry)")
+	assert_false(workflow.has("regression_queue_id"))
+	# 再次进入（完成门禁重放）：last_verified 直接放行，不重跑演练。
+	var reentry: Dictionary = await _tools._run_prior_feature_regression(plan, queue_path)
+	assert_false(bool(reentry.get("failed", true)))
+	assert_true(bool(reentry.get("resumed_from_queue", false)))
+
+func test_prior_regression_queue_failure_blocks() -> void:
+	# 10 个互不相同的动词 feature（动词表全集内的不同键，id 互异不合并）。
+	var verb_names: Array = ["movement", "collectible", "win", "pause", "save",
+		"enemy", "audio", "juice", "game_over", "level"]
+	for index in range(10):
+		FeatureRegistryScript.record_feature("Feature %s" % verb_names[index],
+			{verb_names[index]: true}, [{"wait_ms": 1}], "fp")
+	_core.responses["run_project"] = {"status": "ok"}
+	_core.responses["play_and_verify"] = {"passed": true, "assertions": []}
+	var queue_path: String = "user://vq_regression_%s.json" % str(get_instance_id())
+	# 进程重启后 instance id 计数器复用——先清掉上次运行的同名残留。
+	if FileAccess.file_exists(queue_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(queue_path))
+	var plan: Dictionary = {"goal": "Zorble the flurb.", "workflow": {"workflow_id": "w1"}}
+	await _tools._run_prior_feature_regression(plan, queue_path)
+
+	_core.responses["play_and_verify"] = {"passed": false,
+		"assertions": [{"description": "drill broke", "passed": false}]}
+	var resumed: Dictionary = await _tools._run_prior_feature_regression(plan, queue_path)
+	assert_true(bool(resumed.get("failed", false)),
+		"a failing deferred drill blocks completion via the queue path")
+	assert_true(String(resumed.get("reason", "")).contains("queue has"),
+		"the reason points at the queue verdicts: %s" % str(resumed.get("reason", "")))
 
 func test_prior_regression_skips_current_goal_verbs() -> void:
 	FeatureRegistryScript.record_feature("Arrow-key player movement",

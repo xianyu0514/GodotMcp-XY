@@ -170,3 +170,47 @@ func test_gather_deterministic_across_runs() -> void:
 	var second: Dictionary = _tools._tool_gather_task_context({"goal": "add a dash to the player", "search_path": TEMP_DIR})
 	assert_eq(first["entry_scripts"], second["entry_scripts"], "same goal yields identical entries")
 	assert_eq(first["referencing_scenes"], second["referencing_scenes"])
+
+# ============================================================================
+# 引用精确性（M5：完整路径/UID 匹配，同名脚本不混淆）
+# ============================================================================
+
+func test_same_name_scripts_do_not_conflate_scene_references() -> void:
+	# 场景只引用 ui/player.gd；actors/player.gd 是同名的另一个脚本。
+	# 旧的文件名子串匹配会把两者都算作被引用（审计第一缺口）。
+	DirAccess.make_dir_recursive_absolute(TEMP_DIR + "/scripts/actors")
+	DirAccess.make_dir_recursive_absolute(TEMP_DIR + "/scripts/ui")
+	_write(TEMP_DIR + "/scripts/actors/player.gd", "extends Node\nvar from_actors := true\n")
+	_write(TEMP_DIR + "/scripts/ui/player.gd", "extends Control\nvar from_ui := true\n")
+	_write(TEMP_DIR + "/scenes/game.tscn",
+		'[gd_scene format=2]\n[ext_resource type="Script" path="res://%s/scripts/ui/player.gd" id="1"]\n[node name="Main" type="Node"]\n' % TEMP_DIR.trim_prefix("res://"))
+
+	var result: Dictionary = _tools._tool_gather_task_context({
+		"goal": "player", "search_path": TEMP_DIR,
+	})
+	assert_false(result.has("error"))
+	var entries: Array = result["entry_scripts"]
+	assert_eq(entries.size(), 2, "both same-name scripts match the keyword")
+
+	var scenes: Array = result["referencing_scenes"]
+	assert_eq(scenes.size(), 1)
+	var scene_entry: Dictionary = scenes[0]
+	assert_eq((scene_entry["references_scripts"] as Array),
+		[TEMP_DIR + "/scripts/ui/player.gd"],
+		"only the actually-referenced same-name script is reported")
+	assert_eq(String(scene_entry["match"]), "exact_path_or_uid")
+
+func test_follow_up_points_to_complete_impact_query() -> void:
+	_seed_fixture_project()
+	var result: Dictionary = _tools._tool_gather_task_context({
+		"goal": "add a dash to the player", "search_path": TEMP_DIR,
+	})
+	var impact_hint: String = ""
+	for step in result["follow_up"]:
+		if String(step).contains("query_change_impact"):
+			impact_hint = String(step)
+			break
+	assert_false(impact_hint.is_empty(),
+		"follow-up names the index-backed impact query for complete continuation")
+	assert_true(impact_hint.contains(TEMP_DIR + "/scripts/player.gd"),
+		"the hint carries the entry path as an explicit target")

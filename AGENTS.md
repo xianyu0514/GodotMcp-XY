@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **233 个工具**（28 核心 + 199 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **238 个工具**（28 核心 + 204 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。运行期地图探针（mcp_runtime_probe.gd）自 M5 起双兼容 TileMap 与 TileMapLayer（区域读取/批量写入/立即内部更新）。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.1.0
@@ -53,7 +53,7 @@ addons/godot_mcp/
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── mcp_tool_domains.gd     # 面向用户任务的工具域分类（2D/3D/UI 等，与 category/group 正交）
 │   ├── mcp_tool_preset_manager.gd # 工具预设（分组一键启用/切换）管理
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：233 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：238 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
 │   ├── prompt_workflows.gd     # 7 个可执行工作流 MCP prompts（plan_game_feature/debug_runtime_error 等）
@@ -88,6 +88,12 @@ addons/godot_mcp/
 │   ├── task_plan_store.gd      # 支持文件（非工具）— manage_task_plan 的持久任务图存储
 │   ├── change_journal.gd       # 支持文件（非工具）— 可恢复跨文件修改的操作日志（内容指纹 + 逐文件阶段 + 恢复分类，M3 首版接入 rename_script_symbol）
 │   ├── project_context_tools.gd # 1 个工具 — gather_task_context（M4 首版：自然语言修改目标 → 有界任务上下文：入口脚本/引用场景/输入动作/资源/测试，确定性关键词 + 中英词表）
+│   ├── dependency_index.gd     # 支持文件（非工具）— 增量项目依赖索引（M5 首版：完整路径 + UID 身份、脚本 preload/load 字面量解析、动态 load 疑点、内容哈希增量、BFS 传递闭包）
+│   ├── dependency_impact_tools.gd # 1 个工具 — query_change_impact（M5 首版：变更影响预览——dependents 传递闭包 + 证据链 + 分页；增量索引经 server_core 变更路径日志维护）
+│   ├── change_set_executor.gd  # 支持文件（非工具）— 可恢复跨文件变更单执行协议（读版本绑定、journal 硬门禁、逐文件中断/恢复/幂等/冲突保护）
+│   ├── change_set_tools.gd    # 1 个工具 — apply_change_set（M5 第二交付：变更单工具层——缓冲区守卫 + 写后同步 + follow-up 验证指引）
+│   ├── verification_queue_store.gd # 支持文件（非工具）— 持久化分片验证队列（预算分片/重启续跑/指纹失效/完成契约）
+│   ├── verification_queue_tools.gd # 1 个工具 — run_verification_queue（M5 第三交付：分片验证编排枢纽——script_check 内置执行 + external 回填 + 漂移重验）
 │   ├── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
 │   ├── export_preset_tools.gd  # 5 个工具 — inspect/create/update/remove/duplicate_export_preset（export_presets.cfg 的原子 CRUD）
 │   └── game_workflow_tools.gd  # 2 个工具（category=meta，始终在线）— plan_game_workflow（12 生产 profile 组装持久目标 DAG）、run_game_workflow（自适应检查点切片推进，证据门禁判 completed）
@@ -109,7 +115,7 @@ addons/godot_mcp/
     └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 233 = 28 core + 199 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
+> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 238 = 28 core + 204 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
 
 ## 规范
 
@@ -147,7 +153,7 @@ addons/godot_mcp/
 1. **实现处理器** — 在对应的 `*_tools_native.gd` 中创建 `_register_<name>()` 和 `_tool_<name>()` 函数，用 8 个参数调用 `server_core.register_tool()`（name, desc, input_schema, Callable, output_schema, annotations, category, group）
 2. **登记到 manifest** — 在 `tools_manifest.gd` 的 `MCPToolsManifest.TOOLS` 中添加该工具条目（`{name: {category, group}}`，唯一权威来源；`mcp_tool_classifier.gd` 自动从中生成分类），然后更新 `test_mcp_tool_classifier.gd` 中的工具总数和 supplementary 计数（manifest/classifier/注册三方一致性由 manifest 测试强制）
 3. **添加单元测试** — 在 `test/unit/tools/` 中覆盖缺失参数/无效参数/边界情况
-4. **更新翻译文件** — 在 `translations/tool_descriptions.json` 和 `translations/tool_descriptions.csv` 中添加工具描述（中英文）
+4. **更新翻译文件** — 在 `addons/godot_mcp/translations/tool_descriptions.json` 和 `addons/godot_mcp/translations/tool_descriptions.csv` 中添加工具描述（中英文）
 5. **更新文档** — `docs/tools/<category>-tools.md`（对应分类页，新增工具行 + 更新分组计数）、`docs/tools/README.md`（分类总数表）、根与 `addons/godot_mcp/` 下的 `README.md` / `README.zh.md`
 6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
@@ -165,8 +171,8 @@ addons/godot_mcp/
    - 更新功能列表中的工具计数与分类计数表
 4. **`docs/architecture.md`** — 如果工具分类数量有大幅变化，更新工具注册章节的统计表
 5. **翻译文件**
-   - `translations/tool_descriptions.json` — 新工具有描述文本
-   - `translations/tool_descriptions.csv` — 新工具有中英文描述
+   - `addons/godot_mcp/translations/tool_descriptions.json` — 新工具有描述文本
+   - `addons/godot_mcp/translations/tool_descriptions.csv` — 新工具有中英文描述
 6. **`docs/contributing.md`** — 如果工具创建流程有变化
 
 **验证清单：**
@@ -186,7 +192,7 @@ addons/godot_mcp/
 ## Godot 4.7 特殊注意事项
 - `float()` 构造函数不可用 — 使用 `as float`
 - `AnimationNodeStateMachine.set_start_node()` 不存在 — 使用 `add_node()`
-- 运行时 TileMap 工具（`mcp_runtime_probe.gd`）仅支持旧版 `TileMap`，不支持 `TileMapLayer`；编辑期的 `set_tilemap_layer_cells` / `get_tilemap_layer_cells`（Scene-Advanced）使用 4.x 单层 `TileMapLayer` API
+- 运行时 TileMap 工具（`mcp_runtime_probe.gd`）自 M5 起双兼容旧版 `TileMap` 与 `TileMapLayer`（区域读取 `get_tilemap_region` / 批量写入 `set_tilemap_cells` 走 `update_internals()` 立即重建，物理/导航断言前仍需 `advance_frames(1)`）；编辑期的 `set_tilemap_layer_cells` / `get_tilemap_layer_cells`（Scene-Advanced）使用 4.x 单层 `TileMapLayer` API
 - `execute_editor_script`：使用 `edited_scene` 访问场景，用 `_custom_print()` 输出，**不要**用 `get_tree()`
 - `_request_runtime_probe` 首次调用返回 `pending` — 再次调用获取缓存的响应
 

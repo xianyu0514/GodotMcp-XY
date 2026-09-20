@@ -11,7 +11,7 @@ extends "res://addons/gut/test.gd"
 #
 # 基线（首次诊断快照，Godot 4.7.2 headless；数字随 schema 演进变化，
 # 本测试不锁定具体出现次数，只锁定“关键字集合 ⊆ 白名单”）：
-#   - 218+ 个工具全部注册成功（当前仓库 233 个）
+#   - 218+ 个工具全部注册成功（当前仓库 234 个）
 #   - 实际用到的关键字只有 7 个：
 #       type properties description required default items enum
 #   - 全部 input_schema 均为 {type:"object", properties:{...}}（含 17 个无参工具
@@ -35,6 +35,9 @@ const TOOL_MODULE_PATHS: Array[String] = [
 	"res://addons/godot_mcp/tools/project_tools_native.gd",
 	"res://addons/godot_mcp/tools/project_resources_tools.gd",
 	"res://addons/godot_mcp/tools/project_context_tools.gd",
+	"res://addons/godot_mcp/tools/dependency_impact_tools.gd",
+	"res://addons/godot_mcp/tools/change_set_tools.gd",
+	"res://addons/godot_mcp/tools/verification_queue_tools.gd",
 	"res://addons/godot_mcp/tools/project_assets_tools.gd",
 	"res://addons/godot_mcp/tools/project_tileset_tools.gd",
 	"res://addons/godot_mcp/tools/project_verification_tools.gd",
@@ -145,6 +148,7 @@ const FULL_SET_TOKEN_BUDGET: int = 60000
 const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
 	"play_and_verify": "行为验收编排（M7）：步内断言语义必须写进 schema（steps/assertions/sample 富参数），精简会丢掉 mid-sequence 断言的可用性说明",
 	"generate_asset": "资产生成：~1.6KB 描述 + 20 参数（历史基线，待精简）",
+	"run_verification_queue": "分片验证编排枢纽（M5 交付 #3）：五个 command 的语义契约（create/advance/inspect/record/abandon）与完成判定必须内联在 schema 里，精简会丢掉 external 回填协议的可用性说明",
 	"manage_task_plan": "任务图编排：~1.8KB 描述 + 富参数（历史基线，待精简）",
 	"generate_3d_asset": "文生 3D：~1.4KB 描述 + 富参数（历史基线，待精简）",
 	"slice_sprite_sheet": "精灵图切片：富参数 schema（历史基线，待精简）",
