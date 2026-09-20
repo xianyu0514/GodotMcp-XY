@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="EnemyStats" load_steps=2 format=3 uid="uid://slicebossstats001"]
+
+[ext_resource type="Script" path="res://scripts/combat/enemy_stats.gd" id="1_stats"]
+
+[resource]
+script = ExtResource("1_stats")
+move_speed = 80.0
+contact_damage = 25
+knockback_resistance = 0.9
+patrol_range = 90.0
+display_name = "Boss"

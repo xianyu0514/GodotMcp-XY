@@ -37,6 +37,10 @@ const MCP_RUNTIME_DIR: String = ".mcp"
 ## 第三方 / 脚手架目录
 const TOOLING_DIRS: Array[String] = ["addons", "test", "tests", "docs"]
 
+## 嵌套 Godot 项目目录（内有独立 project.godot）：按 tooling 域处理——
+## 它们的脚本只在各自项目的类/autoload 上下文可编译。
+const NESTED_PROJECT_DIRS: Array[String] = ["slice_b"]
+
 ## 生成物伴随文件后缀（源文件仍在，只是缓存描述丢了）
 const GENERATED_FILE_SUFFIXES: Array[String] = [".import", ".uid"]
 
@@ -91,6 +95,11 @@ static func domain_of(path: String) -> int:
 	if first in TOOLING_DIRS and segments.size() > 1:
 		return Domain.TOOLING
 	if first in TOOLING_DIRS and segments.size() == 1:
+		return Domain.TOOLING
+	# 嵌套项目（自带 project.godot 的目录，如 slice_b/）：其脚本按自己的
+	# res:// 语义引用全局类/autload，在宿主项目上下文必然解析失败——
+	# 诊断扫描按 tooling 域跳过（首段命中即可，嵌套项目不会嵌套）。
+	if first in NESTED_PROJECT_DIRS and segments.size() >= 1:
 		return Domain.TOOLING
 
 	return Domain.SOURCE

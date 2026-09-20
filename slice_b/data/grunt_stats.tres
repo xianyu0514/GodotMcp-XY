@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="EnemyStats" load_steps=2 format=3 uid="uid://slicebgruntstats01"]
+
+[ext_resource type="Script" path="res://scripts/combat/enemy_stats.gd" id="1_stats"]
+
+[resource]
+script = ExtResource("1_stats")
+move_speed = 120.0
+contact_damage = 10
+knockback_resistance = 0.0
+patrol_range = 120.0
+display_name = "Grunt"
