@@ -172,6 +172,7 @@ func test_prompts_registered():
 	assert_true("plan_game_feature" in names, "plan_game_feature should be registered")
 	assert_true("debug_runtime_error" in names, "debug_runtime_error should be registered")
 	assert_true("onboard_new_project" in names, "onboard_new_project should be registered")
+	assert_true("make_game_change" in names, "make_game_change should be registered")
 
 func test_prompt_plan_game_feature_messages():
 	var workflows: RefCounted = _new_workflows()
@@ -246,6 +247,37 @@ func test_prompt_release_export_flow_messages():
 	assert_true(defaulted.has("messages"), "No required args; defaults must render")
 	assert_true(str(defaulted["messages"][0]["content"]["text"]).contains("default export preset"),
 		"Empty platform falls back to the default preset wording")
+
+func test_prompt_make_game_change_messages():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_change").call({
+		"change": "increase player acceleration and keep collision intact",
+		"acceptance": "player crosses 200px in 1s under held input; zero runtime errors"
+	})
+	assert_true(result.has("messages"), "Should return messages")
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("gather_task_context"), "Template should reference gather_task_context")
+	assert_true(text.contains("query_change_impact"), "Template should reference query_change_impact")
+	assert_true(text.contains("apply_change_set"), "Template should reference apply_change_set")
+	assert_true(text.contains("expected_content_hash"), "Template should pin read versions via expected_content_hash")
+	assert_true(text.contains("\"command\": \"create\""), "run_verification_queue must use its real 'command' parameter")
+	assert_true(text.contains("increase player acceleration and keep collision intact"), "change should be embedded")
+	assert_true(text.contains("zero runtime errors"), "acceptance should be embedded")
+	var no_acceptance: Dictionary = workflows.get_callable("make_game_change").call({"change": "tweak speed"})
+	assert_true(no_acceptance.has("messages"), "Omitted acceptance should render with the default wording")
+	assert_true(str(no_acceptance["messages"][0]["content"]["text"]).contains("write 1-3 objective conditions"),
+		"Missing acceptance falls back to the frame-it-yourself wording")
+	var missing: Dictionary = workflows.get_callable("make_game_change").call({})
+	assert_true(missing.has("error"), "Missing required change must fail")
+
+func test_prompt_keyword_matcher_routes_change_set_queries():
+	var workflows: RefCounted = _new_workflows()
+	var en_hit: Dictionary = workflows.match_prompt("prepare a cross-file change set with impact analysis")
+	assert_eq(String(en_hit.get("name", "")), "make_game_change",
+		"English change-set/impact wording routes to make_game_change")
+	var zh_hit: Dictionary = workflows.match_prompt("先做影响分析再提交变更单")
+	assert_eq(String(zh_hit.get("name", "")), "make_game_change",
+		"Chinese 影响分析/变更单 wording routes to make_game_change")
 
 func test_prompt_keyword_matcher_bilingual():
 	var workflows: RefCounted = _new_workflows()

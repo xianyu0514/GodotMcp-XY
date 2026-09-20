@@ -7,6 +7,7 @@
 | 场景 | 用法 | 特点 |
 | --- | --- | --- |
 | 短任务（几分钟内） | `enable_tools({"workflow_query": "<目标>"})` → 直接调用激活的工具 | 一次调用激活 ≤8 个工具；命中配方时响应带 `suggested_prompt` |
+| 单项修改（要证据、要可恢复） | `make_game_change` prompt（`prompts/get`）→ 按模板走 7 步循环 | 先验收条件 → 影响分析 → 变更单预览/提交（`expected_content_hash`）→ 编译+行为验证 → 证据报告；中断后同一 `change_set_id` 续跑 |
 | 完整功能/整游戏 | `plan_game_workflow` → 循环 `run_game_workflow` 直到 `completed` | 持久目标 DAG、断点续跑、证据门禁；编辑器重启后可恢复 |
 
 **目标措辞**：说清可验证的产出，不要只说领域词。好例：“方向键移动的角色，吃到金币后显示胜利标签；脚本要过校验，项目要过冒烟测试”。差例：“做个好玩的游戏”（无法编译出可验证的步骤时会显式要求澄清，不会假装完成）。
@@ -35,11 +36,12 @@
 
 ## 可执行配方（prompts）
 
-`prompts/list` 提供 9 个即用流程模板；`enable_tools` 命中关键词时会在响应里 `suggested_prompt` 提示：
+`prompts/list` 提供 10 个即用流程模板；`enable_tools` 命中关键词时会在响应里 `suggested_prompt` 提示：
 
 | 配方 | 用途 |
 | --- | --- |
 | `plan_game_feature` | GDD → 带门禁的任务图 |
+| `make_game_change` | 一条需求 → 可恢复变更循环（影响分析→预览→提交→验证→证据报告） |
 | `iterate_play_verify` | 运行→观测→门禁→最小修复循环（3 次同败即停） |
 | `debug_runtime_error` | 运行错误端到端排查 |
 | `fix_compile_errors` | 编译/校验错误修复循环 |

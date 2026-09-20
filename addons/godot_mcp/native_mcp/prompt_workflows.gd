@@ -209,6 +209,41 @@ Notes: {{notes}}
 Done when: steps 1-5 all pass; any blocking failure is reported with the exact tool message.
 """
 
+const MAKE_GAME_CHANGE_TEMPLATE: String = """
+You are executing the "Recoverable Change" workflow against the Godot project through MCP tools.
+This is an executable workflow template: follow the steps in order; never skip the preview or the verification, and never report a write as done before its gates pass.
+
+Change: {{change}}
+Acceptance: {{acceptance}}
+
+Step 1 — Frame acceptance first. If no acceptance was given, write 1-3 objective, observable conditions before touching anything (e.g. "validate_script passes on touched scripts", "player moves 100px right under fixed input", "zero runtime errors").
+
+Step 2 — Orient (read-only):
+{"tool": "gather_task_context", "args": {"goal": "{{change}}"}} — entry scripts, referencing scenes, input actions, related resources and affected tests for this goal.
+{"tool": "query_change_impact", "args": {"target_paths": ["<entry script or scene paths from the step above>"]}} — transitive dependents with evidence. Follow has_more/next_offset to the end; treat unknown_targets and dynamic_unknowns as risk to inspect, not as proof of safety.
+
+Step 3 — Pin read versions before editing:
+{"tool": "read_script", "args": {"script_path": "<path>"}} — or {"tool": "batch_read_scripts", "args": {"script_paths": ["<paths>"]}} for several. Keep each returned content_hash: every modify operation must carry the expected_content_hash of the read that produced it.
+
+Step 4 — Preview, then commit:
+{"tool": "apply_change_set", "args": {"intent": "{{change}}", "operations": {"modify": [{"path": "<path>", "expected_content_hash": "<hash from step 3>", "edits": [{"old_text": "<snippet that occurs exactly once>", "new_text": "<replacement>"}]}]}, "change_set_id": "<stable id you reuse>", "dry_run": true}}
+Review the preview (fingerprints, per-file edit counts), then commit the SAME change_set_id and operations with "dry_run": false. On interruption re-submit the same id: applied files are skipped and manually-edited files stop at an explicit conflict — never widen edits to work around a conflict.
+Scene/node edits that the text schema cannot express go through the focused scene tools instead; do not force them into the change set.
+
+Step 5 — Compile gate: {"tool": "validate_script", "args": {"script_path": "<each touched script>"}} — zero errors required before any behavior claim.
+
+Step 6 — Behavior gate — pick the cheapest tool that actually observes the acceptance:
+{"tool": "play_and_verify", "args": {"steps": [{"action": "<input action>", "wait_frames": 30, "screenshot": true}], "assertions": [{"expression": "<runtime expression for one acceptance condition>", "description": "<the acceptance condition>"}], "deterministic": true}}
+For multi-slice verification use {"tool": "run_verification_queue", "args": {"command": "create", "goal": "{{change}}", "items": [{"kind": "script_check", "label": "<what>", "detail": {"scripts": ["<paths>"]}}, {"kind": "external", "label": "<behavior to run>", "detail": "<how>"}]}} then {"command": "advance"}; an external item is recorded with {"command": "record"} only after you actually ran it — recording a verdict is not the same as producing one.
+Runtime errors, if any: {"tool": "get_editor_logs", "args": {"source": "runtime"}}.
+
+Step 7 — Persist and report:
+If a task plan exists, feed measured outcomes back: {"tool": "manage_task_plan", "args": {"action": "set_dod", "id": "<task id>"}} and {"tool": "manage_task_plan", "args": {"action": "set_status", "id": "<task id>", "status": "<new status>"}}.
+Report in one block: files changed and why (intent), evidence per acceptance condition (tool receipts, screenshots), what was NOT verified, and how to resume or inspect (the change_set_id).
+
+Rules: after 3 identical consecutive failures stop retrying and report the isolated root cause; a committed change is "written, pending verification" until steps 5-6 pass; conflicts and missing prerequisites are reported, never silently skipped.
+"""
+
 var _prompts: Dictionary = {}  # name -> {name, description, arguments, callable}
 
 func _init() -> void:
@@ -289,6 +324,15 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_release_export_flow")
 	)
+	_add_prompt(
+		"make_game_change",
+		"One requirement through the recoverable change loop: frame acceptance, gather context and impact, pin read versions, preview + commit an apply_change_set, then verify (compile + behavior) and report evidence with resume handles.",
+		[
+			{"name": "change", "description": "What to change, in natural language (EN/ZH), e.g. 'increase player acceleration and keep collision intact'.", "required": true},
+			{"name": "acceptance", "description": "Optional objective acceptance conditions. When omitted you must write them before editing.", "required": false}
+		],
+		Callable(self, "_get_make_game_change")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -317,7 +361,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"run_test_suite": ["run tests", "test suite", "unit test", "gut",
 		"跑测试", "测试套件", "单元测试"],
 	"onboard_new_project": ["onboard", "new project", "discover tools",
-		"上手", "新项目", "工具发现"]
+		"上手", "新项目", "工具发现"],
+	"make_game_change": ["change set", "impact analysis", "cross-file change", "recoverable change",
+		"变更单", "影响分析", "跨文件", "可恢复"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -459,3 +505,11 @@ func _get_fix_compile_errors(args: Dictionary) -> Dictionary:
 	else:
 		content = content.replace("{{script_paths_block}}", paths)
 	return _render(content, args, [])
+
+func _get_make_game_change(args: Dictionary) -> Dictionary:
+	var content: String = MAKE_GAME_CHANGE_TEMPLATE
+	var acceptance: String = str(args.get("acceptance", "")).strip_edges()
+	if acceptance.is_empty():
+		acceptance = "none given — write 1-3 objective conditions in Step 1 before editing"
+	content = content.replace("{{acceptance}}", acceptance)
+	return _render(content, args, ["change"])
