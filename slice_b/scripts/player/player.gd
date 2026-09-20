@@ -33,6 +33,8 @@ func take_hit(damage: int, knockback: Vector2) -> void:
 	hp = int(verdict["hp"])
 	_invuln_left = INVULN_SECONDS
 	_knockback_velocity = knockback
+	if SoundBus != null:
+		SoundBus.play_sfx(SoundBus.SFX_HIT)
 	if GameSave != null:
 		GameSave.record_combat_state(hp, GameSave.coins)
 	if bool(verdict["dead"]):

@@ -1,9 +1,10 @@
-[gd_scene load_steps=11 format=3 uid="uid://slicebmapbossaaa0003"]
+[gd_scene load_steps=12 format=3 uid="uid://slicebmapbossaaa0003"]
 
 [ext_resource type="Script" path="res://scripts/world/map_root.gd" id="1_root"]
 [ext_resource type="Script" path="res://scripts/world/door.gd" id="2_door"]
 [ext_resource type="Script" path="res://scripts/world/spawn_marker.gd" id="3_spawn"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="4_player"]
+[ext_resource type="Texture2D" path="res://art/sky_boss.tres" id="9_sky"]
 [ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="5_enemy"]
 [ext_resource type="Resource" path="res://data/grunt_stats.tres" id="6_grunt"]
 [ext_resource type="Resource" path="res://data/boss_stats.tres" id="7_boss"]
@@ -21,10 +22,11 @@ size = Vector2(48, 96)
 script = ExtResource("1_root")
 map_id = "res://scenes/maps/map_boss.tscn"
 
-[node name="Background" type="ColorRect" parent="."]
+[node name="Background" type="TextureRect" parent="."]
 offset_right = 960.0
 offset_bottom = 540.0
-color = Color(0.38, 0.12, 0.14, 1)
+texture = ExtResource("9_sky")
+stretch_mode = 6
 
 [node name="Title" type="Label" parent="."]
 offset_left = 24.0

@@ -6,6 +6,8 @@ extends Node2D
 func _ready() -> void:
 	if not map_id.is_empty():
 		GameSave.record_map_visit(map_id)
+	if SoundBus != null:
+		SoundBus.play_bgm()
 	var spawn: Marker2D = get_node_or_null("SpawnMarker")
 	var player: CharacterBody2D = get_node_or_null("Player")
 	if spawn and player:
