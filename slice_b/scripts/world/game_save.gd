@@ -21,6 +21,8 @@ signal save_written(data: Dictionary)
 
 var inventory: Inventory = InventoryScript.new()
 var quest_log: QuestLog = QuestLogScript.new()
+## 金币是高频读写成员（任务奖励/受击快照），与 current["coins"] 双向同步。
+var coins: int = 0
 var current: Dictionary = _fresh()
 
 func _ready() -> void:
@@ -63,6 +65,7 @@ func save() -> void:
 		DirAccess.copy_absolute(ProjectSettings.globalize_path(SAVE_PATH),
 			ProjectSettings.globalize_path(BACKUP_PATH))
 	current["schema_version"] = SCHEMA_VERSION
+	current["coins"] = coins
 	current["items"] = inventory.to_dict()
 	current["quests"] = quest_log.to_dict()
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -99,6 +102,7 @@ static func _migrate(data: Dictionary) -> Dictionary:
 
 func _apply(data: Dictionary) -> void:
 	current = data
+	coins = int(data.get("coins", 0))
 	inventory.load_dict(data.get("items", {}) if data.get("items", {}) is Dictionary else {})
 	quest_log.load_dict(data.get("quests", {}) if data.get("quests", {}) is Dictionary else {})
 
