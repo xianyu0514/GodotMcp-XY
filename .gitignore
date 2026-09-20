@@ -62,3 +62,8 @@ slice_b/.godot/
 slice_b/build/
 slice_b/audio/*.wav
 slice_b/audio/*.import
+
+# Stress game: synced plugin + generated cache + build artifacts (slice_b pattern)
+stress_game/addons/
+stress_game/.godot/
+stress_game/build/

@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://cu6jn0dy7l20x"]
+
+[ext_resource type="Script" uid="uid://dk03grldm8hdr" path="res://scripts/player_movement.gd" id="1_e6k5b"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_vo1u4"]
+size = Vector2(32, 32)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_07i4t"]
+size = Vector2(32, 576)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_sqi60"]
+size = Vector2(32, 576)
+
+[node name="room_movement" type="Node2D" unique_id=427804424]
+
+[node name="Player" type="CharacterBody2D" parent="." unique_id=1500200075]
+position = Vector2(320, 288)
+script = ExtResource("1_e6k5b")
+
+[node name="Visual" type="ColorRect" parent="Player" unique_id=238635939]
+offset_left = -16.0
+offset_top = -16.0
+offset_right = 16.0
+offset_bottom = 16.0
+color = Color(0.3, 0.7, 0.9, 1)
+
+[node name="Shape" type="CollisionShape2D" parent="Player" unique_id=417477008]
+shape = SubResource("RectangleShape2D_vo1u4")
+
+[node name="WallLeft" type="StaticBody2D" parent="." unique_id=563977785]
+position = Vector2(64, 288)
+
+[node name="Shape" type="CollisionShape2D" parent="WallLeft" unique_id=1832521563]
+shape = SubResource("RectangleShape2D_07i4t")
+
+[node name="WallRight" type="StaticBody2D" parent="." unique_id=1176822315]
+position = Vector2(576, 288)
+
+[node name="Shape" type="CollisionShape2D" parent="WallRight" unique_id=1230760301]
+shape = SubResource("RectangleShape2D_sqi60")
