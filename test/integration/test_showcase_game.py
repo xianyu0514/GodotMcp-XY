@@ -12,6 +12,7 @@
 """
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -129,17 +130,35 @@ def showcase_oracle():
     try:
         rpc("enable_tools", {"tools": ["play_and_verify", "run_project",
                                        "install_runtime_probe", "stop_project"]}, 900)
-        rpc("run_project", {"allow_window": True}, 901)
+        # 冷启动竞态重试（本机实证：干净 .godot 首次 run 可能立即退，
+        # 重试即活——重放器 repro_showcase_oracle.py 复现过）。
+        for _attempt in range(3):
+            try:
+                rpc("run_project", {"allow_window": True}, 901)
+                break
+            except AssertionError:
+                if _attempt == 2:
+                    raise
+                time.sleep(8)
         time.sleep(3)
 
         # 1) 三关完整通关弧线：解锁 → L1/L2/L3 各自收集全 → 每关换关、
         #    最终胜利文案、回 L1。计数/状态/关卡全部取证编码。
+        # 扫币帧数按模型实速计算（13-final-tune 后 SPEED=390：硬编码 50 帧
+        # 会冲 325px 直入敌带 [220,380] 致死——CI 实证）。与蓝图 sweep 同式：
+        # 停点 = 簇尾 - 磁吸 + 余量，clamp 进安全走廊（<= 189px）。
+        model = json.loads(open(SCRATCH + os.sep + ".mcp" + os.sep + "game_model.json", encoding="utf-8").read())
+        speed = float(model.get("params", {}).get("SPEED", 260.0))
+        coins_n = 5
+        spacing = min(40.0, 78.0 / float(coins_n - 1))
+        window_px = 110.0 + (coins_n - 1) * spacing - 90.0 + 12.0
+        sweep_frames = max(10, min(29, math.ceil(window_px / (speed / 60.0))))
         steps = []
         for _ in range(3):
             steps.append({"action": "ui_accept", "pressed": True, "wait_ms": 300})
             steps.append({"action": "ui_accept", "pressed": False, "wait_ms": 100})
         for level in (1, 2, 3):
-            steps.append({"action": "move_right", "pressed": True, "wait_frames": 50})
+            steps.append({"action": "move_right", "pressed": True, "wait_frames": sweep_frames})
             steps.append({
                 "action": "move_right", "pressed": False, "wait_ms": 300,
                 "assert": {"expression":
