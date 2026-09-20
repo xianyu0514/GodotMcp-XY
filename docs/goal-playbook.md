@@ -7,6 +7,7 @@
 | 场景 | 用法 | 特点 |
 | --- | --- | --- |
 | 短任务（几分钟内） | `enable_tools({"workflow_query": "<目标>"})` → 直接调用激活的工具 | 一次调用激活 ≤8 个工具；命中配方时响应带 `suggested_prompt` |
+| 单项修改（要证据、要可恢复） | `make_game_change` prompt（`prompts/get`）→ 按模板走 7 步循环 | 先验收条件 → 影响分析 → 变更单预览/提交（`expected_content_hash`）→ 编译+行为验证 → 证据报告；中断后同一 `change_set_id` 续跑 |
 | 完整功能/整游戏 | `plan_game_workflow` → 循环 `run_game_workflow` 直到 `completed` | 持久目标 DAG、断点续跑、证据门禁；编辑器重启后可恢复 |
 
 **目标措辞**：说清可验证的产出，不要只说领域词。好例：“方向键移动的角色，吃到金币后显示胜利标签；脚本要过校验，项目要过冒烟测试”。差例：“做个好玩的游戏”（无法编译出可验证的步骤时会显式要求澄清，不会假装完成）。
@@ -35,11 +36,12 @@
 
 ## 可执行配方（prompts）
 
-`prompts/list` 提供 9 个即用流程模板；`enable_tools` 命中关键词时会在响应里 `suggested_prompt` 提示：
+`prompts/list` 提供 10 个即用流程模板；`enable_tools` 命中关键词时会在响应里 `suggested_prompt` 提示：
 
 | 配方 | 用途 |
 | --- | --- |
 | `plan_game_feature` | GDD → 带门禁的任务图 |
+| `make_game_change` | 一条需求 → 可恢复变更循环（影响分析→预览→提交→验证→证据报告） |
 | `iterate_play_verify` | 运行→观测→门禁→最小修复循环（3 次同败即停） |
 | `debug_runtime_error` | 运行错误端到端排查 |
 | `fix_compile_errors` | 编译/校验错误修复循环 |
@@ -57,6 +59,17 @@
 - **首场景/首脚本路径自动推导**：不传路径时按 profile 落到 `res://scenes|scripts|themes/<profile>...`；要控制位置就显式传 `scene_path`/`script_path`。
 - **目标蓝图**：目标提到移动/收集/胜利（双语）时，`create_script` 自动生成真实控制器（含运行期生成的拾取体与胜利标签）、场景根派生为 `CharacterBody2D`；显式传 `content` 永远优先。
 
+## 做可玩内容的实测要点（first-playable 冒烟沉淀）
+
+- **`create_scene` 写文件但不打开**：建完先 `open_scene`（Vibe Coding 模式下带 `allow_ui_focus=true`）再 `create_node`，否则报 "No active edited scene"。
+- **抢焦点/开窗口的动作要显式授权**：`open_scene` 带 `allow_ui_focus`，`run_project`/`stop_project` 带 `allow_window` —— 这是 Vibe Coding 守卫的设计行为，报错文本会说明。
+- **坐标接受 JSON 数组**：`set_property` 的 `property_value` 用 `[320, 288]` 即可（也接受 `{"x":..,"y":..}` 与字符串形式）。
+- **WASD 绑定用物理键码**：`upsert_project_input_action` 事件形如 `{"type":"key","physical_keycode":65}`（跨键盘布局稳定；keycode 是当前布局逻辑键，二者至少其一）。
+- **运行时探针先装后跑**：`install_runtime_probe`（persistent）→ `run_project` → 等 debugger 会话激活 → 再驱动输入；`await_runtime_condition` 会真等到条件成立或超时（新鲜但为假会继续轮询）。
+- **表达式相对当前场景解析**：`evaluate_runtime_expression` 的 base 默认是 current_scene，`get_node('Player').position.x` 这类相对写法最稳；裸 `node_path` 从探针根解析。
+- **改脚本后要确认场景引用的是外部文件**：`create_script` 挂载按外部路径引用；若手工内嵌过源码，改 .gd 文件不会影响场景 —— 用 read_script 与运行实测对照。
+- **传错参数名不会再静默**：调度层会在结果里附 `_schema_warnings` 指出未知键与 schema 实际键集，一次往返即可自纠。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
@@ -69,6 +82,8 @@
 
 ## 自动提交的回归保障
 
+- `test_first_contact_flow.py` — 首次接入契约（initialize 指引、惰性工具面、项目识别、自愈报错、workflow_query 路由、prompt 配方）
+- `test_first_playable_flow.py` — 可玩切片冒烟（纯原子工具：建输入/场景/脚本 → 运行验证移动+撞墙 → apply_change_set 改参数实测生效 → 编辑器重启持久性）
 - `test_game_goal_flow.py` — 目标级闭环（scratch 项目 → plan → run → completed）
 - `test_batch_scene_node_edits_flow.py` — 单调用脚本化节点组装 + 真值断言
 - 1784 项单元测试覆盖路由、门禁语义、缓存一致性与工具校验

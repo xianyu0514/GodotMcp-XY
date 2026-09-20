@@ -62,7 +62,7 @@ Reported error:
 3. Diagnose — {"tool": "validate_script", "args": {"script_path": "<script path>"}}:
    confirm there are no parse errors, then identify the root cause (null instance, wrong
    type, out-of-range access, missing signal connection, ...).
-4. Fix — apply the smallest coherent edit to the script (write_script / execute_editor_script).
+4. Fix — apply the smallest coherent edit to the script (modify_script on the read content / create_script for a new file / execute_editor_script).
    Keep the change backward compatible and consistent with project conventions.
 5. Re-verify — re-run validate_script on the edited script, then {"tool": "run_project", "args": {}}
    and pull get_editor_logs again. Confirm the original error is gone and no new error appeared.
@@ -154,7 +154,7 @@ Script paths: {{script_paths_block}}
    collect structured errors with line numbers (and warnings).
 2. Read — {"tool": "read_script", "args": {"script_path": "<path>"}} — read the script around
    each reported error line to understand the failing construct.
-3. Fix — apply the smallest coherent edit (write_script / execute_editor_script), keeping the
+3. Fix — apply the smallest coherent edit (modify_script on the read content / create_script for a new file / execute_editor_script), keeping the
    change backward compatible and consistent with project conventions.
 4. Re-validate — re-run validate_script on the edited script until it reports valid with no errors.
 5. Check for cascade — validate any scripts that depend on the fixed one, then run the project
@@ -197,7 +197,7 @@ Notes: {{notes}}
 
 1. Templates — {"tool": "manage_export_templates", "args": {"action": "status"}}: matching_version_installed
    must be true; when false, download with {"action": "download"} and poll {"action": "download_status"}.
-2. Preset — {"tool": "inspect_export_preset"} then {"tool": "validate_export_preset"}: resolve every
+2. Preset — {"tool": "inspect_export_presets"} then {"tool": "validate_export_preset"}: resolve every
    reported issue (export_path, template availability, platform fields) before exporting.
 3. Version — {"tool": "bump_version"}: raise the project version per the requested step and record
    the changelog entry it returns.
@@ -207,6 +207,46 @@ Notes: {{notes}}
 6. Report — summarize artifact path, size, version and smoke verdict in one block.
 
 Done when: steps 1-5 all pass; any blocking failure is reported with the exact tool message.
+"""
+
+const MAKE_GAME_CHANGE_TEMPLATE: String = """
+You are executing the "Recoverable Change" workflow against the Godot project through MCP tools.
+This is an executable workflow template: follow the steps in order; never skip the preview or the verification, and never report a write as done before its gates pass.
+
+Change: {{change}}
+Acceptance: {{acceptance}}
+
+Step 0 — Activate the toolset (supplementary tools are off by design, not broken):
+{"tool": "enable_tools", "args": {"workflow_query": "{{change}}"}} — one call routes the tools this loop needs. If a call ever answers "Tool is disabled", the error embeds the exact enable call; unknown argument names surface in _schema_warnings with the schema's real property list.
+
+Step 1 — Frame acceptance first. If no acceptance was given, write 1-3 objective, observable conditions before touching anything (e.g. "validate_script passes on touched scripts", "player moves 100px right under fixed input", "zero runtime errors").
+
+Step 2 — Orient (read-only):
+{"tool": "gather_task_context", "args": {"goal": "{{change}}"}} — entry scripts, referencing scenes, input actions, related resources and affected tests for this goal.
+{"tool": "query_change_impact", "args": {"target_paths": ["<entry script or scene paths from the step above>"]}} — transitive dependents with evidence. Follow has_more/next_offset to the end; treat unknown_targets and dynamic_unknowns as risk to inspect, not as proof of safety.
+
+Step 3 — Pin read versions before editing:
+{"tool": "read_script", "args": {"script_path": "<path>"}} — or {"tool": "batch_read_scripts", "args": {"script_paths": ["<paths>"]}} for several. Keep each returned content_hash: every modify operation must carry the expected_content_hash of the read that produced it.
+
+Step 4 — Preview, then commit:
+{"tool": "apply_change_set", "args": {"intent": "{{change}}", "operations": {"modify": [{"path": "<path>", "expected_content_hash": "<hash from step 3>", "edits": [{"old_text": "<snippet that occurs exactly once>", "new_text": "<replacement>"}]}]}, "change_set_id": "<stable id you reuse>", "dry_run": true}}
+Review the preview (fingerprints, per-file edit counts), then commit the SAME change_set_id and operations with "dry_run": false. On interruption re-submit the same id: applied files are skipped and manually-edited files stop at an explicit conflict — never widen edits to work around a conflict.
+Scene/node edits that the text schema cannot express go through the focused scene tools instead; do not force them into the change set.
+
+Step 5 — Compile gate: {"tool": "validate_script", "args": {"script_path": "<each touched script>"}} — zero errors required before any behavior claim.
+
+Step 6 — Behavior gate — pick the cheapest tool that actually observes the acceptance:
+{"tool": "play_and_verify", "args": {"steps": [{"action": "<input action>", "wait_frames": 30, "screenshot": true}], "assertions": [{"expression": "<runtime expression for one acceptance condition>", "description": "<the acceptance condition>"}], "deterministic": true}}
+For multi-slice verification use {"tool": "run_verification_queue", "args": {"command": "create", "goal": "{{change}}", "items": [{"kind": "script_check", "label": "<what>", "detail": {"scripts": ["<paths>"]}}, {"kind": "external", "label": "<behavior to run>", "detail": "<how>"}]}} then {"command": "advance"}; an external item is recorded with {"command": "record"} only after you actually ran it — recording a verdict is not the same as producing one.
+Runtime errors, if any: {"tool": "get_editor_logs", "args": {"source": "runtime"}}.
+
+Step 7 — Persist and report:
+If a task plan exists, feed measured outcomes back: {"tool": "manage_task_plan", "args": {"action": "set_dod", "id": "<task id>"}} and {"tool": "manage_task_plan", "args": {"action": "set_status", "id": "<task id>", "status": "<new status>"}}.
+Report in one block: files changed and why (intent), evidence per acceptance condition (tool receipts, screenshots), what was NOT verified, and how to resume or inspect (the change_set_id).
+
+Operational notes (verified against a live editor): create_scene writes the file but does not open it — open_scene {"scene_path": ..., "allow_ui_focus": true} before creating nodes; run_project/stop_project take {"allow_window": true}; install the runtime probe BEFORE run_project and wait for the debugger session before driving input; set_property accepts [x, y] arrays; WASD bindings use {"type": "key", "physical_keycode": <int>}.
+
+Rules: after 3 identical consecutive failures stop retrying and report the isolated root cause; a committed change is "written, pending verification" until steps 5-6 pass; conflicts and missing prerequisites are reported, never silently skipped.
 """
 
 var _prompts: Dictionary = {}  # name -> {name, description, arguments, callable}
@@ -289,6 +329,15 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_release_export_flow")
 	)
+	_add_prompt(
+		"make_game_change",
+		"One requirement through the recoverable change loop: frame acceptance, gather context and impact, pin read versions, preview + commit an apply_change_set, then verify (compile + behavior) and report evidence with resume handles.",
+		[
+			{"name": "change", "description": "What to change, in natural language (EN/ZH), e.g. 'increase player acceleration and keep collision intact'.", "required": true},
+			{"name": "acceptance", "description": "Optional objective acceptance conditions. When omitted you must write them before editing.", "required": false}
+		],
+		Callable(self, "_get_make_game_change")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -317,7 +366,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"run_test_suite": ["run tests", "test suite", "unit test", "gut",
 		"跑测试", "测试套件", "单元测试"],
 	"onboard_new_project": ["onboard", "new project", "discover tools",
-		"上手", "新项目", "工具发现"]
+		"上手", "新项目", "工具发现"],
+	"make_game_change": ["change set", "impact analysis", "cross-file change", "recoverable change",
+		"变更单", "影响分析", "跨文件", "可恢复"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -459,3 +510,11 @@ func _get_fix_compile_errors(args: Dictionary) -> Dictionary:
 	else:
 		content = content.replace("{{script_paths_block}}", paths)
 	return _render(content, args, [])
+
+func _get_make_game_change(args: Dictionary) -> Dictionary:
+	var content: String = MAKE_GAME_CHANGE_TEMPLATE
+	var acceptance: String = str(args.get("acceptance", "")).strip_edges()
+	if acceptance.is_empty():
+		acceptance = "none given — write 1-3 objective conditions in Step 1 before editing"
+	content = content.replace("{{acceptance}}", acceptance)
+	return _render(content, args, ["change"])

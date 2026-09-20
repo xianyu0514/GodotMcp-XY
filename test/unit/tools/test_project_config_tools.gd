@@ -180,3 +180,35 @@ func test_remove_autoload_success():
 	})
 	assert_eq(result.get("status"), "success", "Should succeed")
 	assert_false(ProjectSettings.has_setting("autoload/" + TMP_AUTOLOAD), "Autoload should be removed from memory")
+
+# --- upsert_project_input_action: key event payload shapes ------------------
+
+func test_build_input_event_accepts_physical_keycode_only():
+	# WASD 绑定应使用跨布局稳定的 physical_keycode；曾因强制要求 keycode 而被拒
+	#（first-playable 冒烟实测阻塞点）。
+	var event: InputEvent = _tools._build_project_input_event({"type": "key", "physical_keycode": 65})
+	assert_not_null(event, "Physical-keycode-only key events must be accepted")
+	if event is InputEventKey:
+		assert_eq((event as InputEventKey).physical_keycode, 65, "Physical keycode preserved")
+		assert_eq((event as InputEventKey).keycode, 0, "Logical keycode stays unset when omitted")
+
+func test_build_input_event_accepts_keycode_only():
+	var event: InputEvent = _tools._build_project_input_event({"type": "key", "keycode": 68})
+	assert_not_null(event, "Logical-keycode-only key events must be accepted")
+
+func test_build_input_event_requires_an_identifying_field():
+	var event: InputEvent = _tools._build_project_input_event({"type": "key"})
+	assert_null(event, "A key event with neither keycode nor physical_keycode is invalid")
+
+func test_upsert_input_action_invalid_payload_error_is_self_healing():
+	# 非法 payload 必须在任何 ProjectSettings 写入之前失败，并给出可接受的形状。
+	var action_setting: String = "input/mcp_selfheal_probe"
+	var result: Dictionary = _tools._tool_upsert_project_input_action({
+		"action_name": "mcp_selfheal_probe",
+		"events": [{"type": "key"}]
+	})
+	assert_true(result.has("error"), "Invalid payload must fail")
+	assert_true(str(result.get("error", "")).contains("physical_keycode"),
+		"Error must teach the accepted shapes")
+	assert_false(ProjectSettings.has_setting(action_setting),
+		"Nothing may be written to ProjectSettings for an invalid payload")

@@ -154,3 +154,20 @@ func test_parse_key_value_string_negative():
 	var result: Dictionary = _node_tools._parse_key_value_string("{x:-5,y:10}")
 	assert_eq(result.get("x"), "-5", "negative parsed")
 	assert_eq(result.get("y"), "10", "positive parsed")
+
+# --- JSON 数组形式的数学类型转换（first-playable 冒烟实测阻塞点） ----------------
+
+func test_convert_array_value_to_vector2():
+	var node: Node2D = Node2D.new()
+	add_child_autofree(node)
+	var converted: Variant = _node_tools._convert_value_for_property(node, "position", [320, 288])
+	assert_true(converted is Vector2, "Array [x, y] must convert to Vector2")
+	if converted is Vector2:
+		assert_almost_eq((converted as Vector2).x, 320.0, 0.001)
+		assert_almost_eq((converted as Vector2).y, 288.0, 0.001)
+
+func test_convert_array_value_to_vector3():
+	var node: Node3D = Node3D.new()
+	add_child_autofree(node)
+	var converted: Variant = _node_tools._convert_value_for_property(node, "position", [1.0, 2.0, 3.0])
+	assert_true(converted is Vector3, "Array [x, y, z] must convert to Vector3")

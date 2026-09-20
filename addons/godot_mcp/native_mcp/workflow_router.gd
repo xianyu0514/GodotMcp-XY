@@ -112,6 +112,30 @@ const TOKEN_ALIASES: Dictionary = {
 	"verify": ["validate", "assert"], "wire": ["attach", "instantiate"]
 }
 
+# 自然中文查询 → 英文规范短语的确定性词典（与 gather_task_context 的 zh->en 词表同哲学：
+# 可解释、可审计、无猜测）。查询分词只按空格切分，中文连续文本会成为一个整 token 而
+# 完全绕过签名/概念匹配；命中本词典的短语把「中文本身 + 英文映射」都作为匹配变体——
+# 中文走 zh 路由文本的子串匹配，英文走工具名/描述匹配。映射值必须是成组短语（如
+# "change set"），禁止映射为单个泛词（如 "set"），避免无关工具误入候选。
+const CJK_TERM_MAP: Dictionary = {
+	"变更单": ["change set"],
+	"跨文件": ["cross file"],
+	"影响分析": ["impact"],
+	"变更影响": ["impact"],
+	"任务上下文": ["task context"],
+	"验证队列": ["verification queue"],
+	"分片验证": ["verification queue"],
+	"运行错误": ["runtime error"],
+	"编译错误": ["compile error"],
+	"性能预算": ["performance budget"],
+	"视觉基线": ["visual baseline"],
+	"冒烟测试": ["smoke test"],
+	"瓦片地图": ["tilemap"],
+	"场景树": ["scene tree"],
+	"截图": ["screenshot"],
+	"断点": ["breakpoint"]
+}
+
 const TOOL_SIGNATURE_STOP_WORDS: Array[String] = ["and", "or", "no"]
 const TOOL_SIGNATURE_GENERIC_TERMS: Array[String] = [
 	"add", "assert", "batch", "create", "debug", "debugger", "detect", "find",
@@ -312,9 +336,33 @@ func build_query_terms(query_raw: String, drop_stop_words: bool = false) -> Arra
 			if variants not in terms:
 				terms.append(variants)
 			matched_alias = true
+		_append_cjk_term_variants(token, terms)
 		if not matched_alias:
 			terms.append(_token_variants(token))
 	return terms
+
+## 含 CJK 的 token 对照 CJK_TERM_MAP：命中短语的中文本身与英文映射都进入 terms。
+## 纯加法路径 —— 未命中词典或不含 CJK 时行为与原先完全一致。
+func _append_cjk_term_variants(token: String, terms: Array) -> void:
+	if not _has_cjk(token):
+		return
+	for map_key_value in CJK_TERM_MAP:
+		var map_key: String = String(map_key_value)
+		if not token.contains(map_key):
+			continue
+		var variants: Array[String] = _token_variants(map_key)
+		for mapped_value in CJK_TERM_MAP[map_key_value]:
+			for mapped_form in _token_variants(String(mapped_value)):
+				_append_unique(variants, mapped_form)
+		if variants not in terms:
+			terms.append(variants)
+
+func _has_cjk(text: String) -> bool:
+	for i in range(text.length()):
+		var code: int = text.unicode_at(i)
+		if (code >= 0x4E00 and code <= 0x9FFF) or (code >= 0x3400 and code <= 0x4DBF):
+			return true
+	return false
 
 func _build_tool_signature(name: String) -> Array[String]:
 	var signature: Array[String] = []

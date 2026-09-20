@@ -56,7 +56,7 @@ addons/godot_mcp/
 │   ├── tools_manifest.gd       # 单一数据表（唯一真相）：238 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
-│   ├── prompt_workflows.gd     # 7 个可执行工作流 MCP prompts（plan_game_feature/debug_runtime_error 等）
+│   ├── prompt_workflows.gd     # 10 个可执行工作流 MCP prompts（plan_game_feature/make_game_change/debug_runtime_error 等）
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_tunnel_manager.gd   # Cloudflare Quick Tunnel 生命周期与公网 URL 上报
 │   ├── mcp_tunnel_supervisor.gd # 独立低开销的隧道守护（跨编辑器重启持久化）
@@ -179,6 +179,13 @@ addons/godot_mcp/
 - [ ] 全文搜索旧工具数（`154`、`66`、`124`、`70`）确认已替换
 - [ ] 全文搜索新工具名确认已出现在详细工具列表
 - [ ] 如果没有新工具，确认分类计数已更新
+### 工作流持续优化（强制）
+每完成一个工作包/修复，花一分钟回答：这次工作里最浪费的往返是什么？把它变成以下之一并随同提交：
+- **自愈**：错误消息/结果里直接给出下一步精确调用（参照 "Tool is disabled" 与 `_schema_warnings` 的做法）。
+- **门禁**：一致性/契约测试，让同类漂移在 CI 就失败。
+- **沉淀**：把实测语义写进 `docs/goal-playbook.md`（"做可玩内容的实测要点"），下一个会话不必重新发现。
+判断标准：同一个坑被第二个会话踩到而文档/工具没变，就是本条的失职。
+
 ### 临时文件清理（强制）
 每次代码修改结束后，必须清理：
 1. `.codeartsdoer/temp/` — diff 备份 `.gd` 文件（会导致 `Class hides a global script class` 错误）

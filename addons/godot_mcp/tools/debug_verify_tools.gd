@@ -174,6 +174,7 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			var pre_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 				_merge_runtime_params(params, {
 					"expression": String((step["assert"] as Dictionary).get("expression", "")),
+					"single_sample": true,
 					"timeout_ms": 3000}))
 			# 快照必须新鲜：陈旧/超时的 last_value 会污染位移 delta
 			# （CI run 35343562660："按右键左移 110px"实为陈旧 before 与
@@ -237,6 +238,7 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 				var post_read: Dictionary = await _get_runtime_tools()._tool_await_runtime_condition(
 					_merge_runtime_params(params, {
 						"expression": String(step_assert.get("expression", "")),
+						"single_sample": true,
 						"timeout_ms": 3000}))
 				if post_read.has("error") or bool(post_read.get("stale", false)):
 					# 步后读同样必须新鲜——陈旧 after 配新鲜 before 是同一种

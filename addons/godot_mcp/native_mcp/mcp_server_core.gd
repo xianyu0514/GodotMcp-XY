@@ -42,7 +42,7 @@ const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estim
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 231-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus six always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 238-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -776,20 +776,20 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		var error_result: Dictionary = {
 			"content": [{
 				"type": "text",
-				"text": "Tool not found: " + tool_name
+				"text": "Tool not found: %s. Next steps: verify the exact name with search_tools {\"query\": \"%s\"} or browse list_tool_catalog {\"summary_only\": true}; if it is a workflow recipe (e.g. visual_playtest), fetch it with prompts/get {\"name\": \"%s\"} — recipes are prompts, not tools. Do not retry the same unknown name." % [tool_name, tool_name, tool_name]
 			}],
 			"isError": true
 		}
 		return MCPTypes.create_response(id, error_result)
-	
+
 	var tool: MCPTypes.MCPTool = _tools[tool_name]
-	
+
 	if not tool.enabled:
 		_log_error("Tool is disabled: " + tool_name)
 		var error_result: Dictionary = {
 			"content": [{
 				"type": "text",
-				"text": "Tool is disabled: " + tool_name
+				"text": "Tool is disabled: %s (supplementary tools are disabled by default; core and meta stay on — this is by design, not a failure). Next step: enable_tools {\"tools\": [\"%s\"]}, or a whole group with {\"groups\": [\"...\"]}, or route a goal in one call with {\"workflow_query\": \"<what you want to do>\"} (activates at most 8 tools and may suggest a prompt recipe)." % [tool_name, tool_name]
 			}],
 			"isError": true
 		}
@@ -896,6 +896,13 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		}
 		return MCPTypes.create_response(id, error_result)
 	
+	# 未知参数警告（一次往返自纠）：调用方传了 schema 未声明的顶层键时，处理器会
+	# 静默忽略它并按默认值执行（实测教训：replace vs erase_existing、edits vs
+	# operations 各浪费一整个编辑器往返）。在结果里附加 _schema_warnings 指出未知
+	# 键与 schema 实际接受的键，让调用方下一次调用即自纠。嵌套对象的自由参数
+	# （additionalProperties）不受影响；schema 未声明 properties 的工具跳过。
+	_append_schema_warnings(result, arguments, tool)
+	
 	var has_error: bool = result is Dictionary and result.has("error")
 	var response_result: Dictionary = _format_tool_result(result, tool)
 	var serialized_size_bytes: int = _formatted_result_source_size_bytes(response_result)
@@ -925,6 +932,32 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	_log_info("Tool execution completed: " + tool_name)
 	
 	return response
+
+func _append_schema_warnings(result: Variant, arguments: Dictionary, tool: MCPTypes.MCPTool) -> void:
+	if not (result is Dictionary):
+		return
+	var schema: Dictionary = tool.input_schema if tool.input_schema is Dictionary else {}
+	if bool(schema.get("additionalProperties", false)):
+		return
+	var properties: Variant = schema.get("properties", null)
+	if not (properties is Dictionary) or (properties as Dictionary).is_empty():
+		return
+	var unknown: Array[String] = []
+	for key in arguments:
+		var key_text: String = String(key)
+		if key_text.begins_with("_"):
+			continue
+		if not properties.has(key_text):
+			unknown.append(key_text)
+	if unknown.is_empty():
+		return
+	var known: Array[String] = []
+	for key in properties:
+		known.append(String(key))
+	(result as Dictionary)["_schema_warnings"] = [
+		"arguments contained keys not in this tool's schema: " + ", ".join(unknown)
+			+ "; schema properties: " + ", ".join(known)
+	]
 
 ## Wrap a tool's raw result into an MCP tool-call result payload. Shared by live
 ## execution and cache hits so both produce identical responses. Results whose
