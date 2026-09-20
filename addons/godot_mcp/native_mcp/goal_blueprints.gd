@@ -420,11 +420,11 @@ static func controller_script(objective: String) -> String:
 		source += "\t# 金币聚簇在敌人巡逻带之前（80 + i*60，全部落在 x<210 走廊）：\n"
 		source += "\t# 敌人带 [220,380] 会让任何穿越死亡——旧布局 200/380/560 的\n"
 		source += "\t# 第二、三枚永远不可达，带敌人的完整通关从几何上不可能。\n"
+		# 走廊几何（全分支共享）：间距随币数自适应压缩（簇尾 <=188px，
+		# 敌带危险缘前留余量）；level 语境另有恒定基址变量。
+		source += "\tvar _coin_spacing: float = minf(40.0, 78.0 / float(maxi(COINS_TO_WIN - 1, 1)))\n"
 		if bool(verbs.get("level", false)):
-			# 初始布局随恢复后的关卡走（读档已先行）——与 _respawn_coins
-			# 的 base_x 公式一致。夹紧上限让末枚金币永不越过敌带安全线
-			# （CI 实证：偏移 +40/关后 L2 末枚 230 落进巡逻带 [220,380]）。
-			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
+			source += "\tvar base_x: float = 110.0\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
 		if bool(verbs.get("level", false)):
@@ -437,9 +437,9 @@ static func controller_script(objective: String) -> String:
 		source += "\t\tvar extra_coin := Area2D.new()\n"
 		source += "\t\textra_coin.name = \"Coin%d\" % coin_index\n"
 		if bool(verbs.get("level", false)):
-			source += "\t\textra_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+			source += "\t\textra_coin.position = Vector2(base_x + coin_index * _coin_spacing, 0)\n"
 		else:
-			source += "\t\textra_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
+			source += "\t\textra_coin.position = Vector2(110.0 + coin_index * _coin_spacing, 0)\n"
 		source += "\t\tvar extra_col := CollisionShape2D.new()\n"
 		source += "\t\tvar extra_shape := CircleShape2D.new()\n"
 		source += "\t\textra_shape.radius = COIN_RADIUS\n"
@@ -812,18 +812,18 @@ static func controller_script(objective: String) -> String:
 		source += "\t\t\tchild.name = \"_coin_dying_%d\" % dying_index\n"
 		source += "\t\t\tdying_index += 1\n"
 		source += "\t\t\tchild.queue_free()\n"
+		# 走廊几何（全分支共享）：间距随币数自适应压缩（簇尾 <=188px，
+		# 敌带危险缘前留余量）；重摆同款：全分支共享间距，level 另有基址。
+		source += "\tvar _coin_spacing: float = minf(40.0, 78.0 / float(maxi(COINS_TO_WIN - 1, 1)))\n"
 		if bool(verbs.get("level", false)):
-			# 关卡布局：每关聚簇基址右移 40px（L1=110 与既有校准一致），
-			# 夹紧上限保证末枚金币 ≤200px（敌带危险缘 ~212px 前留余量）——
-			# 偏移不夹紧时 L2 末枚 230 已进带，扫描收满从几何上不可能。
-			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
+			source += "\tvar base_x: float = 110.0\n"
 		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
 		source += "\t\tvar new_coin := Area2D.new()\n"
 		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"
 		if bool(verbs.get("level", false)):
-			source += "\t\tnew_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+			source += "\t\tnew_coin.position = Vector2(base_x + coin_index * _coin_spacing, 0)\n"
 		else:
-			source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
+			source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * _coin_spacing, 0)\n"
 		source += "\t\tvar coin_col := CollisionShape2D.new()\n"
 		source += "\t\tvar coin_shape := CircleShape2D.new()\n"
 		source += "\t\tcoin_shape.radius = COIN_RADIUS\n"
