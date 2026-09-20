@@ -54,3 +54,7 @@ releases/
 # Benchmark / integration scratch workspaces (created by runners)
 tmp_benchmark_project/
 tmp_representative_game/
+
+# Slice B：插件同步物与编辑器缓存不入库（setup.ps1 负责同步）
+slice_b/addons/
+slice_b/.godot/
