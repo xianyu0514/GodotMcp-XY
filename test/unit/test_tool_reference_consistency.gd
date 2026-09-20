@@ -31,6 +31,7 @@ const GUIDE_DOC_PATHS: Array[String] = [
 const DOC_ENGINE_API_ALLOWLIST: Dictionary = {
 	"load": "Godot built-in function documented in guides",
 	"can_instantiate": "GDScript resource method documented in guides",
+	"get_node": "Godot Node API used inside runtime expressions in guides",
 }
 
 var _tool_ref_regex: RegEx

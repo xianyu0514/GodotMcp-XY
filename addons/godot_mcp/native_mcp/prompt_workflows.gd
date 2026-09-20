@@ -216,6 +216,9 @@ This is an executable workflow template: follow the steps in order; never skip t
 Change: {{change}}
 Acceptance: {{acceptance}}
 
+Step 0 — Activate the toolset (supplementary tools are off by design, not broken):
+{"tool": "enable_tools", "args": {"workflow_query": "{{change}}"}} — one call routes the tools this loop needs. If a call ever answers "Tool is disabled", the error embeds the exact enable call; unknown argument names surface in _schema_warnings with the schema's real property list.
+
 Step 1 — Frame acceptance first. If no acceptance was given, write 1-3 objective, observable conditions before touching anything (e.g. "validate_script passes on touched scripts", "player moves 100px right under fixed input", "zero runtime errors").
 
 Step 2 — Orient (read-only):
@@ -240,6 +243,8 @@ Runtime errors, if any: {"tool": "get_editor_logs", "args": {"source": "runtime"
 Step 7 — Persist and report:
 If a task plan exists, feed measured outcomes back: {"tool": "manage_task_plan", "args": {"action": "set_dod", "id": "<task id>"}} and {"tool": "manage_task_plan", "args": {"action": "set_status", "id": "<task id>", "status": "<new status>"}}.
 Report in one block: files changed and why (intent), evidence per acceptance condition (tool receipts, screenshots), what was NOT verified, and how to resume or inspect (the change_set_id).
+
+Operational notes (verified against a live editor): create_scene writes the file but does not open it — open_scene {"scene_path": ..., "allow_ui_focus": true} before creating nodes; run_project/stop_project take {"allow_window": true}; install the runtime probe BEFORE run_project and wait for the debugger session before driving input; set_property accepts [x, y] arrays; WASD bindings use {"type": "key", "physical_keycode": <int>}.
 
 Rules: after 3 identical consecutive failures stop retrying and report the isolated root cause; a committed change is "written, pending verification" until steps 5-6 pass; conflicts and missing prerequisites are reported, never silently skipped.
 """
