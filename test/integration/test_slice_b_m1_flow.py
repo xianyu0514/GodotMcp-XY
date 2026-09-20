@@ -57,11 +57,14 @@ def main() -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
-    # 存档残留清零（跨运行隔离——存档在 slice_b 的 user:// 下）。
+    # 插件同步（干净 checkout 无 slice_b/addons——没有它插件不加载、
+    # 服务器永不上，CI 实证 150s 超时）+ 存档残留清零。
+    import shutil
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(Path(__file__).resolve().parents[2] / "slice_b" / "setup.ps1")],
+                   capture_output=True, timeout=120)
     appdata = os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata")
-    for name in ("SliceB",):
-        import shutil
-        shutil.rmtree(os.path.join(appdata, name), ignore_errors=True)
+    shutil.rmtree(os.path.join(appdata, "SliceB"), ignore_errors=True)
 
     process = subprocess.Popen(
         [GODOT, "--editor", "--headless", "--path", str(SLICE),

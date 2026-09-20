@@ -35,6 +35,13 @@ SLOW_TESTS = {
     # fast 套件内只会 420 秒必超时（CI run 35480163068 实证：45/46 里
     # 唯一的失败就是它）。
     "test_showcase_game.py",
+    # 门槛 B/D 证据流（各为一次真实 slice_b 编辑器会话，2-6 分钟）——
+    # 手动/dispatch 触发是它们的家；fast 集的冷启动时序（干净 checkout
+    # 首启全量导入）与 420s 上限都不适合（CI 35507071312 实证）。
+    "test_slice_b_m1_flow.py",
+    "test_slice_b_m2_flow.py",
+    "test_slice_b_playbook_flow.py",
+    "test_slice_b_export_flow.py",
 }
 
 DEFAULT_TIMEOUT = 600
