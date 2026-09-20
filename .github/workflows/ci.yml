@@ -16,6 +16,10 @@ on:
         description: "Also run the 10-goal representative game build + independent oracle (honest completion gates) — ~10 extra minutes"
         type: boolean
         default: false
+      slice_suite:
+        description: "Also run the six slice-B player-flow evidence suites (assets, continue-game, playbook, exports) — ~25 extra minutes"
+        type: boolean
+        default: false
 
 # Minimal ship-loop CI (⑦): headless project import gate + GUT unit tests.
 # Pinned to the same Godot version the addon targets (project.godot ->
@@ -297,7 +301,7 @@ jobs:
     name: Slice-B player-flow E2E (manual)
     runs-on: windows-latest
     timeout-minutes: 45
-    if: (github.event_name == 'workflow_dispatch' && inputs.slow_suite) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slice-ci]'))
+    if: (github.event_name == 'workflow_dispatch' && inputs.slice_suite) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slice-ci]'))
     steps:
       - name: Checkout
         uses: actions/checkout@v4
