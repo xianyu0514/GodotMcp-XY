@@ -161,6 +161,16 @@ def main() -> int:
               str(enable.get("suggested_prompt", {}).get("name", "")) == "make_game_change",
               json.dumps(enable.get("suggested_prompt", {})))
 
+        # 7b) unknown-argument self-correction: a near-miss parameter must be
+        #     named in _schema_warnings with the real property list, live.
+        near_miss = rpc_call("tools/call", {
+            "name": "search_tools",
+            "arguments": {"query": "change set", "keyword": "change set"}})
+        near_miss_text = tool_text(near_miss)
+        check("unknown argument surfaces _schema_warnings",
+              "_schema_warnings" in near_miss_text and "keyword" in near_miss_text,
+              near_miss_text[:250])
+
         # 8) discovery by keyword.
         search = tool_payload(rpc_call("tools/call", {
             "name": "search_tools", "arguments": {"query": "change set"}}))

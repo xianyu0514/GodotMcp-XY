@@ -896,6 +896,13 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		}
 		return MCPTypes.create_response(id, error_result)
 	
+	# 未知参数警告（一次往返自纠）：调用方传了 schema 未声明的顶层键时，处理器会
+	# 静默忽略它并按默认值执行（实测教训：replace vs erase_existing、edits vs
+	# operations 各浪费一整个编辑器往返）。在结果里附加 _schema_warnings 指出未知
+	# 键与 schema 实际接受的键，让调用方下一次调用即自纠。嵌套对象的自由参数
+	# （additionalProperties）不受影响；schema 未声明 properties 的工具跳过。
+	_append_schema_warnings(result, arguments, tool)
+	
 	var has_error: bool = result is Dictionary and result.has("error")
 	var response_result: Dictionary = _format_tool_result(result, tool)
 	var serialized_size_bytes: int = _formatted_result_source_size_bytes(response_result)
@@ -925,6 +932,32 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	_log_info("Tool execution completed: " + tool_name)
 	
 	return response
+
+func _append_schema_warnings(result: Variant, arguments: Dictionary, tool: MCPTypes.MCPTool) -> void:
+	if not (result is Dictionary):
+		return
+	var schema: Dictionary = tool.input_schema if tool.input_schema is Dictionary else {}
+	if bool(schema.get("additionalProperties", false)):
+		return
+	var properties: Variant = schema.get("properties", null)
+	if not (properties is Dictionary) or (properties as Dictionary).is_empty():
+		return
+	var unknown: Array[String] = []
+	for key in arguments:
+		var key_text: String = String(key)
+		if key_text.begins_with("_"):
+			continue
+		if not properties.has(key_text):
+			unknown.append(key_text)
+	if unknown.is_empty():
+		return
+	var known: Array[String] = []
+	for key in properties:
+		known.append(String(key))
+	(result as Dictionary)["_schema_warnings"] = [
+		"arguments contained keys not in this tool's schema: " + ", ".join(unknown)
+			+ "; schema properties: " + ", ".join(known)
+	]
 
 ## Wrap a tool's raw result into an MCP tool-call result payload. Shared by live
 ## execution and cache hits so both produce identical responses. Results whose

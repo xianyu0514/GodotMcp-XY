@@ -324,6 +324,56 @@ func test_unknown_tool_error_is_self_healing():
 	assert_true(text.contains("prompts/get"), "Error should teach that recipes are prompts, not tools")
 	assert_true(text.contains("Do not retry"), "Error should forbid blind retries")
 
+func test_unknown_argument_returns_schema_warning() -> void:
+	# 一次往返自纠：未知顶层参数被静默忽略是实测最大摩擦（replace vs
+	# erase_existing 类）。结果必须指出未知键与 schema 实际键集。
+	_core.register_tool("warn_tool", "A tool", {
+		"type": "object",
+		"properties": {"name": {"type": "string"}, "count": {"type": "integer"}}
+	}, func(args): return {"status": "ok", "name": str(args.get("name", ""))})
+	var msg: Dictionary = {"id": 9, "method": "tools/call",
+		"params": {"name": "warn_tool", "arguments": {"name": "x", "replace": true}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_true(text.contains("_schema_warnings"), "Warning must be present in the result")
+	assert_true(text.contains("replace"), "Warning must name the unknown key")
+	assert_true(text.contains("name, count") or text.contains("count, name"),
+		"Warning must list the schema's actual properties")
+
+func test_known_arguments_return_no_schema_warning() -> void:
+	_core.register_tool("clean_tool", "A tool", {
+		"type": "object",
+		"properties": {"name": {"type": "string"}}
+	}, func(args): return {"status": "ok"})
+	var msg: Dictionary = {"id": 10, "method": "tools/call",
+		"params": {"name": "clean_tool", "arguments": {"name": "x"}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_false(text.contains("_schema_warnings"), "No warning when all keys are known")
+
+func test_schema_without_properties_skips_warning() -> void:
+	_core.register_tool("free_tool", "A tool", {"type": "object"},
+		func(args): return {"echo": args})
+	var msg: Dictionary = {"id": 11, "method": "tools/call",
+		"params": {"name": "free_tool", "arguments": {"anything": 1}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_false(text.contains("_schema_warnings"), "Free-form schemas must not warn")
+
+func test_error_results_also_carry_schema_warning() -> void:
+	_core.register_tool("err_tool", "A tool", {
+		"type": "object",
+		"properties": {"path": {"type": "string"}}
+	}, func(args): return {"error": "Missing required parameter: path"})
+	var msg: Dictionary = {"id": 12, "method": "tools/call",
+		"params": {"name": "err_tool", "arguments": {"paths": ["a"]}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_true(bool(response.get("result", {}).get("isError", false)), "Should be an error result")
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_true(text.contains("_schema_warnings"), "Error results must also carry the hint")
+	assert_true(text.contains("paths"), "The near-miss key must be named")
+	assert_true(text.contains("path"), "The real property must be listed")
+
 func test_server_instructions_counts_match_manifest():
 	# initialize.instructions 是 AI 客户端看到的第一段话；其中的工具计数必须与
 	# manifest 真值一致（曾漂移为 231）。

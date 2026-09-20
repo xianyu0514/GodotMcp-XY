@@ -59,6 +59,17 @@
 - **首场景/首脚本路径自动推导**：不传路径时按 profile 落到 `res://scenes|scripts|themes/<profile>...`；要控制位置就显式传 `scene_path`/`script_path`。
 - **目标蓝图**：目标提到移动/收集/胜利（双语）时，`create_script` 自动生成真实控制器（含运行期生成的拾取体与胜利标签）、场景根派生为 `CharacterBody2D`；显式传 `content` 永远优先。
 
+## 做可玩内容的实测要点（first-playable 冒烟沉淀）
+
+- **`create_scene` 写文件但不打开**：建完先 `open_scene`（Vibe Coding 模式下带 `allow_ui_focus=true`）再 `create_node`，否则报 "No active edited scene"。
+- **抢焦点/开窗口的动作要显式授权**：`open_scene` 带 `allow_ui_focus`，`run_project`/`stop_project` 带 `allow_window` —— 这是 Vibe Coding 守卫的设计行为，报错文本会说明。
+- **坐标接受 JSON 数组**：`set_property` 的 `property_value` 用 `[320, 288]` 即可（也接受 `{"x":..,"y":..}` 与字符串形式）。
+- **WASD 绑定用物理键码**：`upsert_project_input_action` 事件形如 `{"type":"key","physical_keycode":65}`（跨键盘布局稳定；keycode 是当前布局逻辑键，二者至少其一）。
+- **运行时探针先装后跑**：`install_runtime_probe`（persistent）→ `run_project` → 等 debugger 会话激活 → 再驱动输入；`await_runtime_condition` 会真等到条件成立或超时（新鲜但为假会继续轮询）。
+- **表达式相对当前场景解析**：`evaluate_runtime_expression` 的 base 默认是 current_scene，`get_node('Player').position.x` 这类相对写法最稳；裸 `node_path` 从探针根解析。
+- **改脚本后要确认场景引用的是外部文件**：`create_script` 挂载按外部路径引用；若手工内嵌过源码，改 .gd 文件不会影响场景 —— 用 read_script 与运行实测对照。
+- **传错参数名不会再静默**：调度层会在结果里附 `_schema_warnings` 指出未知键与 schema 实际键集，一次往返即可自纠。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
