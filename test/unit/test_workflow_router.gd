@@ -198,6 +198,34 @@ func test_real_game_task_corpus_meets_route_quality_gate() -> void:
 		expectation_recall * 100.0, verify_recall * 100.0,
 		average_savings * 100.0, minimum_savings * 100.0])
 
+func test_natural_chinese_change_set_query_routes_the_recoverable_loop() -> void:
+	# 自然中文查询（非官方工具描述）必须路由出变更循环核心工具。曾因查询分词只按
+	# 空格切分，中文连续文本成为一个整 token，完全绕过签名/概念匹配，只能靠
+	# curated 关键词捡到 verify 类工具 —— apply_change_set 从未成为候选。
+	var route: Dictionary = _router.route("做一次跨文件变更单并验证脚本", _registered, 8)
+	var names: Array[String] = _flatten_tools(route)
+	assert_true("apply_change_set" in names,
+		"A Chinese change-set query must route apply_change_set, got: %s" % ", ".join(names))
+	var english: Dictionary = _router.route("apply a recoverable cross-file change set and verify scripts", _registered, 8)
+	assert_true("apply_change_set" in _flatten_tools(english),
+		"The English equivalent must keep routing apply_change_set (regression guard)")
+
+func test_build_query_terms_maps_cjk_phrases_to_matchable_variants() -> void:
+	# zh->en 确定性词典：中文短语本身 + 英文规范短语都进入匹配变体
+	#（中文子串匹配 zh 路由文本，英文子串匹配工具名/描述）。
+	var terms: Array = _router.build_query_terms("跨文件变更单", true)
+	var joined: String = ";".join(_variant_labels(terms))
+	assert_true(joined.contains("变更单"), "The CJK phrase itself must stay matchable against zh routing hints")
+	assert_true(joined.contains("change set"), "The zh->en map must yield the English canonical phrase")
+
+func _variant_labels(terms: Array) -> Array[String]:
+	var labels: Array[String] = []
+	for variants_value in terms:
+		var variants: Array = variants_value if variants_value is Array else [variants_value]
+		var label: String = ",".join(PackedStringArray(variants))
+		labels.append(label)
+	return labels
+
 func test_multistep_chinese_goal_builds_small_phased_workflow() -> void:
 	var route: Dictionary = _router.route("创建 2D 游戏角色并验证运行", _registered, 8)
 	var names: Array[String] = _flatten_tools(route)

@@ -154,6 +154,9 @@ def main() -> int:
         check("workflow_query routes a bounded toolset",
               enable.get("status") == "success" and 0 < len(enable.get("changed_tools", [])) <= 10,
               json.dumps(enable)[:300])
+        check("chinese change-set query routes apply_change_set",
+              "apply_change_set" in enable.get("changed_tools", []),
+              json.dumps(enable.get("changed_tools", [])))
         check("workflow_query suggested make_game_change",
               str(enable.get("suggested_prompt", {}).get("name", "")) == "make_game_change",
               json.dumps(enable.get("suggested_prompt", {})))
