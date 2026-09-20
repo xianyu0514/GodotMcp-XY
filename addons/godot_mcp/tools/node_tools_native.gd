@@ -136,6 +136,8 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 			parent = _get_user_scene_root()
 
 	if not parent:
+		if parent_path.is_empty() or parent_path == "/root":
+			return {"error": "No active edited scene to create nodes in — call open_scene {\"scene_path\": \"...\"} first (create_scene writes the file but does not open it)."}
 		return {"error": "Parent node not found: " + parent_path}
 
 	var type_error: String = _node_type_error(node_type)
@@ -1705,6 +1707,9 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 		TYPE_VECTOR2:
 			if value is Dictionary:
 				return Vector2(float(value.get("x", 0.0)), float(value.get("y", 0.0)))
+			if value is Array and value.size() >= 2:
+				# JSON 数组是最自然的坐标写法 [x, y]；缺失时曾静默落空（first-playable 冒烟实测）。
+				return Vector2(float(value[0]), float(value[1]))
 			if value is String:
 				var parsed: Dictionary = _parse_key_value_string(value)
 				if not parsed.is_empty():
@@ -1715,6 +1720,8 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 		TYPE_VECTOR2I:
 			if value is Dictionary:
 				return Vector2i(int(value.get("x", 0)), int(value.get("y", 0)))
+			if value is Array and value.size() >= 2:
+				return Vector2i(int(value[0]), int(value[1]))
 			if value is String:
 				var parts: PackedStringArray = _strip_constructor_prefix(value).replace("(", "").replace(")", "").replace(" ", "").split(",")
 				if parts.size() >= 2:
@@ -1722,6 +1729,8 @@ func _convert_value_for_property(node: Node, property_name: String, value: Varia
 		TYPE_VECTOR3:
 			if value is Dictionary:
 				return Vector3(float(value.get("x", 0.0)), float(value.get("y", 0.0)), float(value.get("z", 0.0)))
+			if value is Array and value.size() >= 3:
+				return Vector3(float(value[0]), float(value[1]), float(value[2]))
 			if value is String:
 				var parsed: Dictionary = _parse_key_value_string(value)
 				if not parsed.is_empty():

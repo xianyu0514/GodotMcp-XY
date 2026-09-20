@@ -456,7 +456,9 @@ func _tool_upsert_project_input_action(params: Dictionary) -> Dictionary:
 			return {"error": "Each event entry must be an object"}
 		var built_event: InputEvent = _build_project_input_event(raw_event)
 		if built_event == null:
-			return {"error": "Unsupported input event payload: " + JSON.stringify(raw_event)}
+			return {"error": "Unsupported input event payload: " + JSON.stringify(raw_event)
+				+ ". Accepted shapes: {\"type\":\"key\",\"keycode\":<int>} and/or \"physical_keycode\":<int> (layout-stable, preferred for WASD); "
+				+ "{\"type\":\"mouse_button\",\"button_index\":<int>}; {\"type\":\"action\",\"action_name\":\"...\"}. At least one identifying field is required per event."}
 		stored_events.append(built_event)
 		added_events.append(_serialize_project_input_event(built_event))
 
@@ -1967,11 +1969,14 @@ func _build_project_input_event(payload: Dictionary) -> InputEvent:
 			return action_event
 		"key":
 			var keycode: int = int(payload.get("keycode", 0))
-			if keycode == 0:
+			var physical_keycode: int = int(payload.get("physical_keycode", 0))
+			# 二者至少其一：physical_keycode 是跨键盘布局稳定的绑定方式（WASD 应使用它），
+			# keycode 是按当前布局的逻辑键。两者都缺才是非法 payload。
+			if keycode == 0 and physical_keycode == 0:
 				return null
 			var key_event := InputEventKey.new()
 			key_event.keycode = keycode
-			key_event.physical_keycode = int(payload.get("physical_keycode", 0))
+			key_event.physical_keycode = physical_keycode
 			key_event.unicode = int(payload.get("unicode", 0))
 			key_event.pressed = bool(payload.get("pressed", true))
 			key_event.echo = bool(payload.get("echo", false))

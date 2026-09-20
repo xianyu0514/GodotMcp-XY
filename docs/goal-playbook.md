@@ -72,6 +72,7 @@
 ## 自动提交的回归保障
 
 - `test_first_contact_flow.py` — 首次接入契约（initialize 指引、惰性工具面、项目识别、自愈报错、workflow_query 路由、prompt 配方）
+- `test_first_playable_flow.py` — 可玩切片冒烟（纯原子工具：建输入/场景/脚本 → 运行验证移动+撞墙 → apply_change_set 改参数实测生效 → 编辑器重启持久性）
 - `test_game_goal_flow.py` — 目标级闭环（scratch 项目 → plan → run → completed）
 - `test_batch_scene_node_edits_flow.py` — 单调用脚本化节点组装 + 真值断言
 - 1784 项单元测试覆盖路由、门禁语义、缓存一致性与工具校验

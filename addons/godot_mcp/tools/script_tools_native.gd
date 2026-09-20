@@ -1752,6 +1752,11 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 					var fresh_attach: GDScript = GDScript.new()
 					fresh_attach.source_code = FileAccess.get_file_as_string(script_path)
 					if fresh_attach.reload() == OK:
+						# take_over_path：让场景保存时按外部路径（res://...）引用该
+						# 脚本，而不是把源码内嵌成 sub_resource。内嵌会让后续修改
+						# .gd 文件与运行中的场景静默分叉（first-playable 冒烟实测：
+						# 文件已提交 SPEED 400，游戏仍以 200 运行）。
+						fresh_attach.take_over_path(script_path)
 						script_res = fresh_attach
 						cold_attach = true
 					else:

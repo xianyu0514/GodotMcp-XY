@@ -1414,14 +1414,20 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 		if result.get("status", "") == "success" and not bool(result.get("stale", false)):
 			var last_value: Variant = result.get("value", null)
 			var condition_met: bool = _is_truthy_runtime_value(last_value)
-			return {
-				"status": "success" if condition_met else "failed",
-				"condition_met": condition_met,
-				"last_value": last_value,
-				"refresh_result": result.get("refresh_result", {}),
-				"attempts": attempts,
-				"elapsed_ms": timeout_ms - (deadline_ms - Time.get_ticks_msec())
-			}
+			if condition_met:
+				return {
+					"status": "success",
+					"condition_met": true,
+					"last_value": last_value,
+					"refresh_result": result.get("refresh_result", {}),
+					"attempts": attempts,
+					"elapsed_ms": timeout_ms - (deadline_ms - Time.get_ticks_msec())
+				}
+			# Fresh but false: keep waiting and re-dispatch. A tool named await must
+			# actually wait until the condition holds or the timeout expires (the
+			# first version returned failed here after a single sample, forcing every
+			# caller to hand-roll retry loops; first-playable smoke measured a 28ms
+			# give-up while the player was demonstrably moving 300ms later).
 		# If still pending or failed, wait before retrying
 		if Time.get_ticks_msec() + poll_interval_ms < deadline_ms:
 			var tree: SceneTree = Engine.get_main_loop() as SceneTree
