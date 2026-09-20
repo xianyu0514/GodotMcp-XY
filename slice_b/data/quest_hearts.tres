@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="QuestDef" load_steps=2 format=3 uid="uid://slicebquesthearts1"]
+
+[ext_resource type="Script" path="res://scripts/quests/quest_def.gd" id="1_def"]
+
+[resource]
+script = ExtResource("1_def")
+quest_id = "quest_hearts"
+display_name = "Hearts for the Shrine"
+description = "Bring 2 hearts to the shrine."
+required_item = "heart"
+required_count = 2
+reward_coins = 5
+reward_heal = 10

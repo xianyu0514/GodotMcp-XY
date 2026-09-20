@@ -397,7 +397,7 @@ func test_verify_scripts_collect_wrapper_skips_addons_and_test():
 	tool._collect_verify_script_paths(paths)
 	# Headless（无 EditorInterface）时封装回退到 DirAccess，结果必须与直接扫描一致。
 	var expected: Array = []
-	tool._collect_gd_scripts_excluding("res://", expected, ["addons", "test", ".godot"])
+	tool._collect_gd_scripts_excluding("res://", expected, ["addons", "test", ".godot", "slice_b"])
 	assert_eq(paths, expected, "Wrapper scan matches the DirAccess fallback in headless mode")
 	for path in paths:
 		assert_false(String(path).begins_with("res://addons/"), "Wrapper scan skips addons/: " + str(path))

@@ -3011,7 +3011,8 @@ func _collect_gd_scripts_excluding(directory_path: String, result: Array, skip_d
 func _collect_verify_script_paths(result: Array) -> void:
 	# 磁盘为真相源：工作流刚创建的脚本在 EditorFileSystem 冷缓存里不存在，
 	# 走缓存会把 total_checked 报成 0，验证门禁因此永远失败。
-	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot"])
+	# slice_b：嵌套 Godot 项目——其脚本只在切片项目的类/autoload 上下文可编译。
+	_collect_gd_scripts_excluding("res://", result, ["addons", "test", ".godot", "slice_b"])
 
 func _walk_editor_filesystem(dir: EditorFileSystemDirectory, result: Array, skip_dir_names: Array) -> void:
 	for i in range(dir.get_subdir_count()):
