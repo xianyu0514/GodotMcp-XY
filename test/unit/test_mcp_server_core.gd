@@ -299,6 +299,42 @@ func test_disabled_tool_call_returns_error():
 	var response: Dictionary = await _core._handle_tool_call(msg)
 	assert_true(response.get("result", {}).get("isError", false), "Calling disabled tool should return isError")
 
+func test_disabled_tool_error_names_the_exact_enable_call():
+	# 自愈错误：AI 收到 disabled 报错后不需要猜测，直接得到可执行的下一步调用。
+	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"})
+	_core.set_tool_enabled("test_tool", false)
+	var msg: Dictionary = {"id": 2, "method": "tools/call", "params": {"name": "test_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_true(text.contains("Tool is disabled: test_tool"), "Error should keep the stable prefix")
+	assert_true(text.contains("enable_tools"), "Error should name enable_tools as the next step")
+	assert_true(text.contains("\"tools\": [\"test_tool\"]"), "Error should embed the exact enable call with this tool's name")
+	assert_true(text.contains("workflow_query"), "Error should also teach the one-call goal routing alternative")
+
+func test_unknown_tool_error_is_self_healing():
+	# 自愈错误：未知工具名给出发现路径（search_tools / list_tool_catalog）与 prompt 提示，
+	# 并明确"不要原样重试"。
+	var msg: Dictionary = {"id": 3, "method": "tools/call", "params": {"name": "definitely_not_a_tool", "arguments": {}}}
+	var response: Dictionary = await _core._handle_tool_call(msg)
+	assert_true(response.get("result", {}).get("isError", false), "Unknown tool should return isError")
+	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
+	assert_true(text.contains("Tool not found: definitely_not_a_tool"), "Error should keep the stable prefix")
+	assert_true(text.contains("search_tools"), "Error should point at search_tools")
+	assert_true(text.contains("list_tool_catalog"), "Error should point at list_tool_catalog")
+	assert_true(text.contains("prompts/get"), "Error should teach that recipes are prompts, not tools")
+	assert_true(text.contains("Do not retry"), "Error should forbid blind retries")
+
+func test_server_instructions_counts_match_manifest():
+	# initialize.instructions 是 AI 客户端看到的第一段话；其中的工具计数必须与
+	# manifest 真值一致（曾漂移为 231）。
+	var ManifestScript = preload("res://addons/godot_mcp/native_mcp/tools_manifest.gd")
+	var total: int = ManifestScript.TOOLS.size()
+	var response: Dictionary = _core._handle_initialize({"id": 1, "params": {"protocolVersion": "2025-11-25"}})
+	var instructions: String = str(response.get("result", {}).get("instructions", ""))
+	assert_false(instructions.is_empty(), "Instructions should be present")
+	assert_true(instructions.contains("%d-tool catalog" % total),
+		"Instructions should cite the manifest truth (%d-tool catalog)" % total)
+
 func test_tool_enabled_default_core():
 	_core.register_tool("test_tool", "A test tool", {"type": "object"}, func(args): return {"status": "ok"}, {}, {}, "core", "Script")
 	var tools: Array = _core.get_registered_tools()
