@@ -1,4 +1,4 @@
-# Slice B addon 同步：把主仓库的 MCP 插件拷进切片项目（addons 不入 git）。
+# Slice B 一键准备：同步 MCP 插件 + 合成音频素材（全部幂等，不动存档）。
 # 用法：powershell -File slice_b/setup.ps1
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -15,3 +15,12 @@ if ($text -notmatch 'res://addons/godot_mcp/plugin.cfg') {
     Set-Content $project $text -NoNewline
 }
 Write-Host "slice_b addon synced from $src"
+# 素材准备：天空纹理随仓库；音频由幂等脚本合成（存在且大小符合即跳过）。
+$prepare = Join-Path $PSScriptRoot "prepare_assets.py"
+$python = (Get-Command python -ErrorAction SilentlyContinue)
+if ($python) {
+    & $python.Source $prepare
+    if ($LASTEXITCODE -ne 0) { throw "asset preparation failed" }
+} else {
+    Write-Warning "python not found - run 'python slice_b/prepare_assets.py' manually before playing"
+}

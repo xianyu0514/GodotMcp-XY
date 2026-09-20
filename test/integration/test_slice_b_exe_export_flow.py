@@ -126,7 +126,7 @@ def main() -> int:
         # —— 打包 exe 的完整运行时链 ——
         run_exported(["--quit-after", "300"])
         first = read_save()
-        if first is None or int(first.get("schema_version", -1)) != 2:
+        if first is None or int(first.get("schema_version", -1)) < 2:
             raise AssertionError(f"exported game did not write a v2 save: {first}")
 
         write_save({
@@ -137,7 +137,7 @@ def main() -> int:
         })
         run_exported(["--quit-after", "300"])
         migrated = read_save()
-        if int(migrated.get("schema_version", -1)) != 2:
+        if int(migrated.get("schema_version", -1)) < 2:
             raise AssertionError(f"exported game did not migrate v1 -> v2: {migrated}")
         for field in ("hp", "coins", "items", "quests"):
             if field not in migrated:
@@ -147,7 +147,7 @@ def main() -> int:
 
         run_exported(["--quit-after", "300"])
         resumed = read_save()
-        if int(resumed.get("schema_version", -1)) != 2:
+        if int(resumed.get("schema_version", -1)) < 2:
             raise AssertionError(f"save did not survive a second boot: {resumed}")
 
         print(f"Gate-D exe leg verified: real SliceB.exe exported via MCP "

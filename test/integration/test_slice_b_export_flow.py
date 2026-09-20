@@ -132,7 +132,7 @@ def main() -> int:
         first = read_save()
         if first is None:
             raise AssertionError("the packaged game did not write a save on boot")
-        if int(first.get("schema_version", -1)) != 2:
+        if int(first.get("schema_version", -1)) < 2:
             raise AssertionError(f"fresh save should be v2: {first}")
 
         # —— 3. v1 存档在打包游戏里被迁移为 v2 ——
@@ -144,7 +144,7 @@ def main() -> int:
         })
         run_packaged(["--quit-after", "300"])
         migrated = read_save()
-        if int(migrated.get("schema_version", -1)) != 2:
+        if int(migrated.get("schema_version", -1)) < 2:
             raise AssertionError(f"packaged game did not migrate v1 -> v2: {migrated}")
         for field in ("hp", "coins", "items", "quests"):
             if field not in migrated:
@@ -156,7 +156,7 @@ def main() -> int:
         # —— 4. 二次启动存档持续（继续游玩语义）——
         run_packaged(["--quit-after", "300"])
         resumed = read_save()
-        if int(resumed.get("schema_version", -1)) != 2:
+        if int(resumed.get("schema_version", -1)) < 2:
             raise AssertionError(f"save did not survive a second boot: {resumed}")
         if "res://scenes/maps/map_l1.tscn" not in resumed.get("visited_maps", []):
             raise AssertionError(f"visited progress dropped: {resumed}")

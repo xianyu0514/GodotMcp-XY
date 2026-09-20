@@ -44,6 +44,7 @@ SLOW_TESTS = {
     "test_slice_b_export_flow.py",
     "test_slice_b_exe_export_flow.py",
     "test_slice_b_content_flow.py",
+    "test_slice_b_resume_flow.py",
 }
 
 DEFAULT_TIMEOUT = 600
