@@ -322,8 +322,8 @@ func test_multi_coin_goal_generates_correct_count() -> void:
 	var source: String = BlueprintsScript.controller_script("collect 3 coins and show a win label")
 	assert_true(source.contains("const COINS_TO_WIN: int = 3"), "3 coins parsed from goal")
 	assert_true(source.contains("Coin%d"), "extra coin generation loop present")
-	assert_true(source.contains("110.0 + coin_index * 40.0"),
-		"coins cluster before the enemy patrol band (P0-3 geometry fix)")
+	assert_true(source.contains("110.0 + coin_index * _coin_spacing"),
+		"coins cluster at adaptive spacing (corridor: tail <= 188px, clear of the band)")
 
 func test_multi_param_tuning_parses() -> void:
 	var tools: RefCounted = preload("res://addons/godot_mcp/tools/game_workflow_tools.gd").new()
