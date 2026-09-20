@@ -130,6 +130,14 @@ def showcase_oracle():
     try:
         rpc("enable_tools", {"tools": ["play_and_verify", "run_project",
                                        "install_runtime_probe", "stop_project"]}, 900)
+        # 长会话尾部的首要嫌疑：13 个目标留下任意存档态（关卡/位置/计数），
+        # 自动读档让 oracle 的"从标题开始的完整弧线"断言错位。oracle 前
+        # 显式归零 = 与验收语义一致（独立验证从新档开始）。
+        try:
+            rpc("stop_project", {"allow_window": True}, 899)
+        except Exception:
+            pass
+        purge_user_saves()
         # 冷启动竞态重试（本机实证：干净 .godot 首次 run 可能立即退，
         # 重试即活——重放器 repro_showcase_oracle.py 复现过）。
         for _attempt in range(3):
@@ -176,6 +184,12 @@ def showcase_oracle():
         steps.append({"assert": {"expression": "_win_label.text", "expected": "You Win!",
                                  "description": "the final level shows the real win"}})
         r = rpc("play_and_verify", {"steps": steps, "deterministic": True}, 905)
+        if not r.get("passed"):
+            for _a in r.get("assertions", []):
+                if not _a.get("passed", True):
+                    print(f"      full_loop failed at step {_a.get('step')}: "
+                          f"expr={_a.get('expression')} expected={_a.get('expected')} "
+                          f"actual={_a.get('actual')}")
         checks.append(("three_level_full_loop", bool(r.get("passed"))))
 
         # 2) 多模态反馈接线：音乐在放 + 反馈玩家存在
