@@ -18,6 +18,7 @@ config/features=PackedStringArray("4.7")
 
 GameSave="*res://scripts/world/game_save.gd"
 SliceHUD="*res://scripts/ui/hud.gd"
+SoundBus="*res://scripts/world/sound_bus.gd"
 MCPRuntimeProbe="*res://addons/godot_mcp/runtime/mcp_runtime_probe.gd"
 
 [display]
