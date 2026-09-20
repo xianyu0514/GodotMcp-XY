@@ -1,13 +1,12 @@
 """Gate-D acceptance: the packaged game runs, saves, resumes and migrates
 OUTSIDE the editor.
 
-Local constraint, honestly stated: this machine has no 4.7.2 export
-templates, so the classic exe export cannot run here. Godot's official
-PCK distribution form (`godot --main-pack game.pck`) is used instead:
-the pack is self-contained (scenes/scripts/resources/project.godot),
-runs without the slice_b source tree, and exercises the same runtime
-path an exported exe would. The exe-export leg stays a TODO for a
-template-equipped environment.
+This is the PCK form: Godot's official distribution shape
+(`godot --main-pack game.pck`), self-contained (scenes/scripts/
+resources/project.godot), running without the slice_b source tree.
+It stays the template-independent leg; the classic exe export is
+covered by test_slice_b_exe_export_flow.py when 4.7.2 export
+templates are installed.
 
 Flow:
 1. Editor session packs res:// into build/slice_b.pck (pack_pck)
@@ -166,7 +165,7 @@ def main() -> int:
               f"(exit 0), fresh v2 save written, hand-written v1 save migrated "
               f"in the packaged game, progress survives reboots. "
               f"Pack size {PCK.stat().st_size} bytes. "
-              f"(exe-export leg pending a template-equipped environment)")
+              f"(exe form covered by test_slice_b_exe_export_flow.py)")
         return 0
     finally:
         process.kill()
