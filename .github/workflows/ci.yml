@@ -293,6 +293,73 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
 
+  slice-e2e:
+    name: Slice-B player-flow E2E (manual)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    if: (github.event_name == 'workflow_dispatch' && inputs.slow_suite) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[slice-ci]'))
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Godot 4.7.2 (Windows build)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p godot
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip
+          unzip -o godot.zip -d godot
+          rm godot.zip
+
+      - name: Warm the import cache (cold checkout imports on first boot)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
+        run: |
+          set -euo pipefail
+          "$GODOT_EXE" --headless --path . --import
+
+      # 资产前置：素材清单自检（缺失即红——不再有隐藏的本机生成依赖）。
+      - name: Prepare slice assets (tracked skies + synthesized audio)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python slice_b/prepare_assets.py --check
+
+      # 六类切片证据流经统一 runner（--filter slice_b --slow 精确命中）。
+      # exe 导出腿单独判定模板前提：模板缺失时显式 SKIP 而非假绿/假红。
+      - name: Run the six slice flows (M1 transition, M2 playbook step, full playbook, resume, content, PCK export)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
+        run: |
+          set -euo pipefail
+          FILTER='^(test_slice_b_m1_flow|test_slice_b_m2_flow|test_slice_b_playbook_flow|test_slice_b_resume_flow|test_slice_b_content_flow|test_slice_b_export_flow)\.py$'
+          python test/integration/run_integration.py --filter "$FILTER" --slow
+
+      - name: Run the exe-export leg (only when export templates exist)
+        shell: bash
+        env:
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
+        run: |
+          set -euo pipefail
+          TPL="$APPDATA/Godot/export_templates/4.7.2.stable/windows_release_x86_64.exe"
+          if [ -f "$TPL" ]; then
+            python test/integration/test_slice_b_exe_export_flow.py
+          else
+            echo "::warning::exe-export leg SKIPPED — no 4.7.2 export templates on this runner (precondition unmet, not a pass)"
+          fi
+
+      - name: Upload build artifacts (pck/exe when present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slice-build-artifacts
+          path: |
+            slice_b/build/*.pck
+            slice_b/build/*.exe
+          if-no-files-found: warn
+
   representative-game:
     name: Representative game E2E (manual, honest completion gates)
     runs-on: windows-latest
