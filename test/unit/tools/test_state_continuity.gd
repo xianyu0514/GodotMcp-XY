@@ -32,8 +32,9 @@ func test_load_runs_before_anything_spawns() -> void:
 
 func test_initial_spawn_is_level_aware() -> void:
 	var source: String = BlueprintsScript.controller_script(FULL_GAME)
-	assert_true(source.contains("var base_x: float = 110.0 + (current_level - 1) * 40.0"),
-		"the initial cluster follows the restored level")
+	# 夹紧公式：簇基址随关右移但不越过敌带安全线（末枚 <= 200px）。
+	assert_true(source.contains("var base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)"),
+		"the initial cluster follows the restored level (clamped before the enemy band)")
 	var script := GDScript.new()
 	script.source_code = source
 	assert_eq(script.reload(), OK, "the full merged game still compiles")
