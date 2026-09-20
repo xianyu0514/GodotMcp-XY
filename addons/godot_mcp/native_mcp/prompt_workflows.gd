@@ -197,7 +197,7 @@ Notes: {{notes}}
 
 1. Templates — {"tool": "manage_export_templates", "args": {"action": "status"}}: matching_version_installed
    must be true; when false, download with {"action": "download"} and poll {"action": "download_status"}.
-2. Preset — {"tool": "inspect_export_preset"} then {"tool": "validate_export_preset"}: resolve every
+2. Preset — {"tool": "inspect_export_presets"} then {"tool": "validate_export_preset"}: resolve every
    reported issue (export_path, template availability, platform fields) before exporting.
 3. Version — {"tool": "bump_version"}: raise the project version per the requested step and record
    the changelog entry it returns.
