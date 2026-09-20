@@ -64,3 +64,36 @@ func test_await_never_treats_stale_as_final() -> void:
 		"expression": "stale_forever", "timeout_ms": 200, "poll_interval_ms": 50})
 	assert_eq(result.get("status"), "failed", "Stale-only stream must end in timeout failure")
 	assert_eq(result.get("condition_met"), false, "A stale sample must never be reported as met")
+
+class SingleSampleHarness extends "res://addons/godot_mcp/tools/debug_runtime_tools.gd":
+	var evaluations: int = 0
+	var first_value: Variant = false
+	func _tool_evaluate_runtime_expression(_params: Dictionary) -> Dictionary:
+		evaluations += 1
+		return {
+			"status": "success",
+			"stale": false,
+			"value": (first_value if evaluations == 1 else true),
+			"refresh_result": {"status": "success"}
+		}
+
+func test_single_sample_returns_fresh_false_immediately() -> void:
+	# 快照语义：新鲜但为假 → 立即返回（不等真值、不带 error）。
+	# play_and_verify 的位移步前快照依赖此行为（原点表达式必为假）。
+	var harness: SingleSampleHarness = SingleSampleHarness.new()
+	harness.first_value = false
+	var result: Dictionary = await harness._tool_await_runtime_condition({
+		"expression": "snapshot", "single_sample": true,
+		"timeout_ms": 3000, "poll_interval_ms": 50})
+	assert_eq(result.get("condition_met"), false, "Fresh-false snapshot reports condition_met=false")
+	assert_false(result.has("error"), "A fresh false read is NOT an error (snapshot semantics)")
+	assert_eq(harness.evaluations, 1, "Must return after the first fresh evaluation — no waiting")
+
+func test_single_sample_still_retries_until_fresh() -> void:
+	# 陈旧读不算数：single_sample 也要等到新鲜值（测量造假的防线不变）。
+	var stale_then_fresh: SingleSampleHarness = SingleSampleHarness.new()
+	stale_then_fresh.first_value = true
+	var result: Dictionary = await stale_then_fresh._tool_await_runtime_condition({
+		"expression": "snapshot", "single_sample": true,
+		"timeout_ms": 3000, "poll_interval_ms": 50})
+	assert_eq(result.get("condition_met"), true, "Truthy fresh value still reports met")

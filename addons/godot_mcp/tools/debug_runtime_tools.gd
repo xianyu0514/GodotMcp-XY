@@ -1399,6 +1399,10 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 	
 	var timeout_ms: int = maxi(int(params.get("timeout_ms", 10000)), 100)
 	var poll_interval_ms: int = maxi(int(params.get("poll_interval_ms", 500)), 50)
+	# single_sample=true：只等"新鲜"读，不等"真值"——快照语义（play_and_verify
+	# 位移断言的步前快照在原点必然为假，那是合法读数；默认语义会等满超时并把
+	# 假值误报为读取失败，CI run 35539792622 四目标 replan 的根因）。
+	var single_sample: bool = bool(params.get("single_sample", false))
 	var deadline_ms: int = Time.get_ticks_msec() + timeout_ms
 	var attempts: int = 0
 	
@@ -1414,10 +1418,10 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 		if result.get("status", "") == "success" and not bool(result.get("stale", false)):
 			var last_value: Variant = result.get("value", null)
 			var condition_met: bool = _is_truthy_runtime_value(last_value)
-			if condition_met:
+			if condition_met or single_sample:
 				return {
-					"status": "success",
-					"condition_met": true,
+					"status": "success" if condition_met else "failed",
+					"condition_met": condition_met,
 					"last_value": last_value,
 					"refresh_result": result.get("refresh_result", {}),
 					"attempts": attempts,
@@ -1473,7 +1477,14 @@ func _register_assert_runtime_condition(server_core: RefCounted) -> void:
 	)
 
 func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
-	var wait_result: Dictionary = await _tool_await_runtime_condition(params)
+	# expected 值比较必须用"新鲜单次读"而非"等到真"：expected=false 的断言
+	# （如"第二次 Esc 后 world 恢复"）在等到真语义下永远无法满足而超时
+	#（CI run 35539792622 goal4-pause 四目标 replan 的回归根因）。无 expected
+	# 的纯真值断言保持文档契约：超时窗口内变真。
+	var wait_params: Dictionary = params.duplicate()
+	if params.has("expected"):
+		wait_params["single_sample"] = true
+	var wait_result: Dictionary = await _tool_await_runtime_condition(wait_params)
 	if wait_result.has("error"):
 		return wait_result
 
