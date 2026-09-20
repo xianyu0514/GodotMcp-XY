@@ -54,7 +54,9 @@ func test_multi_coin_source_has_identity_safe_pickup() -> void:
 func test_coins_cluster_before_the_enemy_band() -> void:
 	var source: String = BlueprintsScript.controller_script("collect 3 coins with a patrolling enemy")
 	assert_true(source.contains("Vector2(110.0, 0)"), "first coin at 110 (beyond the 98px spawn pickup range)")
-	assert_true(source.contains("110.0 + coin_index * 40.0"), "extras cluster at +40 steps")
+	# 走廊几何：间距随币数自适应（簇尾 ≤188px、敌带前留余量）。
+	assert_true(source.contains("110.0 + coin_index * _coin_spacing"),
+		"extras cluster at adaptive spacing (corridor geometry)")
 	# 聚簇上界：最后一枚（index 2）在 200，拾取窗最远 298 < 敌带下沿 220-16
 	assert_false(source.contains("200 + coin_index * 180"),
 		"old spread (200/380/560) put coins 2-3 inside the death band")

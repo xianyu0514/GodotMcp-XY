@@ -1649,12 +1649,11 @@ func _movement_feel_legs() -> Dictionary:
 ## 同样帧数跑更远，CI run #11 实证：50 帧 @390px/s = 325px 扫进敌带，
 ## 赛后死亡 gameover 覆写。速度取游戏模型的调参覆盖，缺省 260）。
 static func _coin_sweep_frames(coin_total: int, levels_merged: bool = false) -> int:
-	var window_px: float = 110.0 + maxi(coin_total - 1, 0) * 40.0 - 90.0 + 12.0
-	if levels_merged:
-		# 关卡合并后的金币簇逐关右移（base_x 随 current_level 偏移再夹紧），
-		# 扫描窗同步加宽一档——CI 实证：09b 的 L2 末枚在簇 +40px 处，
-		# 按 L1 窗扫描停在磁吸半径之外，coins_collected 永远差一枚。
-		window_px += 40.0
+	# 窗口按走廊布局的实际簇几何：末枚 = 110 + (N-1)*spacing（间距与生成器
+	# 同式压缩），停点 = 末枚 - 磁吸 90 + 余量 12。任何币数停点 ~110px，
+	# 距敌带危险缘（~212px）百像素余量；关卡基址恒定，无需漂移补偿。
+	var spacing: float = minf(40.0, 78.0 / float(maxi(coin_total - 1, 1)))
+	var window_px: float = 110.0 + maxi(coin_total - 1, 0) * spacing - 90.0 + 12.0
 	var speed: float = float(GameModelStoreScript.load_model().get("params", {}).get("SPEED", 260.0))
 	if speed < 130.0:
 		speed = 130.0
