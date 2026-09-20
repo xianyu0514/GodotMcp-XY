@@ -44,6 +44,12 @@ python test/integration/test_runtime_probe_flow.py
 
 Integration tests are useful for transport behavior, runtime probe workflows, editor automation, imports/exports and project-level side effects.
 
+The first-contact contract — what a fresh AI client experiences on connect (initialize instructions, lazy tools/list surface, project identity probes, self-healing disabled/unknown-tool errors, `workflow_query` routing with `suggested_prompt`, prompt recipes) — is pinned by:
+
+```bash
+GODOT_EXE=<editor-console-exe> MCP_PORT=9187 python test/integration/test_first_contact_flow.py
+```
+
 ## Static checks
 
 The repository includes focused static checks such as:

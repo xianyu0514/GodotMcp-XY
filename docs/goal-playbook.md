@@ -71,6 +71,7 @@
 
 ## 自动提交的回归保障
 
+- `test_first_contact_flow.py` — 首次接入契约（initialize 指引、惰性工具面、项目识别、自愈报错、workflow_query 路由、prompt 配方）
 - `test_game_goal_flow.py` — 目标级闭环（scratch 项目 → plan → run → completed）
 - `test_batch_scene_node_edits_flow.py` — 单调用脚本化节点组装 + 真值断言
 - 1784 项单元测试覆盖路由、门禁语义、缓存一致性与工具校验
