@@ -424,7 +424,8 @@ static func controller_script(objective: String) -> String:
 			# 初始布局随恢复后的关卡走（读档已先行）——与 _respawn_coins
 			# 的 base_x 公式一致。夹紧上限让末枚金币永不越过敌带安全线
 			# （CI 实证：偏移 +40/关后 L2 末枚 230 落进巡逻带 [220,380]）。
-			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
+			source += "\tvar _coin_spacing: float = minf(40.0, 90.0 / float(maxi(COINS_TO_WIN - 1, 1)))\n"
+			source += "\tvar base_x: float = clampf(110.0 + (current_level - 1) * 40.0, 110.0, 200.0 - float(COINS_TO_WIN - 1) * _coin_spacing)\n"
 		source += "\t_coin_area = Area2D.new()\n"
 		source += "\t_coin_area.name = \"Coin\"\n"
 		if bool(verbs.get("level", false)):
@@ -437,7 +438,7 @@ static func controller_script(objective: String) -> String:
 		source += "\t\tvar extra_coin := Area2D.new()\n"
 		source += "\t\textra_coin.name = \"Coin%d\" % coin_index\n"
 		if bool(verbs.get("level", false)):
-			source += "\t\textra_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+			source += "\t\textra_coin.position = Vector2(base_x + coin_index * _coin_spacing, 0)\n"
 		else:
 			source += "\t\textra_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar extra_col := CollisionShape2D.new()\n"
@@ -816,12 +817,13 @@ static func controller_script(objective: String) -> String:
 			# 关卡布局：每关聚簇基址右移 40px（L1=110 与既有校准一致），
 			# 夹紧上限保证末枚金币 ≤200px（敌带危险缘 ~212px 前留余量）——
 			# 偏移不夹紧时 L2 末枚 230 已进带，扫描收满从几何上不可能。
-			source += "\tvar base_x: float = minf(110.0 + (current_level - 1) * 40.0, 200.0 - float(COINS_TO_WIN - 1) * 40.0)\n"
+			source += "\tvar _coin_spacing: float = minf(40.0, 90.0 / float(maxi(COINS_TO_WIN - 1, 1)))\n"
+			source += "\tvar base_x: float = clampf(110.0 + (current_level - 1) * 40.0, 110.0, 200.0 - float(COINS_TO_WIN - 1) * _coin_spacing)\n"
 		source += "\tfor coin_index in range(COINS_TO_WIN):\n"
 		source += "\t\tvar new_coin := Area2D.new()\n"
 		source += "\t\tnew_coin.name = \"Coin\" if coin_index == 0 else \"Coin%d\" % coin_index\n"
 		if bool(verbs.get("level", false)):
-			source += "\t\tnew_coin.position = Vector2(base_x + coin_index * 40.0, 0)\n"
+			source += "\t\tnew_coin.position = Vector2(base_x + coin_index * _coin_spacing, 0)\n"
 		else:
 			source += "\t\tnew_coin.position = Vector2(110.0 + coin_index * 40.0, 0)\n"
 		source += "\t\tvar coin_col := CollisionShape2D.new()\n"
