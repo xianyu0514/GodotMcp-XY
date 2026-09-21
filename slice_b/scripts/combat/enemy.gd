@@ -8,9 +8,38 @@ extends Area2D
 var _time: float = 0.0
 var _origin_x: float = 0.0
 
+var _hp: int = 0
+var _dead: bool = false
+
 func _ready() -> void:
+	add_to_group("enemies")
+	_hp = stats.max_hp if stats != null else 30
 	_origin_x = global_position.x
 	body_entered.connect(_on_body_entered)
+
+
+## 受击入口（包03，玩家攻击调用）：扣血 + 闪白 + 击退视觉位移（巡逻自然
+## 回归）+ 死亡闪橙后移除。每击只经 CombatRules 判定一次。
+func take_damage(amount: int, knockback: Vector2) -> void:
+	if stats == null or _dead:
+		return
+	var verdict: Dictionary = CombatRules.apply_hit(_hp, maxi(0, amount))
+	_hp = int(verdict["hp"])
+	var visual: CanvasItem = get_node_or_null("Body")
+	if visual:
+		visual.modulate = Color(3.0, 3.0, 3.0)
+		var tween: Tween = create_tween()
+		tween.tween_property(visual, "modulate", Color(1, 1, 1, 1), 0.18)
+	var resistance: float = CombatRules.clamp_resistance(stats.knockback_resistance)
+	_origin_x += CombatRules.knockback_displacement(knockback, resistance).x * 0.2
+	if bool(verdict["dead"]):
+		_dead = true
+		set_physics_process(false)
+		if visual:
+			visual.modulate = Color(4.0, 1.6, 0.4)
+		var die_tween: Tween = create_tween()
+		die_tween.tween_interval(0.22)
+		die_tween.tween_callback(queue_free)
 
 func _physics_process(delta: float) -> void:
 	if stats == null:
