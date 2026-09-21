@@ -1,12 +1,12 @@
 [gd_scene format=3 uid="uid://bex08j85v14dg"]
 
 [ext_resource type="Script" uid="uid://dt8hubrgl7a4t" path="res://scripts/player/player.gd" id="1_player"]
-[ext_resource type="Texture2D" uid="uid://dr7mtjvk362hw" path="res://art/knight_32.tres" id="2_g2els"]
+[ext_resource type="Texture2D" uid="uid://8oi7e127ygrm" path="res://art/knight_32.tres" id="2_g2els"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_g2els"]
 size = Vector2(30, 30)
 
-[sub_resource type="GDScript" id="GDScript_qhqgy"]
+[sub_resource type="GDScript" id="GDScript_g2els"]
 script/source = "extends Sprite2D
 ## 角色皮肤（包01）：精灵表 idle/move 动画 + 朝向翻转 + 支点对齐。
 ## 由 apply_character_visual 接入；参数全部 @export，可随时经 MCP 调整。
@@ -64,7 +64,7 @@ func set_block_visual(value: bool) -> bool:
 	return use_block_visual
 "
 
-[sub_resource type="GDScript" id="GDScript_qlg0r"]
+[sub_resource type="GDScript" id="GDScript_qhqgy"]
 script/source = "
 extends Node2D
 ## 受击反馈（包02 + 打击感版）：闪白自恢复 + hitstop 顿帧 + 真随机镜头震
@@ -82,6 +82,9 @@ extends Node2D
 var _particles: CPUParticles2D
 var _tween: Tween
 var _hitstop_active: bool = false
+
+## 最近一次震动的最大偏移幅度（像素）——供回归断言\"震屏真的发生了\"。
+var last_shake_magnitude: float = 0.0
 
 
 func _ready() -> void:
@@ -127,8 +130,14 @@ func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
 	_particles.restart()
 	_do_hitstop()
 	# 真随机镜头震：多步随机偏移线性衰减到原位（连续受击 kill 重启不累积）。
+	# 无相机的场景自动补一个挂在玩家上——震屏永远真实发生，绝不静默跳过
+	#（实测教训：slice_b 地图没有 Camera2D，旧代码 if camera 直接全程无效）。
 	if camera_shake_pixels > 0.0:
 		var camera: Camera2D = get_viewport().get_camera_2d()
+		if camera == null:
+			camera = Camera2D.new()
+			camera.position_smoothing_enabled = false
+			get_parent().add_child(camera)
 		if camera:
 			var steps: int = maxi(int(camera_shake_seconds / 0.033), 3)
 			var original_offset: Vector2 = camera.offset
@@ -136,6 +145,9 @@ func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
 				var falloff: float = 1.0 - float(i) / float(steps)
 				camera.offset = original_offset + Vector2(
 					randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * camera_shake_pixels * falloff
+				# 延迟免疫证据：记录本次震动的最大幅度（探针往返 ~100ms 总能
+				# 错过 0.2s 的采样窗口；断言读这个值，不再赌时机）。
+				last_shake_magnitude = maxf(last_shake_magnitude, camera.offset.length())
 				await get_tree().process_frame
 				await get_tree().process_frame
 			camera.offset = original_offset
@@ -269,10 +281,10 @@ shape = SubResource("RectangleShape2D_g2els")
 texture = ExtResource("2_g2els")
 hframes = 4
 vframes = 2
-script = SubResource("GDScript_qhqgy")
+script = SubResource("GDScript_g2els")
 
 [node name="HitFeedback" type="Node2D" parent="." unique_id=560967588]
-script = SubResource("GDScript_qlg0r")
+script = SubResource("GDScript_qhqgy")
 
 [node name="Attack" type="Node2D" parent="." unique_id=167480876]
 script = SubResource("GDScript_dqkch")

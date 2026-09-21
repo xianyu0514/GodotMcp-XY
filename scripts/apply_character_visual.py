@@ -29,6 +29,7 @@ later via ordinary MCP node-property calls, no re-run required.
 """
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -132,6 +133,9 @@ var _particles: CPUParticles2D
 var _tween: Tween
 var _hitstop_active: bool = false
 
+## 最近一次震动的最大偏移幅度（像素）——供回归断言"震屏真的发生了"。
+var last_shake_magnitude: float = 0.0
+
 
 func _ready() -> void:
 	_particles = CPUParticles2D.new()
@@ -176,8 +180,14 @@ func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
 	_particles.restart()
 	_do_hitstop()
 	# 真随机镜头震：多步随机偏移线性衰减到原位（连续受击 kill 重启不累积）。
+	# 无相机的场景自动补一个挂在玩家上——震屏永远真实发生，绝不静默跳过
+	#（实测教训：slice_b 地图没有 Camera2D，旧代码 if camera 直接全程无效）。
 	if camera_shake_pixels > 0.0:
 		var camera: Camera2D = get_viewport().get_camera_2d()
+		if camera == null:
+			camera = Camera2D.new()
+			camera.position_smoothing_enabled = false
+			get_parent().add_child(camera)
 		if camera:
 			var steps: int = maxi(int(camera_shake_seconds / 0.033), 3)
 			var original_offset: Vector2 = camera.offset
@@ -185,6 +195,9 @@ func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
 				var falloff: float = 1.0 - float(i) / float(steps)
 				camera.offset = original_offset + Vector2(
 					randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * camera_shake_pixels * falloff
+				# 延迟免疫证据：记录本次震动的最大幅度（探针往返 ~100ms 总能
+				# 错过 0.2s 的采样窗口；断言读这个值，不再赌时机）。
+				last_shake_magnitude = maxf(last_shake_magnitude, camera.offset.length())
 				await get_tree().process_frame
 				await get_tree().process_frame
 			camera.offset = original_offset
@@ -292,7 +305,8 @@ def ensure_script(mcp: Mcp, path: str, content: str) -> None:
         "operations": [{"path": path,
                         "expected_content_hash": read["content_hash"],
                         "edits": [{"old_text": existing, "new_text": content}]}],
-        "change_set_id": "component-update-" + Path(path).name.replace(".gd", ""),
+        "change_set_id": "component-update-" + Path(path).name.replace(".gd", "")
+                         + "-" + hashlib.sha1(content.encode()).hexdigest()[:8],
         "dry_run": False})
     if "error" in verdict:
         raise SystemExit(f"updating {path} failed: {verdict}")
@@ -523,7 +537,24 @@ def run_regression(mcp: Mcp, scene: str, movement_expression: str = "position.x"
                             "description": "invuln window prevented a second deduction"}},
                 {"wait_ms": 800,
                  "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": False,
-                            "description": "modulate returns to white after the flash window"}}]}})
+                            "description": "modulate returns to white after the flash window"}},
+                {"wait_ms": 100,
+                 "assert": {"expression": "(take_hit(1000, Vector2(0, 0)) == null)", "expected": True,
+                            "description": "lethal hit"}},
+                {"wait_ms": 200,
+                 "assert": {"expression": "hp", "expected": 100,
+                            "description": "death respawns at full health"}},
+                {"wait_ms": 300,
+                 "assert": {"expression": "(get_viewport().get_camera_2d() != null)", "expected": True,
+                            "description": "shake has a real camera (auto-created when the scene had none)"}},
+                {"wait_ms": 300,
+                 "assert": {"expression": "get_node('HitFeedback').last_shake_magnitude", "expected": 1,
+                            "operator": "gte",
+                            "description": "camera shake actually moved (latency-proof magnitude evidence)"}},
+                {"action": "move_right", "pressed": True, "wait_ms": 400,
+                 "assert": {"expression": movement_expression, "displacement_min": 30,
+                            "description": "respawned player can still move (not stuck in geometry)"}},
+                {"action": "move_right", "pressed": False, "wait_ms": 100}]}})
     else:
         print("[regression] player has no take_hit — hit checks skipped (movement-only)")
     return mcp.tool("run_verification_queue", {
