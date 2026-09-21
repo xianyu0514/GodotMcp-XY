@@ -387,9 +387,13 @@ func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted
 		if not active_session.is_empty():
 			var info: Dictionary = await runtime_tools._tool_get_runtime_info({"timeout_ms": 2000})
 			if int(info.get("node_count", 0)) > 0:
+				# 会话结构来自 debugger bridge：{session_id, active, breaked, debuggable}。
+				# 附上 attached_at（引擎侧时间）让证据可追溯到具体的运行窗口。
 				return {"ok": true, "session": {
-					"session_id": active_session.get("session_id", active_session.get("id", "")),
-					"started_at": active_session.get("started_at", "")}}
+					"session_id": int(active_session.get("session_id", -1)),
+					"breaked": bool(active_session.get("breaked", false)),
+					"debuggable": bool(active_session.get("debuggable", false)),
+					"attached_at": Time.get_datetime_string_from_system(true, true)}}
 		await Engine.get_main_loop().process_frame
 	return {"ok": false, "detail": "no active debugger session with a visible tree within 20s"}
 

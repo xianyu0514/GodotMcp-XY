@@ -72,6 +72,22 @@
 `{"command":"create","goal":"dash keeps collision","strict":true,"items":[{"kind":"behavior_check","label":"wall","detail":{"scene_path":"res://scenes/arena.tscn","steps":[{"action":"move_right","pressed":true,"wait_ms":1500,"assert":{"expression":"get_node('Player').position.x","expected":544,"operator":"lte","description":"wall blocks"}}]}}],"watch_paths":["res://scripts/player.gd"]}`
 （运算符规范名：eq/ne/gt/gte/lt/lte；未知运算符显式报错。）
 
+## 插件热同步循环（边用边修的标准机制）
+
+仓库侧一键脚本 `scripts/hot_sync_plugin.py <目标工程> --port 9080`：
+按内容差异同步 `addons/godot_mcp` → 触发编辑器文件系统扫描 → 等待主线程
+稳定（扫描期间派发看门狗会 503，这是设计保护）→ 健康探针。
+
+实测边界（一次真实事故换来的）：
+- **不要对服务中的工具模块显式 `.reload()`** —— 实例方法分派错位，下一次
+  behavior_check 直接断连。编辑器自己的外部变更热重载是唯一安全路径。
+- 扫描/导入期间 503 = 主线程忙（"Retry shortly"），等稳定即可，不是故障。
+- 行为变更可靠生效 = 编辑器重启；大多数情况编辑器自动热重载即可生效；
+  数据文件（csv/json）立即生效。
+
+循环形态：用 MCP 做游戏 → 撞缺陷 → 仓库修复（先失败测试）→ hot_sync →
+编辑器自动重载 → 重跑 strict behavior_check 验证 → 继续。
+
 ## 做可玩内容的实测要点（first-playable 冒烟沉淀）
 
 - **`create_scene` 写文件但不打开**：建完先 `open_scene`（Vibe Coding 模式下带 `allow_ui_focus=true`）再 `create_node`，否则报 "No active edited scene"。
