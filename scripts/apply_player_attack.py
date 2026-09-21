@@ -23,6 +23,7 @@ Adds:
 """
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -49,6 +50,10 @@ ATTACK_SCRIPT = '''extends Node2D
 var _phase: String = "idle"
 var _phase_left: float = 0.0
 var _cooldown_left: float = 0.0
+var swing_count: int = 0
+var last_swing_started_ms: int = 0
+## 每次挥击的开始毫秒日志（延迟免疫测量：按住攻击读取相邻差值）。
+var swing_log_ms: Array = []
 var _hit_this_swing: Array = []
 var _slash: ColorRect
 var _facing_right: bool = true
@@ -74,6 +79,11 @@ func cooldown_left() -> float:
 	return _cooldown_left
 
 
+## 供延迟免疫测量：当前引擎毫秒（表达式无法直接调 Time 单例）。
+func now_ms() -> int:
+	return Time.get_ticks_msec()
+
+
 func _physics_process(delta: float) -> void:
 	var player: Node = get_parent()
 	var horizontal: float = player.velocity.x
@@ -86,6 +96,9 @@ func _physics_process(delta: float) -> void:
 			_phase = "startup"
 			_phase_left = startup_seconds
 			_hit_this_swing = []
+			swing_count += 1
+			last_swing_started_ms = Time.get_ticks_msec()
+			swing_log_ms.append(last_swing_started_ms)
 			_slash.visible = true
 			_slash.color = Color(1.0, 0.9, 0.5, 0.35)
 	_update_splash_box()
@@ -260,7 +273,8 @@ def ensure_script(mcp: Mcp, path: str, content: str) -> str:
         "operations": [{"path": path,
                         "expected_content_hash": read["content_hash"],
                         "edits": [{"old_text": existing, "new_text": content}]}],
-        "change_set_id": "attack-update-" + Path(path).name.replace(".gd", ""),
+        "change_set_id": "attack-update-" + Path(path).name.replace(".gd", "")
+                         + "-" + hashlib.sha1(content.encode()).hexdigest()[:8],
         "dry_run": False})
     if "error" in verdict:
         raise SystemExit(f"updating {path} failed: {verdict}")
