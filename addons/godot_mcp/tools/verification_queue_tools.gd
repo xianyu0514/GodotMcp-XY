@@ -45,7 +45,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_run_verification_queue(server_core: RefCounted) -> void:
 	var tool_name: String = "run_verification_queue"
-	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check = the queue itself drives a real run session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
+	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check items each boot a FRESH run of the scene (full isolation - do not assume state from a previous item carries over; an item that needs a dead enemy must kill it itself); the queue drives the session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -72,6 +72,10 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 			"strict": {
 				"type": "boolean", "default": false,
 				"description": "create only: strict queues reject externally recorded verdicts (command=record errors) — completion requires native execution evidence (script_check/behavior_check)."
+			},
+			"requirements": {
+				"type": "array", "items": {"type": "string"},
+				"description": "create only: required requirement ids (the delivery contract). Responses carry a checklist mapping every requirement to verified/smoke/partial/failed/unverified/external_claim; ANY requirement lacking verified evidence makes the overall outcome incomplete."
 			},
 			"budget": {
 				"type": "integer",
@@ -159,6 +163,18 @@ func _command_create(params: Dictionary) -> Dictionary:
 			var steps: Variant = (detail as Dictionary).get("steps", []) if detail is Dictionary else []
 			if not (steps is Array) or (steps as Array).is_empty():
 				return {"error": "behavior_check detail requires a non-empty steps array (same shape play_and_verify accepts; optional scene_path, assertions, deterministic, timeout_ms)"}
+			# 严格完成门禁（包②）：零断言的 behavior_check 只是冒烟结果，
+			# 不能充当严格队列的功能完成证据——建队即拒绝并点名缺断言的项。
+			if bool(params.get("strict", false)):
+				var assertion_count: int = 0
+				for step_value in (steps as Array):
+					if step_value is Dictionary and (step_value as Dictionary).has("assert"):
+						assertion_count += 1
+				var finals: Variant = (detail as Dictionary).get("assertions", []) if detail is Dictionary else []
+				if finals is Array:
+					assertion_count += (finals as Array).size()
+				if assertion_count == 0:
+					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts or a final assertions list" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
 
 	var store: Dictionary = StoreScript.load_store(_resolved_store_path())
 	if store.has("error"):
@@ -169,12 +185,22 @@ func _command_create(params: Dictionary) -> Dictionary:
 		return created
 	var queue: Dictionary = created["queue"]
 	queue["strict"] = bool(params.get("strict", false))
+	var requirements: Variant = params.get("requirements", [])
+	if requirements is Array and not (requirements as Array).is_empty():
+		var contract: Array = []
+		for requirement_value in requirements:
+			var requirement_id: String = str(requirement_value).strip_edges()
+			if not requirement_id.is_empty() and not requirement_id in contract:
+				contract.append(requirement_id)
+		queue["requirements"] = contract
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
 
 	var response: Dictionary = _queue_summary(queue, "open")
 	response["command"] = "create"
+	if queue.has("requirements"):
+		response["checklist"] = _requirement_checklist(queue)
 	if not bool(params.get("defer_first_slice", false)):
 		var advanced: Dictionary = await _advance_and_save(store, queue, int(params.get("budget", 4)))
 		for key in advanced:
@@ -205,6 +231,8 @@ func _command_inspect(params: Dictionary) -> Dictionary:
 			return save_result
 	var summary: Dictionary = _queue_summary(queue, String(queue.get("phase", "open")))
 	summary["command"] = "inspect"
+	if queue.has("requirements"):
+		summary["checklist"] = _requirement_checklist(queue)
 	summary["stale_refreshed"] = staled
 	return summary
 
@@ -251,8 +279,12 @@ func _command_record(params: Dictionary) -> Dictionary:
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
-	var summary: Dictionary = _queue_summary(queue, outcome)
+	_enforce_requirement_contract(queue)
+	var summary: Dictionary = _queue_summary(queue, String(queue.get("phase", outcome)))
 	summary["command"] = "record"
+	if queue.has("requirements"):
+		summary["checklist"] = _requirement_checklist(queue)
+		summary["outcome"] = String(queue.get("phase", outcome))
 	summary["stale_refreshed"] = 0
 	return summary
 
@@ -280,10 +312,14 @@ func _advance_and_save(store: Dictionary, queue: Dictionary, budget: int) -> Dic
 	var staled: int = StoreScript.refresh_stale(queue)
 	var advanced: Dictionary = await StoreScript.advance(queue, maxi(0, budget),
 		func(item: Dictionary) -> Dictionary: return await _execute_item(item))
+	_enforce_requirement_contract(queue)
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
 	advanced["stale_refreshed"] = staled
+	if queue.has("requirements"):
+		advanced["checklist"] = _requirement_checklist(queue)
+		advanced["outcome"] = String(queue.get("phase", advanced.get("outcome", "")))
 	return advanced
 
 ## 内置执行器：script_check 走 GDScript 编译检查；external 项 defer——
@@ -312,6 +348,77 @@ func _check_behavior(detail: Dictionary) -> Dictionary:
 
 ## 经插件注册表取已 initialize 的模块实例（跨模块协作的既有模式）；
 ## 注册表不可用时回退到 new()（meta 回退链自行解析编辑器接口）。
+## 需求清单（P0① 公共能力）：每条需求独立状态 + 证据，缺项 => incomplete。
+func _requirement_checklist(queue: Dictionary) -> Dictionary:
+	var contract: Array = queue.get("requirements", []) if queue.get("requirements", []) is Array else []
+	var entries: Array = []
+	var by_requirement: Dictionary = {}
+	for item_value in queue.get("items", []):
+		var item: Dictionary = item_value if item_value is Dictionary else {}
+		var requirement_id: String = str(item.get("requirement", ""))
+		if requirement_id.is_empty():
+			var label: String = str(item.get("label", ""))
+			if label.begins_with("requirement:"):
+				requirement_id = label.substr(len("requirement:"))
+		if requirement_id.is_empty():
+			continue
+		var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+		var status: String
+		var item_status: String = str(item.get("status", "pending"))
+		var assertions_total: int = int(evidence.get("assertions_total", 0))
+		var assertions_passed: int = int(evidence.get("assertions_passed", 0))
+		var level: String = String(evidence.get("evidence_level", ""))
+		if String(queue.get("blocked_reason", "")) != "" and item_status == "pending":
+			status = "blocked"
+		elif item_status == "pending":
+			status = "unverified"
+		elif level == "external_claim":
+			status = "external_claim"
+		elif item_status == "passed" and assertions_total > 0:
+			status = "verified"
+		elif item_status == "passed":
+			status = "smoke"
+		elif assertions_passed > 0:
+			status = "partial"
+		else:
+			status = "failed"
+		by_requirement[requirement_id] = {
+			"requirement": requirement_id,
+			"status": status,
+			"item_status": item_status,
+			"assertions_passed": assertions_passed,
+			"assertions_total": assertions_total,
+			"evidence_level": level,
+		}
+	for requirement_id in contract:
+		if by_requirement.has(requirement_id):
+			entries.append(by_requirement[requirement_id])
+		else:
+			entries.append({
+				"requirement": requirement_id, "status": "unverified",
+				"item_status": "missing", "assertions_passed": 0,
+				"assertions_total": 0, "evidence_level": "",
+			})
+	var unverified: Array = []
+	for entry in entries:
+		if str(entry.get("status", "")) != "verified":
+			unverified.append(str(entry.get("requirement", "?")))
+	return {
+		"requirements": entries,
+		"unverified": unverified,
+		"overall": "complete" if (not contract.is_empty() and unverified.is_empty()) else "incomplete",
+	}
+
+func _enforce_requirement_contract(queue: Dictionary) -> void:
+	var contract: Array = queue.get("requirements", []) if queue.get("requirements", []) is Array else []
+	if contract.is_empty():
+		return
+	var checklist: Dictionary = _requirement_checklist(queue)
+	if String(checklist.get("overall", "incomplete")) != "complete":
+		if String(queue.get("phase", "")) == "completed":
+			queue["phase"] = "incomplete"
+		queue["blocked_reason"] = "requirements without verified evidence: " + ", ".join(checklist.get("unverified", []))
+
 func _tool_instance(class_key: String, fallback_script: GDScript) -> RefCounted:
 	if Engine.has_meta("GodotMCPPlugin"):
 		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
@@ -387,9 +494,13 @@ func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted
 		if not active_session.is_empty():
 			var info: Dictionary = await runtime_tools._tool_get_runtime_info({"timeout_ms": 2000})
 			if int(info.get("node_count", 0)) > 0:
+				# 会话结构来自 debugger bridge：{session_id, active, breaked, debuggable}。
+				# 附上 attached_at（引擎侧时间）让证据可追溯到具体的运行窗口。
 				return {"ok": true, "session": {
-					"session_id": active_session.get("session_id", active_session.get("id", "")),
-					"started_at": active_session.get("started_at", "")}}
+					"session_id": int(active_session.get("session_id", -1)),
+					"breaked": bool(active_session.get("breaked", false)),
+					"debuggable": bool(active_session.get("debuggable", false)),
+					"attached_at": Time.get_datetime_string_from_system(true, true)}}
 		await Engine.get_main_loop().process_frame
 	return {"ok": false, "detail": "no active debugger session with a visible tree within 20s"}
 
@@ -431,13 +542,36 @@ func _queue_summary(queue: Dictionary, outcome: String) -> Dictionary:
 	var items: Array = []
 	for item_value in queue.get("items", []):
 		var item: Dictionary = item_value
-		items.append({
+		var entry: Dictionary = {
 			"id": String(item.get("id", "")),
 			"kind": String(item.get("kind", "")),
 			"label": String(item.get("label", "")),
 			"status": String(item.get("status", "")),
 			"checked_at": String(item.get("checked_at", "")),
-		})
+		}
+		# Compact evidence summary so callers stop digging through the store
+		# file: level, pass counts, first failure description, key metrics.
+		var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+		if not evidence.is_empty():
+			entry["evidence_level"] = String(evidence.get("evidence_level", ""))
+			# 判定标注（包②）：verified=原生运行且带断言；smoke=原生运行但零断言；
+			# external_claim=外部声明。严格队列只认 verified。
+			if String(evidence.get("evidence_level", "")) == "external_claim":
+				entry["verification"] = "external_claim"
+			elif int(evidence.get("assertions_total", 0)) > 0:
+				entry["verification"] = "verified"
+			else:
+				entry["verification"] = "smoke"
+			if evidence.has("assertions_total"):
+				entry["assertions_passed"] = int(evidence.get("assertions_passed", 0))
+				entry["assertions_total"] = int(evidence.get("assertions_total", 0))
+			for assertion_value in evidence.get("assertions", []):
+				if assertion_value is Dictionary and not bool((assertion_value as Dictionary).get("passed", true)):
+					entry["first_failure"] = String((assertion_value as Dictionary).get("description", ""))
+					break
+			if evidence.has("steps_executed"):
+				entry["steps_executed"] = int(evidence.get("steps_executed", 0))
+		items.append(entry)
 	return {
 		"queue_id": String(queue.get("queue_id", "")),
 		"goal": String(queue.get("goal", "")),

@@ -97,3 +97,19 @@ func test_single_sample_still_retries_until_fresh() -> void:
 		"expression": "snapshot", "single_sample": true,
 		"timeout_ms": 3000, "poll_interval_ms": 50})
 	assert_eq(result.get("condition_met"), true, "Truthy fresh value still reports met")
+
+# --- 数值宽松相等（实测坑：expected 3 被 float 化为 "3.0"，actual "3"，eq 字符串比较误判）---
+
+func test_compare_values_eq_is_numeric_tolerant():
+	var harness: FalseThenTrueHarness = FalseThenTrueHarness.new()
+	assert_true(harness._compare_values("3", "3.0", "eq"), "int vs float-formatted equal values must pass eq")
+	assert_true(harness._compare_values("0", "0.0", "eq"), "zero forms must compare equal")
+	assert_true(harness._compare_values("543.99", "543.99", "eq"), "identical floats pass")
+	assert_false(harness._compare_values("3", "4", "eq"), "different numbers still fail")
+	assert_true(harness._compare_values("true", "true", "eq"), "non-numeric strings compare verbatim")
+	assert_false(harness._compare_values("abc", "abd", "eq"), "different strings fail")
+
+func test_compare_values_ne_is_numeric_tolerant():
+	var harness: FalseThenTrueHarness = FalseThenTrueHarness.new()
+	assert_false(harness._compare_values("3", "3.0", "ne"), "equal numbers must not be 'ne'")
+	assert_true(harness._compare_values("3", "3.5", "ne"), "different numbers are 'ne'")

@@ -313,3 +313,32 @@ zero errors'})
 	assert_true(text.contains('add a "dash" skill'), "Embedded quotes survive")
 	assert_true(text.contains("with cooldown < 1s"), "Newline-adjacent text survives")
 	assert_true(text.contains('player "stops" at walls'), "Acceptance quotes survive")
+
+func test_plugin_shipped_making_recipes_registered():
+	# 发布即用：角色与近战敌人配方随插件分发（不是仓库侧脚本）。
+	var workflows: RefCounted = _new_workflows()
+	var prompts: Array[Dictionary] = workflows.get_prompts()
+	var names: Array = []
+	for p in prompts:
+		names.append(String(p.get("name", "")))
+	assert_true("make_game_character" in names, "character recipe ships with the plugin")
+	assert_true("make_melee_enemy" in names, "melee-enemy recipe ships with the plugin")
+
+func test_character_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_character").call({"goal": "knight"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("gather_task_context"), "locates the player, never assumes names")
+	assert_true(text.contains("on_name_conflict"), "idempotent node creation")
+	assert_true(text.contains("requirements"), "ends in a requirement contract")
+	assert_true(text.contains("never silently no-op"), "camera-existence lesson baked in")
+	assert_true(text.contains("EXTERNAL reference"), "embedded-copy lesson baked in")
+
+func test_melee_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_melee_enemy").call({"goal": "chaser"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("attacks_landed"), "single-hit evidence field")
+	assert_true(text.contains("stats resources"), "grunt-vs-boss via stats, not code branches")
+	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
+	assert_true(text.contains("0.22s"), "death-window timing lesson")

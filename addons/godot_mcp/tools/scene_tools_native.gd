@@ -95,6 +95,7 @@ func _register_create_scene(server_core: RefCounted) -> void:
 		"properties": {
 			"status": {"type": "string"},
 			"scene_path": {"type": "string"},
+			"open_after_create": {"type": "boolean", "default": true, "description": "Open the new scene as the active edited scene immediately (saves an open_scene call). Default true; false keeps the old write-only behavior."},
 			"root_node_type": {"type": "string"}
 		}
 	}
@@ -178,11 +179,26 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	
 	ChangeJournalScript.record_write_operation("create_scene " + scene_path,
 		scene_path, before_hash, ChangeJournalScript.file_sha256(scene_path), true)
-	return {
+	var response: Dictionary = {
 		"status": "success",
 		"scene_path": scene_path,
 		"root_node_type": root_node_type
 	}
+	if bool(params.get("open_after_create", true)):
+		var opener: EditorInterface = _get_editor_interface()
+		if opener:
+			# 用带确认的打开（注册 + 有限重试 + 连续帧稳定确认）：冷启动期间
+			# 裸 open_scene_from_path 可能被编辑器恢复上次会话布局覆盖（CI
+			# 实测：audit 测试在全新 checkout 上偶发回到 TestScene.tscn）。
+			var opened_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
+				opener, scene_path)
+			response["opened"] = opened_root != null
+			if opened_root == null:
+				response["open_note"] = "open unconfirmed during editor startup; call open_scene next"
+		else:
+			response["opened"] = false
+			response["open_note"] = "editor interface unavailable; call open_scene next"
+	return response
 
 # ============================================================================
 # save_scene - 保存当前场景

@@ -162,6 +162,48 @@ Script paths: {{script_paths_block}}
 """
 
 # ============================================================================
+
+
+const CHARACTER_RECIPE_TEMPLATE: String = """
+You are executing the "Character Visuals + Hit Feedback" recipe against the Godot project through MCP tools. Everything here ships WITH the plugin — no external scripts.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset (supplementary tools are off by design):
+{"tool": "enable_tools", "args": {"workflow_query": "{{goal}}"}}
+
+Step 1 — Locate the existing player (never assume node names):
+{"tool": "gather_task_context", "args": {"goal": "{{goal}} player visual"}}
+scene_objects classifies each scene's nodes by role (body/visual/collision/camera/audio). Bind to a scene whose root is the CharacterBody2D when possible; instanced players bind their instance_of source; per-scene player children bind directly.
+
+Step 2 — Ensure the Skin component (idempotent; re-runs update, never duplicate):
+Create res://scripts/player/character_skin.gd (Sprite2D script: idle/move rows from one sheet, facing flip, pixel_offset pivot alignment, use_block_visual toggle keeps the original ColorRect reachable), then ensure the node with {"tool": "create_node", "args": {"parent_path": "<player>", "node_type": "Sprite2D", "node_name": "Skin", "on_name_conflict": "skip"}} and attach via batch attach_script — it saves an EXTERNAL reference (updates to the .gd reach the game).
+
+Step 3 — Ensure the HitFeedback component (idempotent): a Node2D script with flash_color/flash_seconds, one-shot particles, camera_shake (auto-creates a Camera2D when the scene has none — shake must never silently no-op), and hitstop (Engine.time_scale dip with an ignore_time_scale timer). Wire it into the existing damage entry by apply_change_set: read_script for the hash, replace the block that plays the hit SFX with the same block plus a play_hit_feedback call. No damage entry yet? Attach the component and say so — do not invent wiring.
+
+Step 4 — Sheet (placeholder when the user has none): {"tool": "generate_asset", "args": {"resource_path": "res://art/player_skin.tres", "prompt": "player sheet", "type": "sprite", "provider": "placeholder", "pattern": "sprite_sheet", "width": 120, "height": 60, "frame_columns": 4, "frame_rows": 2, "colors": [{"r": 0.25, "g": 0.55, "b": 0.95}, {"r": 0.98, "g": 0.85, "b": 0.35}]}} — .tres is immediately referenceable. A user-provided PNG needs an import scan first.
+
+Step 5 — Verify with a requirement contract (the delivery checklist is plugin-built). Shape (fill the items with one behavior_check per requirement, built per the facts below — each item boots a FRESH run and must be self-contained):
+{"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "flash", "shake", "particles", "hitstop"], "items": [{"kind": "behavior_check", "requirement": "movement", "label": "r1", "detail": {"scene_path": "<scene>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 600, "assert": {"expression": "<expr>", "displacement_min": 60, "description": "movement held"}}]}}]}} Assert per-effect audit fields, not vibes: flash set then recovered, shake magnitude >= 1 and reset, particles emitted, hitstop engaged and restored, movement displacement. Advance slices to a terminal state and read the checklist: ANY requirement not verified = the overall outcome is incomplete — report it as incomplete.
+"""
+
+const MELEE_ENEMY_RECIPE_TEMPLATE: String = """
+You are executing the "Melee Enemy Behavior" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy behavior combat chase attack"}}
+
+Step 1 — Locate the existing enemy via gather_task_context scene_objects (an Area2D body with a visual child; instanced enemies bind their source scene). Create res://scripts/combat/melee_brain.gd — a Node child "MeleeBrain" on the enemy root: patrol (origin-anchored) -> chase when the player enters detect_range -> windup with a warning-color flash -> one hit per swing (attacks_landed counter, hit only within attack_range on the facing side) -> recover -> cooldown. Expose every knob @export: detect_range, chase_range, chase_speed, attack_range, windup_seconds, hit_damage, hit_knockback, recover_seconds, attack_cooldown. Wire death->drop through apply_change_set on the enemy's take_damage dead-branch: notify the brain, which spawns exactly one coin.
+
+Step 2 — Boss-vs-grunt tuning is DATA, not code: grunt and boss are the same script with different EnemyStats resources (knockback_resistance 0 vs 0.9). "Normal enemies knock back easily, boss resists" = edit the stats resources, never branch the behavior script.
+
+Step 3 — Contract-verify with run_verification_queue (strict, requirements: detect+chase, windup telegraphs, single hit per swing, death stops attacking, drop exactly once; each item boots a FRESH run). Timing facts that bite: death-window reads must land inside the ~0.22s before queue_free; each requirement item boots its own run, so an item that needs a dead enemy must kill it itself; enemy instances without a stats resource silently refuse take_damage — wire stats.
+
+Step 4 — Natural-language tuning maps to @export reads: "attack windup more obvious" -> windup_seconds up; "chase shorter" -> chase_range down. After ANY script change, re-verify the affected requirements only.
+"""
+
+
 # Prompt 注册表
 # ============================================================================
 
@@ -338,6 +380,22 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_change")
 	)
+	_add_prompt(
+		"make_game_character",
+		"Attach visuals, animation and full hit feedback to an EXISTING player through atomic tools (idempotent; requirement-contract verified) — the shipped character recipe.",
+		[
+			{"name": "goal", "description": "What the character should look and feel like, e.g. 'sprite-sheet knight with punchy hit feedback'.", "required": true}
+		],
+		Callable(self, "_get_make_game_character")
+	)
+	_add_prompt(
+		"make_melee_enemy",
+		"Turn an existing enemy into a melee fighter: patrol, detect, chase, telegraphed windup, single-hit swing, recover, death drop — all knobs live-tunable; grunt-vs-boss is stats data.",
+		[
+			{"name": "goal", "description": "The enemy behavior wanted, e.g. 'chaser that telegraphs then strikes once'.", "required": true}
+		],
+		Callable(self, "_get_melee_enemy")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -368,7 +426,11 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"onboard_new_project": ["onboard", "new project", "discover tools",
 		"上手", "新项目", "工具发现"],
 	"make_game_change": ["change set", "impact analysis", "cross-file change", "recoverable change",
-		"变更单", "影响分析", "跨文件", "可恢复"]
+		"变更单", "影响分析", "跨文件", "可恢复"],
+	"make_game_character": ["character visual", "sprite sheet", "hit feedback", "skin", "flash", "camera shake",
+		"角色外观", "精灵图", "受击反馈", "闪白", "震屏", "皮肤"],
+	"make_melee_enemy": ["melee enemy", "enemy behavior", "chase", "windup", "enemy drop",
+		"近战敌人", "敌人行为", "追击", "前摇", "掉落"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -510,6 +572,14 @@ func _get_fix_compile_errors(args: Dictionary) -> Dictionary:
 	else:
 		content = content.replace("{{script_paths_block}}", paths)
 	return _render(content, args, [])
+
+func _get_make_game_character(args: Dictionary) -> Dictionary:
+	return _render(CHARACTER_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_melee_enemy(args: Dictionary) -> Dictionary:
+	return _render(MELEE_ENEMY_RECIPE_TEMPLATE, args, ["goal"])
+
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:
 	var content: String = MAKE_GAME_CHANGE_TEMPLATE

@@ -61,9 +61,9 @@ func _register_create_node(server_core: RefCounted) -> void:
 				},
 				"on_name_conflict": {
 					"type": "string",
-					"description": "Behavior when node_name already exists in parent: 'error' (return error), 'rename' (auto-rename with unique suffix), 'auto' (allow Godot to assign @NodeType@XXXXX name). Default: 'error'.",
+					"description": "Behavior when node_name already exists in parent: 'error' (return error), 'rename' (auto-rename with unique suffix), 'skip' (idempotent: already exists counts as done), 'auto' (allow Godot to assign @NodeType@XXXXX name). Default: 'error'.",
 					"default": "error",
-					"enum": ["error", "rename", "auto"]
+					"enum": ["error", "rename", "skip", "auto"]
 				}
 			},
 			"required": ["parent_path", "node_type", "node_name"]
@@ -148,7 +148,14 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	if parent.has_node(node_name):
 		match on_name_conflict:
 			"error":
-				return {"error": "A node named '" + node_name + "' already exists under " + parent_path + ". Use a different name or set on_name_conflict='rename'."}
+				return {"error": "A node named '" + node_name + "' already exists under " + parent_path + ". Use a different name or set on_name_conflict='rename' or 'skip'."}
+			"skip":
+				# Idempotent recipes: an existing node counts as done.
+				return {
+					"status": "skipped", "node_name": node_name,
+					"node_path": str(parent.get_path()) + "/" + node_name,
+					"reason": "already exists"
+				}
 			"rename":
 				var counter: int = 1
 				var new_name: String = node_name + "_" + str(counter)
@@ -599,6 +606,7 @@ func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 						"type": "object",
 						"properties": {
 							"type": {"type": "string", "enum": ["create", "delete", "rename", "move", "set_property", "attach_script", "connect_signal"]},
+							"on_exists": {"type": "string", "enum": ["error", "skip"], "default": "error", "description": "create only: 'skip' treats an existing node as done (idempotent recipes)."},
 							"parent_path": {"type": "string"},
 							"node_type": {"type": "string"},
 							"node_name": {"type": "string"},
@@ -698,6 +706,7 @@ func _resolve_batch_edit_node(node_path: String, batch_created_nodes: Dictionary
 
 func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, scene_root: Node) -> Dictionary:
 	var prepared_operations: Array = []
+	var skipped_operations: Array = []
 	var batch_created_nodes: Dictionary = {}
 	var batch_pending_scripts: Dictionary = {}
 	var structural_index: int = 0
@@ -778,14 +787,22 @@ func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, s
 				if script_resource == null:
 					return {"error": "Failed to load script: " + script_path}
 				# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源
-				# （有源码但无成员）。现场编译等价脚本且不注册路径：路径资源会被
-				# 仍在进行的扫描反复失效，而内存脚本不受影响；保存场景时源码内联。
+				# （有源码但无成员）。现场编译等价脚本并用 take_over_path 注册为
+				# 该路径的资源：后续对该 .gd 文件的修改经 reload 即可到达场景，
+				# 场景保存引用外部路径而非内嵌源码。旧做法（纯内存脚本）保存时
+				# 源码内嵌成 sub_resource，之后更新外部文件永远到不了游戏——
+				# 实测两次咬人（Attack 节点 / arena 玩家），故在此修复。
 				if not script_resource.can_instantiate():
 					var fresh_script: GDScript = GDScript.new()
 					fresh_script.source_code = FileAccess.get_file_as_string(script_path)
 					if fresh_script.reload() != OK:
 						return {"error": "Script did not compile: " + script_path}
+					fresh_script.take_over_path(script_path)
 					script_resource = fresh_script
+				else:
+					# 已可实例化但无路径（缓存壳）时同样接管路径，确保外部引用。
+					if String(script_resource.resource_path).is_empty():
+						script_resource.take_over_path(script_path)
 				batch_pending_scripts[attach_target] = script_resource
 				prepared_operations.append({
 					"type": "attach_script",
@@ -836,10 +853,11 @@ func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, s
 						"method_name": method_name,
 						"callable": callable
 					})
-	return {"operations": prepared_operations}
+	return {"operations": prepared_operations, "skipped": skipped_operations}
 
 func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dictionary:
 	var prepared_operations: Array = []
+	var skipped_operations: Array = []
 	for operation in operations:
 		if not (operation is Dictionary):
 			return {"error": "Each operation entry must be an object"}
@@ -857,6 +875,12 @@ func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dic
 						parent_node = scene_root
 					else:
 						return {"error": "Parent node not found: " + parent_path}
+				var on_exists: String = str(operation.get("on_exists", "error")).to_lower()
+				if on_exists == "skip" and parent_node.has_node(node_name):
+					skipped_operations.append({
+						"type": "create", "node_path": str(parent_node.get_path()) + "/" + node_name,
+						"reason": "already exists"})
+					continue
 				var type_error: String = _node_type_error(node_type)
 				if not type_error.is_empty():
 					return {"error": type_error}
@@ -946,7 +970,7 @@ func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dic
 	var conflict_error: String = _batch_scene_conflict_error(prepared_operations, scene_root)
 	if not conflict_error.is_empty():
 		return {"error": conflict_error}
-	return {"operations": prepared_operations}
+	return {"operations": prepared_operations, "skipped": skipped_operations}
 
 # Preflight the evolving hierarchy without allocating nodes or mutating the scene.
 # Paths still resolve against the scene as it was at the start of the request.
@@ -1135,6 +1159,12 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 			pending.free()
 		return extended
 	prepared_operations = extended["operations"]
+	var skipped_operations: Array = []
+	for source in [preparation, extended]:
+		var source_skipped: Variant = source.get("skipped", [])
+		if source_skipped is Array:
+			for skipped_value in source_skipped:
+				skipped_operations.append(skipped_value)
 	var conflict: String = _batch_scene_conflict_error(prepared_operations, scene_root)
 	if not conflict.is_empty():
 		for pending in allocated:

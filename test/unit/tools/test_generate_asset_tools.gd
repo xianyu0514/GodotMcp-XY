@@ -258,3 +258,33 @@ func test_land_asset_bytes_writes_valid():
 	var result: Dictionary = _tools._land_asset_bytes(png, _tmp_path("ok.png"), "image")
 	assert_false(result.has("error"), "Valid bytes should land without error")
 	assert_true(FileAccess.file_exists(_tmp_path("ok.png")), "Valid bytes should be written to disk")
+
+# --- sprite_sheet 占位模式 + .tres 立即可引用（角色工作流回流） ----------------
+
+func test_placeholder_sprite_sheet_saves_tres_referenceable():
+	var result: Dictionary = _tools._tool_generate_asset({
+		"resource_path": "res://test/.tmp_asset_ctx/sheet.tres",
+		"prompt": "player character sheet placeholder",
+		"type": "sprite", "provider": "placeholder",
+		"pattern": "sprite_sheet",
+		"width": 120, "height": 60,
+		"frame_columns": 4, "frame_rows": 2,
+		"colors": [{"r": 0.25, "g": 0.55, "b": 0.95}, {"r": 0.98, "g": 0.85, "b": 0.35}],
+	})
+	var detail: String = str(result.get("error", result))
+	assert_eq(String(result.get("status", "")), "success", detail.substr(0, 200))
+	assert_true(ResourceLoader.exists("res://test/.tmp_asset_ctx/sheet.tres"),
+		"a .tres sheet is referenceable immediately (no editor import wait)")
+	var texture: Texture2D = load("res://test/.tmp_asset_ctx/sheet.tres") as Texture2D
+	assert_not_null(texture)
+	if texture:
+		assert_eq(texture.get_width(), 120, "sheet width honored")
+		assert_eq(texture.get_height(), 60, "sheet height honored")
+
+func test_placeholder_sprite_sheet_validates_pattern_only_explicitly():
+	# sprite_sheet 不进 auto 轮换池：占位随机图不该意外变成帧表。
+	var result: Dictionary = _tools._tool_generate_asset({
+		"resource_path": "res://test/.tmp_asset_ctx/auto.png",
+		"prompt": "auto placeholder",
+		"type": "sprite", "provider": "placeholder", "pattern": "auto", "width": 8, "height": 8})
+	assert_eq(String(result.get("status", "")), "success")

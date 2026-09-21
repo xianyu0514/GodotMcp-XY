@@ -1,19 +1,324 @@
-[gd_scene load_steps=3 format=3 uid="uid://sl1ceb0ardslice"]
+[gd_scene format=3]
 
 [ext_resource type="Script" path="res://scripts/player/player.gd" id="1_player"]
+[ext_resource type="Texture2D" path="res://art/knight_32.tres" id="2_g2els"]
 
-[sub_resource type="RectangleShape2D" id="shape_player"]
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_g2els"]
 size = Vector2(30, 30)
 
-[node name="Player" type="CharacterBody2D" groups=["player"]]
-script = ExtResource("1_player")
+[sub_resource type="GDScript" id="GDScript_g2els"]
+script/source = "extends Sprite2D
+## 角色皮肤（包01）：精灵表 idle/move 动画 + 朝向翻转 + 支点对齐。
+## 由 apply_character_visual 接入；参数全部 @export，可随时经 MCP 调整。
 
-[node name="Body" type="ColorRect" parent="."]
+@export var idle_frames: int = 2
+@export var move_frames: int = 4
+@export var animation_fps: int = 8
+@export var use_block_visual: bool = false:
+	set(value):
+		use_block_visual = value
+		_body_visible = value
+		_update_visibility()
+@export var pixel_offset: Vector2 = Vector2.ZERO
+
+var _frame_time: float = 0.0
+var _frame: int = 0
+var _facing_right: bool = true
+var _body_visible: bool = false
+
+@onready var _body: ColorRect = get_parent().get_node_or_null(\"Body\")
+
+
+func _ready() -> void:
+	_update_visibility()
+
+
+func _update_visibility() -> void:
+	visible = not use_block_visual
+	if _body:
+		_body.visible = use_block_visual or not visible
+
+
+func _physics_process(delta: float) -> void:
+	var speed: float = get_parent().velocity.length()
+	var count: int = move_frames if speed > 10.0 else idle_frames
+	var row: int = 0 if speed <= 10.0 else 1
+	var horizontal: float = get_parent().velocity.x
+	if absf(horizontal) > 10.0:
+		_facing_right = horizontal > 0.0
+	_frame_time += delta
+	if _frame_time >= 1.0 / maxf(animation_fps, 1.0):
+		_frame_time = 0.0
+		_frame = (_frame + 1) % maxi(count, 1)
+	flip_h = not _facing_right
+	frame_coords = Vector2i(_frame, row)
+	offset = pixel_offset
+
+
+func is_using_block_visual() -> bool:
+	return use_block_visual
+
+
+func set_block_visual(value: bool) -> bool:
+	use_block_visual = value
+	return use_block_visual
+"
+
+[sub_resource type="GDScript" id="GDScript_qhqgy"]
+script/source = "
+extends Node2D
+## 受击反馈 + 自审计（包①：每项用户要求独立证据）。子效果各自记录真值，
+## 任何一项的通过不再替其他项背书；断言读审计字典，免疫探针往返延迟。
+## 只负责表现：伤害/无敌/音效规则留在 player.gd。
+
+@export var flash_color: Color = Color(4.0, 4.0, 4.0)
+@export var flash_seconds: float = 0.22
+@export var particle_amount: int = 26
+@export var camera_shake_pixels: float = 8.0
+@export var camera_shake_seconds: float = 0.22
+@export var hitstop_seconds: float = 0.06
+@export var hitstop_scale: float = 0.05
+
+## 最近一次受击的自审计：每项子效果的独立真值（回归逐项断言这些键）。
+var last_hit_audit: Dictionary = {}
+
+var _particles: CPUParticles2D
+var _tween: Tween
+var _hitstop_active: bool = false
+
+
+func _ready() -> void:
+	_particles = CPUParticles2D.new()
+	_particles.one_shot = true
+	_particles.emitting = false
+	_particles.amount = particle_amount
+	_particles.lifetime = 0.45
+	_particles.direction = Vector2(0, -1)
+	_particles.spread = 180.0
+	_particles.initial_velocity_min = 90.0
+	_particles.initial_velocity_max = 220.0
+	_particles.gravity = Vector2(0, 320)
+	_particles.scale_amount_min = 0.8
+	_particles.scale_amount_max = 2.2
+	_particles.color = Color(1.0, 0.78, 0.3)
+	add_child(_particles)
+	set_physics_process(false)
+
+
+func _reset_audit() -> void:
+	last_hit_audit = {
+		\"flash_set\": false, \"flash_recovered\": false,
+		\"hitstop_engaged\": false, \"hitstop_restored\": false,
+		\"hitstop_time_scale_seen\": 1.0, \"hitstop_restored_to\": 1.0,
+		\"shake_magnitude\": 0.0, \"shake_reset\": false,
+		\"camera_was_created\": false, \"camera_existed\": false,
+		\"particles_emitted\": false, \"particle_amount\": 0,
+	}
+
+
+## hitstop：引擎时间短暂拉慢（顿帧）。计时器 ignore_time_scale 保证恢复准时。
+func _do_hitstop() -> void:
+	if hitstop_seconds <= 0.0 or _hitstop_active:
+		return
+	_hitstop_active = true
+	var before: float = Engine.time_scale
+	Engine.time_scale = maxf(hitstop_scale, 0.01)
+	last_hit_audit[\"hitstop_engaged\"] = true
+	last_hit_audit[\"hitstop_time_scale_seen\"] = Engine.time_scale
+	await get_tree().create_timer(hitstop_seconds, true, false, true).timeout
+	Engine.time_scale = before
+	last_hit_audit[\"hitstop_restored\"] = true
+	last_hit_audit[\"hitstop_restored_to\"] = Engine.time_scale
+	_hitstop_active = false
+
+
+func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
+	_reset_audit()
+	if _tween:
+		_tween.kill()
+	var target: CanvasItem = get_parent().get_node_or_null(\"Skin\") as CanvasItem
+	if target == null:
+		target = get_parent() as CanvasItem
+	target.modulate = flash_color
+	last_hit_audit[\"flash_set\"] = true
+	_tween = create_tween()
+	_tween.tween_property(target, \"modulate\", Color(1, 1, 1, 1), maxf(flash_seconds, 0.01))
+	_tween.finished.connect(func() -> void:
+		last_hit_audit[\"flash_recovered\"] = true)
+	_particles.amount = particle_amount
+	_particles.restart()
+	last_hit_audit[\"particles_emitted\"] = true
+	last_hit_audit[\"particle_amount\"] = particle_amount
+	_do_hitstop()
+	# 真随机镜头震：多步随机偏移线性衰减回原位。无相机则自动补一个挂玩家上
+	# ——震屏绝不静默跳过（实测教训：slice_b 地图原本没有 Camera2D）。
+	if camera_shake_pixels > 0.0:
+		var camera: Camera2D = get_viewport().get_camera_2d()
+		last_hit_audit[\"camera_existed\"] = camera != null
+		if camera == null:
+			camera = Camera2D.new()
+			camera.position_smoothing_enabled = false
+			get_parent().add_child(camera)
+			last_hit_audit[\"camera_was_created\"] = true
+		var steps: int = maxi(int(camera_shake_seconds / 0.033), 3)
+		var original_offset: Vector2 = camera.offset
+		for i in range(steps):
+			var falloff: float = 1.0 - float(i) / float(steps)
+			camera.offset = original_offset + Vector2(
+				randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * camera_shake_pixels * falloff
+			last_hit_audit[\"shake_magnitude\"] = maxf(
+				float(last_hit_audit[\"shake_magnitude\"]), camera.offset.length())
+			await get_tree().process_frame
+			await get_tree().process_frame
+		camera.offset = original_offset
+		last_hit_audit[\"shake_reset\"] = camera.offset == original_offset
+
+
+func is_flash_active() -> bool:
+	var target: CanvasItem = get_parent().get_node_or_null(\"Skin\") as CanvasItem
+	if target == null:
+		target = get_parent() as CanvasItem
+	return target.modulate != Color(1, 1, 1, 1)
+"
+
+[sub_resource type="GDScript" id="GDScript_dqkch"]
+script/source = "extends Node2D
+## 玩家主动攻击（包03）：起手 -> 生效 -> 恢复 -> 冷却。每次挥击对每个
+## 敌人恰好命中一次（hit set）；判定为面向侧的 reach 范围盒。参数全部
+## @export，可随时经 MCP 调整（手感方案的组成部分）。
+
+@export var startup_seconds: float = 0.08
+@export var active_seconds: float = 0.12
+@export var recovery_seconds: float = 0.18
+@export var cooldown_seconds: float = 0.45
+@export var damage: int = 15
+@export var reach: float = 46.0
+@export var hit_height: float = 34.0
+@export var attack_action: String = \"attack\"
+
+var _phase: String = \"idle\"
+var _phase_left: float = 0.0
+var _cooldown_left: float = 0.0
+var swing_count: int = 0
+var last_swing_started_ms: int = 0
+## 每次挥击的开始毫秒日志（延迟免疫测量：按住攻击读取相邻差值）。
+var swing_log_ms: Array = []
+var _hit_this_swing: Array = []
+var _slash: ColorRect
+var _facing_right: bool = true
+
+
+func _ready() -> void:
+	_slash = ColorRect.new()
+	_slash.name = \"Slash\"
+	_slash.color = Color(1.0, 0.75, 0.2, 0.65)
+	_slash.visible = false
+	add_child(_slash)
+
+
+func is_attacking() -> bool:
+	return _phase != \"idle\"
+
+
+func phase() -> String:
+	return _phase
+
+
+func cooldown_left() -> float:
+	return _cooldown_left
+
+
+## 供延迟免疫测量：当前引擎毫秒（表达式无法直接调 Time 单例）。
+func now_ms() -> int:
+	return Time.get_ticks_msec()
+
+
+func _physics_process(delta: float) -> void:
+	var player: Node = get_parent()
+	var horizontal: float = player.velocity.x
+	if absf(horizontal) > 10.0:
+		_facing_right = horizontal > 0.0
+	if _cooldown_left > 0.0:
+		_cooldown_left = maxf(0.0, _cooldown_left - delta)
+	if _phase == \"idle\":
+		if _cooldown_left <= 0.0 and Input.is_action_just_pressed(attack_action):
+			_phase = \"startup\"
+			_phase_left = startup_seconds
+			_hit_this_swing = []
+			swing_count += 1
+			last_swing_started_ms = Time.get_ticks_msec()
+			swing_log_ms.append(last_swing_started_ms)
+			_slash.visible = true
+			_slash.color = Color(1.0, 0.9, 0.5, 0.35)
+	_update_splash_box()
+	if _phase == \"idle\":
+		return
+	_phase_left -= delta
+	if _phase == \"startup\" and _phase_left <= 0.0:
+		_phase = \"active\"
+		_phase_left = active_seconds
+		_slash.color = Color(1.0, 0.62, 0.15, 0.8)
+		_apply_hits()
+	elif _phase == \"active\" and _phase_left <= 0.0:
+		_phase = \"recovery\"
+		_phase_left = recovery_seconds
+		_slash.visible = false
+	elif _phase == \"recovery\" and _phase_left <= 0.0:
+		_phase = \"idle\"
+		_cooldown_left = cooldown_seconds
+
+
+func _update_splash_box() -> void:
+	var side: float = 1.0 if _facing_right else -1.0
+	_slash.size = Vector2(reach, hit_height)
+	_slash.position = Vector2(16.0 if _facing_right else -16.0 - reach, -hit_height / 2.0)
+	_slash.scale.x = side if side < 0.0 else 1.0
+
+
+func _apply_hits() -> void:
+	var player: Node2D = get_parent()
+	for enemy in get_tree().get_nodes_in_group(\"enemies\"):
+		if not enemy is Node2D or not enemy.has_method(\"take_damage\"):
+			continue
+		if enemy in _hit_this_swing or not is_instance_valid(enemy):
+			continue
+		var offset: Vector2 = enemy.global_position - player.global_position
+		if absf(offset.y) > hit_height:
+			continue
+		if absf(offset.x) > reach + 16.0:
+			continue
+		if signf(offset.x) != (1.0 if _facing_right else -1.0) and absf(offset.x) > 8.0:
+			continue
+		_hit_this_swing.append(enemy)
+		var knockback: Vector2 = Vector2((220.0 if _facing_right else -220.0), 0.0)
+		enemy.take_damage(damage, knockback)
+"
+
+[node name="Player" type="CharacterBody2D" unique_id=1178283189 groups=["player"]]
+script = ExtResource("1_player")
+move_speed = 300.0
+acceleration = 9000.0
+deceleration = 11000.0
+
+[node name="Body" type="ColorRect" parent="." unique_id=503345726]
 offset_left = -15.0
 offset_top = -15.0
 offset_right = 15.0
 offset_bottom = 15.0
 color = Color(0.25, 0.55, 0.95, 1)
 
-[node name="Collision" type="CollisionShape2D" parent="."]
-shape = SubResource("shape_player")
+[node name="Collision" type="CollisionShape2D" parent="." unique_id=1293498476]
+shape = SubResource("RectangleShape2D_g2els")
+
+[node name="Skin" type="Sprite2D" parent="." unique_id=1627700447]
+texture = ExtResource("2_g2els")
+hframes = 4
+vframes = 2
+script = SubResource("GDScript_g2els")
+
+[node name="HitFeedback" type="Node2D" parent="." unique_id=560967588]
+script = SubResource("GDScript_qhqgy")
+
+[node name="Attack" type="Node2D" parent="." unique_id=167480876]
+script = SubResource("GDScript_dqkch")
+cooldown_seconds = 0.55

@@ -256,6 +256,22 @@ func _register_get_project_info(server_core: RefCounted) -> void:
 						  output_schema, annotations,
 						  "core", "Project")
 
+## 在场景文件头扫描 uid:// 引用（ResourceUID 冷缓存时的兜底路径）。
+static func _resolve_scene_uid_from_files(scene_uid: String) -> String:
+	if not scene_uid.begins_with("uid://"):
+		return ""
+	var scene_paths: Array[String] = []
+	_collect_resources("res://", [".tscn", ".scn"], scene_paths, false, false)
+	for scene_path in scene_paths:
+		var file: FileAccess = FileAccess.open(scene_path, FileAccess.READ)
+		if file == null:
+			continue
+		var header: String = file.get_line()
+		file.close()
+		if header.contains("uid=\"" + scene_uid + "\""):
+			return scene_path
+	return ""
+
 func _tool_get_project_info(params: Dictionary) -> Dictionary:
 	var project_name: String = ProjectSettings.get_setting("application/config/name", "")
 	var project_version: String = ProjectSettings.get_setting("application/config/version", "")
@@ -264,8 +280,15 @@ func _tool_get_project_info(params: Dictionary) -> Dictionary:
 	
 	var main_scene: String = main_scene_uid
 	if main_scene_uid.begins_with("uid://"):
+		var resolved_scene: String = ""
 		if ClassDB.class_exists("ResourceUID"):
-			main_scene = ResourceUID.uid_to_path(main_scene_uid)
+			resolved_scene = ResourceUID.uid_to_path(main_scene_uid)
+		if resolved_scene.is_empty():
+			# 冷 UID 缓存兜底（CI 实测：全新 checkout 的首次 project_info 与
+			# 初始导入竞争，uid_to_path 返回空 -> "no main scene" 假失败）：
+			# 直接在 .tscn/.scn 文件头扫描该 uid 属性。
+			resolved_scene = _resolve_scene_uid_from_files(main_scene_uid)
+		main_scene = resolved_scene
 	
 	var project_path: String = ProjectSettings.globalize_path("res://")
 	var godot_version: Dictionary = Engine.get_version_info()

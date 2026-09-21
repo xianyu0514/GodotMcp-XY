@@ -116,6 +116,7 @@ func _register_gather_task_context(server_core: RefCounted) -> void:
 			"keywords": {"type": "object", "description": "ascii terms + zh->en mappings actually used"},
 			"entry_scripts": {"type": "array", "items": {"type": "object"}},
 			"referencing_scenes": {"type": "array", "items": {"type": "object"}},
+			"scene_objects": {"type": "array", "items": {"type": "object"}},
 			"input_actions": {"type": "array", "items": {"type": "object"}},
 			"related_resources": {"type": "array", "items": {"type": "object"}},
 			"affected_tests": {"type": "array", "items": {"type": "object"}},
@@ -164,6 +165,7 @@ func _tool_gather_task_context(params: Dictionary) -> Dictionary:
 			"keywords": keywords,
 			"entry_scripts": [],
 			"referencing_scenes": [],
+			"scene_objects": [],
 			"input_actions": [],
 			"related_resources": [],
 			"affected_tests": [],
@@ -292,6 +294,7 @@ func _tool_gather_task_context(params: Dictionary) -> Dictionary:
 		"keywords": keywords,
 		"entry_scripts": entry_scripts,
 		"referencing_scenes": referencing_scenes,
+		"scene_objects": _classify_scene_objects(referencing_scenes, max_items),
 		"input_actions": input_actions,
 		"related_resources": related_resources,
 		"affected_tests": affected_tests,
@@ -372,6 +375,172 @@ static func _index_symbols(content: String) -> Dictionary:
 # 场景引用 / 资源引用 / 测试影响
 # ============================================================================
 
+## 按角色分类引用场景中的节点（配方绑定需要的"定位已有对象"）：
+## 身体（CharacterBody2D/StaticBody2D/Area2D/RigidBody2D）、视觉
+## （Sprite2D/AnimatedSprite2D/ColorRect/...）、碰撞（CollisionShape2D/
+## CollisionPolygon2D）、相机（Camera2D）、音频（AudioStreamPlayer*）。
+## 解析 .tscn 的 [node name=... type=...] 行 —— 确定性、只读、可复现。
+static func _classify_scene_objects(referencing_scenes: Array, max_items: int) -> Array:
+	var classified: Array = []
+	for scene_value in referencing_scenes:
+		var scene: Dictionary = scene_value if scene_value is Dictionary else {}
+		var path: String = String(scene.get("path", ""))
+		if path.is_empty() or not FileAccess.file_exists(path):
+			continue
+		var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+		if file == null:
+			continue
+		var text: String = file.get_as_text()
+		file.close()
+		var roles: Dictionary = {"body": [], "visual": [], "collision": [], "camera": [], "audio": []}
+		var root_type: String = ""
+		var node_count: int = 0
+		var ext_paths: Dictionary = _ext_resource_paths(text)
+		for line in text.split("\n"):
+			if not line.begins_with("[node"):
+				continue
+			var node_name: String = _attr(line, "name")
+			if node_name.is_empty():
+				continue
+			node_count += 1
+			var node_type: String = _attr(line, "type")
+			var parent: String = _attr(line, "parent")
+			if parent.is_empty() and root_type.is_empty():
+				root_type = node_type
+			# 实例化节点没有 type=：类型来自被实例场景的根节点。
+			if node_type.is_empty():
+				var instance_of: String = _instance_target(line, ext_paths)
+				if not instance_of.is_empty():
+					var inst_root: String = _scene_root_type(instance_of)
+					if not inst_root.is_empty():
+						node_type = inst_root
+						if _scene_role(inst_root) == "body":
+							# body 实例：visual 候选取被实例场景里的第一个视觉子节点。
+							var inst_visual: Array = _scene_first_visual(instance_of)
+							if not inst_visual.is_empty():
+								roles["body"].append({
+									"name": node_name, "type": inst_root, "path": parent,
+									"instance_of": instance_of, "visual_node": inst_visual[0]})
+								continue
+			if node_type in ["CharacterBody2D", "StaticBody2D", "RigidBody2D", "Area2D"]:
+				roles["body"].append({"name": node_name, "type": node_type, "path": parent})
+			elif node_type in ["Sprite2D", "AnimatedSprite2D", "ColorRect", "Polygon2D", "TextureRect", "Label"]:
+				roles["visual"].append({"name": node_name, "type": node_type, "path": parent})
+			elif node_type in ["CollisionShape2D", "CollisionPolygon2D"]:
+				roles["collision"].append({"name": node_name, "type": node_type, "path": parent})
+			elif node_type in ["Camera2D"]:
+				roles["camera"].append({"name": node_name, "type": node_type, "path": parent})
+			elif node_type.begins_with("AudioStreamPlayer"):
+				roles["audio"].append({"name": node_name, "type": node_type, "path": parent})
+			if node_count >= 200:
+				break
+		classified.append({
+			"scene": path,
+			"root_type": root_type,
+			"node_count": node_count,
+			"roles": roles,
+		})
+		if classified.size() >= max_items:
+			break
+	return classified
+
+
+static func _attr(line: String, key: String) -> String:
+	var needle: String = key + "=\""
+	var at: int = line.find(needle)
+	if at < 0:
+		return ""
+	var start: int = at + needle.length()
+	var end_quote: int = line.find("\"", start)
+	if end_quote < 0:
+		return ""
+	return line.substr(start, end_quote - start)
+
+static func _instance_id(line: String) -> String:
+	var marker: String = "instance=ExtResource(\""
+	var at: int = line.find(marker)
+	if at < 0:
+		return ""
+	var start: int = at + marker.length()
+	var end_quote: int = line.find("\"", start)
+	if end_quote < 0:
+		return ""
+	return line.substr(start, end_quote - start)
+
+## [ext_resource ...] 的 id -> path 映射（属性顺序无关，纯字符串提取）。
+static func _ext_resource_paths(text: String) -> Dictionary:
+	var mapping: Dictionary = {}
+	for line in text.split("
+"):
+		if not line.begins_with("[ext_resource"):
+			continue
+		var id: String = _attr(line, "id")
+		var path: String = _attr(line, "path")
+		if not id.is_empty() and not path.is_empty():
+			mapping[id] = path
+	return mapping
+
+static func _instance_target(node_line: String, ext_paths: Dictionary) -> String:
+	var id: String = _instance_id(node_line)
+	if id.is_empty():
+		return ""
+	return String(ext_paths.get(id, ""))
+
+## 读取场景根节点类型（一层，不递归）。
+static func _scene_root_type(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var text: String = file.get_as_text()
+	file.close()
+	for line in text.split("
+"):
+		if _attr(line, "parent").is_empty() and not _attr(line, "name").is_empty():
+			return _attr(line, "type")
+	return ""
+
+## 场景内第一个视觉子节点的名字（body 实例的 visual 候选）。
+static func _scene_first_visual(path: String) -> Array:
+	if not FileAccess.file_exists(path):
+		return []
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return []
+	var text: String = file.get_as_text()
+	file.close()
+	for line in text.split("
+"):
+		if _scene_role(_attr(line, "type")) == "visual":
+			return [_attr(line, "name")]
+	return []
+
+static func _scene_role(node_type: String) -> String:
+	if node_type in ["CharacterBody2D", "StaticBody2D", "RigidBody2D", "Area2D"]:
+		return "body"
+	if node_type in ["Sprite2D", "AnimatedSprite2D", "ColorRect", "Polygon2D", "TextureRect", "Label"]:
+		return "visual"
+	if node_type in ["CollisionShape2D", "CollisionPolygon2D"]:
+		return "collision"
+	if node_type == "Camera2D":
+		return "camera"
+	if node_type.begins_with("AudioStreamPlayer"):
+		return "audio"
+	return ""
+
+
+## 场景文本是否直接定义（而非实例化）给定类型的节点。
+static func _scene_defines_node_of_type(content: String, types: Array) -> bool:
+	for line in content.split("
+"):
+		if not line.begins_with("[node"):
+			continue
+		if _attr(line, "type") in types:
+			return true
+	return false
+
+
 static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Array,
 		max_items: int) -> Array:
 	if entry_paths.is_empty():
@@ -408,7 +577,14 @@ static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Ar
 			"path": String(scene_path),
 			"references_scripts": referenced,
 			"match": "exact_path_or_uid",
+			"is_source_scene": _scene_defines_node_of_type(content,
+				["CharacterBody2D", "StaticBody2D", "Area2D", "RigidBody2D"]),
 		})
+	# 源场景（直接定义身体类型节点）排在实例场景（地图）之前——auto-locate
+	# 与配方的对象绑定因此优先命中被定义处而非被实例处（实测：player.tscn
+	# 曾排在三张地图之后）。
+	matches.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return bool(a.get("is_source_scene", false)) and not bool(b.get("is_source_scene", false)))
 	return matches
 
 static func _preload_paths(content: String) -> Array:

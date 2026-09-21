@@ -1,0 +1,28 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/player/player.gd" id="1_player"]
+[ext_resource type="PackedScene" path="res://scenes/enemy.tscn" id="2_enemy"]
+[ext_resource type="Resource" path="res://data/grunt_stats.tres" id="3_stats"]
+
+[sub_resource type="RectangleShape2D" id="shape_p"]
+size = Vector2(30, 30)
+
+[node name="melee_arena" type="Node2D"]
+
+[node name="Player" type="CharacterBody2D" parent="." groups=["player"]]
+position = Vector2(200, 288)
+script = ExtResource("1_player")
+
+[node name="Visual" type="ColorRect" parent="Player"]
+offset_left = -15.0
+offset_top = -15.0
+offset_right = 15.0
+offset_bottom = 15.0
+color = Color(0.35, 0.75, 0.95, 1)
+
+[node name="Shape" type="CollisionShape2D" parent="Player"]
+shape = SubResource("shape_p")
+
+[node name="Grunt" parent="." instance=ExtResource("2_enemy")]
+position = Vector2(80, 288)
+stats = ExtResource("3_stats")

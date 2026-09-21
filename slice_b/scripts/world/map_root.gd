@@ -39,6 +39,10 @@ func _ready() -> void:
 	else:
 		player.global_position = spawn.resolve_spawn()
 
+	# 3.5) 复活点在摆放之后捕获：Player._ready 先于本函数执行，彼时位置
+	# 还是实例默认 (0,0)（墙内）——死亡会传送进墙永远卡死（实测）。
+	if "_respawn_at" in player:
+		player._respawn_at = player.global_position
 	# 4) 进入即落一次盘（访问 + 位置基线 + 当前战斗态快照）。
 	GameSave.record_player_position(player.global_position)
 	GameSave.record_combat_state(int(player.hp) if "hp" in player else 100, GameSave.coins)

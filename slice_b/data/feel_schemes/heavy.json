@@ -1,0 +1,14 @@
+{
+  "Player": {
+    "move_speed": 200.0,
+    "acceleration": 1100.0,
+    "deceleration": 1400.0
+  },
+  "Player/HitFeedback": {
+    "flash_seconds": 0.34,
+    "camera_shake_pixels": 9.0
+  },
+  "Player/Attack": {
+    "cooldown_seconds": 0.62
+  }
+}

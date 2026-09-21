@@ -80,7 +80,7 @@ func start_dash() -> void:
 """.strip_edges() + "\n")
 	_write(TEMP_DIR + "/scripts/enemy_patrol.gd", "extends Node2D\nvar patrol_speed := 50.0\n")
 	_write(TEMP_DIR + "/scenes/player_scene.tscn",
-		'[gd_scene format=2]\n[ext_resource type="Script" path="res://%s/scripts/player.gd" id="1"]\n[node name="Player" type="CharacterBody2D"]\n' % TEMP_DIR.trim_prefix("res://"))
+		'[gd_scene format=2]\n[ext_resource type="Script" path="res://%s/scripts/player.gd" id="1"]\n[node name="Player" type="CharacterBody2D"]\n[node name="Body" type="ColorRect" parent="."]\n[node name="Collision" type="CollisionShape2D" parent="."]\n[node name="Cam" type="Camera2D" parent="."]\n[node name="Sfx" type="AudioStreamPlayer" parent="."]\n' % TEMP_DIR.trim_prefix("res://"))
 	_write("res://test/.tmp_ctx_tests/test_player_dash.gd", "extends GutTest\n# references player.gd dash behaviour\n")
 
 func test_gather_assembles_all_buckets_with_provenance() -> void:
@@ -99,6 +99,16 @@ func test_gather_assembles_all_buckets_with_provenance() -> void:
 	assert_has(entry["symbol_matches"], "start_dash")
 	assert_has(entry["symbol_matches"], "dash_started")
 	assert_false(str(entry["content_hash"]).is_empty(), "entry carries a content hash for read_script pinning")
+
+	var scene_objects: Array = result.get("scene_objects", [])
+	assert_eq(scene_objects.size(), 1, "the referenced scene is classified")
+	var roles: Dictionary = scene_objects[0].get("roles", {})
+	assert_eq(String(scene_objects[0].get("root_type", "")), "CharacterBody2D", "root type reported")
+	assert_eq((roles.get("body", []) as Array).size(), 1, "Player classified as body")
+	assert_eq((roles.get("visual", []) as Array).size(), 1, "ColorRect Body classified as visual")
+	assert_eq((roles.get("collision", []) as Array).size(), 1, "CollisionShape2D classified")
+	assert_eq((roles.get("camera", []) as Array).size(), 1, "Camera2D classified")
+	assert_eq((roles.get("audio", []) as Array).size(), 1, "AudioStreamPlayer classified")
 
 	var scenes: Array = result["referencing_scenes"]
 	assert_eq(scenes.size(), 1, "player_scene.tscn references player.gd")

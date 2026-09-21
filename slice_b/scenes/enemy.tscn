@@ -1,20 +1,23 @@
-[gd_scene load_steps=3 format=3 uid="uid://slicebenemy000001"]
+[gd_scene format=3]
 
 [ext_resource type="Script" path="res://scripts/combat/enemy.gd" id="1_enemy"]
+[ext_resource type="Script" path="res://scripts/combat/melee_brain.gd" id="2_md0e3"]
 
 [sub_resource type="RectangleShape2D" id="shape_enemy"]
 size = Vector2(34, 34)
 
-[node name="Enemy" type="Area2D"]
+[node name="Enemy" type="Area2D" unique_id=1403481014]
 script = ExtResource("1_enemy")
-knockback_impulse = 220.0
 
-[node name="Body" type="ColorRect" parent="."]
+[node name="Body" type="ColorRect" parent="." unique_id=1847651089]
 offset_left = -17.0
 offset_top = -17.0
 offset_right = 17.0
 offset_bottom = 17.0
 color = Color(0.85, 0.25, 0.2, 1)
 
-[node name="EnemyShape" type="CollisionShape2D" parent="."]
+[node name="EnemyShape" type="CollisionShape2D" parent="." unique_id=414477925]
 shape = SubResource("shape_enemy")
+
+[node name="MeleeBrain" type="Node" parent="." unique_id=215203548]
+script = ExtResource("2_md0e3")

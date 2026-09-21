@@ -7,6 +7,7 @@ extends Resource
 
 @export var move_speed: float = 120.0
 @export var contact_damage: int = 10
+@export var max_hp: int = 30
 ## 击退抗性 0..1：0 = 完全被击退，1 = 免疫。普通敌人默认 0（剧本中被
 ## 用户要求提高的目标属性），Boss 特例 0.9。
 @export_range(0.0, 1.0) var knockback_resistance: float = 0.0
