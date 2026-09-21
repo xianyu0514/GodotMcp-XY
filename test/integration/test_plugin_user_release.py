@@ -39,6 +39,18 @@ def check(label, ok, detail=""):
     print(f"  [{'OK' if ok else 'FAIL':4}] {label}" + (f": {detail}" if detail else ""))
     return ok
 
+# Build the plugin-only user project fresh (CI has no residue): a clean
+# project with ONLY addons/godot_mcp copied in — nothing else.
+import shutil
+if USER_PROJ.exists():
+    shutil.rmtree(USER_PROJ, ignore_errors=True)
+(USER_PROJ / "addons").mkdir(parents=True)
+shutil.copytree(REPO / "addons" / "godot_mcp", USER_PROJ / "addons" / "godot_mcp")
+(USER_PROJ / "project.godot").write_text(
+    "config_version=5\n\n[application]\n\nconfig_name=\"PluginUserSim\"\n\n"
+    "[editor_plugins]\n\nenabled=PackedStringArray(\"res://addons/godot_mcp/plugin.cfg\")\n",
+    encoding="utf-8")
+
 proc = subprocess.Popen([GODOT, "--editor", "--headless", "--path", str(USER_PROJ),
     "--", "--mcp-server", f"--mcp-port={port}"],
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -293,3 +305,4 @@ finally:
         proc.wait(timeout=15)
     except subprocess.TimeoutExpired:
         proc.kill()
+    shutil.rmtree(USER_PROJ, ignore_errors=True)
