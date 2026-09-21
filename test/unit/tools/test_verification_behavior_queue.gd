@@ -141,3 +141,29 @@ func test_queue_summary_carries_evidence_summary() -> void:
 	assert_eq(int(result["items"][0].get("assertions_total", -1)), 2)
 	assert_eq(String(result["items"][0].get("first_failure", "")), "the failing one",
 		"first failure description travels with the response")
+
+func test_strict_queue_rejects_assertionless_behavior_check() -> void:
+	# 包②：零断言的 behavior_check 是冒烟结果，不能进严格队列充当完成证据。
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "smoke cannot pass strict",
+		"strict": True,
+		"items": [{"kind": "behavior_check", "label": "no assertions",
+			"detail": {"steps": [{"action": "move_right", "pressed": True}]}}]})
+	assert_has(result, "error", "strict create must refuse assertion-less items")
+	assert_true(str(result["error"]).contains("no assertions"),
+		"error must name the smoke-vs-strict rule")
+
+func test_item_summaries_carry_verification_labels() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": True, "evidence": {
+			"evidence_level": "native_run",
+			"assertions_passed": 2, "assertions_total": 2,
+			"assertions": [{"description": "a", "passed": true},
+				{"description": "b", "passed": true}]}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "labels",
+		"items": [{"kind": "behavior_check", "label": "l",
+			"detail": {"steps": [{"wait_ms": 50,
+				"assert": {"expression": "1", "expected": 1}}]}}]})
+	assert_eq(String(result["items"][0].get("verification", "")), "verified",
+		"native run with assertions labels as verified")

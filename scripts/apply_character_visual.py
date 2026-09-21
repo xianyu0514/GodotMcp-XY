@@ -117,9 +117,9 @@ func set_block_visual(value: bool) -> bool:
 
 FEEDBACK_SCRIPT = '''
 extends Node2D
-## 受击反馈（包02 + 打击感版）：闪白自恢复 + hitstop 顿帧 + 真随机镜头震
-## + 一次性粒子。只负责表现：伤害/无敌/音效规则留在 player.gd。
-## 参数全部 @export，可随时经 MCP 调整。
+## 受击反馈 + 自审计（包①：每项用户要求独立证据）。子效果各自记录真值，
+## 任何一项的通过不再替其他项背书；断言读审计字典，免疫探针往返延迟。
+## 只负责表现：伤害/无敌/音效规则留在 player.gd。
 
 @export var flash_color: Color = Color(4.0, 4.0, 4.0)
 @export var flash_seconds: float = 0.22
@@ -129,12 +129,12 @@ extends Node2D
 @export var hitstop_seconds: float = 0.06
 @export var hitstop_scale: float = 0.05
 
+## 最近一次受击的自审计：每项子效果的独立真值（回归逐项断言这些键）。
+var last_hit_audit: Dictionary = {}
+
 var _particles: CPUParticles2D
 var _tween: Tween
 var _hitstop_active: bool = false
-
-## 最近一次震动的最大偏移幅度（像素）——供回归断言"震屏真的发生了"。
-var last_shake_magnitude: float = 0.0
 
 
 func _ready() -> void:
@@ -155,52 +155,73 @@ func _ready() -> void:
 	set_physics_process(false)
 
 
-## hitstop：把引擎时间 briefly 拉到极慢（顿帧）—— 打击感的核心一招。
-## 计时器 ignore_time_scale，保证低速世界里的恢复准时发生。
+func _reset_audit() -> void:
+	last_hit_audit = {
+		"flash_set": false, "flash_recovered": false,
+		"hitstop_engaged": false, "hitstop_restored": false,
+		"hitstop_time_scale_seen": 1.0, "hitstop_restored_to": 1.0,
+		"shake_magnitude": 0.0, "shake_reset": false,
+		"camera_was_created": false, "camera_existed": false,
+		"particles_emitted": false, "particle_amount": 0,
+	}
+
+
+## hitstop：引擎时间短暂拉慢（顿帧）。计时器 ignore_time_scale 保证恢复准时。
 func _do_hitstop() -> void:
 	if hitstop_seconds <= 0.0 or _hitstop_active:
 		return
 	_hitstop_active = true
+	var before: float = Engine.time_scale
 	Engine.time_scale = maxf(hitstop_scale, 0.01)
+	last_hit_audit["hitstop_engaged"] = true
+	last_hit_audit["hitstop_time_scale_seen"] = Engine.time_scale
 	await get_tree().create_timer(hitstop_seconds, true, false, true).timeout
-	Engine.time_scale = 1.0
+	Engine.time_scale = before
+	last_hit_audit["hitstop_restored"] = true
+	last_hit_audit["hitstop_restored_to"] = Engine.time_scale
 	_hitstop_active = false
 
 
 func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
+	_reset_audit()
 	if _tween:
 		_tween.kill()
 	var target: CanvasItem = get_parent().get_node_or_null("Skin") as CanvasItem
 	if target == null:
 		target = get_parent() as CanvasItem
 	target.modulate = flash_color
+	last_hit_audit["flash_set"] = true
 	_tween = create_tween()
 	_tween.tween_property(target, "modulate", Color(1, 1, 1, 1), maxf(flash_seconds, 0.01))
+	_tween.finished.connect(func() -> void:
+		last_hit_audit["flash_recovered"] = true)
 	_particles.amount = particle_amount
 	_particles.restart()
+	last_hit_audit["particles_emitted"] = true
+	last_hit_audit["particle_amount"] = particle_amount
 	_do_hitstop()
-	# 真随机镜头震：多步随机偏移线性衰减到原位（连续受击 kill 重启不累积）。
-	# 无相机的场景自动补一个挂在玩家上——震屏永远真实发生，绝不静默跳过
-	#（实测教训：slice_b 地图没有 Camera2D，旧代码 if camera 直接全程无效）。
+	# 真随机镜头震：多步随机偏移线性衰减回原位。无相机则自动补一个挂玩家上
+	# ——震屏绝不静默跳过（实测教训：slice_b 地图原本没有 Camera2D）。
 	if camera_shake_pixels > 0.0:
 		var camera: Camera2D = get_viewport().get_camera_2d()
+		last_hit_audit["camera_existed"] = camera != null
 		if camera == null:
 			camera = Camera2D.new()
 			camera.position_smoothing_enabled = false
 			get_parent().add_child(camera)
-		if camera:
-			var steps: int = maxi(int(camera_shake_seconds / 0.033), 3)
-			var original_offset: Vector2 = camera.offset
-			for i in range(steps):
-				var falloff: float = 1.0 - float(i) / float(steps)
-				camera.offset = original_offset + Vector2(
-					randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * camera_shake_pixels * falloff
-				# 延迟免疫证据：记录本次震动的最大幅度（探针往返 ~100ms 总能
-				# 错过 0.2s 的采样窗口；断言读这个值，不再赌时机）。
-				last_shake_magnitude = maxf(last_shake_magnitude, camera.offset.length())
-				await get_tree().process_frame
-				await get_tree().process_frame
-			camera.offset = original_offset
+			last_hit_audit["camera_was_created"] = true
+		var steps: int = maxi(int(camera_shake_seconds / 0.033), 3)
+		var original_offset: Vector2 = camera.offset
+		for i in range(steps):
+			var falloff: float = 1.0 - float(i) / float(steps)
+			camera.offset = original_offset + Vector2(
+				randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * camera_shake_pixels * falloff
+			last_hit_audit["shake_magnitude"] = maxf(
+				float(last_hit_audit["shake_magnitude"]), camera.offset.length())
+			await get_tree().process_frame
+			await get_tree().process_frame
+		camera.offset = original_offset
+		last_hit_audit["shake_reset"] = camera.offset == original_offset
 
 
 func is_flash_active() -> bool:
@@ -498,10 +519,10 @@ def apply_workflow(mcp: Mcp, config: dict) -> dict:
 
 def run_regression(mcp: Mcp, scene: str, movement_expression: str = "position.x",
                    player_script: str = "res://scripts/player/player.gd") -> dict:
-    """Structure-adaptive regression: movement via the bound expression
-    (player-as-root vs player-as-child); hit/invuln/flash checks only when
-    the player script exposes take_hit (reuse without a damage path
-    degrades to movement + explicit guidance)."""
+    """Per-requirement regression (Package 1): every user-facing effect is
+    its OWN queue item with its own assertions — one passing check can
+    never stand in for another. Items gate on take_hit presence (structure
+    reuse degrades explicitly and the checklist reports the gap)."""
     has_take_hit = False
     try:
         read = mcp.tool("read_script", {"script_path": player_script})
@@ -509,65 +530,148 @@ def run_regression(mcp: Mcp, scene: str, movement_expression: str = "position.x"
     except RuntimeError:
         pass
     items = [
-        {"kind": "behavior_check", "label": "movement still real", "detail": {
+        {"kind": "behavior_check", "label": "requirement:movement", "detail": {
             "scene_path": scene, "steps": [
-                # 热身步：让会话/探针完成就绪，位移前读不再与启动竞态。
                 {"wait_ms": 400},
                 {"action": "move_right", "pressed": True, "wait_ms": 600,
                  "assert": {"expression": movement_expression, "displacement_min": 60,
                             "description": "held key still moves the player"}},
                 {"action": "move_right", "pressed": False, "wait_ms": 100}]}}]
     if has_take_hit:
-        items.append({"kind": "behavior_check", "label": "hit once; invuln blocks doubles; flash recovers", "detail": {
-            "scene_path": scene, "steps": [
-                {"wait_ms": 100,
-                 "assert": {"expression": "(take_hit(10, Vector2(120, 0)) == null)", "expected": True,
-                            "description": "first hit lands"}},
-                {"wait_ms": 100,
-                 "assert": {"expression": "hp", "expected": 90,
-                            "description": "exactly one deduction of 10"}},
-                {"wait_ms": 30,
-                 "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": True,
-                            "description": "flash is live right after the hit"}},
-                {"wait_ms": 100,
-                 "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
-                            "description": "second hit during invuln is a no-op call"}},
-                {"wait_ms": 100,
-                 "assert": {"expression": "hp", "expected": 90,
-                            "description": "invuln window prevented a second deduction"}},
-                {"wait_ms": 800,
-                 "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": False,
-                            "description": "modulate returns to white after the flash window"}},
-                {"wait_ms": 100,
-                 "assert": {"expression": "(take_hit(1000, Vector2(0, 0)) == null)", "expected": True,
-                            "description": "lethal hit"}},
-                {"wait_ms": 200,
-                 "assert": {"expression": "hp", "expected": 100,
-                            "description": "death respawns at full health"}},
-                {"wait_ms": 300,
-                 "assert": {"expression": "(get_viewport().get_camera_2d() != null)", "expected": True,
-                            "description": "shake has a real camera (auto-created when the scene had none)"}},
-                {"wait_ms": 300,
-                 "assert": {"expression": "get_node('HitFeedback').last_shake_magnitude", "expected": 1,
-                            "operator": "gte",
-                            "description": "camera shake actually moved (latency-proof magnitude evidence)"}},
-                {"action": "move_right", "pressed": True, "wait_ms": 400,
-                 "assert": {"expression": movement_expression, "displacement_min": 30,
-                            "description": "respawned player can still move (not stuck in geometry)"}},
-                {"action": "move_right", "pressed": False, "wait_ms": 100}]}})
+        items += [
+            {"kind": "behavior_check", "label": "requirement:hitstop", "detail": {
+                "scene_path": scene, "steps": [
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(10, Vector2(120, 0)) == null)", "expected": True,
+                                "description": "hit lands"}},
+                    {"wait_ms": 900,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.hitstop_engaged", "expected": True,
+                                "description": "time_scale actually dropped during the hit"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.hitstop_restored", "expected": True,
+                                "description": "time_scale restored after the hit"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.hitstop_time_scale_seen < 1.0", "expected": True,
+                                "description": "the seen scale was genuinely below 1"}}]}},
+            {"kind": "behavior_check", "label": "requirement:flash", "detail": {
+                "scene_path": scene, "steps": [
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
+                                "description": "hit lands"}},
+                    {"wait_ms": 50,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.flash_set", "expected": True,
+                                "description": "display object changed as expected"}},
+                    {"wait_ms": 900,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.flash_recovered", "expected": True,
+                                "description": "flash recovered afterwards"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": False,
+                                "description": "modulate back to white"}}]}},
+            {"kind": "behavior_check", "label": "requirement:shake", "detail": {
+                "scene_path": scene, "steps": [
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
+                                "description": "hit lands"}},
+                    {"wait_ms": 900,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.shake_magnitude", "expected": 1, "operator": "gte",
+                                "description": "active camera actually moved (magnitude evidence)"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.shake_reset", "expected": True,
+                                "description": "camera offset correctly reset"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(get_viewport().get_camera_2d() != null)", "expected": True,
+                                "description": "a camera exists (created when the scene had none)"}}]}},
+            {"kind": "behavior_check", "label": "requirement:particles", "detail": {
+                "scene_path": scene, "steps": [
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
+                                "description": "hit lands"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.particles_emitted", "expected": True,
+                                "description": "emission actually triggered"}},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "get_node('HitFeedback').last_hit_audit.particle_amount", "expected": 2, "operator": "gte",
+                                "description": "configured burst amount in effect"}}]}},
+            {"kind": "behavior_check", "label": "requirement:respawn (twice)", "detail": {
+                "scene_path": scene, "steps": [
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(1000, Vector2(0, 0)) == null)", "expected": True,
+                                "description": "first lethal hit"}},
+                    {"wait_ms": 200,
+                     "assert": {"expression": "hp", "expected": 100,
+                                "description": "first death: full HP after respawn"}},
+                    {"wait_ms": 200,
+                     "assert": {"expression": "(position == _respawn_at)", "expected": True,
+                                "description": "first death: at the respawn point"}},
+                    {"action": "move_right", "pressed": True, "wait_ms": 400,
+                     "assert": {"expression": movement_expression, "displacement_min": 30,
+                                "description": "first respawn: can still move (not stuck)"}},
+                    {"action": "move_right", "pressed": False, "wait_ms": 100},
+                    {"wait_ms": 100,
+                     "assert": {"expression": "(take_hit(1000, Vector2(0, 0)) == null)", "expected": True,
+                                "description": "second lethal hit"}},
+                    {"wait_ms": 200,
+                     "assert": {"expression": "hp", "expected": 100,
+                                "description": "second death: full HP again"}},
+                    {"wait_ms": 200,
+                     "assert": {"expression": "(position == _respawn_at)", "expected": True,
+                                "description": "second death: respawn point again"}}]}},
+        ]
     else:
-        print("[regression] player has no take_hit — hit checks skipped (movement-only)")
+        print("[regression] player has no take_hit — hit-effect items skipped "
+              "(movement verified only)")
     return mcp.tool("run_verification_queue", {
-        "command": "create", "goal": "character polish regression: originals intact, feedback obeys rules",
+        "command": "create",
+        "goal": "per-requirement regression: every user-facing effect independently evidenced",
         "strict": True,
         "watch_paths": [player_script,
                         "res://scripts/player/character_skin.gd",
                         "res://scripts/player/hit_feedback.gd"],
-        "items": items}, timeout=420.0)
+        "items": items}, timeout=600.0)
 
 
-def true_sentinel():
-    return True
+def _merged_items(partial: dict, final: dict) -> list:
+    """inspect summaries lack the inline assertion fields; prefer the richer
+    processed items from create/advance responses, fall back to inspect."""
+    rich = [i for i in partial.get("items", []) if i.get("verification")]
+    by_id = {i.get("id"): i for i in rich}
+    merged = []
+    for item in final.get("items", []):
+        merged.append(by_id.get(item.get("id"), item))
+    return merged
+
+
+def report_checklist(regression: dict) -> int:
+    """Package 3: evidence-constrained delivery checklist. Every line is
+    derived from actual queue outcomes; unmet/untested requirements make
+    the overall verdict NOT COMPLETE (non-zero return)."""
+    print("\n=== DELIVERY CHECKLIST (evidence-constrained) ===")
+    failures = 0
+    for item in regression.get("items", []):
+        label = str(item.get("label", "?"))
+        if not label.startswith("requirement:"):
+            continue
+        requirement = label.split(":", 1)[1]
+        status = str(item.get("status", "?"))
+        if status == "passed":
+            detail = "verified (%s/%s assertions)" % (
+                item.get("assertions_passed", "?"), item.get("assertions_total", "?"))
+        else:
+            detail = "NOT MET (%s)" % status
+            if item.get("first_failure"):
+                detail += " — %s" % item["first_failure"]
+            failures += 1
+        print("  [%s] %s: %s" % (status.upper(), requirement, detail))
+    untested = [r for r in ("hitstop", "flash", "shake", "particles", "respawn (twice)")
+                if not any(str(i.get("label", "")) == "requirement:%s" % r
+                           for i in regression.get("items", []))]
+    for requirement in untested:
+        print("  [UNTESTED] %s: no check ran — NOT complete" % requirement)
+        failures += 1
+    verdict = ("ALL REQUIREMENTS VERIFIED" if failures == 0 else
+               "%d REQUIREMENT(S) WITHOUT VERIFIED EVIDENCE — OVERALL: NOT COMPLETE" % failures)
+    print("=== %s ===" % verdict)
+    return 1 if failures else 0
 
 
 def main() -> int:
@@ -683,11 +787,26 @@ def main() -> int:
             regression = run_regression(mcp, config["scene"],
                 movement_expression=config.get("movement_expression", "position.x"),
                 player_script=config.get("player_script") or "res://scripts/player/player.gd")
-            print("regression:", regression.get("outcome"),
-                  "passed:", regression.get("passed_count"),
-                  "failed:", regression.get("failed_count"))
-            if regression.get("outcome") != "completed":
+            # 分片预算：推进到终态（completed/failed）才允许出清单——
+            # 挂起的分片绝不冒充完成。
+            advances = 0
+            while regression.get("outcome") in ("pending_more", "open") and advances < 10:
+                regression = mcp.tool("run_verification_queue", {
+                    "command": "advance", "queue_id": regression.get("queue_id", "")},
+                    timeout=600.0)
+                advances += 1
+            final = mcp.tool("run_verification_queue", {
+                "command": "inspect", "queue_id": regression.get("queue_id", "")}, timeout=120.0)
+            final.setdefault("items", [])
+            final["items"] = _merged_items(regression, final)
+            print("regression:", final.get("outcome"),
+                  "passed:", final.get("passed_count"),
+                  "failed:", final.get("failed_count"))
+            checklist_code = report_checklist(final)
+            if final.get("outcome") != "completed":
                 return 1
+            if checklist_code != 0:
+                return checklist_code
         print("CHARACTER VISUAL + FEEDBACK APPLIED (idempotent; re-run updates)")
         return 0
     finally:

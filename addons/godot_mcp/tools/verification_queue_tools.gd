@@ -159,6 +159,18 @@ func _command_create(params: Dictionary) -> Dictionary:
 			var steps: Variant = (detail as Dictionary).get("steps", []) if detail is Dictionary else []
 			if not (steps is Array) or (steps as Array).is_empty():
 				return {"error": "behavior_check detail requires a non-empty steps array (same shape play_and_verify accepts; optional scene_path, assertions, deterministic, timeout_ms)"}
+			# 严格完成门禁（包②）：零断言的 behavior_check 只是冒烟结果，
+			# 不能充当严格队列的功能完成证据——建队即拒绝并点名缺断言的项。
+			if bool(params.get("strict", false)):
+				var assertion_count: int = 0
+				for step_value in (steps as Array):
+					if step_value is Dictionary and (step_value as Dictionary).has("assert"):
+						assertion_count += 1
+				var finals: Variant = (detail as Dictionary).get("assertions", []) if detail is Dictionary else []
+				if finals is Array:
+					assertion_count += (finals as Array).size()
+				if assertion_count == 0:
+					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts or a final assertions list" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
 
 	var store: Dictionary = StoreScript.load_store(_resolved_store_path())
 	if store.has("error"):
@@ -447,6 +459,14 @@ func _queue_summary(queue: Dictionary, outcome: String) -> Dictionary:
 		var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
 		if not evidence.is_empty():
 			entry["evidence_level"] = String(evidence.get("evidence_level", ""))
+			# 判定标注（包②）：verified=原生运行且带断言；smoke=原生运行但零断言；
+			# external_claim=外部声明。严格队列只认 verified。
+			if String(evidence.get("evidence_level", "")) == "external_claim":
+				entry["verification"] = "external_claim"
+			elif int(evidence.get("assertions_total", 0)) > 0:
+				entry["verification"] = "verified"
+			else:
+				entry["verification"] = "smoke"
 			if evidence.has("assertions_total"):
 				entry["assertions_passed"] = int(evidence.get("assertions_passed", 0))
 				entry["assertions_total"] = int(evidence.get("assertions_total", 0))

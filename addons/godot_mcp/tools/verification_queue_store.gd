@@ -228,6 +228,12 @@ static func advance(queue: Dictionary, budget: int,
 		var item_evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
 		if not item_evidence.is_empty():
 			processed_entry["evidence_level"] = String(item_evidence.get("evidence_level", ""))
+			if String(item_evidence.get("evidence_level", "")) == "external_claim":
+				processed_entry["verification"] = "external_claim"
+			elif int(item_evidence.get("assertions_total", 0)) > 0:
+				processed_entry["verification"] = "verified"
+			else:
+				processed_entry["verification"] = "smoke"
 			if item_evidence.has("assertions_total"):
 				processed_entry["assertions_passed"] = int(item_evidence.get("assertions_passed", 0))
 				processed_entry["assertions_total"] = int(item_evidence.get("assertions_total", 0))
