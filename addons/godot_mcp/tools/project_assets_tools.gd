@@ -645,8 +645,10 @@ func _register_generate_asset(server_core: RefCounted) -> void:
 			"preset": {"type": "string", "description": "External preset.", "enum": ["openai_image", "stability_image", "elevenlabs_tts", "local_sd_webui"]},
 			"width": {"type": "integer", "description": "Width px.", "default": 64},
 			"height": {"type": "integer", "description": "Height px.", "default": 64},
-			"pattern": {"type": "string", "description": "Pattern.", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise"], "default": "auto"},
-			"colors": {"type": "array", "description": "Colors."},
+			"pattern": {"type": "string", "description": "Pattern.", "enum": ["auto", "solid", "gradient", "checker", "circle", "frame", "noise", "sprite_sheet"], "default": "auto"},
+			"frame_columns": {"type": "integer", "description": "sprite_sheet only: columns (max frame count of any row). Default 4.", "default": 4},
+			"frame_rows": {"type": "integer", "description": "sprite_sheet only: rows (row 0 idle breathing, other rows squash-stretch motion). Default 2.", "default": 2},
+			"colors": {"type": "array", "description": "Colors. sprite_sheet uses [body_color, eye_color]."},
 			"background": {"description": "Background."},
 			"duration": {"type": "number", "description": "Seconds.", "default": 0.5},
 			"frequency": {"type": "number", "description": "Freq Hz.", "default": 0.0},
@@ -712,7 +714,7 @@ func _tool_generate_asset(params: Dictionary) -> Dictionary:
 	if resource_path.is_empty():
 		return {"error": "Missing required parameter: resource_path"}
 
-	var allowed_ext: Array = [".png", ".jpg", ".jpeg", ".webp"] if category == "image" else [".tres", ".res", ".wav", ".ogg", ".mp3"]
+	var allowed_ext: Array = [".png", ".jpg", ".jpeg", ".webp", ".tres", ".res"] if category == "image" else [".tres", ".res", ".wav", ".ogg", ".mp3"]
 	var validation: Dictionary = PathValidator.validate_file_path(resource_path, allowed_ext)
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
@@ -813,6 +815,28 @@ func _generate_placeholder_image(params: Dictionary, seed: int) -> Dictionary:
 	var secondary: Color = fg_colors[1] if fg_colors.size() > 1 else fg_colors[0]
 
 	match pattern:
+		"sprite_sheet":
+			# 帧网格精灵表：行 0 = idle（亮度呼吸），其余行 = move（横向挤压
+			# 摆动）。primary = 角色主色，secondary = 眼睛/标记色。
+			var cols: int = clampi(int(params.get("frame_columns", 4)), 1, 32)
+			var rows: int = clampi(int(params.get("frame_rows", 2)), 1, 8)
+			var cell_w: int = max(1, width / cols)
+			var cell_h: int = max(1, height / rows)
+			for row in range(rows):
+				for col in range(cols):
+					var x0: int = col * cell_w
+					var y0: int = row * cell_h
+					var inset: int = 2 + (1 if col % 2 == 1 else 0)
+					var squash: bool = row > 0 and col % 2 == 1
+					var inset_x: int = inset + (2 if squash else 0)
+					var frame_color: Color = primary.lightened(0.06 if (row == 0 and col % 2 == 1) else 0.0)
+					for x in range(x0 + inset_x, minf(x0 + cell_w - inset, x0 + cell_w)):
+						for y in range(y0 + inset, minf(y0 + cell_h - inset, y0 + cell_h)):
+							image.set_pixel(x, y, frame_color)
+					var eye_size: int = max(1, cell_w / 8)
+					for x in range(x0 + cell_w - inset - eye_size * 2, x0 + cell_w - inset - eye_size):
+						for y in range(y0 + cell_h / 2 - eye_size, y0 + cell_h / 2):
+							image.set_pixel(x, y, secondary)
 		"solid":
 			image.fill(primary)
 		"gradient":
@@ -867,8 +891,16 @@ func _save_image_asset(image: Image, resource_path: String) -> Dictionary:
 			error = image.save_jpg(resource_path)
 		"webp":
 			error = image.save_webp(resource_path)
+		"tres", "res":
+			# ImageTexture 资源：立即可被 ResourceLoader 引用，无需编辑器
+			# 导入扫描（角色工作流实测：PNG 要等 .import 生成才能挂在节点上）。
+			var texture := ImageTexture.create_from_image(image)
+			error = ResourceSaver.save(texture, resource_path)
+			if error != OK:
+				return {"error": "Failed to save texture resource: " + error_string(error)}
+			return {"size_bytes": _file_size(resource_path)}
 		_:
-			return {"error": "Unsupported image extension '%s'. Use .png, .jpg or .webp." % ext}
+			return {"error": "Unsupported image extension '%s'. Use .png, .jpg, .webp, .tres or .res." % ext}
 	if error != OK:
 		return {"error": "Failed to save image: " + error_string(error)}
 	return {"size_bytes": _file_size(resource_path)}

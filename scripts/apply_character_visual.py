@@ -236,46 +236,25 @@ def wait_for_server(mcp: Mcp, timeout_seconds: float = 150.0) -> None:
 
 
 def ensure_sheet(mcp: Mcp, config: dict, project: Path) -> None:
-    """Generate the placeholder sheet INSIDE the editor (reproducible, no
-    binary in the repo) when it does not exist yet. Frames: row 0 = idle
-    (brightness bob), row 1 = move (horizontal squash-stretch)."""
+    """Sheet via the plugin's generate_asset (pattern=sprite_sheet, .tres) —
+    no inline editor drawing, immediately referenceable, no repo binary."""
     if (project / config["sheet"].replace("res://", "")).exists():
         print(f"[sheet] exists: {config['sheet']}")
         return
     w, h = config["frame_size"]
-    idle, move = config["idle_frames"], config["move_frames"]
-    code = f"""
-var image := Image.create({max(w * max(max(idle, move), 1), 1)}, {h * 2}, false, Image.FORMAT_RGBA8)
-image.fill(Color(0, 0, 0, 0))
-var base := Color(0.25, 0.55, 0.95)
-var face := Color(0.98, 0.85, 0.35)
-for i in range({idle}):
-    var inset := 2 + (1 if i % 2 == 1 else 0)
-    for x in range(i * {w} + inset, i * {w} + {w} - inset):
-        for y in range(inset, {h} - inset):
-            image.set_pixel(x, y, base.lightened(0.06 if i % 2 == 1 else 0.0))
-for i in range({move}):
-    var inset_x := 3 if i % 2 == 1 else 1
-    for x in range(i * {w} + inset_x, i * {w} + {w} - inset_x):
-        for y in range(1, {h} - 1):
-            image.set_pixel(x, y, base)
-    var eye_y := {h} / 2 - 3
-    for x in range(i * {w} + {w} - 10, i * {w} + {w} - 6):
-        for y in range(eye_y, eye_y + 3):
-            image.set_pixel(x, y, face)
-var texture := ImageTexture.create_from_image(image)
-var err := ResourceSaver.save(texture, "{config['sheet']}")
-_custom_print("sheet save err=" + str(err))
-"""
-    result = mcp.tool("execute_editor_script", {"code": code}, timeout=120.0)
-    print("[sheet] generated:", json.dumps(result.get("output", []))[:120])
-    if "err=0" not in json.dumps(result.get("output", [])):
-        raise SystemExit(f"texture save failed: {result.get('output', [])}")
-    # .tres is immediately referenceable — no import-system wait needed.
-    probe = mcp.tool("execute_editor_script", {"code":
-        f"_custom_print(str(ResourceLoader.exists(\"{config['sheet']}\")))"}, timeout=60.0)
-    if "true" not in json.dumps(probe.get("output", [])):
-        raise SystemExit(f"editor did not recognize {config['sheet']}")
+    columns = max(config["idle_frames"], config["move_frames"])
+    result = mcp.tool("generate_asset", {
+        "resource_path": config["sheet"],
+        "prompt": "player character sheet placeholder (sprite_sheet pattern)",
+        "type": "sprite", "provider": "placeholder",
+        "pattern": "sprite_sheet",
+        "width": w * columns, "height": h * 2,
+        "frame_columns": columns, "frame_rows": 2,
+        "colors": [{"r": 0.25, "g": 0.55, "b": 0.95}, {"r": 0.98, "g": 0.85, "b": 0.35}],
+    }, timeout=120.0)
+    if result.get("status") != "success":
+        raise SystemExit(f"sheet generation failed: {result}")
+    print(f"[sheet] generated via generate_asset: {config['sheet']}")
 
 
 def ensure_script(mcp: Mcp, path: str, content: str) -> None:
@@ -305,8 +284,50 @@ def ensure_script(mcp: Mcp, path: str, content: str) -> None:
         raise SystemExit(f"updating {path} failed: {verdict}")
 
 
+def resolve_binding(mcp: Mcp, config: dict) -> dict:
+    """Auto-locate the player scene+node via the plugin's gather_task_context
+    (scene_objects bucket) when the config does not declare them explicitly."""
+    if config.get("scene") and config.get("player_node") and not config.get("auto"):
+        return {"scene": config["scene"], "player_node": config["player_node"], "source": "config"}
+    context = mcp.tool("gather_task_context", {
+        "goal": f"{config.get('goal_hint', 'player character visual')} player",
+        "max_items_per_bucket": 5})
+    # 玩家源场景优先（root 即 CharacterBody2D）；实例 body 一律绑定其源场景
+    # （改源场景而非地图实例覆盖 —— 地图同层的 visual 是地图 UI，不是角色的）。
+    entries = context.get("scene_objects", [])
+    for entry in entries:
+        if entry.get("root_type") == "CharacterBody2D":
+            visuals = entry.get("roles", {}).get("visual", [])
+            if visuals:
+                return {"scene": entry["scene"],
+                        "player_node": _root_node_name(entry),
+                        "body_node": visuals[0]["name"], "source": "gather_task_context"}
+    for entry in entries:
+        for body in entry.get("roles", {}).get("body", []):
+            if body.get("type") == "CharacterBody2D" and body.get("instance_of"):
+                return {"scene": body["instance_of"],
+                        "player_node": body["name"],
+                        "body_node": body.get("visual_node", "Body"),
+                        "source": "gather_task_context"}
+    raise SystemExit("auto-locate failed: no scene with a CharacterBody2D + visual node "
+                     "matched; declare scene/player_node in the config explicitly")
+
+
+def _root_node_name(entry: dict) -> str:
+    for role in ("body", "visual", "collision"):
+        nodes = entry.get("roles", {}).get(role, [])
+        if nodes and not str(nodes[0].get("path", "x")).strip("."):
+            return nodes[0]["name"]
+    return "Player"
+
+
 def apply_workflow(mcp: Mcp, config: dict) -> dict:
     actions: list[str] = []
+    binding = resolve_binding(mcp, config)
+    config["scene"], config["player_node"] = binding["scene"], binding["player_node"]
+    config.setdefault("body_node", binding.get("body_node", "Body"))
+    actions.append(f"binding resolved via {binding['source']}: "
+                   f"{binding['player_node']} in {binding['scene']}")
     scene, player = config["scene"], config["player_node"]
 
     # 1) locate the declared objects — stop with concrete gaps otherwise.
@@ -453,6 +474,8 @@ def main() -> int:
     parser.add_argument("--port", default="9180")
     parser.add_argument("--config", default=None, help="JSON file overriding defaults")
     parser.add_argument("--with-regression", action="store_true")
+    parser.add_argument("--auto", action="store_true",
+                        help="locate the player via gather_task_context instead of the config declaration")
     parser.add_argument("--godot", default=r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe")
     args = parser.parse_args()
 
@@ -460,6 +483,10 @@ def main() -> int:
     if not (project / "project.godot").exists():
         raise SystemExit(f"not a Godot project: {project}")
     config = json.loads(json.dumps(DEFAULT_CONFIG))
+    if args.auto:
+        config["auto"] = True
+        config.pop("scene", None)
+        config.pop("player_node", None)
     if args.config:
         override = json.loads(Path(args.config).read_text(encoding="utf-8"))
         for key, value in override.items():
@@ -484,7 +511,8 @@ def main() -> int:
             "execute_editor_script", "read_script", "create_script",
             "apply_change_set", "open_scene", "get_scene_structure",
             "create_node", "batch_scene_node_edits", "save_scene",
-            "validate_script", "run_verification_queue"]})
+            "validate_script", "run_verification_queue",
+            "gather_task_context", "generate_asset"]})
         ensure_sheet(mcp, config, project)
         report = apply_workflow(mcp, config)
         for action in report["actions"]:
