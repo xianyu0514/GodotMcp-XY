@@ -5,12 +5,12 @@ builds a playable slice and passes a requirement contract.
 
 This is the "download plugin -> easily make games" acceptance.
 """
-import json, random, subprocess, sys, time, urllib.request
+import json, os, random, subprocess, sys, time, urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 USER_PROJ = REPO / ".tmp_plugin_user"
-GODOT = "D:/youxi/kaifa/Godot_v4.7.2-stable_win64_console.exe"
+GODOT = os.environ.get("GODOT_EXE", "D:/youxi/kaifa/Godot_v4.7.2-stable_win64_console.exe")
 port = random.randint(9400, 9799)
 URL = f"http://127.0.0.1:{port}/mcp"
 _req = [0]
