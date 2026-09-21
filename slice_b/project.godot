@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="SliceB"
-run/main_scene="res://scenes/maps/map_l1.tscn"
+run/main_scene="res://scenes/melee_arena.tscn"
 config/features=PackedStringArray("4.7")
 
 [autoload]
