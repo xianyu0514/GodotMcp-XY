@@ -50,6 +50,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_play_and_verify(server_core)
 	_register_assert_performance_budget(server_core)
 	_register_assert_no_runtime_errors(server_core)
+	_register_verify_change_effect(server_core)
 # ============================================================================
 # Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
 # ============================================================================
@@ -835,3 +836,490 @@ func _merge_runtime_params(params: Dictionary, extra: Dictionary) -> Dictionary:
 	for key in extra:
 		out[key] = extra[key]
 	return out
+
+# ============================================================================
+# verify_change_effect（P0-2 公共能力）：证明一次修改真的作用于正在玩的游戏
+#
+# "代码改了，玩起来没变化" 的四类真凶，逐项排查并给出证据：
+#   1. target — 场景文件在磁盘上存在（运行入口锚定）。
+#   2. entity — 节点真正使用的脚本：外部 .gd 引用 vs 场景内嵌 sub_resource
+#      副本（attach_script 嵌入陷阱）；期望的外部脚本是否就是节点在跑的；
+#      编辑器里是否有未保存缓冲（run_project 从磁盘启动，缓冲里的修改
+#      永远到不了游戏）。
+#   3. applied — FRESH 启动场景，运行时读回属性值与期望值比对。
+#   4. behaved —（可选）按 play_and_verify 形状执行行为步骤+断言，证明
+#      行为可测地变化；零断言的行为规格按冒烟拒绝。
+#   5. persist —（默认开）第二次 FRESH 启动再读回：从磁盘加载，暴露
+#      "只在内存里生效"的假象（插件内等价于外部驱动的重启编辑器层级）。
+# 任一必需步骤 not_met => overall=not_effective，needs 给出精确的下一步调用。
+# ============================================================================
+
+## 单测注入点：有效时替代真实读回 / 行为编排（避免依赖编辑器与运行时）。
+var _effect_readback_override: Callable = Callable()
+var _effect_behavior_override: Callable = Callable()
+
+const _EffectQueueScriptPath: String = "res://addons/godot_mcp/tools/verification_queue_tools.gd"
+
+func _register_verify_change_effect(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"verify_change_effect",
+		"Proof that a change actually reaches the game — the 'I edited it but nothing changed' chain, as one checklist. Resolves the node's REAL script from the scene file (external .gd reference vs an EMBEDDED copy — the classic silent killer where edits to the external file never reach the game), flags unsaved editor buffers (run_project boots the disk copy), boots the scene FRESH and reads the property back at runtime against expected_value, optionally runs behavior steps+assertions (play_and_verify shape) proving the behavior measurably moved (zero-assertion behavior specs are rejected as smoke), then boots once more to prove persistence (a second disk boot exposes in-memory-only illusions). Every step returns verified/not_met/skipped with evidence; overall=effective only when all non-skipped steps verified, and 'needs' names the exact next call for each failure.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "Scene file the node lives in, e.g. 'res://scenes/player.tscn'. Also the run entry for verification runs."},
+				"node_path": {"type": "string", "description": "Scene-relative node path including the root, e.g. 'Player/Attack'."},
+				"property": {"type": "string", "description": "Property name on that node, e.g. 'cooldown_seconds'."},
+				"expected_value": {"description": "The value the change should have produced; the runtime readback is compared against it (numeric-tolerant)."},
+				"script_path": {"type": "string", "description": "Optional external script the node SHOULD run (e.g. 'res://scripts/combat/melee_brain.gd'). When the scene carries an embedded copy instead, entity is not_met — attach_script + save_scene is the fix."},
+				"behavior": {"type": "object", "description": "Optional {steps, assertions} in the play_and_verify shape; runs in a FRESH boot to prove the behavior measurably moved. At least one assertion required."},
+				"check_persistence": {"type": "boolean", "default": true, "description": "Boot the scene a second time and read back again — proves the value comes from disk, not memory."},
+				"timeout_ms": {"type": "integer", "default": 8000}
+			},
+			"required": ["scene_path", "node_path", "property", "expected_value"]
+		},
+		Callable(self, "_tool_verify_change_effect"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"overall": {"type": "string", "description": "effective|not_effective"},
+			"checklist": {"type": "array", "description": "[{step: target|entity|applied|behaved|persist, status: verified|not_met|skipped, evidence, ...}]"},
+			"needs": {"type": "array", "items": {"type": "string"}},
+			"resolved": {"type": "object"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_verify_change_effect(params: Dictionary) -> Dictionary:
+	var scene_path: String = String(params.get("scene_path", "")).strip_edges()
+	var node_path: String = String(params.get("node_path", "")).strip_edges()
+	var property: String = String(params.get("property", "")).strip_edges()
+	if scene_path.is_empty():
+		return {"error": "scene_path is required (e.g. 'res://scenes/player.tscn')"}
+	if node_path.is_empty():
+		return {"error": "node_path is required (scene-relative, root included: 'Player/Attack')"}
+	if property.is_empty():
+		return {"error": "property is required (e.g. 'cooldown_seconds')"}
+	if not property.is_valid_identifier():
+		return {"error": "property '%s' is not a valid identifier — readback builds an expression from it" % property}
+	if not params.has("expected_value"):
+		return {"error": "expected_value is required — the value the change should have produced; the runtime readback is compared against it"}
+	var expected: Variant = params["expected_value"]
+	var script_path: String = String(params.get("script_path", "")).strip_edges()
+	var behavior: Dictionary = params.get("behavior", {}) if params.get("behavior", {}) is Dictionary else {}
+	var check_persistence: bool = bool(params.get("check_persistence", true))
+	var timeout_ms: int = maxi(int(params.get("timeout_ms", 8000)), 1000)
+
+	var checklist: Array = []
+	var needs: Array = []
+	var resolved: Dictionary = {
+		"scene_path": scene_path, "node_path": node_path, "property": property,
+		"expected_value": expected}
+
+	# ---- step: target（磁盘上的场景文件存在；运行入口锚定）------------------
+	var project_name: String = String(ProjectSettings.get_setting("application/config/name", ""))
+	var scene_text: String = _effect_read_text(scene_path)
+	if scene_text.is_empty() and not FileAccess.file_exists(scene_path):
+		checklist.append({"step": "target", "status": "not_met",
+			"evidence": "scene file not found: %s" % scene_path})
+		needs.append("check the scene path (gather_task_context locates the scenes for a goal); instance overrides live in the INSTANCING scene, not the base scene file")
+		return _effect_report(checklist, needs, resolved)
+	checklist.append({"step": "target", "status": "verified",
+		"evidence": "project '%s'; %s exists on disk (%d chars)" % [project_name, scene_path, scene_text.length()]})
+
+	# ---- step: entity（节点真正使用的脚本 + 未保存缓冲风险）------------------
+	var entity: Dictionary = _resolve_scene_entity(scene_text, node_path, property)
+	var resolved_view: Dictionary = {}
+	for key in ["found", "matched_path", "node_name", "script_mode", "script_path",
+			"script_uid", "embedded_id", "embedded_extends", "has_property", "root_name"]:
+		if entity.has(key):
+			resolved_view[key] = entity[key]
+	resolved["entity"] = resolved_view
+	var entity_status: String = "verified"
+	var entity_bits: Array = []
+	if not bool(entity.get("found", false)):
+		entity_status = "not_met"
+		entity_bits.append("node '%s' not present in the scene file" % node_path)
+		needs.append("node '%s' is not in %s — verify with get_scene_structure; the override may live in the scene that INSTANCES this one" % [node_path, scene_path])
+	else:
+		var script_mode: String = String(entity.get("script_mode", "none"))
+		match script_mode:
+			"external":
+				var actual_script: String = String(entity.get("script_path", ""))
+				if not script_path.is_empty() and script_path != actual_script:
+					entity_status = "not_met"
+					entity_bits.append("node runs a DIFFERENT external script: %s (expected %s)" % [actual_script, script_path])
+					needs.append("the node's script is '%s', not '%s' — your edits went to a file the node never loads" % [actual_script, script_path])
+				else:
+					entity_bits.append("script is an external reference: %s" % actual_script)
+			"embedded":
+				if not script_path.is_empty():
+					entity_status = "not_met"
+					entity_bits.append("node runs an EMBEDDED copy (sub_resource %s, starts '%s') — edits to %s never reach the game" % [
+						String(entity.get("embedded_id", "?")), String(entity.get("embedded_extends", "?")), script_path])
+					needs.append("attach_script('%s', '%s') to switch the node to the external reference, then save_scene('%s')" % [node_path, script_path, scene_path])
+				else:
+					entity_bits.append("script is EMBEDDED in the scene (sub_resource %s) — edits to any external .gd will never reach it" % String(entity.get("embedded_id", "?")))
+			_:
+				if not script_path.is_empty():
+					entity_status = "not_met"
+					entity_bits.append("node carries no script in this scene")
+					needs.append("node '%s' has no script in %s — the script may be attached in an instancing scene or missing entirely" % [node_path, scene_path])
+				else:
+					entity_bits.append("no script on the node (property must come from an ancestor or instance override)")
+		if not bool(entity.get("has_property", false)):
+			entity_bits.append("property '%s' is not serialized in the node section — its value comes from the script default or an instance override" % property)
+	# 未保存缓冲：run_project 从磁盘启动，编辑器缓冲里的修改到不了游戏。
+	var unsaved: Dictionary = _effect_unsaved_risk(scene_path, script_path)
+	if unsaved.has("scene"):
+		entity_status = "not_met"
+		entity_bits.append("scene has UNSAVED editor edits")
+		needs.append("save_scene('%s') — run_project boots the disk copy, unsaved editor edits never reach the game" % scene_path)
+	elif unsaved.has("script"):
+		entity_status = "not_met"
+		entity_bits.append("script has UNSAVED editor edits")
+		needs.append("save_all_scripts() — the running game loads scripts from disk")
+	elif unsaved.has("unavailable"):
+		entity_bits.append("unsaved-buffer check unavailable (headless)")
+	checklist.append({"step": "entity", "status": entity_status,
+		"evidence": "; ".join(entity_bits)})
+
+	# ---- step: applied（FRESH 启动 + 运行时读回）-----------------------------
+	var readback: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms)
+	var applied_ok: bool = readback.has("value") and _values_match(readback.get("value", null), expected)
+	if applied_ok:
+		checklist.append({"step": "applied", "status": "verified",
+			"evidence": "live value %s == expected %s (fresh boot readback)" % [str(readback.get("value", null)), str(expected)]})
+	else:
+		var applied_evidence: String = "readback failed: %s" % str(readback.get("error", "no value"))
+		if readback.has("value"):
+			applied_evidence = "live value %s != expected %s" % [str(readback.get("value", null)), str(expected)]
+		checklist.append({"step": "applied", "status": "not_met", "evidence": applied_evidence,
+			"live_value": readback.get("value", null)})
+		needs.append("the running game does not serve the expected value — an instancing scene may override '%s', or the change was never saved; save_scene then re-run this check" % property)
+
+	# ---- step: behaved（可选：行为可测地变化）--------------------------------
+	if behavior.is_empty():
+		checklist.append({"step": "behaved", "status": "skipped",
+			"evidence": "no behavior spec supplied (optional)"})
+	else:
+		var behavior_status: String = "verified"
+		var behavior_evidence: String = ""
+		var steps: Array = behavior.get("steps", []) if behavior.get("steps", []) is Array else []
+		var assertion_count: int = 0
+		if behavior.has("assertions") and behavior.get("assertions", []) is Array:
+			assertion_count += (behavior.get("assertions", []) as Array).size()
+		for step_value in steps:
+			if step_value is Dictionary and (step_value as Dictionary).has("assert"):
+				assertion_count += 1
+		if steps.is_empty() or assertion_count == 0:
+			behavior_status = "not_met"
+			behavior_evidence = "behavior spec carries %d steps and %d assertions — a smoke run cannot prove the change" % [steps.size(), assertion_count]
+			needs.append("behavior needs at least one step and one assertion (step 'assert' or final 'assertions'); measured engine-side values are latency-immune evidence")
+		else:
+			var behaved: Dictionary = await _effect_behavior(behavior, scene_path, timeout_ms)
+			var assertions_total: int = int(behaved.get("assertions_total", 0))
+			var assertions_passed: int = int(behaved.get("assertions_passed", 0))
+			if bool(behaved.get("passed", false)) and assertions_total > 0 and assertions_passed == assertions_total:
+				behavior_evidence = "behavior run: %d/%d assertions passed" % [assertions_passed, assertions_total]
+			else:
+				behavior_status = "not_met"
+				behavior_evidence = "behavior run: %s (%d/%d assertions passed) — %s" % [
+					str(behaved.get("error", "assertions failed")), assertions_passed, assertions_total,
+					str(behaved.get("first_failure", ""))]
+				if not str(behaved.get("first_failure", "")).is_empty():
+					needs.append("behavior assertion failed: %s — the change is written but the gameplay did not move" % str(behaved.get("first_failure", "")))
+		checklist.append({"step": "behaved", "status": behavior_status, "evidence": behavior_evidence})
+
+	# ---- step: persist（第二次 FRESH 启动：磁盘真相）-------------------------
+	if not check_persistence:
+		checklist.append({"step": "persist", "status": "skipped",
+			"evidence": "persistence check disabled (check_persistence=false)"})
+	else:
+		var readback2: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms)
+		var persist_ok: bool = readback2.has("value") and _values_match(readback2.get("value", null), expected)
+		if persist_ok:
+			checklist.append({"step": "persist", "status": "verified",
+				"evidence": "second disk boot still serves %s — not an in-memory illusion" % str(expected)})
+		else:
+			checklist.append({"step": "persist", "status": "not_met",
+				"evidence": "second boot readback %s != expected %s (%s)" % [str(readback2.get("value", null)), str(expected), str(readback2.get("error", "value drifted"))]})
+			needs.append("the value reached the first run but not the second — the change was in-memory only; save_scene('%s') before re-running" % scene_path)
+
+	return _effect_report(checklist, needs, resolved)
+
+func _effect_report(checklist: Array, needs: Array, resolved: Dictionary) -> Dictionary:
+	var overall: String = "effective"
+	for entry_value in checklist:
+		if entry_value is Dictionary and String((entry_value as Dictionary).get("status", "")) == "not_met":
+			overall = "not_effective"
+	return {
+		"status": "success",
+		"overall": overall,
+		"checklist": checklist,
+		"needs": needs,
+		"resolved": resolved,
+	}
+
+## 读回一次运行时属性值（FRESH 启动 → 探针求值 → 停止）。真实路径复用验证
+## 队列的原生编排（probe → run → 就绪等待 → play_and_verify → stop），
+## 单测用 _effect_readback_override 替换。返回 {"value": v} 或 {"error": ...}。
+func _effect_readback(scene_path: String, node_path: String, property: String, timeout_ms: int) -> Dictionary:
+	if _effect_readback_override.is_valid():
+		return await _effect_readback_override.call({
+			"scene_path": scene_path, "node_path": node_path,
+			"property": property, "timeout_ms": timeout_ms})
+	var expression: String = _build_readback_expression(node_path, property)
+	var run: Dictionary = await _effect_queue_behavior_run({
+		"scene_path": scene_path,
+		"steps": [{"wait_ms": 1200}],
+		"assertions": [{
+			"expression": expression, "expected": null,
+			"timeout_ms": timeout_ms, "description": "runtime readback"}],
+	})
+	if run.has("error"):
+		return {"error": str(run.get("error"))}
+	var evidence: Dictionary = run.get("evidence", {}) if run.get("evidence", {}) is Dictionary else {}
+	var assertions: Array = evidence.get("assertions", []) if evidence.get("assertions", []) is Array else []
+	if assertions.is_empty() or not (assertions[0] is Dictionary):
+		return {"error": "readback produced no result: %s" % str(evidence.get("issue", "no assertions recorded"))}
+	var first: Dictionary = assertions[0]
+	var value: Variant = first.get("actual", null)
+	if value == null:
+		value = first.get("last_value", null)
+	if value == null and not String(str(first.get("error", ""))).is_empty():
+		return {"error": "readback expression failed: %s" % str(first.get("error"))}
+	return {"value": value}
+
+## 行为步骤编排：真实路径同样复用验证队列的原生执行器。
+func _effect_behavior(behavior: Dictionary, scene_path: String, timeout_ms: int) -> Dictionary:
+	if _effect_behavior_override.is_valid():
+		return await _effect_behavior_override.call({
+			"behavior": behavior, "scene_path": scene_path, "timeout_ms": timeout_ms})
+	var detail: Dictionary = {
+		"scene_path": scene_path,
+		"steps": behavior.get("steps", []),
+	}
+	if behavior.has("assertions"):
+		detail["assertions"] = behavior.get("assertions", [])
+	detail["timeout_ms"] = timeout_ms
+	var run: Dictionary = await _effect_queue_behavior_run(detail)
+	if run.has("error"):
+		return {"error": str(run.get("error"))}
+	var evidence: Dictionary = run.get("evidence", {}) if run.get("evidence", {}) is Dictionary else {}
+	var out: Dictionary = {
+		"passed": bool(run.get("passed", false)) and int(evidence.get("assertions_total", 0)) > 0,
+		"assertions_total": int(evidence.get("assertions_total", 0)),
+		"assertions_passed": int(evidence.get("assertions_passed", 0)),
+	}
+	for assertion_value in evidence.get("assertions", []):
+		if assertion_value is Dictionary and not bool((assertion_value as Dictionary).get("passed", true)):
+			out["first_failure"] = String((assertion_value as Dictionary).get("description", ""))
+			break
+	return out
+
+## 复用 VerificationQueueTools 的原生行为执行器（probe→run→verify→stop）。
+## 优先取插件注册表里已 initialize 的实例；不可用时 load() 兜底（避免与
+## verification_queue_tools.gd 的 preload 形成编译期循环引用）。
+func _effect_queue_behavior_run(detail: Dictionary) -> Dictionary:
+	var queue_tools: RefCounted = null
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has("VerificationQueueTools") and instances["VerificationQueueTools"] is RefCounted:
+				queue_tools = instances["VerificationQueueTools"]
+	if queue_tools == null:
+		var loaded: Resource = load(_EffectQueueScriptPath)
+		if loaded is GDScript:
+			queue_tools = (loaded as GDScript).new()
+	if queue_tools == null:
+		return {"error": "verification queue module unavailable"}
+	return await queue_tools._behavior_run_impl(detail)
+
+## 构造读回表达式：探针以 current_scene 为基点求值，一次表达式覆盖三种
+## 运行时路径形态 —— 完整相对路径（被实例场景托管时）、去根路径（场景根
+## 直跑时）、以及节点即根自身（self 兜底）。
+static func _build_readback_expression(node_path: String, property: String) -> String:
+	var full: String = node_path.strip_edges().trim_prefix("/").trim_suffix("/")
+	var stripped: String = full.substr(full.find("/") + 1) if full.contains("/") else ""
+	var chain: String = "self"
+	if not stripped.is_empty():
+		chain = "(get_node('%s') if has_node('%s') else self)" % [stripped, stripped]
+	if not full.is_empty() and full != stripped:
+		chain = "(get_node('%s') if has_node('%s') else %s)" % [full, full, chain]
+	return "%s.%s" % [chain, property]
+
+## 数值宽容比较：浮点用 is_equal_approx（0.25 == 0.25 之类的 JSON 往返），
+## 布尔精确相等，其余按字符串比较（"0.25" 与 0.25 视为相等）。
+static func _values_match(a: Variant, b: Variant) -> bool:
+	if a == null or b == null:
+		return false
+	if typeof(a) == TYPE_BOOL or typeof(b) == TYPE_BOOL:
+		return bool(a) == bool(b) and typeof(a) == typeof(b)
+	if (a is int or a is float) and (b is int or b is float):
+		return is_equal_approx(float(a), float(b))
+	return str(a) == str(b)
+
+static func _effect_read_text(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content: String = file.get_as_text()
+	file.close()
+	return content
+
+## 未保存缓冲风险：目标场景或目标脚本在编辑器里有未保存修改 => 命中即挡。
+## 编辑器不可用（headless 单测）时返回 {unavailable: true}，不作为失败。
+func _effect_unsaved_risk(scene_path: String, script_path: String) -> Dictionary:
+	var editor_tools: RefCounted = null
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has("EditorToolsNative") and instances["EditorToolsNative"] is RefCounted:
+				editor_tools = instances["EditorToolsNative"]
+	if editor_tools == null:
+		return {"unavailable": true}
+	var result: Dictionary = editor_tools._tool_get_unsaved_changes({})
+	if result.has("error"):
+		return {"unavailable": true}
+	var scenes: Array = result.get("unsaved_scenes", []) if result.get("unsaved_scenes", []) is Array else []
+	var scripts: Array = result.get("unsaved_scripts", []) if result.get("unsaved_scripts", []) is Array else []
+	for candidate in scenes:
+		if String(candidate) == scene_path:
+			return {"scene": scene_path}
+	for candidate in scripts:
+		if not script_path.is_empty() and String(candidate) == script_path:
+			return {"script": script_path}
+	return {}
+
+# ----------------------------------------------------------------------------
+# .tscn 实体解析（纯文本，可单测）：节点段 → 完整路径、脚本引用（外部 vs 内嵌）、
+# 属性是否序列化。返回 {found, matched_path, node_name, script_mode, script_path,
+# script_uid, embedded_id, embedded_extends, has_property, root_name}。
+# ----------------------------------------------------------------------------
+
+## 提取 GDScript sub_resource 段体的源码首行（.tscn 里源码以转义 \n 序列化）。
+## 用显式传参而非 lambda 闭包：GDScript lambda 按值捕获局部变量，循环内的
+## 状态变化对闭包不可见。
+static func _effect_flush_sub_body(lines: PackedStringArray, start: int, end: int,
+		kind: String, sub_id: String, embedded_scripts: Dictionary) -> void:
+	if kind != "sub" or sub_id.is_empty() or not embedded_scripts.has(sub_id):
+		return
+	for i in range(start, mini(end, lines.size())):
+		var body_line: String = lines[i].strip_edges()
+		if body_line.begins_with("script/source = \""):
+			var source: String = body_line.substr(len("script/source = \""))
+			embedded_scripts[sub_id] = {
+				"first_line": source.split("\\n")[0],
+				"chars": source.length()}
+			return
+
+static func _resolve_scene_entity(scene_text: String, node_path: String, property: String) -> Dictionary:
+	var result: Dictionary = {
+		"found": false, "matched_path": "", "node_name": "",
+		"script_mode": "none", "script_path": "", "script_uid": "",
+		"embedded_id": "", "embedded_extends": "", "has_property": false,
+		"root_name": ""}
+	var lines: PackedStringArray = scene_text.split("\n")
+
+	# 单遍扫描：ext_resource（Script）/ GDScript sub_resource 源首行 /
+	# node 段（头部属性 + 段体行区间）。段体 = 本头与下一个 '[' 头之间。
+	var ext_scripts: Dictionary = {}
+	var embedded_scripts: Dictionary = {}
+	var node_sections: Array = []
+	var root_name: String = ""
+	var current_kind: String = ""  # "" | "sub" | "node"
+	var current_sub_id: String = ""
+	var current_body_start: int = -1
+
+	for i in lines.size():
+		var line: String = lines[i].strip_edges()
+		if line.begins_with("["):
+			_effect_flush_sub_body(lines, current_body_start, i, current_kind,
+				current_sub_id, embedded_scripts)
+			current_kind = ""
+			current_sub_id = ""
+			current_body_start = -1
+			if line.begins_with("[ext_resource"):
+				var attrs: Dictionary = _parse_header_attrs(line)
+				if String(attrs.get("type", "")) == "Script":
+					ext_scripts[String(attrs.get("id", ""))] = {
+						"path": String(attrs.get("path", "")),
+						"uid": String(attrs.get("uid", ""))}
+			elif line.begins_with("[sub_resource"):
+				var sub_attrs: Dictionary = _parse_header_attrs(line)
+				if String(sub_attrs.get("type", "")) == "GDScript":
+					current_kind = "sub"
+					current_sub_id = String(sub_attrs.get("id", ""))
+					current_body_start = i + 1
+					if not embedded_scripts.has(current_sub_id):
+						embedded_scripts[current_sub_id] = {"first_line": "", "chars": 0}
+			elif line.begins_with("[node"):
+				var node_attrs: Dictionary = _parse_header_attrs(line)
+				current_kind = "node"
+				node_sections.append({"attrs": node_attrs, "start": i + 1, "end": lines.size()})
+				if not node_attrs.has("parent") and root_name.is_empty():
+					root_name = String(node_attrs.get("name", ""))
+	_effect_flush_sub_body(lines, current_body_start, lines.size(), current_kind,
+		current_sub_id, embedded_scripts)
+	result["root_name"] = root_name
+
+	# 节点完整路径：无 parent => 根；parent="." => 根/名；否则 parent/名。
+	var target: String = node_path.strip_edges().trim_prefix("/").trim_suffix("/")
+	var matched: Dictionary = {}
+	for section_value in node_sections:
+		var section: Dictionary = section_value
+		var attrs: Dictionary = section.get("attrs", {})
+		var name: String = String(attrs.get("name", ""))
+		var full_path: String = name
+		if attrs.has("parent"):
+			var parent: String = String(attrs["parent"])
+			full_path = root_name + "/" + name if parent == "." else parent + "/" + name
+		if full_path == target:
+			matched = {"section": section, "path": full_path, "by_name": false}
+			break
+		if matched.is_empty() and name == target:
+			matched = {"section": section, "path": full_path, "by_name": true}
+	if matched.is_empty():
+		return result
+
+	var section: Dictionary = matched["section"]
+	var attrs: Dictionary = section.get("attrs", {})
+	result["found"] = true
+	result["matched_path"] = String(matched["path"])
+	result["node_name"] = String(attrs.get("name", ""))
+	result["matched_by_name"] = bool(matched["by_name"])
+	# 段体：script 引用形态 + 目标属性是否序列化在场景里。
+	var script_prefix: String = "script = "
+	var property_prefix: String = property + " ="
+	for i in range(int(section.get("start", 0)), int(section.get("end", 0))):
+		var line: String = lines[i].strip_edges()
+		if line.begins_with(script_prefix):
+			var ref: String = line.substr(script_prefix.length())
+			if ref.begins_with("ExtResource("):
+				var id: String = ref.get_slice('"', 1)
+				if ext_scripts.has(id):
+					result["script_mode"] = "external"
+					result["script_path"] = String(ext_scripts[id]["path"])
+					result["script_uid"] = String(ext_scripts[id]["uid"])
+			elif ref.begins_with("SubResource("):
+				var sub_id: String = ref.get_slice('"', 1)
+				result["script_mode"] = "embedded"
+				result["embedded_id"] = sub_id
+				if embedded_scripts.has(sub_id):
+					result["embedded_extends"] = String(embedded_scripts[sub_id]["first_line"])
+		if not result["has_property"] and line.begins_with(property_prefix):
+			result["has_property"] = true
+	return result
+
+## 解析资源头部的属性键值对：[ext_resource type="Script" path="..." id="..."]。
+static func _parse_header_attrs(header: String) -> Dictionary:
+	var attrs: Dictionary = {}
+	var regex: RegEx = RegEx.new()
+	regex.compile("([A-Za-z_]+)=\"([^\"]*)\"")
+	for m in regex.search_all(header):
+		attrs[String(m.get_string(1))] = m.get_string(2)
+	return attrs

@@ -259,6 +259,7 @@ const TOOLS: Dictionary = {
 	"validate_export_preset": {"category": "supplementary", "group": "Editor-Advanced"},
 	"validate_script": {"category": "supplementary", "group": "Script-Advanced"},
 	"validate_shader": {"category": "supplementary", "group": "Script-Advanced"},
+	"verify_change_effect": {"category": "supplementary", "group": "Debug-Advanced"},
 	"verify_scripts": {"category": "supplementary", "group": "Script-Advanced"},
 }
 

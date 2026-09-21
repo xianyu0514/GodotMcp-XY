@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**74 tools** — 3 core, 71 advanced.
+**75 tools** — 3 core, 72 advanced.
 
 Debug edit-time logs and debugger sessions, then inspect and control a running game through the runtime probe. This is the largest category and includes deterministic play verification, performance budgets and runtime error gates.
 
@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (70 advanced)
+### Debug-Advanced (71 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -53,6 +53,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `play_and_verify` | advanced | Drive the running game through a scripted sequence of input steps (with optional waits and screenshots), then evaluate a batch of runtime assertions, returning a single pass/fail report. Steps may also carry an inline 'assert' (expression + expected) evaluated immediately after that step, so mid-sequence behavior — e.g. `get_tree().paused == true` right after Esc, `== false` after the second Esc — is proven in order, not only at the end. Set deterministic=true to make per-step 'wait_frames' advance an exact number of physics frames inside the game (frame-stepped, fps-independent and reproducible) instead of a wall-clock approximation; combine with 'sample' to record a frame-indexed trajectory and per-label 'metrics' (min/max/first/last/delta/peak frame+time) for measuring game feel, and assert on them via {metric, aggregate, operator, expected}. Runtime errors the game emits during the run are captured via the debugger bridge and (by default) fail the report. Requires the game to be running with the runtime probe installed. |
 | `assert_performance_budget` | advanced | Performance budget gate: capture a runtime performance snapshot from the running game and check it against a budget, returning a pass/fail verdict plus a per-metric breakdown. Budget keys: min_fps, max_frame_time_ms, max_physics_frame_time_ms, max_object_count, max_resource_count, max_rendered_objects, max_memory_mb, max_node_count (define only the ones to enforce). min_* checks actual >= limit; max_* checks actual <= limit. Pass an explicit 'snapshot' object to evaluate a previously captured snapshot instead of querying the game. Requires the game to be running with the runtime probe installed (unless 'snapshot' is supplied). |
 | `assert_no_runtime_errors` | advanced | Runtime-error hard gate: scan the categorized debugger output captured from the running game and fail if any error events are present. By default it inspects the 'stderr' category; pass 'categories' to widen or narrow it, and 'since_sequence' to only consider events newer than a previously recorded sequence number (so you can gate a specific window of a run). Returns passed=false with the captured error events when any are found. |
+| `verify_change_effect` | advanced | Proof that a change actually reaches the game — the 'I edited it but nothing changed' chain, as one checklist with per-step evidence. Resolves the node's REAL script from the scene file (external `.gd` reference vs an EMBEDDED sub-resource copy — the classic silent killer where edits to the external file never reach the game), flags unsaved editor buffers (run_project boots the disk copy), boots the scene FRESH and reads the property back at runtime against `expected_value`, optionally runs behavior steps+assertions (play_and_verify shape; zero-assertion specs are rejected as smoke), then boots once more to prove persistence. `overall=effective` only when every non-skipped step verified; `needs` names the exact next call for each failure. |
 | `get_debug_threads` | advanced | Return DAP-style debugger threads visible from the active Godot debug session. |
 | `get_debug_state_events` | advanced | Read recorded debugger break/resume/stop state transitions from the bridge. |
 | `get_debug_output` | advanced | Read categorized runtime debugger output captured by the editor bridge. |
