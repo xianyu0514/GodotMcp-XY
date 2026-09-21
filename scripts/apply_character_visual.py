@@ -620,10 +620,14 @@ def run_regression(mcp: Mcp, scene: str, movement_expression: str = "position.x"
     else:
         print("[regression] player has no take_hit — hit-effect items skipped "
               "(movement verified only)")
+    requirements = ["movement", "hitstop", "flash", "shake", "particles", "respawn (twice)"]
+    if not has_take_hit:
+        requirements = ["movement"]
     return mcp.tool("run_verification_queue", {
         "command": "create",
         "goal": "per-requirement regression: every user-facing effect independently evidenced",
         "strict": True,
+        "requirements": requirements,
         "watch_paths": [player_script,
                         "res://scripts/player/character_skin.gd",
                         "res://scripts/player/hit_feedback.gd"],
@@ -642,6 +646,24 @@ def _merged_items(partial: dict, final: dict) -> list:
 
 
 def report_checklist(regression: dict) -> int:
+    # 优先引用插件契约清单（P0①公共能力）；驱动侧打印只是其视图。
+    plugin = regression.get("checklist", {})
+    if plugin:
+        print("")  # DELIVERY CHECKLIST (plugin contract)
+        failures = 0
+        for entry in plugin.get("requirements", []):
+            status = str(entry.get("status", "?"))
+            requirement = str(entry.get("requirement", "?"))
+            if status == "verified":
+                detail = "verified (%s/%s assertions)" % (
+                    entry.get("assertions_passed", "?"), entry.get("assertions_total", "?"))
+            else:
+                detail = "status=%s (item=%s)" % (status, entry.get("item_status", "?"))
+                failures += 1
+            print("  [%s] %s: %s" % (status.upper(), requirement, detail))
+        overall = str(plugin.get("overall", "incomplete"))
+        print("=== OVERALL: %s ===" % overall.upper())
+        return 0 if overall == "complete" else 1
     """Package 3: evidence-constrained delivery checklist. Every line is
     derived from actual queue outcomes; unmet/untested requirements make
     the overall verdict NOT COMPLETE (non-zero return)."""

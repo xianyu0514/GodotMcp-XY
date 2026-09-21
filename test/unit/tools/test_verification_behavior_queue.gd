@@ -146,16 +146,16 @@ func test_strict_queue_rejects_assertionless_behavior_check() -> void:
 	# 包②：零断言的 behavior_check 是冒烟结果，不能进严格队列充当完成证据。
 	var result: Dictionary = await _tools._tool_run_verification_queue({
 		"command": "create", "goal": "smoke cannot pass strict",
-		"strict": True,
+		"strict": true,
 		"items": [{"kind": "behavior_check", "label": "no assertions",
-			"detail": {"steps": [{"action": "move_right", "pressed": True}]}}]})
+			"detail": {"steps": [{"action": "move_right", "pressed": true}]}}]})
 	assert_has(result, "error", "strict create must refuse assertion-less items")
 	assert_true(str(result["error"]).contains("no assertions"),
 		"error must name the smoke-vs-strict rule")
 
 func test_item_summaries_carry_verification_labels() -> void:
 	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
-		return {"passed": True, "evidence": {
+		return {"passed": true, "evidence": {
 			"evidence_level": "native_run",
 			"assertions_passed": 2, "assertions_total": 2,
 			"assertions": [{"description": "a", "passed": true},
@@ -167,3 +167,79 @@ func test_item_summaries_carry_verification_labels() -> void:
 				"assert": {"expression": "1", "expected": 1}}]}}]})
 	assert_eq(String(result["items"][0].get("verification", "")), "verified",
 		"native run with assertions labels as verified")
+
+# --- P0① 需求契约：故障注入——缺项/smoke/partial 必须被准确点名 ---
+
+func test_missing_requirement_makes_outcome_incomplete() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": true, "evidence": {
+			"evidence_level": "native_run",
+			"assertions_passed": 1, "assertions_total": 1,
+			"assertions": [{"description": "only one", "passed": true}]}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "contract with a gap",
+		"requirements": ["attack", "camera"],
+		"items": [{"kind": "behavior_check", "requirement": "attack", "label": "a",
+			"detail": {"steps": [{"wait_ms": 30,
+				"assert": {"expression": "1", "expected": 1}}]}}]})
+	var checklist: Dictionary = result.get("checklist", {})
+	assert_eq(String(checklist.get("overall", "")), "incomplete",
+		"a missing requirement must make the overall outcome incomplete")
+	assert_eq(String(result.get("outcome", "")), "incomplete",
+		"the queue outcome itself is incomplete, not completed")
+	var unverified: Array = checklist.get("unverified", [])
+	assert_has(unverified, "camera", "the missing requirement is named")
+	assert_false("attack" in unverified, "the verified one is not flagged")
+
+func test_smoke_item_does_not_count_as_verified() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": true, "evidence": {"evidence_level": "native_run"}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "smoke gap",
+		"requirements": ["menu"],
+		"items": [{"kind": "behavior_check", "requirement": "menu", "label": "m",
+			"detail": {"steps": [{"action": "move_right", "pressed": true}]}}]})
+	var checklist: Dictionary = result.get("checklist", {})
+	var entries: Array = checklist.get("requirements", [])
+	assert_eq(entries.size(), 1)
+	assert_eq(String(entries[0].get("status", "")), "smoke",
+		"a pass with zero assertions is labeled smoke, not verified")
+	assert_eq(String(checklist.get("overall", "")), "incomplete")
+
+func test_partial_failure_labeled_partial() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": false, "evidence": {
+			"evidence_level": "native_run",
+			"assertions_passed": 1, "assertions_total": 2,
+			"assertions": [{"description": "ok", "passed": true},
+				{"description": "bad", "passed": false}]}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "partial",
+		"requirements": ["boss"],
+		"items": [{"kind": "behavior_check", "requirement": "boss", "label": "b",
+			"detail": {"steps": [{"wait_ms": 30,
+				"assert": {"expression": "1", "expected": 1}}]}}]})
+	var entries: Array = result.get("checklist", {}).get("requirements", [])
+	assert_eq(String(entries[0].get("status", "")), "partial",
+		"failed-with-some-evidence is partial, distinct from failed")
+
+func test_all_verified_contracts_complete() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": true, "evidence": {
+			"evidence_level": "native_run",
+			"assertions_passed": 2, "assertions_total": 2,
+			"assertions": [{"description": "a", "passed": true},
+				{"description": "b", "passed": true}]}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "full contract",
+		"requirements": ["x", "y"],
+		"items": [
+			{"kind": "behavior_check", "requirement": "x", "label": "1",
+				"detail": {"steps": [{"wait_ms": 30,
+					"assert": {"expression": "1", "expected": 1}}]}},
+			{"kind": "behavior_check", "requirement": "y", "label": "2",
+				"detail": {"steps": [{"wait_ms": 30,
+					"assert": {"expression": "1", "expected": 1}}]}}]})
+	assert_eq(String(result.get("checklist", {}).get("overall", "")), "complete",
+		"all requirements verified => complete")
+	assert_eq(String(result.get("outcome", "")), "completed")

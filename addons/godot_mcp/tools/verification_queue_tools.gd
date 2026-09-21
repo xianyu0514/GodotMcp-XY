@@ -73,6 +73,10 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 				"type": "boolean", "default": false,
 				"description": "create only: strict queues reject externally recorded verdicts (command=record errors) — completion requires native execution evidence (script_check/behavior_check)."
 			},
+			"requirements": {
+				"type": "array", "items": {"type": "string"},
+				"description": "create only: required requirement ids (the delivery contract). Responses carry a checklist mapping every requirement to verified/smoke/partial/failed/unverified/external_claim; ANY requirement lacking verified evidence makes the overall outcome incomplete."
+			},
 			"budget": {
 				"type": "integer",
 				"description": "Maximum pending items to run per create/advance slice. Default 4.",
@@ -181,12 +185,22 @@ func _command_create(params: Dictionary) -> Dictionary:
 		return created
 	var queue: Dictionary = created["queue"]
 	queue["strict"] = bool(params.get("strict", false))
+	var requirements: Variant = params.get("requirements", [])
+	if requirements is Array and not (requirements as Array).is_empty():
+		var contract: Array = []
+		for requirement_value in requirements:
+			var requirement_id: String = str(requirement_value).strip_edges()
+			if not requirement_id.is_empty() and not requirement_id in contract:
+				contract.append(requirement_id)
+		queue["requirements"] = contract
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
 
 	var response: Dictionary = _queue_summary(queue, "open")
 	response["command"] = "create"
+	if queue.has("requirements"):
+		response["checklist"] = _requirement_checklist(queue)
 	if not bool(params.get("defer_first_slice", false)):
 		var advanced: Dictionary = await _advance_and_save(store, queue, int(params.get("budget", 4)))
 		for key in advanced:
@@ -217,6 +231,8 @@ func _command_inspect(params: Dictionary) -> Dictionary:
 			return save_result
 	var summary: Dictionary = _queue_summary(queue, String(queue.get("phase", "open")))
 	summary["command"] = "inspect"
+	if queue.has("requirements"):
+		summary["checklist"] = _requirement_checklist(queue)
 	summary["stale_refreshed"] = staled
 	return summary
 
@@ -263,8 +279,12 @@ func _command_record(params: Dictionary) -> Dictionary:
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
-	var summary: Dictionary = _queue_summary(queue, outcome)
+	_enforce_requirement_contract(queue)
+	var summary: Dictionary = _queue_summary(queue, String(queue.get("phase", outcome)))
 	summary["command"] = "record"
+	if queue.has("requirements"):
+		summary["checklist"] = _requirement_checklist(queue)
+		summary["outcome"] = String(queue.get("phase", outcome))
 	summary["stale_refreshed"] = 0
 	return summary
 
@@ -292,10 +312,14 @@ func _advance_and_save(store: Dictionary, queue: Dictionary, budget: int) -> Dic
 	var staled: int = StoreScript.refresh_stale(queue)
 	var advanced: Dictionary = await StoreScript.advance(queue, maxi(0, budget),
 		func(item: Dictionary) -> Dictionary: return await _execute_item(item))
+	_enforce_requirement_contract(queue)
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
 	advanced["stale_refreshed"] = staled
+	if queue.has("requirements"):
+		advanced["checklist"] = _requirement_checklist(queue)
+		advanced["outcome"] = String(queue.get("phase", advanced.get("outcome", "")))
 	return advanced
 
 ## 内置执行器：script_check 走 GDScript 编译检查；external 项 defer——
@@ -324,6 +348,77 @@ func _check_behavior(detail: Dictionary) -> Dictionary:
 
 ## 经插件注册表取已 initialize 的模块实例（跨模块协作的既有模式）；
 ## 注册表不可用时回退到 new()（meta 回退链自行解析编辑器接口）。
+## 需求清单（P0① 公共能力）：每条需求独立状态 + 证据，缺项 => incomplete。
+func _requirement_checklist(queue: Dictionary) -> Dictionary:
+	var contract: Array = queue.get("requirements", []) if queue.get("requirements", []) is Array else []
+	var entries: Array = []
+	var by_requirement: Dictionary = {}
+	for item_value in queue.get("items", []):
+		var item: Dictionary = item_value if item_value is Dictionary else {}
+		var requirement_id: String = str(item.get("requirement", ""))
+		if requirement_id.is_empty():
+			var label: String = str(item.get("label", ""))
+			if label.begins_with("requirement:"):
+				requirement_id = label.substr(len("requirement:"))
+		if requirement_id.is_empty():
+			continue
+		var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+		var status: String
+		var item_status: String = str(item.get("status", "pending"))
+		var assertions_total: int = int(evidence.get("assertions_total", 0))
+		var assertions_passed: int = int(evidence.get("assertions_passed", 0))
+		var level: String = String(evidence.get("evidence_level", ""))
+		if String(queue.get("blocked_reason", "")) != "" and item_status == "pending":
+			status = "blocked"
+		elif item_status == "pending":
+			status = "unverified"
+		elif level == "external_claim":
+			status = "external_claim"
+		elif item_status == "passed" and assertions_total > 0:
+			status = "verified"
+		elif item_status == "passed":
+			status = "smoke"
+		elif assertions_passed > 0:
+			status = "partial"
+		else:
+			status = "failed"
+		by_requirement[requirement_id] = {
+			"requirement": requirement_id,
+			"status": status,
+			"item_status": item_status,
+			"assertions_passed": assertions_passed,
+			"assertions_total": assertions_total,
+			"evidence_level": level,
+		}
+	for requirement_id in contract:
+		if by_requirement.has(requirement_id):
+			entries.append(by_requirement[requirement_id])
+		else:
+			entries.append({
+				"requirement": requirement_id, "status": "unverified",
+				"item_status": "missing", "assertions_passed": 0,
+				"assertions_total": 0, "evidence_level": "",
+			})
+	var unverified: Array = []
+	for entry in entries:
+		if str(entry.get("status", "")) != "verified":
+			unverified.append(str(entry.get("requirement", "?")))
+	return {
+		"requirements": entries,
+		"unverified": unverified,
+		"overall": "complete" if (not contract.is_empty() and unverified.is_empty()) else "incomplete",
+	}
+
+func _enforce_requirement_contract(queue: Dictionary) -> void:
+	var contract: Array = queue.get("requirements", []) if queue.get("requirements", []) is Array else []
+	if contract.is_empty():
+		return
+	var checklist: Dictionary = _requirement_checklist(queue)
+	if String(checklist.get("overall", "incomplete")) != "complete":
+		if String(queue.get("phase", "")) == "completed":
+			queue["phase"] = "incomplete"
+		queue["blocked_reason"] = "requirements without verified evidence: " + ", ".join(checklist.get("unverified", []))
+
 func _tool_instance(class_key: String, fallback_script: GDScript) -> RefCounted:
 	if Engine.has_meta("GodotMCPPlugin"):
 		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
