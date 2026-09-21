@@ -61,9 +61,9 @@ func _register_create_node(server_core: RefCounted) -> void:
 				},
 				"on_name_conflict": {
 					"type": "string",
-					"description": "Behavior when node_name already exists in parent: 'error' (return error), 'rename' (auto-rename with unique suffix), 'auto' (allow Godot to assign @NodeType@XXXXX name). Default: 'error'.",
+					"description": "Behavior when node_name already exists in parent: 'error' (return error), 'rename' (auto-rename with unique suffix), 'skip' (idempotent: already exists counts as done), 'auto' (allow Godot to assign @NodeType@XXXXX name). Default: 'error'.",
 					"default": "error",
-					"enum": ["error", "rename", "auto"]
+					"enum": ["error", "rename", "skip", "auto"]
 				}
 			},
 			"required": ["parent_path", "node_type", "node_name"]
@@ -148,7 +148,14 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	if parent.has_node(node_name):
 		match on_name_conflict:
 			"error":
-				return {"error": "A node named '" + node_name + "' already exists under " + parent_path + ". Use a different name or set on_name_conflict='rename'."}
+				return {"error": "A node named '" + node_name + "' already exists under " + parent_path + ". Use a different name or set on_name_conflict='rename' or 'skip'."}
+			"skip":
+				# Idempotent recipes: an existing node counts as done.
+				return {
+					"status": "skipped", "node_name": node_name,
+					"node_path": str(parent.get_path()) + "/" + node_name,
+					"reason": "already exists"
+				}
 			"rename":
 				var counter: int = 1
 				var new_name: String = node_name + "_" + str(counter)

@@ -219,11 +219,25 @@ static func advance(queue: Dictionary, budget: int,
 		item["status"] = "passed" if passed else "failed"
 		item["evidence"] = evidence
 		item["checked_at"] = _now()
-		processed.append({
+		var processed_entry: Dictionary = {
 			"id": String(item.get("id", "")),
 			"label": String(item.get("label", "")),
 			"status": String(item["status"]),
-		})
+		}
+		# 紧凑证据摘要随响应同行（调用方免读 store 文件）。
+		var item_evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+		if not item_evidence.is_empty():
+			processed_entry["evidence_level"] = String(item_evidence.get("evidence_level", ""))
+			if item_evidence.has("assertions_total"):
+				processed_entry["assertions_passed"] = int(item_evidence.get("assertions_passed", 0))
+				processed_entry["assertions_total"] = int(item_evidence.get("assertions_total", 0))
+			for assertion_value in item_evidence.get("assertions", []):
+				if assertion_value is Dictionary and not bool((assertion_value as Dictionary).get("passed", true)):
+					processed_entry["first_failure"] = String((assertion_value as Dictionary).get("description", ""))
+					break
+			if evidence.has("steps_executed"):
+				processed_entry["steps_executed"] = int(evidence.get("steps_executed", 0))
+		processed.append(processed_entry)
 		budget -= 1
 
 	var passed_count: int = _count_status(queue, "passed")

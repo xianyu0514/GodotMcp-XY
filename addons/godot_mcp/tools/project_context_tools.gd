@@ -530,6 +530,17 @@ static func _scene_role(node_type: String) -> String:
 	return ""
 
 
+## 场景文本是否直接定义（而非实例化）给定类型的节点。
+static func _scene_defines_node_of_type(content: String, types: Array) -> bool:
+	for line in content.split("
+"):
+		if not line.begins_with("[node"):
+			continue
+		if _attr(line, "type") in types:
+			return true
+	return false
+
+
 static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Array,
 		max_items: int) -> Array:
 	if entry_paths.is_empty():
@@ -566,7 +577,14 @@ static func _find_referencing_scenes(scene_paths: Array[String], entry_paths: Ar
 			"path": String(scene_path),
 			"references_scripts": referenced,
 			"match": "exact_path_or_uid",
+			"is_source_scene": _scene_defines_node_of_type(content,
+				["CharacterBody2D", "StaticBody2D", "Area2D", "RigidBody2D"]),
 		})
+	# 源场景（直接定义身体类型节点）排在实例场景（地图）之前——auto-locate
+	# 与配方的对象绑定因此优先命中被定义处而非被实例处（实测：player.tscn
+	# 曾排在三张地图之后）。
+	matches.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return bool(a.get("is_source_scene", false)) and not bool(b.get("is_source_scene", false)))
 	return matches
 
 static func _preload_paths(content: String) -> Array:

@@ -435,13 +435,28 @@ func _queue_summary(queue: Dictionary, outcome: String) -> Dictionary:
 	var items: Array = []
 	for item_value in queue.get("items", []):
 		var item: Dictionary = item_value
-		items.append({
+		var entry: Dictionary = {
 			"id": String(item.get("id", "")),
 			"kind": String(item.get("kind", "")),
 			"label": String(item.get("label", "")),
 			"status": String(item.get("status", "")),
 			"checked_at": String(item.get("checked_at", "")),
-		})
+		}
+		# Compact evidence summary so callers stop digging through the store
+		# file: level, pass counts, first failure description, key metrics.
+		var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+		if not evidence.is_empty():
+			entry["evidence_level"] = String(evidence.get("evidence_level", ""))
+			if evidence.has("assertions_total"):
+				entry["assertions_passed"] = int(evidence.get("assertions_passed", 0))
+				entry["assertions_total"] = int(evidence.get("assertions_total", 0))
+			for assertion_value in evidence.get("assertions", []):
+				if assertion_value is Dictionary and not bool((assertion_value as Dictionary).get("passed", true)):
+					entry["first_failure"] = String((assertion_value as Dictionary).get("description", ""))
+					break
+			if evidence.has("steps_executed"):
+				entry["steps_executed"] = int(evidence.get("steps_executed", 0))
+		items.append(entry)
 	return {
 		"queue_id": String(queue.get("queue_id", "")),
 		"goal": String(queue.get("goal", "")),

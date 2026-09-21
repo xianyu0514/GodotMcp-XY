@@ -121,3 +121,23 @@ func _stored_items(queue_id: String) -> Array:
 			var items: Variant = (queue_value as Dictionary).get("items", [])
 			return items if items is Array else []
 	return []
+
+func test_queue_summary_carries_evidence_summary() -> void:
+	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
+		return {"passed": false, "evidence": {
+			"evidence_level": "native_run",
+			"assertions_passed": 1, "assertions_total": 2,
+			"assertions": [
+				{"description": "ok one", "passed": true},
+				{"description": "the failing one", "passed": false}],
+			"steps_executed": 3}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "summary evidence",
+		"items": [{"kind": "behavior_check", "label": "sum",
+			"detail": {"steps": [{"action": "x"}]}}]})
+	assert_eq(String(result["items"][0].get("evidence_level", "")), "native_run",
+		"summary items expose the evidence level inline")
+	assert_eq(int(result["items"][0].get("assertions_passed", -1)), 1)
+	assert_eq(int(result["items"][0].get("assertions_total", -1)), 2)
+	assert_eq(String(result["items"][0].get("first_failure", "")), "the failing one",
+		"first failure description travels with the response")

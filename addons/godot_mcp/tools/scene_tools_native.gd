@@ -95,6 +95,7 @@ func _register_create_scene(server_core: RefCounted) -> void:
 		"properties": {
 			"status": {"type": "string"},
 			"scene_path": {"type": "string"},
+			"open_after_create": {"type": "boolean", "default": true, "description": "Open the new scene as the active edited scene immediately (saves an open_scene call). Default true; false keeps the old write-only behavior."},
 			"root_node_type": {"type": "string"}
 		}
 	}
@@ -178,11 +179,20 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	
 	ChangeJournalScript.record_write_operation("create_scene " + scene_path,
 		scene_path, before_hash, ChangeJournalScript.file_sha256(scene_path), true)
-	return {
+	var response: Dictionary = {
 		"status": "success",
 		"scene_path": scene_path,
 		"root_node_type": root_node_type
 	}
+	if bool(params.get("open_after_create", true)):
+		var opener: EditorInterface = _get_editor_interface()
+		if opener:
+			opener.open_scene_from_path(scene_path)
+			response["opened"] = true
+		else:
+			response["opened"] = false
+			response["open_note"] = "editor interface unavailable; call open_scene next"
+	return response
 
 # ============================================================================
 # save_scene - 保存当前场景
