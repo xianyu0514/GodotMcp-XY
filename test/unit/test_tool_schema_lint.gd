@@ -155,6 +155,7 @@ const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
 	"manage_localization": "本地化工作流：长描述 + 富参数（历史基线，待精简）",
 	"configure_android_export": "Android 导出配置：富参数 schema（历史基线，待精简）",
 	"assert_visual_baseline": "视觉回归门禁：富参数 schema（历史基线，待精简）",
+	"batch_scene_node_edits": "幂等配方核心：on_exists=skip 语义必须内联说明（409 token，2026-09 角色工作流引入；精简需先审计配方依赖）",
 }
 
 ## 值为“名称 -> 子 schema”映射的容器关键字。

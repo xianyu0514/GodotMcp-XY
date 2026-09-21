@@ -1,7 +1,7 @@
-[gd_scene format=3 uid="uid://crcob5e3c0qa7"]
+[gd_scene format=3]
 
-[ext_resource type="Script" uid="uid://b742ao6114koy" path="res://scripts/combat/enemy.gd" id="1_enemy"]
-[ext_resource type="Script" uid="uid://d3yfuefoqxs0f" path="res://scripts/combat/melee_brain.gd" id="2_md0e3"]
+[ext_resource type="Script" path="res://scripts/combat/enemy.gd" id="1_enemy"]
+[ext_resource type="Script" path="res://scripts/combat/melee_brain.gd" id="2_md0e3"]
 
 [sub_resource type="RectangleShape2D" id="shape_enemy"]
 size = Vector2(34, 34)
