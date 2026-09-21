@@ -606,6 +606,7 @@ func _register_batch_scene_node_edits(server_core: RefCounted) -> void:
 						"type": "object",
 						"properties": {
 							"type": {"type": "string", "enum": ["create", "delete", "rename", "move", "set_property", "attach_script", "connect_signal"]},
+							"on_exists": {"type": "string", "enum": ["error", "skip"], "default": "error", "description": "create only: 'skip' treats an existing node as done (idempotent recipes)."},
 							"parent_path": {"type": "string"},
 							"node_type": {"type": "string"},
 							"node_name": {"type": "string"},
@@ -705,6 +706,7 @@ func _resolve_batch_edit_node(node_path: String, batch_created_nodes: Dictionary
 
 func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, scene_root: Node) -> Dictionary:
 	var prepared_operations: Array = []
+	var skipped_operations: Array = []
 	var batch_created_nodes: Dictionary = {}
 	var batch_pending_scripts: Dictionary = {}
 	var structural_index: int = 0
@@ -843,10 +845,11 @@ func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, s
 						"method_name": method_name,
 						"callable": callable
 					})
-	return {"operations": prepared_operations}
+	return {"operations": prepared_operations, "skipped": skipped_operations}
 
 func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dictionary:
 	var prepared_operations: Array = []
+	var skipped_operations: Array = []
 	for operation in operations:
 		if not (operation is Dictionary):
 			return {"error": "Each operation entry must be an object"}
@@ -864,6 +867,12 @@ func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dic
 						parent_node = scene_root
 					else:
 						return {"error": "Parent node not found: " + parent_path}
+				var on_exists: String = str(operation.get("on_exists", "error")).to_lower()
+				if on_exists == "skip" and parent_node.has_node(node_name):
+					skipped_operations.append({
+						"type": "create", "node_path": str(parent_node.get_path()) + "/" + node_name,
+						"reason": "already exists"})
+					continue
 				var type_error: String = _node_type_error(node_type)
 				if not type_error.is_empty():
 					return {"error": type_error}
@@ -953,7 +962,7 @@ func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dic
 	var conflict_error: String = _batch_scene_conflict_error(prepared_operations, scene_root)
 	if not conflict_error.is_empty():
 		return {"error": conflict_error}
-	return {"operations": prepared_operations}
+	return {"operations": prepared_operations, "skipped": skipped_operations}
 
 # Preflight the evolving hierarchy without allocating nodes or mutating the scene.
 # Paths still resolve against the scene as it was at the start of the request.
@@ -1142,6 +1151,12 @@ func _tool_batch_scene_node_edits(params: Dictionary) -> Dictionary:
 			pending.free()
 		return extended
 	prepared_operations = extended["operations"]
+	var skipped_operations: Array = []
+	for source in [preparation, extended]:
+		var source_skipped: Variant = source.get("skipped", [])
+		if source_skipped is Array:
+			for skipped_value in source_skipped:
+				skipped_operations.append(skipped_value)
 	var conflict: String = _batch_scene_conflict_error(prepared_operations, scene_root)
 	if not conflict.is_empty():
 		for pending in allocated:

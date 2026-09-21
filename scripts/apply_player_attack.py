@@ -307,6 +307,12 @@ def resolve_binding(mcp: Mcp, config: dict) -> dict:
             if body.get("type") == "CharacterBody2D" and body.get("instance_of"):
                 return {"scene": body["instance_of"], "player_node": body["name"],
                         "source": "gather_task_context"}
+    # 第三种结构：每场景自带 Player 子节点。
+    for entry in entries:
+        for body in entry.get("roles", {}).get("body", []):
+            if body.get("type") == "CharacterBody2D":
+                return {"scene": entry["scene"], "player_node": body["name"],
+                        "source": "gather_task_context"}
     raise SystemExit("auto-locate failed; declare scene/player_node in config")
 
 

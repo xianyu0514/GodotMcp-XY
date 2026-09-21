@@ -285,6 +285,22 @@ def ensure_script(mcp: Mcp, path: str, content: str) -> None:
 
 
 def resolve_binding(mcp: Mcp, config: dict) -> dict:
+    result = _resolve_binding_inner(mcp, config)
+    if not result.get("player_script"):
+        result["player_script"] = _entry_script_for(mcp, config)
+    return result
+
+
+def _entry_script_for(mcp: Mcp, config: dict) -> str:
+    context = mcp.tool("gather_task_context", {
+        "goal": f"{config.get('goal_hint', 'player character visual')} player",
+        "max_items_per_bucket": 5})
+    for entry in context.get("entry_scripts", []):
+        return str(entry.get("path", ""))
+    return ""
+
+
+def _resolve_binding_inner(mcp: Mcp, config: dict) -> dict:
     """Auto-locate the player scene+node via the plugin's gather_task_context
     (scene_objects bucket) when the config does not declare them explicitly."""
     if config.get("scene") and config.get("player_node") and not config.get("auto"):
@@ -292,6 +308,7 @@ def resolve_binding(mcp: Mcp, config: dict) -> dict:
     context = mcp.tool("gather_task_context", {
         "goal": f"{config.get('goal_hint', 'player character visual')} player",
         "max_items_per_bucket": 5})
+
     # 玩家源场景优先（root 即 CharacterBody2D）；实例 body 一律绑定其源场景
     # （改源场景而非地图实例覆盖 —— 地图同层的 visual 是地图 UI，不是角色的）。
     entries = context.get("scene_objects", [])
@@ -301,7 +318,8 @@ def resolve_binding(mcp: Mcp, config: dict) -> dict:
             if visuals:
                 return {"scene": entry["scene"],
                         "player_node": _root_node_name(entry),
-                        "body_node": visuals[0]["name"], "source": "gather_task_context"}
+                        "body_node": visuals[0]["name"], "root_is_player": True,
+                        "source": "gather_task_context"}
     for entry in entries:
         for body in entry.get("roles", {}).get("body", []):
             if body.get("type") == "CharacterBody2D" and body.get("instance_of"):
@@ -309,6 +327,14 @@ def resolve_binding(mcp: Mcp, config: dict) -> dict:
                         "player_node": body["name"],
                         "body_node": body.get("visual_node", "Body"),
                         "source": "gather_task_context"}
+    # 第三种结构：每场景自带 Player 子节点（root 是 Node2D 等）——同层有
+    # 视觉子节点的 CharacterBody2D 即绑定目标。
+    for entry in entries:
+        visuals = entry.get("roles", {}).get("visual", [])
+        for body in entry.get("roles", {}).get("body", []):
+            if body.get("type") == "CharacterBody2D" and visuals:
+                return {"scene": entry["scene"], "player_node": body["name"],
+                        "body_node": visuals[0]["name"], "source": "gather_task_context"}
     raise SystemExit("auto-locate failed: no scene with a CharacterBody2D + visual node "
                      "matched; declare scene/player_node in the config explicitly")
 
@@ -325,6 +351,9 @@ def apply_workflow(mcp: Mcp, config: dict) -> dict:
     actions: list[str] = []
     binding = resolve_binding(mcp, config)
     config["scene"], config["player_node"] = binding["scene"], binding["player_node"]
+    if binding.get("player_script"):
+        config["player_script"] = binding["player_script"]
+    config["movement_expression"] = "position.x" if binding.get("root_is_player", False) else         "get_node('%s').position.x" % config["player_node"]
     config.setdefault("body_node", binding.get("body_node", "Body"))
     actions.append(f"binding resolved via {binding['source']}: "
                    f"{binding['player_node']} in {binding['scene']}")
@@ -402,11 +431,17 @@ def apply_workflow(mcp: Mcp, config: dict) -> dict:
     actions.append("component parameters applied (@export, live-tunable)")
 
     # 5) wire take_hit -> feedback via guarded change set (skip when wired).
-    player_script = "res://scripts/player/player.gd"
+    player_script = config.get("player_script") or "res://scripts/player/player.gd"
     read = mcp.tool("read_script", {"script_path": player_script})
     content = str(read.get("content", ""))
     if WIRE_MARKER in content:
         actions.append("take_hit already wired (skipped)")
+    elif WIRE_OLD not in content:
+        # 结构复用（包05）：项目没有声明的伤害锚点时不硬接线——反馈组件
+        # 已就位，接线点以说明交付（首次受击路径实现时一行接上）。
+        actions.append("wiring anchor not found (SoundBus SFX_HIT block) — "
+                       "HitFeedback attached but unwired; wire play_hit_feedback "
+                       "into your damage entry point when it exists")
     else:
         verdict = mcp.tool("apply_change_set", {
             "intent": "wire hit feedback into the existing damage path",
@@ -423,45 +458,55 @@ def apply_workflow(mcp: Mcp, config: dict) -> dict:
     return {"actions": actions}
 
 
-def run_regression(mcp: Mcp, scene: str) -> dict:
-    """Deterministic regression: drive take_hit DIRECTLY (no enemy-path
-    assumptions) — hp rules, invuln window, flash recovery — plus real
-    input movement on the same scene."""
-    result = mcp.tool("run_verification_queue", {
+def run_regression(mcp: Mcp, scene: str, movement_expression: str = "position.x",
+                   player_script: str = "res://scripts/player/player.gd") -> dict:
+    """Structure-adaptive regression: movement via the bound expression
+    (player-as-root vs player-as-child); hit/invuln/flash checks only when
+    the player script exposes take_hit (reuse without a damage path
+    degrades to movement + explicit guidance)."""
+    has_take_hit = False
+    try:
+        read = mcp.tool("read_script", {"script_path": player_script})
+        has_take_hit = "take_hit" in str(read.get("content", ""))
+    except RuntimeError:
+        pass
+    items = [
+        {"kind": "behavior_check", "label": "movement still real", "detail": {
+            "scene_path": scene, "steps": [
+                {"action": "move_right", "pressed": True, "wait_ms": 600,
+                 "assert": {"expression": movement_expression, "displacement_min": 60,
+                            "description": "held key still moves the player"}},
+                {"action": "move_right", "pressed": False, "wait_ms": 100}]}}]
+    if has_take_hit:
+        items.append({"kind": "behavior_check", "label": "hit once; invuln blocks doubles; flash recovers", "detail": {
+            "scene_path": scene, "steps": [
+                {"wait_ms": 100,
+                 "assert": {"expression": "(take_hit(10, Vector2(120, 0)) == null)", "expected": True,
+                            "description": "first hit lands"}},
+                {"wait_ms": 100,
+                 "assert": {"expression": "hp", "expected": 90,
+                            "description": "exactly one deduction of 10"}},
+                {"wait_ms": 30,
+                 "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": True,
+                            "description": "flash is live right after the hit"}},
+                {"wait_ms": 100,
+                 "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
+                            "description": "second hit during invuln is a no-op call"}},
+                {"wait_ms": 100,
+                 "assert": {"expression": "hp", "expected": 90,
+                            "description": "invuln window prevented a second deduction"}},
+                {"wait_ms": 800,
+                 "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": False,
+                            "description": "modulate returns to white after the flash window"}}]}})
+    else:
+        print("[regression] player has no take_hit — hit checks skipped (movement-only)")
+    return mcp.tool("run_verification_queue", {
         "command": "create", "goal": "character polish regression: originals intact, feedback obeys rules",
         "strict": True,
-        "watch_paths": ["res://scripts/player/player.gd",
+        "watch_paths": [player_script,
                         "res://scripts/player/character_skin.gd",
                         "res://scripts/player/hit_feedback.gd"],
-        "items": [
-            {"kind": "behavior_check", "label": "movement still real", "detail": {
-                "scene_path": scene, "steps": [
-                    {"action": "move_right", "pressed": True, "wait_ms": 600,
-                     "assert": {"expression": "position.x", "displacement_min": 60,
-                                "description": "held key still moves the player"}},
-                    {"action": "move_right", "pressed": False, "wait_ms": 100}]}},
-            {"kind": "behavior_check", "label": "hit lands once; invuln blocks doubles; flash recovers", "detail": {
-                "scene_path": scene, "steps": [
-                    {"wait_ms": 100,
-                     "assert": {"expression": "(take_hit(10, Vector2(120, 0)) == null)", "expected": True,
-                                "description": "first hit lands"}},
-                    {"wait_ms": 100,
-                     "assert": {"expression": "hp", "expected": 90,
-                                "description": "exactly one deduction of 10"}},
-                    {"wait_ms": 30,
-                     "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": True,
-                                "description": "flash is live right after the hit"}},
-                    {"wait_ms": 100,
-                     "assert": {"expression": "(take_hit(10, Vector2(0, 0)) == null)", "expected": True,
-                                "description": "second hit during invuln is a no-op call"}},
-                    {"wait_ms": 100,
-                     "assert": {"expression": "hp", "expected": 90,
-                                "description": "invuln window prevented a second deduction"}},
-                    {"wait_ms": 800,
-                     "assert": {"expression": "get_node('HitFeedback').is_flash_active()", "expected": False,
-                                "description": "modulate returns to white after the flash window"}}]}}
-        ]}, timeout=420.0)
-    return result
+        "items": items}, timeout=420.0)
 
 
 def true_sentinel():
@@ -474,6 +519,8 @@ def main() -> int:
     parser.add_argument("--port", default="9180")
     parser.add_argument("--config", default=None, help="JSON file overriding defaults")
     parser.add_argument("--with-regression", action="store_true")
+    parser.add_argument("--swap-sheet", nargs=2, type=int, metavar=("W", "H"),
+                        help="package 05: generate and bind a different frame-size sheet")
     parser.add_argument("--auto", action="store_true",
                         help="locate the player via gather_task_context instead of the config declaration")
     parser.add_argument("--godot", default=r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe")
@@ -513,12 +560,53 @@ def main() -> int:
             "create_node", "batch_scene_node_edits", "save_scene",
             "validate_script", "run_verification_queue",
             "gather_task_context", "generate_asset"]})
+        # 资产替换（包05）：--swap-sheet W H 生成不同尺寸新表并改绑——
+        # 复用同一配方，只换素材配置；碰撞与支点由 pixel_offset 对齐语义保持。
+        if args.swap_sheet:
+            w, h = args.swap_sheet
+            columns = max(config["idle_frames"], config["move_frames"])
+            sheet_path = config["sheet"].replace(".tres", "_%dx%d.tres" % (w, h))
+            result = mcp.tool("generate_asset", {
+                "resource_path": sheet_path,
+                "prompt": "swapped player sheet (different frame size)",
+                "type": "sprite", "provider": "placeholder",
+                "pattern": "sprite_sheet",
+                "width": w * columns, "height": h * 2,
+                "frame_columns": columns, "frame_rows": 2,
+                "colors": [{"r": 0.9, "g": 0.45, "b": 0.25}, {"r": 0.2, "g": 0.95, "b": 0.6}],
+            }, timeout=120.0)
+            if result.get("status") != "success":
+                raise SystemExit(f"swap sheet generation failed: {result}")
+            config["sheet"] = sheet_path
+            config["frame_size"] = [w, h]
+            print(f"[swap] new {w}x{h} sheet: {sheet_path}")
         ensure_sheet(mcp, config, project)
         report = apply_workflow(mcp, config)
         for action in report["actions"]:
             print("[ok]", action)
+        if args.swap_sheet:
+            # 碰撞完整性（实测教训：资源类型属性必须走 set_node_subresource，
+            # 换图后必须证明碰撞仍在）：运行时断言 shape 非空且尺寸未变。
+            mcp.tool("enable_tools", {"tools": [
+                "run_project", "install_runtime_probe",
+                "evaluate_runtime_expression", "stop_project"]})
+            mcp.tool("install_runtime_probe", {"node_name": "MCPRuntimeProbe", "persistent": True})
+            mcp.tool("run_project", {"scene_path": config["scene"], "allow_window": True})
+            import time as _t
+            _t.sleep(2.0)
+            shape = mcp.tool("evaluate_runtime_expression", {
+                "expression": "get_node('Collision').shape.size"})
+            mcp.tool("stop_project", {"allow_window": True})
+            value = shape.get("value")
+            size_ok = isinstance(value, dict) and value.get("x") and value.get("y")
+            print(f"[integrity] collision shape after swap: {json.dumps(value)} "
+                  f"{'OK' if size_ok else 'MISSING — SWAP REJECTED'}")
+            if not size_ok:
+                return 1
         if args.with_regression:
-            regression = run_regression(mcp, config["scene"])
+            regression = run_regression(mcp, config["scene"],
+                movement_expression=config.get("movement_expression", "position.x"),
+                player_script=config.get("player_script") or "res://scripts/player/player.gd")
             print("regression:", regression.get("outcome"),
                   "passed:", regression.get("passed_count"),
                   "failed:", regression.get("failed_count"))
