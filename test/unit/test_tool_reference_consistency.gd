@@ -144,6 +144,123 @@ func test_slash_list_gate_catches_the_original_drift() -> void:
 	assert_false(_manifest_names.has("write_script"), "Control: write_script must not be a real tool")
 
 
+const ClassifierTestScript = preload("res://test/unit/test_mcp_tool_classifier.gd")
+
+## 从渲染文本提取 {"tool": "X", "args": {...}} 示例：手工花号配平（正则无法
+## 处理嵌套对象），返回 [{tool, args_text, args(Dictionary?)}]。
+func _extract_call_examples(text: String) -> Array[Dictionary]:
+	var examples: Array[Dictionary] = []
+	var needle: String = "{\"tool\": \""
+	var search_from: int = 0
+	while true:
+		var head: int = text.find(needle, search_from)
+		if head < 0:
+			break
+		var name_start: int = head + needle.length()
+		var name_end: int = text.find("\"", name_start)
+		if name_end < 0:
+			break
+		var tool: String = text.substr(name_start, name_end - name_start)
+		var args_prefix: String = "\", \"args\": "
+		var args_start: int = text.find(args_prefix, name_end)
+		examples.append({"tool": tool, "head": head, "args_prefix_at": args_start,
+			"prefix_len": args_prefix.length()})
+		search_from = name_end
+	return examples
+
+
+func _brace_match_json(text: String, open_at: int) -> String:
+	# 从 open_at 的 '{' 起做字符串感知的花号配平，返回完整 JSON 子串。
+	var depth: int = 0
+	var in_string: bool = false
+	var escaped: bool = false
+	for i in range(open_at, text.length()):
+		var ch: String = text[i]
+		if in_string:
+			if escaped:
+				escaped = false
+			elif ch == "\\":
+				escaped = true
+			elif ch == "\"":
+				in_string = false
+			continue
+		if ch == "\"":
+			in_string = true
+		elif ch == "{":
+			depth += 1
+		elif ch == "}":
+			depth -= 1
+			if depth == 0:
+				return text.substr(open_at, i - open_at + 1)
+	return ""
+
+
+## 参数契约门禁（F0）：示例的 args 必须与注册工具的真实 input_schema 形状一致
+## —— 已知键的类型必须匹配（array/object/string）。曾漏网：make_game_change 的
+## operations 写成对象而真实 schema 要求数组，照示例调用必被参数校验拒绝。
+func test_prompt_call_examples_match_tool_schemas() -> void:
+	var core: RefCounted = load("res://addons/godot_mcp/native_mcp/mcp_server_core.gd").new()
+	for path in ClassifierTestScript.TOOL_MODULE_PATHS:
+		var module: RefCounted = load(path).new()
+		module.register_tools(core)
+	var schemas: Dictionary = {}
+	for tool_name in core.get_all_tools():
+		var tool = core.get_all_tools()[tool_name]
+		schemas[str(tool_name)] = tool.input_schema
+
+	var rendered: String = _render_all_prompts()
+	var violations: Array[String] = []
+	for example in _extract_call_examples(rendered):
+		var tool: String = str(example["tool"])
+		if not schemas.has(tool):
+			continue  # 工具名门禁另行覆盖
+		var args_at: int = int(example["args_prefix_at"])
+		if args_at < 0:
+			continue  # 无 args 的示例不做形状检查
+		var args_json: String = _brace_match_json(rendered, args_at + int(example["prefix_len"]))
+		if args_json.is_empty():
+			violations.append("%s: args JSON is not brace-balanced" % tool)
+			continue
+		var parsed: Variant = JSON.parse_string(args_json)
+		if not (parsed is Dictionary):
+			violations.append("%s: args is not a JSON object: %s" % [tool, args_json.substr(0, 60)])
+			continue
+		var args: Dictionary = parsed
+		var schema: Dictionary = schemas[tool] if schemas[tool] is Dictionary else {}
+		var properties: Dictionary = schema.get("properties", {}) if schema.get("properties", null) is Dictionary else {}
+		for key in args:
+			if not properties.has(key):
+				continue
+			var declared: String = str(properties[key].get("type", ""))
+			var value: Variant = args[key]
+			# 只对形状可判的类型做强校验；数字/布尔允许占位字符串（"<N>"）。
+			var shape_ok: bool = true
+			match declared:
+				"array":
+					shape_ok = value is Array
+				"object":
+					shape_ok = value is Dictionary
+				"string":
+					shape_ok = value is String
+				_:
+					continue
+			if not shape_ok:
+				violations.append("%s: arg '%s' declared %s but the example passes %s"
+					% [tool, key, declared, _typename(value)])
+	assert_eq(violations.size(), 0,
+		"Prompt call examples violate registered tool schemas: %s" % "; ".join(violations))
+
+
+func _typename(value: Variant) -> String:
+	match typeof(value):
+		TYPE_ARRAY: return "array"
+		TYPE_DICTIONARY: return "object"
+		TYPE_STRING: return "string"
+		TYPE_BOOL: return "boolean"
+		TYPE_FLOAT, TYPE_INT: return "number"
+		_: return "variant"
+
+
 func test_guide_docs_call_shaped_references_exist() -> void:
 	var prompt_names: Dictionary = _prompt_names()
 	var total_calls: int = 0
