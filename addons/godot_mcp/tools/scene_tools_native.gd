@@ -187,8 +187,14 @@ func _tool_create_scene(params: Dictionary) -> Dictionary:
 	if bool(params.get("open_after_create", true)):
 		var opener: EditorInterface = _get_editor_interface()
 		if opener:
-			opener.open_scene_from_path(scene_path)
-			response["opened"] = true
+			# 用带确认的打开（注册 + 有限重试 + 连续帧稳定确认）：冷启动期间
+			# 裸 open_scene_from_path 可能被编辑器恢复上次会话布局覆盖（CI
+			# 实测：audit 测试在全新 checkout 上偶发回到 TestScene.tscn）。
+			var opened_root: Node = await SCENE_CONTEXT.open_scene_and_wait(
+				opener, scene_path)
+			response["opened"] = opened_root != null
+			if opened_root == null:
+				response["open_note"] = "open unconfirmed during editor startup; call open_scene next"
 		else:
 			response["opened"] = false
 			response["open_note"] = "editor interface unavailable; call open_scene next"
