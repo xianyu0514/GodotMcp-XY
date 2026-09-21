@@ -35,6 +35,9 @@ func take_hit(damage: int, knockback: Vector2) -> void:
 	_knockback_velocity = knockback
 	if SoundBus != null:
 		SoundBus.play_sfx(SoundBus.SFX_HIT)
+	var feedback := get_node_or_null("HitFeedback")
+	if feedback:
+		feedback.play_hit_feedback(knockback)
 	if GameSave != null:
 		GameSave.record_combat_state(hp, GameSave.coins)
 	if bool(verdict["dead"]):

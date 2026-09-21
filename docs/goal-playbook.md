@@ -72,6 +72,31 @@
 `{"command":"create","goal":"dash keeps collision","strict":true,"items":[{"kind":"behavior_check","label":"wall","detail":{"scene_path":"res://scenes/arena.tscn","steps":[{"action":"move_right","pressed":true,"wait_ms":1500,"assert":{"expression":"get_node('Player').position.x","expected":544,"operator":"lte","description":"wall blocks"}}]}}],"watch_paths":["res://scripts/player.gd"]}`
 （运算符规范名：eq/ne/gt/gte/lt/lte；未知运算符显式报错。）
 
+## 角色外观与受击反馈工作流（包 01+02，可复用）
+
+一键接入既有玩家（首个目标 slice_b，已验证；其他项目改 config 即可）：
+
+```bash
+python scripts/apply_character_visual.py slice_b --with-regression   --godot <editor-console-exe> --port <free-port>
+```
+
+行为（全部经 MCP 调用，幂等——复跑只更新不重复）：
+1. 定位声明的玩家（缺失即停并列出缺项）；2. `Skin`（Sprite2D+脚本）：
+精灵表 idle/move 动画 + 朝向翻转 + 支点对齐，原色块保留可随时切回
+（`use_block_visual`）；3. `HitFeedback`：闪白自恢复 + 一次性粒子 +
+可配零的镜头反馈，音效走 SoundBus 既有入口不重复播放；
+4. 缺素材时编辑器内程序化生成 .tres 精灵表（无二进制入仓）；
+5. `take_hit` 接线经 apply_change_set（哈希保护，已接线则跳过）；
+6. `--with-regression` 跑 strict 队列：移动保留、单次扣血、无敌窗
+防双扣、闪白恢复（直接驱动 take_hit，不依赖地图布局）。
+
+可调参数（@export，运行中即可经 MCP set_property 改）：
+Skin: `idle_frames / move_frames / animation_fps / pixel_offset / use_block_visual`；
+HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixels / camera_shake_seconds`。
+覆盖默认用 `--config my.json`（见脚本头部 DEFAULT_CONFIG）。
+
+前后画面：`slice_b/build/character_polish/`（sprite / block / hit_flash 三图）。
+
 ## 插件热同步循环（边用边修的标准机制）
 
 仓库侧一键脚本 `scripts/hot_sync_plugin.py <目标工程> --port 9080`：

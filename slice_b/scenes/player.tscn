@@ -1,19 +1,158 @@
-[gd_scene load_steps=3 format=3 uid="uid://sl1ceb0ardslice"]
+[gd_scene format=3 uid="uid://bex08j85v14dg"]
 
-[ext_resource type="Script" path="res://scripts/player/player.gd" id="1_player"]
+[ext_resource type="Script" uid="uid://dt8hubrgl7a4t" path="res://scripts/player/player.gd" id="1_player"]
+[ext_resource type="Texture2D" uid="uid://cgaatg7qygvns" path="res://art/player_skin.tres" id="2_g2els"]
 
 [sub_resource type="RectangleShape2D" id="shape_player"]
 size = Vector2(30, 30)
 
-[node name="Player" type="CharacterBody2D" groups=["player"]]
+[sub_resource type="GDScript" id="GDScript_g2els"]
+script/source = "extends Sprite2D
+## 角色皮肤（包01）：精灵表 idle/move 动画 + 朝向翻转 + 支点对齐。
+## 由 apply_character_visual 接入；参数全部 @export，可随时经 MCP 调整。
+
+@export var idle_frames: int = 2
+@export var move_frames: int = 4
+@export var animation_fps: int = 8
+@export var use_block_visual: bool = false:
+	set(value):
+		use_block_visual = value
+		_body_visible = value
+		_update_visibility()
+@export var pixel_offset: Vector2 = Vector2.ZERO
+
+var _frame_time: float = 0.0
+var _frame: int = 0
+var _facing_right: bool = true
+var _body_visible: bool = false
+
+@onready var _body: ColorRect = get_parent().get_node_or_null(\"Body\")
+
+
+func _ready() -> void:
+	_update_visibility()
+
+
+func _update_visibility() -> void:
+	visible = not use_block_visual
+	if _body:
+		_body.visible = use_block_visual or not visible
+
+
+func _physics_process(delta: float) -> void:
+	var speed: float = get_parent().velocity.length()
+	var count: int = move_frames if speed > 10.0 else idle_frames
+	var row: int = 0 if speed <= 10.0 else 1
+	var horizontal: float = get_parent().velocity.x
+	if absf(horizontal) > 10.0:
+		_facing_right = horizontal > 0.0
+	_frame_time += delta
+	if _frame_time >= 1.0 / maxf(animation_fps, 1.0):
+		_frame_time = 0.0
+		_frame = (_frame + 1) % maxi(count, 1)
+	flip_h = not _facing_right
+	frame_coords = Vector2i(_frame, row)
+	offset = pixel_offset
+
+
+func is_using_block_visual() -> bool:
+	return use_block_visual
+
+
+func set_block_visual(value: bool) -> bool:
+	use_block_visual = value
+	return use_block_visual
+"
+
+[sub_resource type="GDScript" id="GDScript_qhqgy"]
+script/source = "extends Node2D
+## 受击反馈（包02）：闪白（自动恢复）+ 一次性粒子 + 轻微镜头反馈。
+## 只负责表现：伤害/无敌/音效规则留在 player.gd（SoundBus 已播 hit，
+## 此处不重复播放）。参数全部 @export，可随时经 MCP 调整。
+
+@export var flash_color: Color = Color(3.0, 3.0, 3.0)
+@export var flash_seconds: float = 0.12
+@export var particle_amount: int = 14
+@export var camera_shake_pixels: float = 6.0
+@export var camera_shake_seconds: float = 0.18
+
+var _particles: CPUParticles2D
+var _tween: Tween
+var _camera_tween: Tween
+
+
+func _ready() -> void:
+	_particles = CPUParticles2D.new()
+	_particles.one_shot = true
+	_particles.emitting = false
+	_particles.amount = particle_amount
+	_particles.lifetime = 0.4
+	_particles.speed_scale = 1.0
+	_particles.direction = Vector2(0, -1)
+	_particles.spread = 180.0
+	_particles.initial_velocity_min = 60.0
+	_particles.initial_velocity_max = 140.0
+	_particles.gravity = Vector2(0, 240)
+	_particles.scale_amount_min = 0.6
+	_particles.scale_amount_max = 1.4
+	_particles.color = Color(1.0, 0.85, 0.4)
+	add_child(_particles)
+	set_physics_process(false)
+
+
+func play_hit_feedback(_knockback: Vector2 = Vector2.ZERO) -> void:
+	# 闪白：kill 旧 tween 重启 —— 连续受击不会累积颜色或时间。
+	if _tween:
+		_tween.kill()
+	var target: CanvasItem = get_parent().get_node_or_null(\"Skin\") as CanvasItem
+	if target == null:
+		target = get_parent() as CanvasItem
+	var original: Color = Color(1, 1, 1, 1)
+	target.modulate = flash_color
+	_tween = create_tween()
+	_tween.tween_property(target, \"modulate\", original, maxf(flash_seconds, 0.01))
+	# 粒子：one_shot 重发。
+	_particles.amount = particle_amount
+	_particles.restart()
+	# 镜头：可配为 0（不改变伤害规则，纯表现）。
+	if camera_shake_pixels > 0.0:
+		var camera: Camera2D = get_viewport().get_camera_2d()
+		if camera:
+			if _camera_tween:
+				_camera_tween.kill()
+			var original_offset: Vector2 = camera.offset
+			camera.offset = original_offset + Vector2(camera_shake_pixels, 0)
+			_camera_tween = create_tween()
+			_camera_tween.tween_property(camera, \"offset\", original_offset,
+				maxf(camera_shake_seconds, 0.01))
+
+
+func is_flash_active() -> bool:
+	var target: CanvasItem = get_parent().get_node_or_null(\"Skin\") as CanvasItem
+	if target == null:
+		target = get_parent() as CanvasItem
+	return target.modulate != Color(1, 1, 1, 1)
+"
+
+[node name="Player" type="CharacterBody2D" unique_id=1178283189 groups=["player"]]
 script = ExtResource("1_player")
 
-[node name="Body" type="ColorRect" parent="."]
+[node name="Body" type="ColorRect" parent="." unique_id=503345726]
 offset_left = -15.0
 offset_top = -15.0
 offset_right = 15.0
 offset_bottom = 15.0
 color = Color(0.25, 0.55, 0.95, 1)
 
-[node name="Collision" type="CollisionShape2D" parent="."]
+[node name="Collision" type="CollisionShape2D" parent="." unique_id=1293498476]
 shape = SubResource("shape_player")
+
+[node name="Skin" type="Sprite2D" parent="." unique_id=1627700447]
+texture = ExtResource("2_g2els")
+hframes = 4
+vframes = 2
+script = SubResource("GDScript_g2els")
+
+[node name="HitFeedback" type="Node2D" parent="." unique_id=560967588]
+script = SubResource("GDScript_qhqgy")
+flash_seconds = 0.25
