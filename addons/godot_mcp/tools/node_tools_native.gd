@@ -787,14 +787,22 @@ func _prepare_extended_batch_scene_edits(operations: Array, structural: Array, s
 				if script_resource == null:
 					return {"error": "Failed to load script: " + script_path}
 				# 刚写入的文件在编辑器文件系统扫描前 load() 到的是未编译资源
-				# （有源码但无成员）。现场编译等价脚本且不注册路径：路径资源会被
-				# 仍在进行的扫描反复失效，而内存脚本不受影响；保存场景时源码内联。
+				# （有源码但无成员）。现场编译等价脚本并用 take_over_path 注册为
+				# 该路径的资源：后续对该 .gd 文件的修改经 reload 即可到达场景，
+				# 场景保存引用外部路径而非内嵌源码。旧做法（纯内存脚本）保存时
+				# 源码内嵌成 sub_resource，之后更新外部文件永远到不了游戏——
+				# 实测两次咬人（Attack 节点 / arena 玩家），故在此修复。
 				if not script_resource.can_instantiate():
 					var fresh_script: GDScript = GDScript.new()
 					fresh_script.source_code = FileAccess.get_file_as_string(script_path)
 					if fresh_script.reload() != OK:
 						return {"error": "Script did not compile: " + script_path}
+					fresh_script.take_over_path(script_path)
 					script_resource = fresh_script
+				else:
+					# 已可实例化但无路径（缓存壳）时同样接管路径，确保外部引用。
+					if String(script_resource.resource_path).is_empty():
+						script_resource.take_over_path(script_path)
 				batch_pending_scripts[attach_target] = script_resource
 				prepared_operations.append({
 					"type": "attach_script",
