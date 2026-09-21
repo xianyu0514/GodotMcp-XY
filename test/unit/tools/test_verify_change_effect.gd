@@ -48,6 +48,9 @@ func before_each() -> void:
 	DirAccess.make_dir_recursive_absolute(TMP)
 	_write(SCENE_EXTERNAL, FIXTURE_EXTERNAL)
 	_write(SCENE_EMBEDDED, FIXTURE_EMBEDDED)
+	_write(SCENE_HOST, FIXTURE_HOST)
+	_write(SCENE_HOST_PLAIN, FIXTURE_HOST_PLAIN)
+	_write(SCENE_DEEP, FIXTURE_DEEP)
 	_tools = ToolsScript.new()
 
 func after_each() -> void:
@@ -124,7 +127,7 @@ func test_happy_path_reports_effective() -> void:
 	var result: Dictionary = await _tools._tool_verify_change_effect({
 		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
 		"property": "cooldown_seconds", "expected_value": 0.25,
-		"check_persistence": false})
+		"check_persistence": false, "check_instance_hosts": false})
 	assert_false(result.has("error"), str(result))
 	assert_eq(String(result.get("overall", "")), "effective", str(result.get("checklist", [])))
 	var statuses: Dictionary = {}
@@ -142,10 +145,14 @@ func test_persistence_step_runs_second_boot_by_default() -> void:
 		return {"value": 0.25}
 	var result: Dictionary = await _tools._tool_verify_change_effect({
 		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
-		"property": "cooldown_seconds", "expected_value": 0.25})
+		"property": "cooldown_seconds", "expected_value": 0.25, "check_instance_hosts": false})
 	assert_eq(String(result.get("overall", "")), "effective")
 	assert_eq(calls.size(), 2, "persist step boots a second time by default")
-	assert_eq(String(result.get("checklist", [])[4].get("status", "")), "verified")
+	var persist_status: String = ""
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "persist":
+			persist_status = String(entry.get("status", ""))
+	assert_eq(persist_status, "verified")
 
 func test_embedded_copy_with_expected_script_fails_entity_with_fix() -> void:
 	_tools._effect_readback_override = _ok_readback
@@ -257,7 +264,7 @@ func test_behavior_with_assertions_passes_when_all_assertions_pass() -> void:
 		"property": "cooldown_seconds", "expected_value": 0.25,
 		"behavior": {"steps": [{"action": "attack", "assert": {"expression": "1 == 1"}}],
 			"assertions": [{"expression": "get_node('Attack').cooldown_seconds < 0.5"}]},
-		"check_persistence": false})
+		"check_persistence": false, "check_instance_hosts": false})
 	assert_eq(String(result.get("overall", "")), "effective", str(result.get("checklist", [])))
 
 func test_missing_scene_fails_target_only() -> void:
@@ -280,6 +287,165 @@ func test_parameter_validation_rejects_bad_input() -> void:
 	for params in cases:
 		var result: Dictionary = await _tools._tool_verify_change_effect(params)
 		assert_true(result.has("error"), "must reject: %s" % str(params))
+
+
+const SCENE_HOST: String = TMP + "/host.tscn"
+const SCENE_HOST_PLAIN: String = TMP + "/host_plain.tscn"
+const SCENE_DEEP: String = TMP + "/deep.tscn"
+
+## 宿主场景：实例化 player_external.tscn，并在实例根与子节点两处覆盖属性。
+const FIXTURE_HOST: String = """[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://.tmp_vce/player_external.tscn" id="1_player"]
+[ext_resource type="Script" path="res://scripts/arena.gd" id="2_arena"]
+
+[node name="Arena" type="Node2D"]
+script = ExtResource("2_arena")
+
+[node name="Hero" parent="." instance=ExtResource("1_player")]
+speed = 320.0
+
+[node name="Attack" parent="Hero"]
+cooldown_seconds = 0.9
+"""
+
+## 只实例化、不覆盖任何属性的宿主。
+const FIXTURE_HOST_PLAIN: String = """[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://.tmp_vce/player_external.tscn" id="1_player"]
+
+[node name="Arena" type="Node2D"]
+
+[node name="Hero" parent="." instance=ExtResource("1_player")]
+"""
+
+## 深度 2 钉死 .tscn parent 语义：parent 值不含根名（TestScene.tscn 实测），
+## Root/Mid/Leaf 的 Leaf 段写的是 parent="Mid" 而非 parent="Root/Mid"。
+const FIXTURE_DEEP: String = """[gd_scene format=3]
+
+[node name="Root" type="Node2D"]
+
+[node name="Mid" type="Node2D" parent="."]
+
+[node name="Leaf" type="Node2D" parent="Mid"]
+cooldown_seconds = 0.4
+"""
+
+func test_deep_parent_path_resolution_includes_root_name() -> void:
+	var leaf: Dictionary = ToolsScript._resolve_scene_entity(FIXTURE_DEEP, "Root/Mid/Leaf", "cooldown_seconds")
+	assert_true(bool(leaf.get("found", false)), "depth-2 node resolves with the root name in the path")
+	assert_true(bool(leaf.get("has_property", false)))
+	var mid: Dictionary = ToolsScript._resolve_scene_entity(FIXTURE_DEEP, "Root/Mid", "cooldown_seconds")
+	assert_true(bool(mid.get("found", false)), "depth-1 node still resolves")
+
+func test_instance_override_masks_base_change() -> void:
+	_tools._effect_readback_override = _ok_readback
+	var result: Dictionary = await _tools._tool_verify_change_effect({
+		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
+		"property": "cooldown_seconds", "expected_value": 0.25,
+		"host_scenes": [SCENE_HOST],
+		"check_persistence": false})
+	assert_eq(String(result.get("overall", "")), "not_effective",
+		"a masked change is not effective even when the base-scene readback passes")
+	var hosts_entry: Dictionary = {}
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "hosts":
+			hosts_entry = entry
+	assert_eq(String(hosts_entry.get("status", "")), "not_met")
+	assert_true(String(hosts_entry.get("evidence", "")).contains("0.9"),
+		"evidence names the masking value: %s" % hosts_entry.get("evidence", ""))
+	var fix: String = ""
+	for need in result.get("needs", []):
+		if String(need).contains("batch_update_scene_files"):
+			fix = String(need)
+	assert_true(fix.contains(SCENE_HOST) and fix.contains("Hero/Attack") and fix.contains("expect_current: 0.9"),
+		"needs names the exact host, node and guard value: %s" % fix)
+	var resolved_hosts: Array = result.get("resolved", {}).get("instance_hosts", [])
+	assert_eq(resolved_hosts.size(), 1, "resolved carries the discovered host")
+
+func test_instance_override_matching_expected_verifies_hosts() -> void:
+	_tools._effect_readback_override = _ok_readback
+	var result: Dictionary = await _tools._tool_verify_change_effect({
+		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
+		"property": "cooldown_seconds", "expected_value": 0.9,
+		"host_scenes": [SCENE_HOST],
+		"check_persistence": false})
+	var hosts_entry: Dictionary = {}
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "hosts":
+			hosts_entry = entry
+	assert_eq(String(hosts_entry.get("status", "")), "verified",
+		"an override equal to the expected value is the wanted state, not a mask")
+
+func test_host_without_override_verifies_hosts() -> void:
+	_tools._effect_readback_override = _ok_readback
+	var result: Dictionary = await _tools._tool_verify_change_effect({
+		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
+		"property": "cooldown_seconds", "expected_value": 0.25,
+		"host_scenes": [SCENE_HOST_PLAIN],
+		"check_persistence": false})
+	var hosts_entry: Dictionary = {}
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "hosts":
+			hosts_entry = entry
+	assert_eq(String(hosts_entry.get("status", "")), "verified")
+	assert_true(String(hosts_entry.get("evidence", "")).contains("instanced by 1"))
+
+func test_no_hosts_skipped() -> void:
+	_tools._effect_readback_override = _ok_readback
+	var result: Dictionary = await _tools._tool_verify_change_effect({
+		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
+		"property": "cooldown_seconds", "expected_value": 0.25,
+		"host_scenes": [SCENE_EMBEDDED],
+		"check_persistence": false})
+	var hosts_entry: Dictionary = {}
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "hosts":
+			hosts_entry = entry
+	assert_eq(String(hosts_entry.get("status", "")), "skipped",
+		"a standalone scene has no hosts to check")
+	assert_true(String(hosts_entry.get("evidence", "")).contains("pinned"))
+
+func test_auto_scan_discovers_host_and_mask() -> void:
+	_tools._effect_readback_override = _ok_readback
+	var result: Dictionary = await _tools._tool_verify_change_effect({
+		"scene_path": SCENE_EXTERNAL, "node_path": "Player/Attack",
+		"property": "cooldown_seconds", "expected_value": 0.25,
+		"check_persistence": false})
+	assert_true(int(result.get("resolved", {}).get("hosts_scanned_files", 0)) > 0,
+		"auto scan ran and reports how many scene files it scanned")
+	var hosts_entry: Dictionary = {}
+	for entry in result.get("checklist", []):
+		if String(entry.get("step", "")) == "hosts":
+			hosts_entry = entry
+	assert_eq(String(hosts_entry.get("status", "")), "not_met",
+		"the scan must find host.tscn and its masking override")
+
+func test_instance_root_override_detected_pure() -> void:
+	var found: Dictionary = ToolsScript._effect_instance_overrides(
+		FIXTURE_HOST, "res://.tmp_vce/player_external.tscn", "", "speed")
+	var instances: Array = found.get("instances", [])
+	assert_eq(instances.size(), 1, "one instance of the base scene")
+	assert_eq(String(instances[0].get("node", "")), "Hero")
+	var overrides: Array = found.get("overrides", [])
+	assert_eq(overrides.size(), 1, "instance-root override found")
+	assert_eq(String(overrides[0].get("node", "")), "Arena/Hero")
+	assert_eq(String(overrides[0].get("value", "")), "320.0")
+
+func test_child_override_detected_pure() -> void:
+	var found: Dictionary = ToolsScript._effect_instance_overrides(
+		FIXTURE_HOST, "res://.tmp_vce/player_external.tscn", "Attack", "cooldown_seconds")
+	var overrides: Array = found.get("overrides", [])
+	assert_eq(overrides.size(), 1, "child-section override found via instance root + child path")
+	assert_eq(String(overrides[0].get("node", "")), "Arena/Hero/Attack")
+	assert_eq(String(overrides[0].get("value", "")), "0.9")
+
+func test_instance_detection_ignores_other_scene_references() -> void:
+	# SCENE_EMBEDDED 不实例化 base —— 解析结果应为空。
+	var found: Dictionary = ToolsScript._effect_instance_overrides(
+		FIXTURE_EMBEDDED, "res://.tmp_vce/player_external.tscn", "Attack", "cooldown_seconds")
+	assert_eq((found.get("instances", []) as Array).size(), 0)
+	assert_eq((found.get("overrides", []) as Array).size(), 0)
 
 # ---------------------------------------------------------------------------
 # 辅助

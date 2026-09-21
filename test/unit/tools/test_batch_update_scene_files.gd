@@ -185,6 +185,28 @@ func test_parameter_validation_rejects_bad_input() -> void:
 		var result: Dictionary = _tools._tool_batch_update_scene_files(params)
 		assert_true(result.has("error"), "must reject: %s" % str(params))
 
+func test_deep_node_path_resolution_includes_root_name() -> void:
+	# parent 语义钉死：Leaf 段写 parent="Mid"（不含根名），完整路径 Root/Mid/Leaf。
+	DirAccess.make_dir_recursive_absolute(TMP)
+	_write(TMP + "/deep.tscn", "[gd_scene format=3]
+
+[node name=\"Root\" type=\"Node2D\"]
+
+[node name=\"Mid\" type=\"Node2D\" parent=\".\"]
+
+[node name=\"Leaf\" type=\"Node2D\" parent=\"Mid\"]
+cooldown_seconds = 0.4
+")
+	var result: Dictionary = _tools._tool_batch_update_scene_files({
+		"scenes": [TMP + "/deep.tscn"],
+		"edits": [{"node": "Root/Mid/Leaf", "property": "cooldown_seconds",
+			"value": 0.6, "expect_current": 0.4}],
+		"dry_run": false})
+	var deep: Dictionary = _report_for(result, TMP + "/deep.tscn")
+	assert_eq((deep.get("changed", []) as Array).size(), 1,
+		"depth-2 node resolves: %s" % str(deep.get("missing", [])))
+	assert_true(_read(TMP + "/deep.tscn").contains("cooldown_seconds = 0.6"))
+
 func test_other_lines_stay_byte_identical() -> void:
 	var before: String = _read(BOSS)
 	_tools._tool_batch_update_scene_files({

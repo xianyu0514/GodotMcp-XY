@@ -1548,7 +1548,7 @@ func _tool_batch_update_scene_files(params: Dictionary) -> Dictionary:
 				var full_path: String = name
 				if attrs.has("parent"):
 					var parent: String = String(attrs["parent"])
-					full_path = root_name + "/" + name if parent == "." else parent + "/" + name
+					full_path = root_name + "/" + name if parent == "." else root_name + "/" + parent + "/" + name
 				if full_path == node or (section.is_empty() and name == node):
 					section = section_value
 					if full_path == node:

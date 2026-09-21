@@ -124,6 +124,19 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - **改脚本后要确认场景引用的是外部文件**：`create_script` 挂载按外部路径引用；若手工内嵌过源码，改 .gd 文件不会影响场景 —— 用 read_script 与运行实测对照。
 - **传错参数名不会再静默**：调度层会在结果里附 `_schema_warnings` 指出未知键与 schema 实际键集，一次往返即可自纠。
 
+## 修改生效确认链（verify_change_effect 的实测要点）
+
+"代码/属性改了，玩起来没变化" 的四类真凶与逐项证据（verify_change_effect 已固化，这里记录口径）：
+
+1. **内嵌脚本副本**：节点段写 `script = SubResource("GDScript_xxx")` 时，对外部 .gd 的任何修改都到不了游戏（attach_script 曾在保存时嵌入副本——已修，但历史场景仍可能带着内嵌副本）。修复：`attach_script` 换回外部引用 + `save_scene`。
+2. **未保存缓冲**：`run_project` 从磁盘启动，编辑器缓冲里的修改永远不进游戏。修复：`save_scene` / `save_all_scripts`。
+3. **实例覆盖（最隐蔽）**：直跑基场景全通过，但真实游戏跑的是宿主场景——宿主里 `[node name="X" parent="." instance=ExtResource(...)]` 的属性覆盖值胜过基值。verify_change_effect 的 hosts 步会点名宿主文件+节点，needs 直接给出带 `expect_current` 的 `batch_update_scene_files` 修复调用。
+4. **只在内存生效**：第二次磁盘启动读回不一致 => 改动没落盘。
+
+**.tscn 文本解析的两个实测陷阱**（解析器已按此实现，改动前先读这里）：
+- `parent` 属性**不含根名**：`[node name="Leaf" parent="Mid"]` 的完整路径是 `Root/Mid/Leaf`，不是 `Mid/Leaf`（TestScene.tscn 实测）。
+- `instance=ExtResource("id")` 的 id 前面是 `(`，键值正则 `key="value"` 匹配不到——必须从原始头部行直接提取，否则宿主实例永远识别不出。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

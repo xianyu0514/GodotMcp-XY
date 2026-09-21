@@ -859,11 +859,12 @@ var _effect_readback_override: Callable = Callable()
 var _effect_behavior_override: Callable = Callable()
 
 const _EffectQueueScriptPath: String = "res://addons/godot_mcp/tools/verification_queue_tools.gd"
+const ProjectToolsScript = preload("res://addons/godot_mcp/tools/project_tools_native.gd")
 
 func _register_verify_change_effect(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"verify_change_effect",
-		"Proof that a change actually reaches the game — the 'I edited it but nothing changed' chain, as one checklist. Resolves the node's REAL script from the scene file (external .gd reference vs an EMBEDDED copy — the classic silent killer where edits to the external file never reach the game), flags unsaved editor buffers (run_project boots the disk copy), boots the scene FRESH and reads the property back at runtime against expected_value, optionally runs behavior steps+assertions (play_and_verify shape) proving the behavior measurably moved (zero-assertion behavior specs are rejected as smoke), then boots once more to prove persistence (a second disk boot exposes in-memory-only illusions). Every step returns verified/not_met/skipped with evidence; overall=effective only when all non-skipped steps verified, and 'needs' names the exact next call for each failure.",
+		"Proof that a change actually reaches the game — the 'I edited it but nothing changed' chain, as one checklist. Resolves the node's REAL script from the scene file (external .gd reference vs an EMBEDDED copy — the classic silent killer where edits to the external file never reach the game), flags unsaved editor buffers (run_project boots the disk copy), boots the scene FRESH and reads the property back at runtime against expected_value, optionally runs behavior steps+assertions (play_and_verify shape) proving the behavior measurably moved (zero-assertion behavior specs are rejected as smoke), discovers which scenes INSTANCE this one and whether any host OVERRIDES the property on that node (running the host serves the override, masking the base value — the fix is named with the exact host scene and node), then boots once more to prove persistence (a second disk boot exposes in-memory-only illusions). Every step returns verified/not_met/skipped with evidence; overall=effective only when all non-skipped steps verified, and 'needs' names the exact next call for each failure.",
 		{
 			"type": "object",
 			"properties": {
@@ -874,6 +875,8 @@ func _register_verify_change_effect(server_core: RefCounted) -> void:
 				"script_path": {"type": "string", "description": "Optional external script the node SHOULD run (e.g. 'res://scripts/combat/melee_brain.gd'). When the scene carries an embedded copy instead, entity is not_met — attach_script + save_scene is the fix."},
 				"behavior": {"type": "object", "description": "Optional {steps, assertions} in the play_and_verify shape; runs in a FRESH boot to prove the behavior measurably moved. At least one assertion required."},
 				"check_persistence": {"type": "boolean", "default": true, "description": "Boot the scene a second time and read back again — proves the value comes from disk, not memory."},
+				"host_scenes": {"type": "array", "items": {"type": "string"}, "description": "Optional pinned list of scenes that INSTANCE scene_path. When omitted, project .tscn files are scanned (addons/tooling excluded) to find hosts and any property override on the node."},
+				"check_instance_hosts": {"type": "boolean", "default": true, "description": "Run the hosts step (discover instancing scenes and property overrides). Set false to skip the project scan when the scene is known standalone."},
 				"timeout_ms": {"type": "integer", "default": 8000}
 			},
 			"required": ["scene_path", "node_path", "property", "expected_value"]
@@ -882,7 +885,7 @@ func _register_verify_change_effect(server_core: RefCounted) -> void:
 		{"type": "object", "properties": {
 			"status": {"type": "string"},
 			"overall": {"type": "string", "description": "effective|not_effective"},
-			"checklist": {"type": "array", "description": "[{step: target|entity|applied|behaved|persist, status: verified|not_met|skipped, evidence, ...}]"},
+			"checklist": {"type": "array", "description": "[{step: target|entity|hosts|applied|behaved|persist, status: verified|not_met|skipped, evidence, ...}]"},
 			"needs": {"type": "array", "items": {"type": "string"}},
 			"resolved": {"type": "object"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
@@ -907,6 +910,7 @@ func _tool_verify_change_effect(params: Dictionary) -> Dictionary:
 	var script_path: String = String(params.get("script_path", "")).strip_edges()
 	var behavior: Dictionary = params.get("behavior", {}) if params.get("behavior", {}) is Dictionary else {}
 	var check_persistence: bool = bool(params.get("check_persistence", true))
+	var host_scenes_pinned: Array = params.get("host_scenes", []) if params.get("host_scenes", []) is Array else []
 	var timeout_ms: int = maxi(int(params.get("timeout_ms", 8000)), 1000)
 
 	var checklist: Array = []
@@ -982,6 +986,24 @@ func _tool_verify_change_effect(params: Dictionary) -> Dictionary:
 		entity_bits.append("unsaved-buffer check unavailable (headless)")
 	checklist.append({"step": "entity", "status": entity_status,
 		"evidence": "; ".join(entity_bits)})
+
+	# ---- step: hosts（实例覆盖感知：谁实例化本场景、谁覆盖了目标属性）-------
+	# 运行宿主场景时实例覆盖值胜过基场景值——直跑基场景全部通过的修改，
+	# 在真实游戏里可能正被宿主覆盖挡住。这一步把"可能是实例覆盖"变成
+	# 点名文件与节点的精确诊断 + 修复调用。
+	var hosts_result: Dictionary
+	if bool(params.get("check_instance_hosts", true)):
+		hosts_result = _effect_hosts_step(scene_path, node_path, property, expected, host_scenes_pinned)
+	else:
+		hosts_result = {"entry": {"step": "hosts", "status": "skipped",
+			"evidence": "instance-host check disabled (check_instance_hosts=false)"}}
+	if hosts_result.has("hosts"):
+		resolved["instance_hosts"] = hosts_result["hosts"]
+	if hosts_result.has("scanned_files"):
+		resolved["hosts_scanned_files"] = hosts_result["scanned_files"]
+	checklist.append(hosts_result["entry"])
+	for need_value in hosts_result.get("needs", []):
+		needs.append(need_value)
 
 	# ---- step: applied（FRESH 启动 + 运行时读回）-----------------------------
 	var readback: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms)
@@ -1195,6 +1217,163 @@ func _effect_unsaved_risk(scene_path: String, script_path: String) -> Dictionary
 			return {"script": script_path}
 	return {}
 
+## hosts 步实现：发现实例化本场景的宿主，并检测宿主侧的属性覆盖。
+## host_scenes_pinned 非空时只查指定宿主（省一次项目扫描）；否则收集
+## res:// 下全部 .tscn（排除 addons/测试等工具目录）逐个解析。
+func _effect_hosts_step(scene_path: String, node_path: String, property: String,
+		expected: Variant, host_scenes_pinned: Array) -> Dictionary:
+	var child_path: String = node_path.substr(node_path.find("/") + 1) if node_path.contains("/") else ""
+	var candidates: Array = []
+	var scanned_files: int = -1  # -1 = pinned（未扫描）
+	if not host_scenes_pinned.is_empty():
+		for host_value in host_scenes_pinned:
+			candidates.append(String(host_value).strip_edges())
+	else:
+		var scene_files: Array[String] = []
+		ProjectToolsScript._collect_resources("res://", [".tscn"], scene_files, false, false)
+		scanned_files = scene_files.size()
+		for scene_file in scene_files:
+			if scene_file != scene_path:
+				candidates.append(scene_file)
+
+	var hosts: Array = []
+	var masking: Array = []
+	for host_value in candidates:
+		var host_path: String = String(host_value)
+		var host_text: String = _effect_read_text(host_path)
+		if host_text.is_empty():
+			continue
+		var found: Dictionary = _effect_instance_overrides(host_text, scene_path, child_path, property)
+		var instances: Array = found.get("instances", []) if found.get("instances", []) is Array else []
+		if instances.is_empty():
+			continue
+		var host_entry: Dictionary = {"scene": host_path, "instances": instances}
+		var overrides: Array = found.get("overrides", []) if found.get("overrides", []) is Array else []
+		if not overrides.is_empty():
+			host_entry["overrides"] = overrides
+			for override_value in overrides:
+				var override: Dictionary = override_value
+				var override_parsed: Variant = str_to_var(String(override.get("value", "")))
+				override["parsed_value"] = override_parsed
+				if not _values_match(override_parsed, expected):
+					masking.append({
+						"host": host_path,
+						"node": String(override.get("node", "")),
+						"value": String(override.get("value", ""))})
+		hosts.append(host_entry)
+
+	var result: Dictionary = {"hosts": hosts}
+	if scanned_files >= 0:
+		result["scanned_files"] = scanned_files
+	if hosts.is_empty():
+		var skipped_evidence: String = "not instanced by any project scene"
+		if scanned_files >= 0:
+			skipped_evidence += " (scanned %d scene files, addons/tooling excluded)" % scanned_files
+		else:
+			skipped_evidence += " (none of the pinned host scenes instances it)"
+		result["entry"] = {"step": "hosts", "status": "skipped", "evidence": skipped_evidence}
+		return result
+	if masking.is_empty():
+		result["entry"] = {"step": "hosts", "status": "verified",
+			"evidence": "instanced by %d scene(s); no override masks '%s' on %s" % [hosts.size(), property, node_path]}
+		return result
+	var mask_names: Array = []
+	for mask_value in masking:
+		var mask: Dictionary = mask_value
+		mask_names.append("%s@%s:%s" % [String(mask.get("value", "")), String(mask.get("host", "")), String(mask.get("node", ""))])
+	result["entry"] = {"step": "hosts", "status": "not_met",
+		"evidence": "%d instance override(s) mask '%s' on %s: %s — running the HOST scene serves the override, not the base value" % [masking.size(), property, node_path, ", ".join(mask_names)]}
+	var needs: Array = []
+	for mask_value in masking:
+		var mask: Dictionary = mask_value
+		needs.append("the property is overridden to %s in %s at %s — running that host masks the base-scene change; update the override: batch_update_scene_files {scenes: ['%s'], edits: [{node: '%s', property: '%s', value: <wanted>, expect_current: %s}]}" % [
+			String(mask.get("value", "")), String(mask.get("host", "")), String(mask.get("node", "")),
+			String(mask.get("host", "")), String(mask.get("node", "")), property,
+			String(mask.get("value", ""))])
+	result["needs"] = needs
+	return result
+
+## 纯文本解析（可单测）：host_text 中实例化 base_scene_path 的节点段，
+## 以及这些实例（或其子节点段）上对 property 的覆盖。
+## child_path 为目标节点相对实例根的路径（"" 表示实例根本身）。
+## 返回 {instances: [{node, path}], overrides: [{node, value}]}。
+static func _effect_instance_overrides(host_text: String, base_scene_path: String,
+		child_path: String, property: String) -> Dictionary:
+	var out: Dictionary = {"instances": [], "overrides": []}
+	var lines: PackedStringArray = host_text.split("\n")
+	var ext_scenes: Dictionary = {}
+	var sections: Array = []
+	var root_name: String = ""
+	var current: Dictionary = {}
+	for i in lines.size():
+		var line: String = lines[i].strip_edges()
+		if line.begins_with("["):
+			if not current.is_empty():
+				current["end"] = i
+				sections.append(current)
+			current = {}
+			if line.begins_with("[ext_resource"):
+				var attrs: Dictionary = _parse_header_attrs(line)
+				if String(attrs.get("type", "")) == "PackedScene":
+					ext_scenes[String(attrs.get("id", ""))] = String(attrs.get("path", ""))
+			elif line.begins_with("[node"):
+				var node_attrs: Dictionary = _parse_header_attrs(line)
+				current = {"attrs": node_attrs, "start": i + 1, "end": lines.size()}
+				# instance=ExtResource("id") 的 id 前是 "("，键值正则匹配不到
+				# ——必须从原始头部行直接提取，否则宿主实例永远识别不出。
+				var instance_marker: String = "instance=ExtResource(\""
+				var marker_at: int = line.find(instance_marker)
+				if marker_at >= 0:
+					current["instance_ext_id"] = line.substr(marker_at + instance_marker.length()).get_slice('"', 0)
+				if not node_attrs.has("parent") and root_name.is_empty():
+					root_name = String(node_attrs.get("name", ""))
+	if not current.is_empty():
+		current["end"] = lines.size()
+		sections.append(current)
+
+	# 每段的完整路径 + 实例引用解析（instance=ExtResource("id") -> 基场景）。
+	var paths_by_section: Array = []
+	for section_value in sections:
+		var section: Dictionary = section_value
+		var attrs: Dictionary = section.get("attrs", {})
+		var name: String = String(attrs.get("name", ""))
+		var full_path: String = name
+		if attrs.has("parent"):
+			var parent: String = String(attrs["parent"])
+			full_path = root_name + "/" + name if parent == "." else root_name + "/" + parent + "/" + name
+		var instances_base: bool = false
+		var instance_ext_id: String = String(section.get("instance_ext_id", ""))
+		if not instance_ext_id.is_empty():
+			if String(ext_scenes.get(instance_ext_id, "")) == base_scene_path:
+				instances_base = true
+		paths_by_section.append({"section": section, "path": full_path, "instances_base": instances_base})
+
+	var property_prefix: String = property + " ="
+	for entry_value in paths_by_section:
+		var entry: Dictionary = entry_value
+		if not bool(entry.get("instances_base", false)):
+			continue
+		var instance_root: String = String(entry.get("path", ""))
+		out["instances"].append({
+			"node": instance_root.get_slice("/", instance_root.count("/")),
+			"path": instance_root})
+		# 覆盖目标：实例根本身（child_path 为空）或路径 == 实例根/子路径 的段。
+		var wanted: String = instance_root if child_path.is_empty() else instance_root + "/" + child_path
+		for candidate_value in paths_by_section:
+			var candidate: Dictionary = candidate_value
+			var candidate_path: String = String(candidate.get("path", ""))
+			if candidate_path != wanted:
+				continue
+			var section: Dictionary = candidate.get("section", {})
+			for i in range(int(section.get("start", 0)), int(section.get("end", 0))):
+				var body_line: String = lines[i].strip_edges()
+				if body_line.begins_with(property_prefix):
+					out["overrides"].append({
+						"node": candidate_path,
+						"value": body_line.substr(property_prefix.length()).strip_edges()})
+					break
+	return out
+
 # ----------------------------------------------------------------------------
 # .tscn 实体解析（纯文本，可单测）：节点段 → 完整路径、脚本引用（外部 vs 内嵌）、
 # 属性是否序列化。返回 {found, matched_path, node_name, script_mode, script_path,
@@ -1277,7 +1456,7 @@ static func _resolve_scene_entity(scene_text: String, node_path: String, propert
 		var full_path: String = name
 		if attrs.has("parent"):
 			var parent: String = String(attrs["parent"])
-			full_path = root_name + "/" + name if parent == "." else parent + "/" + name
+			full_path = root_name + "/" + name if parent == "." else root_name + "/" + parent + "/" + name
 		if full_path == target:
 			matched = {"section": section, "path": full_path, "by_name": false}
 			break
