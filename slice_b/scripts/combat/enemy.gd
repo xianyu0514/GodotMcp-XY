@@ -35,6 +35,9 @@ func take_damage(amount: int, knockback: Vector2) -> void:
 	if bool(verdict["dead"]):
 		_dead = true
 		set_physics_process(false)
+		var brain := get_node_or_null("MeleeBrain")
+		if brain and brain.has_method("notify_death"):
+			brain.notify_death()
 		if visual:
 			visual.modulate = Color(4.0, 1.6, 0.4)
 		var die_tween: Tween = create_tween()
