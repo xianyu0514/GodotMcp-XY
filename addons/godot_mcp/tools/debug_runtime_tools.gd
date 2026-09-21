@@ -1541,8 +1541,16 @@ func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
 func _compare_values(actual: String, expected: String, operator: String) -> bool:
 	match operator:
 		"eq":
+			# 数值宽松相等：expected 的 JSON 整数会被 str() 格式化为 "3.0"，
+			# actual 的 int 3 是 "3"——纯字符串比较把数值相等误判为不等
+			#（room_2 拾取验收实测：3 == "3.0" 判 false）。两边都可解析为数字
+			# 时按数值比较，否则逐字符比较。
+			if actual.is_valid_float() and expected.is_valid_float():
+				return is_equal_approx(float(actual), float(expected))
 			return actual == expected
 		"ne":
+			if actual.is_valid_float() and expected.is_valid_float():
+				return not is_equal_approx(float(actual), float(expected))
 			return actual != expected
 		"gt":
 			return float(actual) > float(expected)
