@@ -632,6 +632,22 @@ def main() -> int:
                   f"{'OK' if size_ok else 'MISSING — SWAP REJECTED'}")
             if not size_ok:
                 return 1
+            # ART GATE（实测教训：跑步帧落在贴图外=移动时角色消失）：当前帧
+            # 格子中心必须非透明——移动中运行时断言。
+            mcp.tool("simulate_runtime_input_action", {"action_name": "move_right", "pressed": True})
+            import time as _t2
+            _t2.sleep(0.4)
+            frame_size = config.get("frame_size", [32, 32])
+            gate = mcp.tool("evaluate_runtime_expression", {"expression":
+                "get_node('Skin').texture.get_image().get_pixel("
+                "int(get_node('Skin').frame_coords.x) * %d + %d, "
+                "int(get_node('Skin').frame_coords.y) * %d + %d).a > 0.0"
+                % (frame_size[0], frame_size[0] // 2, frame_size[1], frame_size[1] // 2 - 2)})
+            mcp.tool("simulate_runtime_input_action", {"action_name": "move_right", "pressed": False})
+            art_ok = gate.get("value") is True
+            print(f"[integrity] run-frame art present: {'OK' if art_ok else 'EMPTY CELL — SHEET REJECTED'}")
+            if not art_ok:
+                return 1
         if args.with_regression:
             regression = run_regression(mcp, config["scene"],
                 movement_expression=config.get("movement_expression", "position.x"),
