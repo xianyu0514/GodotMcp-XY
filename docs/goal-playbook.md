@@ -59,6 +59,19 @@
 - **首场景/首脚本路径自动推导**：不传路径时按 profile 落到 `res://scenes|scripts|themes/<profile>...`；要控制位置就显式传 `scene_path`/`script_path`。
 - **目标蓝图**：目标提到移动/收集/胜利（双语）时，`create_script` 自动生成真实控制器（含运行期生成的拾取体与胜利标签）、场景根派生为 `CharacterBody2D`；显式传 `content` 永远优先。
 
+## 原生行为验收（F1，验证队列直接驱动运行）
+
+`run_verification_queue` 新增 `behavior_check` 项：队列本身编排探针安装 →
+`run_project`（allow_window）→ 会话就绪 → `play_and_verify` 输入步骤与断言 →
+停止，产出 `evidence_level=native_run` 的证据（场景、逐断言实际/期望值、
+运行错误、截图、会话标识），受 `watch_paths` 指纹漂移保护。`strict=true`
+的队列拒绝外部声明（record 报错）——完成必须有原生执行证据；非 strict
+队列的外部回填显式标记 `external_claim`。
+
+示例：给"冲刺后撞墙仍停止"建队列——
+`{"command":"create","goal":"dash keeps collision","strict":true,"items":[{"kind":"behavior_check","label":"wall","detail":{"scene_path":"res://scenes/arena.tscn","steps":[{"action":"move_right","pressed":true,"wait_ms":1500,"assert":{"expression":"get_node('Player').position.x","expected":544,"operator":"lte","description":"wall blocks"}}]}}],"watch_paths":["res://scripts/player.gd"]}`
+（运算符规范名：eq/ne/gt/gte/lt/lte；未知运算符显式报错。）
+
 ## 做可玩内容的实测要点（first-playable 冒烟沉淀）
 
 - **`create_scene` 写文件但不打开**：建完先 `open_scene`（Vibe Coding 模式下带 `allow_ui_focus=true`）再 `create_node`，否则报 "No active edited scene"。

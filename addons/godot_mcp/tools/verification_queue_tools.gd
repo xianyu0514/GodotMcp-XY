@@ -2,6 +2,16 @@
 class_name VerificationQueueTools
 extends RefCounted
 
+# F1 原生行为验收：behavior_check 项由队列本身驱动运行会话（探针→运行→
+# 输入/断言→停止），产出绑定本次运行证据的判定；strict 队列拒绝外部声明。
+const DebugVerifyToolsScript = preload("res://addons/godot_mcp/tools/debug_verify_tools.gd")
+const DebugRuntimeToolsScript = preload("res://addons/godot_mcp/tools/debug_runtime_tools.gd")
+const DebugBridgeToolsScript = preload("res://addons/godot_mcp/tools/debug_bridge_tools.gd")
+const EditorToolsScript = preload("res://addons/godot_mcp/tools/editor_tools_native.gd")
+
+## 测试注入点：有效时替代 _behavior_run_impl（避免单测依赖真实编辑器/运行时）。
+var _behavior_run_override: Callable = Callable()
+
 # run_verification_queue（M5 第三交付工具层）：把持久化分片验证队列暴露
 # 为 MCP 工具。队列是编排枢纽——分片、证据指纹与完成判定统一在这里，
 # 执行体可插拔：
@@ -35,7 +45,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_run_verification_queue(server_core: RefCounted) -> void:
 	var tool_name: String = "run_verification_queue"
-	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; external verdicts come back via command=record. Restart-safe."
+	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check = the queue itself drives a real run session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -52,12 +62,16 @@ func _register_run_verification_queue(server_core: RefCounted) -> void:
 			"items": {
 				"type": "array",
 				"items": {"type": "object"},
-				"description": "create only: [{id?, kind: 'script_check'|'external', label, detail}]. script_check detail: {scripts: [...]}; external detail is free-form."
+				"description": "create only: [{id?, kind: 'script_check'|'external'|'behavior_check', label, detail}]. script_check detail: {scripts: [...]}; behavior_check detail: {scene_path?, steps: [...], assertions?: [...], deterministic?, timeout_ms?} (steps/assertions use the play_and_verify shape); external detail is free-form."
 			},
 			"watch_paths": {
 				"type": "array",
 				"items": {"type": "string"},
 				"description": "create only: files whose fingerprints guard evidence — drift re-opens verdicts."
+			},
+			"strict": {
+				"type": "boolean", "default": false,
+				"description": "create only: strict queues reject externally recorded verdicts (command=record errors) — completion requires native execution evidence (script_check/behavior_check)."
 			},
 			"budget": {
 				"type": "integer",
@@ -138,8 +152,13 @@ func _command_create(params: Dictionary) -> Dictionary:
 		if not (item_value is Dictionary):
 			return {"error": "each queue item must be an object"}
 		var kind: String = str((item_value as Dictionary).get("kind", ""))
-		if kind != "script_check" and kind != "external":
-			return {"error": "queue item kind must be 'script_check' or 'external' (got '%s')" % kind}
+		if kind != "script_check" and kind != "external" and kind != "behavior_check":
+			return {"error": "queue item kind must be 'script_check', 'external' or 'behavior_check' (got '%s')" % kind}
+		if kind == "behavior_check":
+			var detail: Variant = (item_value as Dictionary).get("detail", {})
+			var steps: Variant = (detail as Dictionary).get("steps", []) if detail is Dictionary else []
+			if not (steps is Array) or (steps as Array).is_empty():
+				return {"error": "behavior_check detail requires a non-empty steps array (same shape play_and_verify accepts; optional scene_path, assertions, deterministic, timeout_ms)"}
 
 	var store: Dictionary = StoreScript.load_store(_resolved_store_path())
 	if store.has("error"):
@@ -149,6 +168,7 @@ func _command_create(params: Dictionary) -> Dictionary:
 	if created.has("error"):
 		return created
 	var queue: Dictionary = created["queue"]
+	queue["strict"] = bool(params.get("strict", false))
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
@@ -210,7 +230,10 @@ func _command_record(params: Dictionary) -> Dictionary:
 		return {"error": "queue '%s' has no item '%s'" % [String(queue.get("queue_id", "")), item_id]}
 	if String(target.get("status", "")) != "pending":
 		return {"error": "item '%s' already has a recorded verdict (%s); stale refresh or a new queue is required to change it" % [item_id, String(target.get("status", ""))]}
+	if bool(queue.get("strict", false)):
+		return {"error": "queue '%s' is strict: externally recorded verdicts cannot replace native run evidence. Replace the external item with a behavior_check/script_check item, or create a non-strict queue." % String(queue.get("queue_id", ""))}
 	target["status"] = "passed" if passed else "failed"
+	evidence["evidence_level"] = "external_claim"
 	target["evidence"] = evidence
 	target["checked_at"] = StoreScript._now()
 
@@ -256,7 +279,7 @@ func _command_abandon(params: Dictionary) -> Dictionary:
 func _advance_and_save(store: Dictionary, queue: Dictionary, budget: int) -> Dictionary:
 	var staled: int = StoreScript.refresh_stale(queue)
 	var advanced: Dictionary = await StoreScript.advance(queue, maxi(0, budget),
-		func(item: Dictionary) -> Dictionary: return _execute_item(item))
+		func(item: Dictionary) -> Dictionary: return await _execute_item(item))
 	var save_result: Dictionary = StoreScript.save_store(store, _resolved_store_path())
 	if save_result.has("error"):
 		return save_result
@@ -270,7 +293,105 @@ func _execute_item(item: Dictionary) -> Dictionary:
 	var detail: Dictionary = item.get("detail", {}) if item.get("detail", {}) is Dictionary else {}
 	if kind == "script_check":
 		return _check_scripts(detail)
+	if kind == "behavior_check":
+		return await _check_behavior(detail)
 	return {"defer": true}
+
+## behavior_check 原生执行器：验证 detail 形状 →（测试注入点）→ 真实编排
+## 探针安装 → run_project(allow_window) → 会话就绪等待 → play_and_verify →
+## stop_project。证据标记 evidence_level=native_run 并携带运行事实（场景、
+## 步数、逐断言实际/期望、运行错误、截图路径、会话标识）。
+func _check_behavior(detail: Dictionary) -> Dictionary:
+	var steps: Variant = detail.get("steps", [])
+	if not (steps is Array) or (steps as Array).is_empty():
+		return {"passed": false, "evidence": {
+			"evidence_level": "native_run", "issue": "behavior_check detail needs a non-empty steps array"}}
+	if _behavior_run_override.is_valid():
+		return await _behavior_run_override.call(detail)
+	return await _behavior_run_impl(detail)
+
+## 经插件注册表取已 initialize 的模块实例（跨模块协作的既有模式）；
+## 注册表不可用时回退到 new()（meta 回退链自行解析编辑器接口）。
+func _tool_instance(class_key: String, fallback_script: GDScript) -> RefCounted:
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has(class_key) and instances[class_key] is RefCounted:
+				return instances[class_key]
+	return fallback_script.new()
+
+func _behavior_run_impl(detail: Dictionary) -> Dictionary:
+	var scene_path: String = str(detail.get("scene_path", ""))
+	var runtime_tools: RefCounted = _tool_instance("DebugRuntimeTools", DebugRuntimeToolsScript)
+	var verify_tools: RefCounted = _tool_instance("DebugVerifyTools", DebugVerifyToolsScript)
+	var bridge_tools: RefCounted = _tool_instance("DebugBridgeTools", DebugBridgeToolsScript)
+	var editor_tools: RefCounted = _tool_instance("EditorToolsNative", EditorToolsScript)
+	var evidence: Dictionary = {"evidence_level": "native_run", "scene_path": scene_path}
+
+	var probe: Dictionary = await bridge_tools._tool_install_runtime_probe(
+		{"node_name": "MCPRuntimeProbe", "persistent": true})
+	if probe.has("error") and String(probe.get("status", "")) != "already_installed":
+		evidence["issue"] = "probe install failed: " + str(probe.get("error"))
+		return {"passed": false, "evidence": evidence}
+
+	var run_params: Dictionary = {"allow_window": true}
+	if not scene_path.is_empty():
+		run_params["scene_path"] = scene_path
+	var run: Dictionary = await editor_tools._tool_run_project(run_params)
+	if run.has("error") or String(run.get("status", "")) == "error":
+		evidence["issue"] = "run_project failed: " + str(run.get("error", run.get("game_status", "")))
+		return {"passed": false, "evidence": evidence}
+
+	# 会话就绪：debugger session 激活 + 运行树可见（探针流验证过的模式）。
+	var ready: Dictionary = await _await_behavior_session(bridge_tools, runtime_tools)
+	if not bool(ready.get("ok", false)):
+		await editor_tools._tool_stop_project({"allow_window": true})
+		evidence["issue"] = "runtime never became observable: " + str(ready.get("detail", ""))
+		return {"passed": false, "evidence": evidence}
+	evidence["session"] = ready.get("session", {})
+
+	var verify_params: Dictionary = {
+		"steps": detail.get("steps", []),
+		"assertions": detail.get("assertions", []),
+		"deterministic": bool(detail.get("deterministic", false)),
+	}
+	if detail.has("timeout_ms"):
+		verify_params["timeout_ms"] = int(detail["timeout_ms"])
+	var report: Dictionary = await verify_tools._tool_play_and_verify(verify_params)
+	await editor_tools._tool_stop_project({"allow_window": true})
+
+	if report.has("error"):
+		evidence["issue"] = "play_and_verify failed to orchestrate: " + str(report.get("error"))
+		return {"passed": false, "evidence": evidence}
+	evidence["steps_executed"] = int(report.get("steps_executed", 0))
+	evidence["assertions"] = report.get("assertions", [])
+	evidence["assertions_passed"] = int(report.get("assertions_passed", 0))
+	evidence["assertions_total"] = int(report.get("assertions_total", 0))
+	evidence["runtime_errors"] = report.get("runtime_errors", [])
+	evidence["screenshots"] = report.get("screenshots", [])
+	evidence["runtime_info"] = report.get("runtime_info", {})
+	return {"passed": bool(report.get("passed", false)), "evidence": evidence}
+
+func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted) -> Dictionary:
+	var deadline_ms: int = Time.get_ticks_msec() + 20000
+	while Time.get_ticks_msec() < deadline_ms:
+		var sessions: Dictionary = await bridge_tools._tool_get_debugger_sessions({})
+		var list: Array = sessions.get("sessions", []) if sessions.get("sessions", []) is Array else []
+		var active_session: Dictionary = {}
+		for session_value in list:
+			var session: Dictionary = session_value
+			if bool(session.get("active", false)):
+				active_session = session
+				break
+		if not active_session.is_empty():
+			var info: Dictionary = await runtime_tools._tool_get_runtime_info({"timeout_ms": 2000})
+			if int(info.get("node_count", 0)) > 0:
+				return {"ok": true, "session": {
+					"session_id": active_session.get("session_id", active_session.get("id", "")),
+					"started_at": active_session.get("started_at", "")}}
+		await Engine.get_main_loop().process_frame
+	return {"ok": false, "detail": "no active debugger session with a visible tree within 20s"}
 
 func _resolved_store_path() -> String:
 	return _store_path if not _store_path.is_empty() else StoreScript.DEFAULT_STORE_PATH
