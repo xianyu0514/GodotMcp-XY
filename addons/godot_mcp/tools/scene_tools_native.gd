@@ -63,6 +63,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_save_branch_as_scene(server_core)
 	_register_set_tilemap_layer_cells(server_core)
 	_register_get_tilemap_layer_cells(server_core)
+	_register_batch_update_scene_files(server_core)
 
 # ============================================================================
 # create_scene - 创建新场�?
@@ -1414,3 +1415,223 @@ static func _parse_vector2i(value: Variant) -> Variant:
 	if value is Array and value.size() >= 2:
 		return Vector2i(int(value[0]), int(value[1]))
 	return null
+
+# ============================================================================
+# batch_update_scene_files（P1 场景变体与批量修改）：跨多个 .tscn 文件的
+# 语义化批量属性修改 —— 修改几十种敌人/道具时保留各自的特殊配置。
+#
+# 保留特殊配置的两道闸：
+#   1. expect_current（旧默认值守卫）：只有当前序列化值 == expect_current 的
+#      节点才改写；Boss 那份已经改成 300 的配置原样保留并如实上报。
+#   2. preserve 显式清单：逐 scene|node|property 指定"这份不许动"。
+# 纯文本级编辑（不打开编辑器、其余字节原样保留），逐文件报告
+# changed / preserved / unchanged / missing + 汇总；dry_run 默认开。
+# ============================================================================
+
+func _register_batch_update_scene_files(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"batch_update_scene_files",
+		"Semantic batch property edit across many .tscn FILES at once (text-level, no editor round-trip — everything but the edited lines stays byte-identical). Each edit targets {node, property, value} with an optional expect_current guard: only nodes whose CURRENT serialized value equals expect_current are rewritten, so tuning all grunts while the boss keeps its special 300 is one call, not per-file surgery; nodes whose value already drifted are reported as preserved (special config kept, never clobbered). An explicit preserve list ({scene, node, property}) is a second, absolute keep. Values serialize via var_to_str (floats/int/string/bool/Vector2/Color); the existing serialized type is followed when the new value converts losslessly (200.0 over int 200 stays '200'). Properties not serialized in a node section are reported as missing (with the exact node path), never silently appended. dry_run defaults to true — the first call is the preview, re-run with dry_run=false to write. Per-scene report: changed / preserved / unchanged / missing with from- and to-values.",
+		{
+			"type": "object",
+			"properties": {
+				"scenes": {
+					"type": "array", "items": {"type": "string"},
+					"description": "Target .tscn files, e.g. ['res://scenes/grunt.tscn', 'res://scenes/boss.tscn']."
+				},
+				"edits": {
+					"type": "array", "items": {"type": "object"},
+					"description": "[{node: 'Enemy/Brain' (scene-relative, root included), property: 'detect_range', value: <new>, expect_current: <optional old-default guard>}]"
+				},
+				"preserve": {
+					"type": "array", "items": {"type": "object"},
+					"description": "Absolute keep list: [{scene, node, property}] — matched nodes are never rewritten, reported as preserved."
+				},
+				"dry_run": {
+					"type": "boolean", "default": true,
+					"description": "Preview only (default). Set false to write the files."
+				}
+			},
+			"required": ["scenes", "edits"]
+		},
+		Callable(self, "_tool_batch_update_scene_files"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"dry_run": {"type": "boolean"},
+			"written": {"type": "boolean"},
+			"scenes": {"type": "array"},
+			"totals": {"type": "object"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_batch_update_scene_files(params: Dictionary) -> Dictionary:
+	var scenes_raw: Variant = params.get("scenes", [])
+	if not (scenes_raw is Array) or (scenes_raw as Array).is_empty():
+		return {"error": "scenes must be a non-empty array of .tscn paths"}
+	var edits_raw: Variant = params.get("edits", [])
+	if not (edits_raw is Array) or (edits_raw as Array).is_empty():
+		return {"error": "edits must be a non-empty array of {node, property, value[, expect_current]}"}
+	var edits: Array = []
+	for edit_value in edits_raw:
+		if not (edit_value is Dictionary):
+			return {"error": "each edit must be an object"}
+		var edit: Dictionary = edit_value
+		var node: String = String(edit.get("node", "")).strip_edges()
+		var property: String = String(edit.get("property", "")).strip_edges()
+		if node.is_empty():
+			return {"error": "each edit requires a non-empty 'node' (scene-relative, root included)"}
+		if property.is_empty() or not property.is_valid_identifier():
+			return {"error": "edit for node '%s' requires a valid 'property' identifier (got '%s')" % [node, property]}
+		if not edit.has("value") or edit.get("value", null) == null:
+			return {"error": "edit for '%s.%s' requires a non-null 'value'" % [node, property]}
+		edits.append(edit)
+	var preserve_keys: Dictionary = {}
+	var preserve_raw: Variant = params.get("preserve", [])
+	if preserve_raw is Array:
+		for keep_value in preserve_raw:
+			if keep_value is Dictionary:
+				var keep: Dictionary = keep_value
+				preserve_keys["%s|%s|%s" % [
+					String(keep.get("scene", "")).strip_edges(),
+					String(keep.get("node", "")).strip_edges(),
+					String(keep.get("property", "")).strip_edges()]] = true
+	var dry_run: bool = bool(params.get("dry_run", true))
+
+	var reports: Array = []
+	var totals: Dictionary = {"scenes_touched": 0, "changed": 0, "preserved": 0, "unchanged": 0, "missing": 0}
+	var written: bool = false
+	for scene_value in scenes_raw:
+		var scene_path: String = String(scene_value).strip_edges()
+		var report: Dictionary = {"scene": scene_path, "changed": [], "preserved": [], "unchanged": [], "missing": []}
+		var access: FileAccess = FileAccess.open(scene_path, FileAccess.READ) if FileAccess.file_exists(scene_path) else null
+		if access == null:
+			report["error"] = "scene file not found or unreadable"
+			reports.append(report)
+			continue
+		var text: String = access.get_as_text()
+		access.close()
+		var lines: PackedStringArray = text.split("\n")
+		var sections: Array = []
+		var root_name: String = ""
+		var current: Dictionary = {}
+		for i in lines.size():
+			var line: String = lines[i].strip_edges()
+			if line.begins_with("[node"):
+				if not current.is_empty():
+					current["end"] = i
+					sections.append(current)
+				var header_attrs: Dictionary = _batch_parse_attrs(line)
+				current = {"attrs": header_attrs, "start": i + 1, "end": lines.size()}
+				if not header_attrs.has("parent") and root_name.is_empty():
+					root_name = String(header_attrs.get("name", ""))
+			elif line.begins_with("[") and not current.is_empty():
+				current["end"] = i
+				sections.append(current)
+				current = {}
+		if not current.is_empty():
+			current["end"] = lines.size()
+			sections.append(current)
+
+		var file_dirty: bool = false
+		for edit_value in edits:
+			var edit: Dictionary = edit_value
+			var node: String = String(edit.get("node", "")).strip_edges()
+			var property: String = String(edit.get("property", "")).strip_edges()
+			var new_value: Variant = edit.get("value", null)
+			var target_key: String = "%s|%s|%s" % [scene_path, node, property]
+			# 定位节点段：完整路径优先，退化为段名匹配（与实体解析同一语义）。
+			var section: Dictionary = {}
+			for section_value in sections:
+				var attrs: Dictionary = (section_value as Dictionary).get("attrs", {})
+				var name: String = String(attrs.get("name", ""))
+				var full_path: String = name
+				if attrs.has("parent"):
+					var parent: String = String(attrs["parent"])
+					full_path = root_name + "/" + name if parent == "." else parent + "/" + name
+				if full_path == node or (section.is_empty() and name == node):
+					section = section_value
+					if full_path == node:
+						break
+			if section.is_empty():
+				report["missing"].append({"node": node, "property": property,
+					"reason": "node not present in the scene file"})
+				continue
+			# 段体内找属性行（tab 缩进的 "<property> ="）。
+			var property_line_index: int = -1
+			var current_text: String = ""
+			var property_prefix: String = property + " ="
+			for i in range(int(section.get("start", 0)), int(section.get("end", 0))):
+				var body_line: String = lines[i].strip_edges()
+				if body_line.begins_with(property_prefix):
+					property_line_index = i
+					current_text = body_line.substr(property_prefix.length()).strip_edges()
+					break
+			if property_line_index < 0:
+				report["missing"].append({"node": node, "property": property,
+					"reason": "property not serialized in the node section (value comes from the script default or an instance override) — set it once via batch_scene_node_edits and save, then batch-edit it here"})
+				continue
+			if preserve_keys.has(target_key):
+				report["preserved"].append({"node": node, "property": property,
+					"current": current_text, "reason": "explicit preserve list"})
+				continue
+			var current_value: Variant = str_to_var(current_text)
+			if _batch_values_equal(current_value, new_value):
+				report["unchanged"].append({"node": node, "property": property, "current": current_text})
+				continue
+			if edit.has("expect_current") and not _batch_values_equal(current_value, edit.get("expect_current", null)):
+				report["preserved"].append({"node": node, "property": property,
+					"current": current_text, "reason": "current value differs from expect_current — special config kept"})
+				continue
+			# 跟随既有序列化类型（无损时）：int 行写回 int，避免 200 变 200.0。
+			var serialized: Variant = new_value
+			if typeof(current_value) == TYPE_INT and new_value is float and is_equal_approx(float(new_value), roundf(float(new_value))):
+				serialized = int(roundf(float(new_value)))
+			var new_text: String = var_to_str(serialized)
+			# 保留原行缩进（.tscn 用 tab，逐字跟随而不是硬编码）。
+			var raw_line: String = lines[property_line_index]
+			var leading: String = raw_line.substr(0, raw_line.length() - raw_line.lstrip("\t").length())
+			lines[property_line_index] = leading + property + " = " + new_text
+			file_dirty = true
+			report["changed"].append({"node": node, "property": property,
+				"from": current_text, "to": new_text})
+		if file_dirty and not dry_run:
+			var writer: FileAccess = FileAccess.open(scene_path, FileAccess.WRITE)
+			if writer == null:
+				report["error"] = "could not open for writing"
+			else:
+				writer.store_string("\n".join(lines))
+				writer.close()
+				written = true
+				totals["scenes_touched"] = int(totals["scenes_touched"]) + 1
+		reports.append(report)
+		totals["changed"] = int(totals["changed"]) + (report["changed"] as Array).size()
+		totals["preserved"] = int(totals["preserved"]) + (report["preserved"] as Array).size()
+		totals["unchanged"] = int(totals["unchanged"]) + (report["unchanged"] as Array).size()
+		totals["missing"] = int(totals["missing"]) + (report["missing"] as Array).size()
+	return {
+		"status": "success",
+		"dry_run": dry_run,
+		"written": written,
+		"scenes": reports,
+		"totals": totals,
+	}
+
+## 数值宽容相等：浮点近似、布尔精确、其余字符串比较（str_to_var 解析当前值）。
+static func _batch_values_equal(a: Variant, b: Variant) -> bool:
+	if a == null or b == null:
+		return false
+	if typeof(a) == TYPE_BOOL or typeof(b) == TYPE_BOOL:
+		return bool(a) == bool(b) and typeof(a) == typeof(b)
+	if (a is int or a is float) and (b is int or b is float):
+		return is_equal_approx(float(a), float(b))
+	return str(a) == str(b)
+
+## 解析资源头部属性键值对（与 debug_verify_tools 同一语义的本地实现）。
+static func _batch_parse_attrs(header: String) -> Dictionary:
+	var attrs: Dictionary = {}
+	var regex: RegEx = RegEx.new()
+	regex.compile("([A-Za-z_]+)=\"([^\"]*)\"")
+	for m in regex.search_all(header):
+		attrs[String(m.get_string(1))] = m.get_string(2)
+	return attrs

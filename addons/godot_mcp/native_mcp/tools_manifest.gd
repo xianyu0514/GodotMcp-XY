@@ -42,6 +42,7 @@ const TOOLS: Dictionary = {
 	"batch_connect_signals": {"category": "supplementary", "group": "Node-Advanced"},
 	"batch_create_resources": {"category": "supplementary", "group": "Project-Advanced"},
 	"batch_get_node_properties": {"category": "supplementary", "group": "Node-Advanced"},
+	"batch_update_scene_files": {"category": "supplementary", "group": "Scene-Advanced"},
 	"batch_read_scripts": {"category": "supplementary", "group": "Script-Advanced"},
 	"batch_scene_node_edits": {"category": "supplementary", "group": "Node-Advanced"},
 	"batch_update_node_properties": {"category": "supplementary", "group": "Node-Advanced"},

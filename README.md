@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-239-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-240-blue.svg)](docs/tools/README.md)
 [![CI](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml)
 
 > 中文文档见 [README.zh.md](README.zh.md)。
@@ -19,7 +19,7 @@ Where typical Godot MCP servers stop at tool calls, this one closes the loop. `p
 - **Durable goal orchestration:** 12 production profiles compose into a persistent goal DAG with objective-evidence gates, adaptive checkpoint slices, crash-and-resume execution and fail-closed semantics for non-idempotent steps — proven by dedicated end-to-end tests that kill the editor mid-goal and resume to completion.
 - **Honest evidence gates:** completion requires engine-issued receipts — real script compilation (truncated verifies rejected), genuinely-playing animation checks, per-workflow visual baselines, platform-correct export chains and a durable stderr ring that chatty games cannot flush.
 - **Native server:** the MCP server lives in the editor process and ships with the plugin; HTTP/SSE on `http://localhost:9080/mcp` plus stdio for local-process clients.
-- **239 tools with a small default surface:** 28 core tools are enabled immediately, 205 advanced tools remain on demand, and 6 meta tools cover discovery plus goal orchestration. One `enable_tools` call routes a bilingual task to at most 8 atomic tools — measured ~97% schema-token savings.
+- **240 tools with a small default surface:** 28 core tools are enabled immediately, 206 advanced tools remain on demand, and 6 meta tools cover discovery plus goal orchestration. One `enable_tools` call routes a bilingual task to at most 8 atomic tools — measured ~97% schema-token savings.
 - **Cache correctness as a feature:** dependency-tagged result invalidation, single-flight dedupe, per-file compile/dependency memos and a `get_cache_diagnostics` telemetry tool; a CI regression asserts that repeat reads hit and real mutations invalidate.
 - **Runtime-aware automation:** the runtime probe inspects live scene trees, evaluates expressions, injects input, controls animation/audio/shader/tilemap state, captures screenshots and gates on performance/error/visual budgets.
 - **Security controls:** optional Bearer-token auth, path validation, rate limiting and a strict security mode built around Godot APIs rather than arbitrary OS shell access.
@@ -72,7 +72,7 @@ Client-specific examples for Claude Desktop, Cursor, Trae, Cline, OpenCode and C
 | [Debug & Runtime](docs/tools/debug-tools.md) | 76 | 3 | 73 | Logs, debugger control, profilers, runtime probe, deterministic play checks and regression gates |
 | [Project](docs/tools/project-tools.md) | 73 | 3 | 70 | Settings, resources, input map, tests, migration scans, assets, TileSets, sprite/glTF workflows, task plans and localization |
 | [Meta](docs/tools/meta-tools.md) | 6 | — | — | Discovery, on-demand enablement and durable complete-game orchestration |
-| **Total** | **239** | **28** | **205** | |
+| **Total** | **240** | **28** | **206** | |
 
 Only core and meta tools are visible to `tools/list` at startup. For a complete user outcome, one `run_game_workflow({"command": "..."})` call creates or resumes a persistent goal DAG composed from 12 production profiles; repeating the same command after a yield, disconnect or restart keeps the workflow identity and never re-dispatches completed work. Adaptive 4/8/16/32-call slices bound each round without truncating the goal. Checkpoints use validated staging, atomic promotion and a retained backup; receipt digests are recomputed after load, and every done step must reference its own passing evidence. Unknown composite goals can be routed clause-by-clause beyond ten capabilities, while different commands, missing inputs/capabilities, protected paths and unverifiable requirements stop explicitly. See [Complete Game Workflows](docs/game-workflows.md).
 

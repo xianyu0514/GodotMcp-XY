@@ -10,7 +10,7 @@ Existing-script edits support unique text replacements and optional content-hash
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.
 - `native_mcp/` — JSON-RPC/MCP core, HTTP/SSE and stdio transports, auth, settings, tunnel support and tool-state management.
-- `tools/` — the 239 registered MCP tools.
+- `tools/` — the 240 registered MCP tools.
 - `runtime/mcp_runtime_probe.gd` — optional autoload used to inspect and drive a running game.
 - `ui/` — the MCP dock panel, tool manager and detail views.
 - `translations/` — panel text and tool descriptions.
@@ -36,10 +36,10 @@ The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and
 
 ## Tool model
 
-The addon registers 239 tools:
+The addon registers 240 tools:
 
 - 28 core tools enabled by default.
-- 205 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
+- 206 advanced tools registered but disabled until enabled from the panel or `enable_tools`.
 - 6 always-on meta tools: four discovery tools plus `plan_game_workflow` and `run_game_workflow`.
 
 Complete goals can start with one `run_game_workflow(command=...)` call, which creates or resumes a durable DAG from 12 reusable production profiles. Equivalent retries keep the same workflow; different commands conflict. Adaptive 4/8/16/32-call slices, atomic checkpoint generations and revalidated completion receipts make long runs resumable without visibility churn or duplicate completed work. Short tasks continue to use `enable_tools` with the unchanged 8-tool default/10-tool hard discovery budget.
