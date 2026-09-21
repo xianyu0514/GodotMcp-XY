@@ -203,6 +203,23 @@ Step 3 — Contract-verify with run_verification_queue (strict, requirements: de
 Step 4 — Natural-language tuning maps to @export reads: "attack windup more obvious" -> windup_seconds up; "chase shorter" -> chase_range down. After ANY script change, re-verify the affected requirements only.
 """
 
+const MENU_RECIPE_TEMPLATE: String = """
+You are executing the "Game Menu & HUD" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "ui menu hud button pause interaction"}}
+
+Step 1 — Locate context with gather_task_context (which scene the menu enters FROM, where game state lives). Build the menu with create_scene (root Control) + batch_scene_node_edits (VBoxContainer + Buttons); attach ONE external controller script and wire EVERY button with connect_signal ("pressed" -> handler). attach_script keeps the EXTERNAL reference — an embedded copy makes every later edit to the .gd never reach the game. A button left unwired is a defect, not a style choice: list each button -> effect before building.
+
+Step 2 — Standard wirings: Start -> get_tree().change_scene_to_file(gameplay scene); Quit -> get_tree().quit(); Pause -> get_tree().paused = true (toggle); HUD listens to a state autoload via Signal (never polls). Two PAUSE TRAPS that bite every project: (a) paused freezes EVERYTHING — the pause menu and its buttons must live under a node with process_mode = PROCESS_MODE_WHEN_PAUSED or the resume click never registers; (b) a decorative full-screen overlay drawn ABOVE buttons eats their clicks unless mouse_filter = MOUSE_FILTER_IGNORE.
+
+Step 3 — Interaction verification is CLICK-THROUGH, not screenshots: play_and_verify steps send a mouse_button event at the button's runtime rect_center (read get_global_rect() at runtime, never guess pixel positions), then assert the effect — scene path changed / get_tree().paused == true / state signal fired. Shape:
+{"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["menu_renders", "start_changes_scene", "pause_resume_roundtrip", "hud_reflects_state"], "items": [{"kind": "behavior_check", "requirement": "pause_resume_roundtrip", "label": "r3", "detail": {"scene_path": "<menu scene>", "steps": [{"event": {"type": "mouse_button", "position": "<pause rect_center>", "button_index": 1, "pressed": true}, "wait_ms": 300, "assert": {"expression": "get_tree().paused == true", "description": "paused after click"}}, {"event": {"type": "mouse_button", "position": "<resume rect_center>", "button_index": 1, "pressed": true}, "wait_ms": 300, "assert": {"expression": "get_tree().paused == false", "description": "resumed after second click"}}]}}]}} Each item boots a FRESH run, must be self-contained, and carries at least one assertion — zero-assertion runs are smoke and the strict contract rejects them. ANY requirement not verified = the overall outcome is incomplete; report it as incomplete.
+
+Step 4 — After ANY script or theme change, prove it reached the running game with verify_change_effect (names the embedded-copy / unsaved-buffer / instance-override killers when they bite). Visual tuning is theme data, not per-node overrides: create_theme + set_theme_item ("bigger text" = font_size) + set_default_theme.
+"""
+
 
 # Prompt 注册表
 # ============================================================================
@@ -396,6 +413,14 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_melee_enemy")
 	)
+	_add_prompt(
+		"make_game_menu",
+		"Build a menu/HUD that actually works when clicked: buttons wired to external scripts, pause that survives being paused, HUD fed by signals — then click-through verified with a requirement contract.",
+		[
+			{"name": "goal", "description": "The menu or HUD wanted, e.g. 'main menu with start/quit plus a pause overlay'.", "required": true}
+		],
+		Callable(self, "_get_make_game_menu")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -430,7 +455,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_character": ["character visual", "sprite sheet", "hit feedback", "skin", "flash", "camera shake",
 		"角色外观", "精灵图", "受击反馈", "闪白", "震屏", "皮肤"],
 	"make_melee_enemy": ["melee enemy", "enemy behavior", "chase", "windup", "enemy drop",
-		"近战敌人", "敌人行为", "追击", "前摇", "掉落"]
+		"近战敌人", "敌人行为", "追击", "前摇", "掉落"],
+	"make_game_menu": ["menu", "hud", "main menu", "pause menu", "button wiring", "ui screen",
+		"菜单", "主菜单", "暂停菜单", "界面", "按钮"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -579,6 +606,10 @@ func _get_make_game_character(args: Dictionary) -> Dictionary:
 
 func _get_melee_enemy(args: Dictionary) -> Dictionary:
 	return _render(MELEE_ENEMY_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_menu(args: Dictionary) -> Dictionary:
+	return _render(MENU_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:

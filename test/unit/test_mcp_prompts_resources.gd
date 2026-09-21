@@ -323,6 +323,7 @@ func test_plugin_shipped_making_recipes_registered():
 		names.append(String(p.get("name", "")))
 	assert_true("make_game_character" in names, "character recipe ships with the plugin")
 	assert_true("make_melee_enemy" in names, "melee-enemy recipe ships with the plugin")
+	assert_true("make_game_menu" in names, "menu recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -342,3 +343,17 @@ func test_melee_recipe_carries_operational_truths():
 	assert_true(text.contains("stats resources"), "grunt-vs-boss via stats, not code branches")
 	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
 	assert_true(text.contains("0.22s"), "death-window timing lesson")
+
+
+func test_menu_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_menu").call({"goal": "main menu"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("connect_signal"), "every button wired through signals")
+	assert_true(text.contains("EXTERNAL reference"), "embedded-copy lesson baked in")
+	assert_true(text.contains("PROCESS_MODE_WHEN_PAUSED"), "pause-freeze lesson baked in")
+	assert_true(text.contains("MOUSE_FILTER_IGNORE"), "overlay-click-eating lesson baked in")
+	assert_true(text.contains("get_global_rect()"), "clicks target runtime rects, never guessed pixels")
+	assert_true(text.to_lower().contains("click-through"), "interaction proof is click-through, not screenshots")
+	assert_true(text.contains("verify_change_effect"), "post-change effectiveness proof named")
+	assert_true(text.contains("requirements"), "ends in a requirement contract")

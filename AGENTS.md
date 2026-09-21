@@ -56,7 +56,7 @@ addons/godot_mcp/
 │   ├── tools_manifest.gd       # 单一数据表（唯一真相）：238 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
-│   ├── prompt_workflows.gd     # 10 个可执行工作流 MCP prompts（plan_game_feature/make_game_change/debug_runtime_error 等）
+│   ├── prompt_workflows.gd     # 13 个可执行工作流 MCP prompts（plan_game_feature/make_game_change/make_game_character/make_melee_enemy/make_game_menu 等）
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_tunnel_manager.gd   # Cloudflare Quick Tunnel 生命周期与公网 URL 上报
 │   ├── mcp_tunnel_supervisor.gd # 独立低开销的隧道守护（跨编辑器重启持久化）
