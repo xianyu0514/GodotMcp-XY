@@ -60,7 +60,7 @@ func test_selecting_preset_refreshes_explanation_and_count():
 	panel._preset_option.select(index)
 	panel._on_preset_selected(index)
 	assert_false(panel._preset_description_label.text.is_empty(), "Preset explanation is visible before applying")
-	assert_string_contains(panel._preset_count_label.text, "82", "Level design preview reports enabled tool count")
+	assert_string_contains(panel._preset_count_label.text, "83", "Level design preview reports enabled tool count")
 
 func test_profile_dropdown_keeps_common_tasks_immediately_discoverable():
 	var panel: Node = _make_panel()

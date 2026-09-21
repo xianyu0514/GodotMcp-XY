@@ -141,7 +141,7 @@ const FULL_SET_TOKEN_BUDGET: int = 60000
 
 ## 超限豁免清单（应尽量保持为空；见 TOOL_TOKEN_BUDGET 注释）。
 ## 登记格式：{"tool_name": "超限原因（仍须单独安排描述精简）"}
-## 当前 8 个：均为预算门禁建立前已存在的复杂编排/生成/导出工具（长描述 +
+## 当前 12 个：预算门禁建立前的复杂编排/生成/导出工具 + 两个验收编排新工具（长描述 +
 ## 富参数 schema，实测 458–1191 token）。400 是 DSH 研究（docs/research/
 ## dsh-tool-token-economy-study.md §3.1 建议 B）建议的单工具预算，保留作为
 ## 回归线；这 8 个的描述/参数精简是独立工作项，禁止通过放宽预算来掩盖。
@@ -156,6 +156,8 @@ const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
 	"configure_android_export": "Android 导出配置：富参数 schema（历史基线，待精简）",
 	"assert_visual_baseline": "视觉回归门禁：富参数 schema（历史基线，待精简）",
 	"batch_scene_node_edits": "幂等配方核心：on_exists=skip 语义必须内联说明（409 token，2026-09 角色工作流引入；精简需先审计配方依赖）",
+	"verify_change_effect": "修改生效确认链（P0-2 公共能力）：五步证据语义（实体解析/内嵌副本/未保存缓冲/行为断言/持久化）必须内联在描述里，精简会丢掉 needs 自愈指引的可用性说明（539 token）",
+	"batch_update_scene_files": "场景批量修改（P1）：expect_current 守卫/preserve 清单/类型跟随/dry_run 语义必须内联，精简会丢掉保留特殊配置的守卫语义（452 token）",
 }
 
 ## 值为“名称 -> 子 schema”映射的容器关键字。

@@ -69,18 +69,18 @@ func test_meta_tools_survive_every_preset():
 func test_all_enables_everything():
 	var states: Dictionary = _manager.resolve_preset_states("all", _all_names)
 	assert_eq(_count_enabled(states), _all_names.size(), "all preset should enable every registered tool")
-	assert_eq(_count_enabled(states), 238, "all preset should enable 238 tools")
+	assert_eq(_count_enabled(states), 240, "all preset should enable 240 tools")
 
 func test_debugging_includes_core_plus_debug_advanced():
 	var states: Dictionary = _manager.resolve_preset_states("debugging", _all_names)
-	assert_eq(_count_enabled(states), 107, "debugging = 28 core + 6 meta + 73 Debug-Advanced")
+	assert_eq(_count_enabled(states), 108, "debugging = 28 core + 6 meta + 74 Debug-Advanced")
 	assert_true(states["create_node"], "Core tool should remain enabled")
 	assert_true(states["get_runtime_info"], "Debug-Advanced tool should be enabled")
 	assert_false(states["run_export"], "Unrelated Project-Advanced tool should stay disabled")
 
 func test_level_design_enables_authoring_groups():
 	var states: Dictionary = _manager.resolve_preset_states("level_design", _all_names)
-	assert_eq(_count_enabled(states), 82, "level_design = 28 core + 6 meta + 8 + 9 + 8 + 23 advanced authoring tools")
+	assert_eq(_count_enabled(states), 83, "level_design = 28 core + 6 meta + 8 + 9 + 9 + 23 advanced authoring tools")
 	assert_true(states["connect_signal"], "Node-Write-Advanced tool should be enabled")
 	assert_false(states["get_runtime_info"], "Debug-Advanced tool should be disabled for level design")
 
