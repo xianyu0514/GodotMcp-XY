@@ -298,3 +298,18 @@ func test_longer_keyword_wins_over_generic():
 	var hit: Dictionary = workflows.match_prompt("fix compile errors then verify runtime error gates")
 	assert_eq(String(hit.get("name", "")), "iterate_play_verify",
 		"The longer 'runtime error' phrase beats shorter 'compile' for mixed intents")
+
+func test_prompt_renders_quotes_and_newlines_safely():
+	# F0：需求文本含引号/换行时必须原样渲染（replace 而非 format，不得截断或
+	# 插值出错），否则示例与真实调用会在特殊字符上分叉。
+	var workflows: RefCounted = _new_workflows()
+	var tricky: String = 'add a "dash" skill
+with cooldown < 1s'
+	var result: Dictionary = workflows.get_callable("make_game_change").call({
+		"change": tricky, "acceptance": 'player "stops" at walls
+zero errors'})
+	assert_true(result.has("messages"), "Tricky characters must still render")
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains('add a "dash" skill'), "Embedded quotes survive")
+	assert_true(text.contains("with cooldown < 1s"), "Newline-adjacent text survives")
+	assert_true(text.contains('player "stops" at walls'), "Acceptance quotes survive")

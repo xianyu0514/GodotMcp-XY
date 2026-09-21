@@ -229,7 +229,7 @@ Step 3 — Pin read versions before editing:
 {"tool": "read_script", "args": {"script_path": "<path>"}} — or {"tool": "batch_read_scripts", "args": {"script_paths": ["<paths>"]}} for several. Keep each returned content_hash: every modify operation must carry the expected_content_hash of the read that produced it.
 
 Step 4 — Preview, then commit:
-{"tool": "apply_change_set", "args": {"intent": "{{change}}", "operations": {"modify": [{"path": "<path>", "expected_content_hash": "<hash from step 3>", "edits": [{"old_text": "<snippet that occurs exactly once>", "new_text": "<replacement>"}]}]}, "change_set_id": "<stable id you reuse>", "dry_run": true}}
+{"tool": "apply_change_set", "args": {"intent": "{{change}}", "operations": [{"path": "<path>", "expected_content_hash": "<hash from step 3>", "edits": [{"old_text": "<snippet that occurs exactly once>", "new_text": "<replacement>"}]}], "change_set_id": "<stable id you reuse>", "dry_run": true}}
 Review the preview (fingerprints, per-file edit counts), then commit the SAME change_set_id and operations with "dry_run": false. On interruption re-submit the same id: applied files are skipped and manually-edited files stop at an explicit conflict — never widen edits to work around a conflict.
 Scene/node edits that the text schema cannot express go through the focused scene tools instead; do not force them into the change set.
 

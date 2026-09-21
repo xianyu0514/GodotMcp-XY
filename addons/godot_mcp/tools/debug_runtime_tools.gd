@@ -1490,6 +1490,12 @@ func _tool_assert_runtime_condition(params: Dictionary) -> Dictionary:
 
 	var last_value = wait_result.get("last_value", null)
 	var expected_raw = params.get("expected", null)
+	# 未知比较运算符不得静默判 false（实测坑：示例写 "<=" 而规范名是 "lte"，
+	# 静默 false 会把真实通过的行为误判为失败）——显式报错让调用方一次自纠。
+	if expected_raw != null and params.has("operator"):
+		var op_probe: String = str(params.get("operator", ""))
+		if not op_probe in ["eq", "ne", "gt", "gte", "lt", "lte"]:
+			return {"error": "Unknown operator '%s'. Supported: eq, ne, gt, gte, lt, lte." % op_probe}
 	var attempts: int = wait_result.get("attempts", 0)
 	var elapsed_ms: int = wait_result.get("elapsed_ms", 0)
 
