@@ -24,6 +24,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCHEME_DIR = "data/feel_schemes"
 
 SCHEMES = {
+    "punchy": {
+        "Player": {"move_speed": 300.0, "acceleration": 9000.0, "deceleration": 11000.0},
+        "Player/HitFeedback": {"flash_seconds": 0.22, "camera_shake_pixels": 8.0},
+        "Player/Attack": {"cooldown_seconds": 0.32},
+    },
     "snappy": {
         "Player": {"move_speed": 320.0, "acceleration": 3600.0, "deceleration": 4200.0},
         "Player/HitFeedback": {"flash_seconds": 0.18, "camera_shake_pixels": 3.0},
