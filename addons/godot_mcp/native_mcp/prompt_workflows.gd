@@ -219,6 +219,36 @@ Step 3 — Interaction verification is CLICK-THROUGH, not screenshots: play_and_
 
 Step 4 — After ANY script or theme change, prove it reached the running game with verify_change_effect (names the embedded-copy / unsaved-buffer / instance-override killers when they bite). Visual tuning is theme data, not per-node overrides: create_theme + set_theme_item ("bigger text" = font_size) + set_default_theme.
 """
+const ANY_GAME_RECIPE_TEMPLATE: String = """
+You are executing the "Any Game" universal making method against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+This is the UNIVERSAL entry: route every piece of the goal to the fastest safe path, and never fake completion. Quality here is genre-independent — the evidence surface (runtime expressions, simulated input, FRESH boots, strict contracts) is identical for a platformer, a puzzle, a card game or something nobody has shipped with this plugin before.
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "game creation scene script input verify"}}
+
+Step 1 — Decompose the goal into pillars (movement, combat, enemies, items/pickups, maps/levels, menus/HUD, save, audio, game feel, win/lose, plus the goal's unique mechanic). For each pillar, prefer a SHIPPED recipe when it matches — they carry session-tested operational truths:
+  character visuals + hit feedback -> make_game_character
+  melee enemy (patrol/detect/chase/windup/hit/death-drop) -> make_melee_enemy
+  menus, HUD, pause -> make_game_menu
+  one cross-file change -> make_game_change
+  a long multi-phase goal -> plan_game_workflow (durable DAG, evidence-gated completion)
+
+Step 2 — For a pillar with NO shipped recipe, run the general loop (this is the method that makes "any game" safe):
+  a) gather_task_context — never assume names; find the real scenes, scripts and the input map.
+  b) Build the SMALLEST PLAYABLE SLICE of that pillar: one external script (attach_script keeps the EXTERNAL reference), signals wired (never polls), values exposed as @export knobs.
+  c) BEFORE tuning, write acceptance as a strict requirement contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["<r1>", "<r2>"], "items": [{"kind": "behavior_check", "requirement": "r1", "detail": {"scene_path": "<scene>", "steps": [...]}}]}} — one behavior_check per requirement, each item boots a FRESH run and carries at least one assertion; zero-assertion runs are smoke and the strict contract rejects them.
+  d) Advance to a terminal state; ANY unverified requirement = the overall outcome is incomplete — report it as incomplete, never summarize past a gap.
+  e) Iterate smallest-loop: change ONE knob -> verify_change_effect proves it reached the running game (embedded script copy / unsaved editor buffer / host-scene instance override are named with the exact fix when they bite) -> re-verify only the affected requirements.
+
+Step 3 — Genre guidance is DATA, not permission: turn-based = state machines and timers, not physics; physics-driven = rigid bodies + applied forces (assert DISPLACEMENT, never vibes); puzzle = deterministic input sequences (play_and_verify deterministic=true, frame-stepped); card/strategy = data tables + rules script, UI via the menu recipe; dialogue/narrative = data + the UI recipe; 3D = same atomic tools (nodes/scripts/expressions are dimension-agnostic) with generate_3d_asset for placeholders.
+
+Step 4 — Quality floor (every game, no exceptions): assert_no_runtime_errors after every milestone; assert_performance_budget once gameplay stabilizes; screenshot key screens; release_export_flow (export smoke) before calling the game done.
+
+Step 5 — Close honestly: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why, and suggest the next three sentences the user could say (tune a knob / add a pillar / ship it).
+"""
+
 
 
 # Prompt 注册表
@@ -421,6 +451,14 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_menu")
 	)
+	_add_prompt(
+		"make_any_game",
+		"The universal entry for ANY game: route each pillar to a shipped recipe when one matches, run the general make->strict-contract->verify loop for pillars that have none, keep the genre-independent quality floor (no runtime errors, performance budget, export smoke), and close with the plugin-built checklist. Quality does not depend on the genre being known.",
+		[
+			{"name": "goal", "description": "The game or game part wanted, any genre, e.g. 'a physics golf game with 9 holes and par tracking'.", "required": true}
+		],
+		Callable(self, "_get_make_any_game")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -457,7 +495,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_melee_enemy": ["melee enemy", "enemy behavior", "chase", "windup", "enemy drop",
 		"近战敌人", "敌人行为", "追击", "前摇", "掉落"],
 	"make_game_menu": ["menu", "hud", "main menu", "pause menu", "button wiring", "ui screen",
-		"菜单", "主菜单", "暂停菜单", "界面", "按钮"]
+		"菜单", "主菜单", "暂停菜单", "界面", "按钮"],
+	"make_any_game": ["make any game", "make me a game", "build a game", "whatever game", "any genre",
+		"做一个游戏", "随便做个游戏", "任意游戏", "任何游戏", "给我做个游戏"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -610,6 +650,10 @@ func _get_melee_enemy(args: Dictionary) -> Dictionary:
 
 func _get_make_game_menu(args: Dictionary) -> Dictionary:
 	return _render(MENU_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_any_game(args: Dictionary) -> Dictionary:
+	return _render(ANY_GAME_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:

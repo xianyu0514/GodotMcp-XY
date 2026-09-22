@@ -57,7 +57,7 @@ Godot MCP Native 是一个 **Godot 4.7 EditorPlugin**，在编辑器进程内原
 │                 结果缓存 · 溢出落盘 · 进度与取消             │
 └────────────────────────────────────────────────────────────┘
                           ↓ await tool.callable(args)
-┌─ 能力层 · 240 工具 + 7 资源 + 13 prompts ───────────────────┐
+┌─ 能力层 · 240 工具 + 7 资源 + 14 prompts ───────────────────┐
 │  场景与节点 38 · 脚本 18 · 编辑器控制 27                    │
 │  运行与调试 73 · 项目与资源 69 · 元工具 6                   │
 └────────────────────────────────────────────────────────────┘
@@ -101,7 +101,7 @@ _enter_tree()
   ├─ _register_all_tools()         按 TOOL_SCRIPT_PATHS 顺序实例化 15 个工具模块
   ├─ _ensure_runtime_probe_autoload()
   ├─ _register_all_resources()     7 个 godot:// 资源
-  ├─ _register_all_prompts()       13 个可执行工作流 prompt
+  ├─ _register_all_prompts()       14 个可执行工作流 prompt
   ├─ load_tool_states()            必须在建 UI 前恢复启用状态
   └─ _create_main_screen_panel()
 ```
