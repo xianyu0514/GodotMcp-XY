@@ -328,6 +328,10 @@ func test_plugin_shipped_making_recipes_registered():
 	assert_true("make_game_map" in names, "map recipe ships with the plugin")
 	assert_true("make_game_pickup" in names, "pickup recipe ships with the plugin")
 	assert_true("make_game_save" in names, "save recipe ships with the plugin")
+	assert_true("make_game_juice" in names, "juice recipe ships with the plugin")
+	assert_true("make_game_audio" in names, "audio recipe ships with the plugin")
+	assert_true("make_game_boss" in names, "boss recipe ships with the plugin")
+	assert_true("make_game_ranged_enemy" in names, "ranged-enemy recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -348,6 +352,54 @@ func test_melee_recipe_carries_operational_truths():
 	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
 	assert_true(text.contains("0.22s"), "death-window timing lesson")
 
+
+func test_juice_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_juice").call({"goal": "heavier hits"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("FEEL IS DATA"), "feel is a knob dict, not code paths")
+	assert_true(text.contains("hitstop must ALWAYS restore") or text.to_lower().contains("always restore"),
+		"leaked-hitstop freeze lesson baked in")
+	assert_true(text.contains("time_scale"), "restore asserted on Engine.time_scale")
+	assert_true(text.contains("RECOVER") or text.contains("recovers"), "flash must recover, both directions audited")
+	assert_true(text.contains("verify_change_effect"))
+	assert_true(text.contains("requirements"))
+
+func test_audio_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_audio").call({"goal": "bgm and sfx"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("cannot synthesize audio"), "honest scope: files come from the user")
+	assert_true(text.contains("POOL"), "SFX pool — one player for everything cuts the BGM")
+	assert_true(text.contains("bgm_survives_sfx"), "the pooling proof is a contract requirement")
+	assert_true(text.contains("PLAYER/BUS STATE") or text.to_lower().contains("player/bus state"),
+		"assert state, you cannot hear")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_boss_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_boss").call({"goal": "two-phase boss"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("DATA ON TOP OF THE MELEE BRAIN") or text.to_lower().contains("data on top of the melee brain"),
+		"boss is data, not a code branch")
+	assert_true(text.contains("knockback_resistance"), "resistance is stats data")
+	assert_true(text.contains("threshold_hp_ratio"), "phases as threshold rows")
+	assert_true(text.contains("HOST rule"), "arena instances the boss — verify against the arena")
+	assert_true(text.contains("victory_fires"), "death wired to victory in the contract")
+	assert_true(text.contains("deal your own damage"), "per-item self-containment lesson")
+
+func test_ranged_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_ranged_enemy").call({"goal": "archer"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("WINDUP telegraph") or text.contains("windup telegraph"),
+		"undodgeable shots are defects")
+	assert_true(text.contains("free itself on hit AND on lifetime") or text.to_lower().contains("on hit and on lifetime"),
+		"leak-free projectiles")
+	assert_true(text.contains("no_fire_out_of_range") and text.contains("projectiles_free_after_ttl"),
+		"leak and range gates in the contract")
+	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
+	assert_true(text.contains("verify_change_effect"))
 
 func test_map_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()

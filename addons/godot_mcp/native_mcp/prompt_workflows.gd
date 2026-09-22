@@ -301,6 +301,78 @@ Step 4 — After ANY change to the save module, verify_change_effect proves it r
 
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (add a save point / autosave on level end / show the save slot in the menu).
 """
+const GAME_JUICE_RECIPE_TEMPLATE: String = """
+You are executing the "Game Feel / Juice" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "animation audio scene verify feel"}}
+
+Step 1 — Locate the feedback events with gather_task_context (hit lands, damage taken, pickup, jump). FEEL IS DATA: one feel scheme = one dict of knobs (flash_duration, shake_magnitude, shake_decay_ms, hitstop_ms, particle_burst, lerp rates). Ship three presets — punchy (short flash, hard shake, 40ms hitstop), snappy (fast lerps, small shake), heavy (long hitstop, big magnitude, slow recovery) — as data files or @export groups. "Make it punchier" = switch scheme or raise numbers, NEVER new code paths.
+
+Step 2 — Wiring truths: shake needs a Camera2D (auto-created, but ASSERT the camera actually moved — a shake that silently no-ops is a defect); hitstop must ALWAYS restore engine time_scale (a leaked hitstop freezes the game — assert time_scale is back to 1.0 after the event); flash sets a modulate/color and must RECOVER (set then restored, both directions audited).
+
+Step 3 — Contract BEFORE tuning, one requirement per effect, per-effect AUDIT FIELDS not vibes: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["flash_fires_and_recovers", "shake_moves_and_resets", "hitstop_engages_and_restores"], "items": [{"kind": "behavior_check", "requirement": "hitstop_engages_and_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "attack", "pressed": true, "wait_ms": 600, "assert": {"expression": "Engine.time_scale", "expected": 1.0, "description": "hitstop restored after the hit"}}]}}]}} — each item boots a FRESH run; a feel effect that only sometimes fires fails its own item.
+
+Step 4 — Tune one knob at a time; a knob change is a CHANGE like any other — verify_change_effect proves it reached the running game (host-scene instance overrides are named when they mask a base-scene knob). Batch-tuning many scenes: batch_update_scene_files with expect_current keeps per-scene specials.
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (heavier scheme / more particles / wire feel into a new event).
+"""
+
+const GAME_AUDIO_RECIPE_TEMPLATE: String = """
+You are executing the "Game Audio" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "audio bus player scene verify"}}
+
+Step 1 — HONEST SCOPE: MCP cannot synthesize audio FILES — the recipe builds the complete SYSTEM (buses, players, triggers, ducking) so that dropping files into the listed paths activates them; where a file is missing it asserts loudly instead of silently playing nothing. Locate events with gather_task_context.
+
+Step 2 — Wiring truths: BGM on a dedicated "Music" bus via one AudioStreamPlayer; SFX through a small POOL of players on an "SFX" bus — never one player for everything (a long sound effect cuts the background music, the classic silent bug). Events trigger sounds through signals, never polls. Buses: create Music/SFX (and a Master duck target), set default volumes as data.
+
+Step 3 — Contract — audio is verified by PLAYER/BUS STATE (you cannot hear, so assert state, never assume): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["bgm_playing_on_music_bus", "sfx_fires_on_event", "bgm_survives_sfx"], "items": [{"kind": "behavior_check", "requirement": "bgm_playing_on_music_bus", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 500, "assert": {"expression": "get_node('<BGM player path>').playing", "description": "bgm playing"}}]}}]}} — bgm_survives_sfx is the pooling proof: fire the longest SFX, then assert the BGM player is STILL playing. Each item boots a FRESH run.
+
+Step 4 — Mixing is data: volumes/ducking are bus values — tune one, then verify_change_effect proves the change reached the running game; per-scene special mixes survive batch retunes via expect_current.
+
+Step 5 — Close honestly: checklist verbatim, list the audio file paths still missing (by name), next sentences suggested (drop in the BGM file / add a footstep SFX / duck music in menus).
+"""
+
+const GAME_BOSS_RECIPE_TEMPLATE: String = """
+You are executing the "Boss Fight" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy stats scene verify combat"}}
+
+Step 1 — A BOSS IS DATA ON TOP OF THE MELEE BRAIN, not a code branch: run make_melee_enemy first if no enemy brain exists. Boss = an EnemyStats resource with high hp and knockback_resistance near 1.0 (grunt ~0), plus PHASES as data rows: [{"threshold_hp_ratio": 0.5, "knobs": {"chase_speed": 1.4, "attack_cooldown": 0.6}}]. Phase switching reads hp ratio and applies knob overrides — no if-boss branches in behavior scripts.
+
+Step 2 — Arena: build the arena as a MAP (make_game_map), instance the boss from its scene — HOST rule: the arena INSTANCES the boss, verify against the ARENA scene, arena overrides win over base values. Death path: big feedback (make_game_juice), guaranteed drops, and a VICTORY trigger wired through a signal.
+
+Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["phase_switch_occurs", "knockback_resisted", "death_stops_attacking", "victory_fires"], "items": [{"kind": "behavior_check", "requirement": "phase_switch_occurs", "detail": {"scene_path": "<res://scenes/boss_arena.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<deal lethal-ish damage expression>", "description": "push hp below the threshold"}}, {"wait_ms": 400, "assert": {"expression": "<boss phase field expression>", "expected": 2, "description": "phase 2 engaged"}}]}}]}} — each item boots a FRESH run and must push the boss into the state it asserts itself (deal your own damage). Death-window reads stay inside the free window.
+
+Step 4 — Tuning is stats/data: harder boss = rows in the phase table or stats resource; after any script change verify_change_effect proves reach; variant bosses via create stats resources, batch-retuned with expect_current.
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (third phase / adds at 30% / a telegraphed AoE).
+"""
+
+const GAME_RANGED_RECIPE_TEMPLATE: String = """
+You are executing the "Ranged Enemy" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy projectile scene verify combat"}}
+
+Step 1 — Locate the enemy with gather_task_context. A RANGED enemy reuses the melee brain's patrol/detect/recover shape but fires PROJECTILES: Area2D projectile + speed*direction, a WINDUP telegraph before every shot (a shot without telegraph is undodgeable — that is a defect, not difficulty), fire only within attack_range, cooldown between shots.
+
+Step 2 — Projectile truths: every projectile MUST free itself on hit AND on lifetime timeout — leaked projectiles sink performance silently, so assert the active count returns to baseline. Facing: direction = (player position - self position).normalized() at fire time. A small POOL of projectile nodes beats spawn-per-shot once bursts exceed a handful.
+
+Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["projectile_hits_reduces_hp", "no_fire_out_of_range", "projectiles_free_after_ttl", "windup_precedes_shot"], "items": [{"kind": "behavior_check", "requirement": "no_fire_out_of_range", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 1500, "assert": {"expression": "<active projectile count expression>", "expected": 0, "description": "nothing spawned while the player is out of range"}}]}}]}} — each item boots a FRESH run and sets up its own range situation (walk in/out itself).
+
+Step 4 — Tuning: projectile speed / fire rate / windup / range are @export knobs — one at a time, then verify_change_effect proves reach; many ranged enemies retuned at once via batch_update_scene_files with expect_current (the elite archer keeps her custom range).
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (leading shots / a spread variant / ammo drops).
+"""
+
 
 
 
@@ -537,6 +609,38 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_save")
 	)
+	_add_prompt(
+		"make_game_juice",
+		"Tune game feel as DATA: one feel scheme = one knob dict (flash/shake/hitstop/particles/lerps) with punchy-snappy-heavy presets; per-effect audit contracts (flash recovers, shake moves AND resets, hitstop ALWAYS restores time_scale); knob changes proven by verify_change_effect.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'heavier punch feel across hits' / 'BGM plus hit and pickup SFX' / 'two-phase boss with adds' / 'an archer that leads its shots'.", "required": true}
+		],
+		Callable(self, "_get_make_game_juice")
+	)
+	_add_prompt(
+		"make_game_audio",
+		"Wire the whole audio system: Music/SFX buses, pooled SFX players (a long effect must never cut the BGM), signal-driven triggers, data-only mixing — verified by player/bus STATE you cannot hear. Honest scope: files come from you; the system activates them and names what is missing.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'heavier punch feel across hits' / 'BGM plus hit and pickup SFX' / 'two-phase boss with adds' / 'an archer that leads its shots'.", "required": true}
+		],
+		Callable(self, "_get_make_game_audio")
+	)
+	_add_prompt(
+		"make_game_boss",
+		"A boss is DATA on top of the melee brain: EnemyStats with knockback resistance, phases as threshold->knob-override rows (no if-boss branches), an arena map instancing the boss, death wired to victory — contract-proven phase switch, resistance, death stop, victory.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'heavier punch feel across hits' / 'BGM plus hit and pickup SFX' / 'two-phase boss with adds' / 'an archer that leads its shots'.", "required": true}
+		],
+		Callable(self, "_get_make_game_boss")
+	)
+	_add_prompt(
+		"make_game_ranged_enemy",
+		"Ranged enemies that are fair and leak-free: windup telegraph before every shot, fire only in range, projectiles free on hit AND lifetime (leak asserted back to baseline), pooled nodes — contract-proven hit damage, no out-of-range fire, cleanup, telegraph.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'heavier punch feel across hits' / 'BGM plus hit and pickup SFX' / 'two-phase boss with adds' / 'an archer that leads its shots'.", "required": true}
+		],
+		Callable(self, "_get_make_game_ranged_enemy")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -581,7 +685,15 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_pickup": ["pickup", "collectible", "coin", "gem", "item placement",
 		"拾取", "金币", "收集品", "道具"],
 	"make_game_save": ["save file", "save system", "checkpoint", "continue game", "autosave",
-		"存档", "检查点", "继续游戏", "自动保存"]
+		"存档", "检查点", "继续游戏", "自动保存"],
+	"make_game_juice": ["game feel", "juice", "hitstop", "feel scheme", "punchy",
+		"打击感", "手感", "顿帧", "游戏手感"],
+	"make_game_audio": ["bgm", "music", "sfx", "audio bus", "sound design",
+		"背景音乐", "音效", "音频", "音乐"],
+	"make_game_boss": ["boss", "boss fight", "boss phase", "final boss",
+		"首领", "头目", "Boss 战", "最终 Boss"],
+	"make_game_ranged_enemy": ["ranged enemy", "archer", "shooter", "projectile", "turret",
+		"远程敌人", "弓箭手", "射手", "炮塔", "投掷"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -750,6 +862,22 @@ func _get_make_game_pickup(args: Dictionary) -> Dictionary:
 
 func _get_make_game_save(args: Dictionary) -> Dictionary:
 	return _render(GAME_SAVE_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_juice(args: Dictionary) -> Dictionary:
+	return _render(GAME_JUICE_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_audio(args: Dictionary) -> Dictionary:
+	return _render(GAME_AUDIO_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_boss(args: Dictionary) -> Dictionary:
+	return _render(GAME_BOSS_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_ranged_enemy(args: Dictionary) -> Dictionary:
+	return _render(GAME_RANGED_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:

@@ -148,6 +148,15 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   版本号；跨 FRESH 项的持久证据只有 user:// 文件本身（运行时状态不跨项）——
   项1 玩+存盘断言文件存在，项2 FRESH 启动断言还原。
 
+- **手感**：feel 即数据（一个方案=一组旋钮）；hitstop 必须 ALWAYS 恢复 time_scale
+  （泄漏的 hitstop 冻结游戏）；闪光要"设置且恢复"双向审计；震屏断言相机真的动了。
+- **音频**：MCP 不能合成音频文件——诚实边界是"系统全接好、文件你来放、缺文件点名"；
+  SFX 用小池（单播放器放长音效会掐断 BGM）；验证靠播放器/总线状态（听不到就断言状态）。
+- **Boss**：= 近战脑 + stats 数据（击退抗性）+ 阶段表（阈值→旋钮覆盖行），
+  行为脚本里没有 if-boss；竞技场实例化 Boss => 对竞技场验收。
+- **远程敌人**：每次射击前必须有前摇（无前摇=不可闪避=缺陷）；投射物命中**和**超时
+  都要 free（泄漏静默拖垮性能，断言活跃数回到基线）。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
