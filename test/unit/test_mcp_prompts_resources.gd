@@ -325,6 +325,9 @@ func test_plugin_shipped_making_recipes_registered():
 	assert_true("make_melee_enemy" in names, "melee-enemy recipe ships with the plugin")
 	assert_true("make_game_menu" in names, "menu recipe ships with the plugin")
 	assert_true("make_any_game" in names, "universal any-game entry ships with the plugin")
+	assert_true("make_game_map" in names, "map recipe ships with the plugin")
+	assert_true("make_game_pickup" in names, "pickup recipe ships with the plugin")
+	assert_true("make_game_save" in names, "save recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -345,6 +348,44 @@ func test_melee_recipe_carries_operational_truths():
 	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
 	assert_true(text.contains("0.22s"), "death-window timing lesson")
 
+
+func test_map_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_map").call({"goal": "a small level"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("configure_tileset_layers") and text.contains("set_tile_collision_polygon"),
+		"physics/collision BEFORE painting")
+	assert_true(text.contains("ASSIGN the TileSet") or text.to_lower().contains("assign the tileset"),
+		"tileset-assignment lesson (cells won't render without it)")
+	assert_true(text.contains("displacement_max"), "relative displacement assert in the contract example")
+	assert_true(text.contains("HOST rule"), "level instances scenes — verify against the LEVEL, hosts named")
+	assert_true(text.contains("verify_change_effect"))
+	assert_true(text.contains("requirements"), "ends in a requirement contract")
+
+func test_pickup_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_pickup").call({"goal": "coins"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("body_entered SIGNAL") or text.contains("body_entered"),
+		"collect via signal, never polls")
+	assert_true(text.to_lower().contains("death-window") or text.contains("free window"),
+		"queue_free window lesson baked in")
+	assert_true(text.contains("no_double_collect"), "double-collect protection in the contract")
+	assert_true(text.to_lower().contains("fresh"), "per-item FRESH isolation")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_save_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_save").call({"goal": "autosave"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("user://"), "user:// path rule baked in")
+	assert_true(text.contains("READ-ONLY in exported builds") or text.contains("read-only in exported builds"),
+		"the res:// export trap named")
+	assert_true(text.contains("version field"), "schema versioning baked in")
+	assert_true(text.contains("the FILE persisted") or text.contains("FILE persisted"),
+		"the cross-FRESH proof mechanism explained")
+	assert_true(text.contains("fresh_boot_restores"), "restore proven by a FRESH boot")
+	assert_true(text.contains("verify_change_effect"))
 
 func test_any_game_recipe_carries_the_universal_method():
 	var workflows: RefCounted = _new_workflows()

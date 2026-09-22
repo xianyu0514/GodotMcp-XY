@@ -137,6 +137,17 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - `parent` 属性**不含根名**：`[node name="Leaf" parent="Mid"]` 的完整路径是 `Root/Mid/Leaf`，不是 `Mid/Leaf`（TestScene.tscn 实测）。
 - `instance=ExtResource("id")` 的 id 前面是 `(`，键值正则 `key="value"` 匹配不到——必须从原始头部行直接提取，否则宿主实例永远识别不出。
 
+## M1 三配方的实测要点（地图 / 道具 / 存档）
+
+- **地图**：TileSet 必须显式赋给 TileMapLayer，否则刷了格子不渲染；碰撞层先于涂画配置；
+  位移断言用 displacement_min/max（相对值），起点非原点的关卡会被绝对阈值误杀；
+  批量写瓦片后物理要等一帧再断言。关卡实例化玩家/敌人 => 对关卡场景验收，宿主覆盖胜过基值。
+- **道具**：Area2D + body_entered 信号收集（绝不轮询）；节点 queue_free 后读不到——
+  断言计数器而不是节点；防双拾取要在同一次回调里处理。
+- **存档**：存 user://（res:// 在导出后只读——只在出货时才咬人的陷阱）；显式字段清单 +
+  版本号；跨 FRESH 项的持久证据只有 user:// 文件本身（运行时状态不跨项）——
+  项1 玩+存盘断言文件存在，项2 FRESH 启动断言还原。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

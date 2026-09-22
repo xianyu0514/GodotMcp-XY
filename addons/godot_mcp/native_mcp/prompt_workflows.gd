@@ -248,6 +248,60 @@ Step 4 — Quality floor (every game, no exceptions): assert_no_runtime_errors a
 
 Step 5 — Close honestly: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why, and suggest the next three sentences the user could say (tune a knob / add a pillar / ship it).
 """
+const GAME_MAP_RECIPE_TEMPLATE: String = """
+You are executing the "Game Map / Level" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "level design tilemap tileset scene input verify"}}
+
+Step 1 — Locate context with gather_task_context (which scene the level is entered FROM, where the player and enemy scenes live — never assume names). Create the level scene, then build the tile layer in order: create_tileset -> configure_tileset_layers (physics layer FIRST — walls need collision before painting matters) -> set_tile_collision_polygon per wall tile -> ASSIGN the TileSet to the TileMapLayer or painted cells will not render. Paint with set_tilemap_layer_cells (4.x single-layer API; the runtime probe's region tools are dual-compatible with legacy TileMap).
+
+Step 2 — Populate by instancing: the player at the spawn tile, enemies from their scenes, pickups along the route. HOST rule: the level INSTANCES those scenes, so verify against the LEVEL scene, and property overrides placed here WIN over base-scene values (verify_change_effect's hosts step names any mask with the exact fix).
+
+Step 3 — Contract-verify traversal BEFORE tuning: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "walls_block", "goal_reachable"], "items": [{"kind": "behavior_check", "requirement": "walls_block", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 600, "assert": {"expression": "<player global position x>", "displacement_max": 8, "description": "wall stops the player"}}]}}]}} — displacement asserts are RELATIVE (displacement_min/displacement_max), never absolute thresholds (a level starting away from the origin fails absolute checks for no reason). After any batch tile write, physics needs one settled frame before collision assertions. Each item boots a FRESH run of the LEVEL.
+
+Step 4 — Tune via data, one change at a time; after ANY script change, verify_change_effect proves it reached the running game. Retuning many level files at once: batch_update_scene_files with expect_current keeps per-level specials (a boss arena keeps its wider corridor while every standard corridor narrows).
+
+Step 5 — Close honestly: report the plugin-built checklist verbatim, name unverified requirements, suggest the next sentences (tune difficulty / add a hazard / wire the goal to win-lose).
+"""
+
+const GAME_PICKUP_RECIPE_TEMPLATE: String = """
+You are executing the "Pickup / Collectible" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "item pickup area2d signal scene verify"}}
+
+Step 1 — Locate context with gather_task_context (player scene, where state lives, whether an autoload exists). Build the pickup: Area2D root + visual child + monitoring on; collect on the body_entered SIGNAL (never poll in _physics_process); the collected pickup queue_frees itself — reads about the NODE must land inside the free window or assert on the COUNTER instead (the death-window lesson: reads after queue_free see nothing).
+
+Step 2 — State: the counter lives on the player or a state autoload and is updated THROUGH a signal (decoupled, per project convention). Double-collect protection: disable/queue_free in the same callback that increments — assert it with two quick walks over the same spot.
+
+Step 3 — Contract BEFORE tuning: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["pickup_increments_counter", "pickup_disappears", "no_double_collect"], "items": [{"kind": "behavior_check", "requirement": "pickup_increments_counter", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<counter expression, e.g. get_node('/root/GameState').coins>", "expected": 1, "operator": "gte", "description": "coin counted"}}]}}]}} — each item boots a FRESH run and is self-contained (an item that needs two coins collected must walk past both itself).
+
+Step 4 — Place pickups by instancing in levels; per-level specials (value, respawn flag) survive batch retunes via expect_current. Feel knobs (magnet radius, bob speed) are @export data — tune one, then verify_change_effect proves the change reached the running game.
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (add a rare pickup / wire coins to a shop / persist the collection).
+"""
+
+const GAME_SAVE_RECIPE_TEMPLATE: String = """
+You are executing the "Save / Continue" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "save load file scene verify"}}
+
+Step 1 — THE PATH RULE: save files MUST live under user:// (res:// is READ-ONLY in exported builds — writing there works in the editor and silently fails after export, the trap that only bites at ship time). Write via FileAccess with a version field, and save an EXPLICIT field list (position, hp, collected ids) — never serialized object references.
+
+Step 2 — Triggers: a save point, autosave on milestone, or a menu entry (wire the menu via make_game_menu). Load path: on boot, if the save exists, restore state BEFORE the first frame of gameplay (continue), else start fresh. The save MODULE is one external script (attach_script keeps the EXTERNAL reference) reading/writing user:// and exposing save()/load() through signals.
+
+Step 3 — Contract, exploiting the one thing that DOES cross FRESH boots — the user:// FILE (runtime state does not): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["save_writes_file", "fresh_boot_restores", "no_save_means_new_game"], "items": [{"kind": "behavior_check", "requirement": "save_writes_file", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "interact_save", "pressed": true, "wait_ms": 400, "assert": {"expression": "FileAccess.file_exists('user://save.json')", "description": "save file written"}}]}}, {"kind": "behavior_check", "requirement": "fresh_boot_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<restored state expression, e.g. get_node('/root/GameState').hp>", "expected": 2, "description": "continued from the save"}}]}}]}} — item 2 boots FRESH and still sees the save because the FILE persisted; that is the whole proof of continue.
+
+Step 4 — After ANY change to the save module, verify_change_effect proves it reached the running game; changing the save SCHEMA bumps the version field and migrates old files (a player's save must never crash a new build).
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (add a save point / autosave on level end / show the save slot in the menu).
+"""
+
 
 
 
@@ -459,6 +513,30 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_any_game")
 	)
+	_add_prompt(
+		"make_game_map",
+		"Build a playable level: tileset with collision FIRST, painted walls, instanced player/enemies/pickups at spawn — then traversal contract-verified (movement, walls block, goal reachable) with RELATIVE displacement asserts against the LEVEL scene (host overrides named).",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'a 30x20 tile level with walls and a goal tile' / 'coins worth 1 and a rare gem worth 5' / 'autosave on level end and continue from the menu'.", "required": true}
+		],
+		Callable(self, "_get_make_game_map")
+	)
+	_add_prompt(
+		"make_game_pickup",
+		"Make collectibles that actually count: Area2D + body_entered signal (never polls), counter on the player/autoload via signal, double-collect protection, death-window-aware assertions — strict contract (increments / disappears / no double collect) per FRESH run.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'a 30x20 tile level with walls and a goal tile' / 'coins worth 1 and a rare gem worth 5' / 'autosave on level end and continue from the menu'.", "required": true}
+		],
+		Callable(self, "_get_make_game_pickup")
+	)
+	_add_prompt(
+		"make_game_save",
+		"Add save/continue that survives export: user:// files (res:// is read-only in builds), explicit field lists with versioning, restore before first gameplay frame — proven by the one thing that crosses FRESH boots, the save FILE itself.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'a 30x20 tile level with walls and a goal tile' / 'coins worth 1 and a rare gem worth 5' / 'autosave on level end and continue from the menu'.", "required": true}
+		],
+		Callable(self, "_get_make_game_save")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -497,7 +575,13 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_menu": ["menu", "hud", "main menu", "pause menu", "button wiring", "ui screen",
 		"菜单", "主菜单", "暂停菜单", "界面", "按钮"],
 	"make_any_game": ["make any game", "make me a game", "build a game", "whatever game", "any genre",
-		"做一个游戏", "随便做个游戏", "任意游戏", "任何游戏", "给我做个游戏"]
+		"做一个游戏", "随便做个游戏", "任意游戏", "任何游戏", "给我做个游戏"],
+	"make_game_map": ["map", "level", "tilemap", "tileset", "level design",
+		"地图", "关卡", "瓦片", "地牢"],
+	"make_game_pickup": ["pickup", "collectible", "coin", "gem", "item placement",
+		"拾取", "金币", "收集品", "道具"],
+	"make_game_save": ["save file", "save system", "checkpoint", "continue game", "autosave",
+		"存档", "检查点", "继续游戏", "自动保存"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -654,6 +738,18 @@ func _get_make_game_menu(args: Dictionary) -> Dictionary:
 
 func _get_make_any_game(args: Dictionary) -> Dictionary:
 	return _render(ANY_GAME_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_map(args: Dictionary) -> Dictionary:
+	return _render(GAME_MAP_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_pickup(args: Dictionary) -> Dictionary:
+	return _render(GAME_PICKUP_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_save(args: Dictionary) -> Dictionary:
+	return _render(GAME_SAVE_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:
