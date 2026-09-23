@@ -490,6 +490,10 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 	evidence["runtime_errors"] = report.get("runtime_errors", [])
 	evidence["screenshots"] = report.get("screenshots", [])
 	evidence["runtime_info"] = report.get("runtime_info", {})
+	# 轨迹透传（有界）：延迟类天梯测量需要在证据里读每帧采样（首变帧）。
+	if report.has("trajectory") and report.get("trajectory", []) is Array:
+		var full_traj: Array = report.get("trajectory", [])
+		evidence["trajectory"] = full_traj if full_traj.size() <= 240 else full_traj.slice(full_traj.size() - 240, full_traj.size())
 	return {"passed": bool(report.get("passed", false)), "evidence": evidence}
 
 func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted) -> Dictionary:

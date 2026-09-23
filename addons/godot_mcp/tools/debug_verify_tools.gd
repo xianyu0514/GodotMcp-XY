@@ -421,6 +421,7 @@ func _run_timeline_mode(params: Dictionary, timeline: Dictionary) -> Dictionary:
 		"mode": "timeline",
 		"frames_advanced": maxi(frame_cursor - 1, 0),
 		"events_applied": int(run.get("events_applied", 0)),
+		"trajectory": trajectory,
 		"steps_executed": 0,
 		"assertions_total": assertion_results.size(),
 		"assertions_passed": passed_count,
