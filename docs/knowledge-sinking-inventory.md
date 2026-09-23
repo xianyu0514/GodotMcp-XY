@@ -19,6 +19,15 @@
 | 陈旧快照 = 测量造假 | await/assert runtime condition 的 stale 显式拒绝 | ✅ 已下沉 |
 | 只在内存生效的假象 | verify_change_effect persist 步（二次磁盘启动） | ✅ 已下沉 |
 
+## 已下沉·第一批（2026-09-23 落地，配方文本已同commit缩短，K-5）
+
+| 文本真理 | 下沉分支 | 配方缩短 |
+| --- | --- | --- |
+| 死亡窗口（queue_free 后读不到） | await/assert 表达式失败错误附自愈提示（断言计数器/在窗口内读） | melee/pickup 改为指向自愈提示 |
+| 存档 res:// 陷阱 | audit_project_health 新增 res:// 写入扫描（user:// 修复建议） | save 配方一句话点名审计 |
+| 输入未绑定全契约失败 | play_and_verify 输入步失败附 upsert_project_input_action 精确修复 | first_game 缩短 |
+| TileSet 未赋不渲染 | set_tilemap_layer_cells 无 TileSet 时响应内警告 | map 配方缩短 |
+
 ## 下沉候选（有明确工具分支可落）
 
 | 文本真理 | 现配方 | 候选分支 |

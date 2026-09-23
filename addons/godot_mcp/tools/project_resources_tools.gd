@@ -1779,19 +1779,23 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 	if cyclic_dependencies_result.has("error"):
 		return cyclic_dependencies_result
 
+	var res_write_result: Dictionary = _scan_res_write_paths({
+		"search_path": search_path, "max_results": max_results})
+
 	var summary: Dictionary = {
 		"scanned_scripts": int(broken_scripts_result.get("scanned_scripts", 0)),
 		"broken_scripts": int(broken_scripts_result.get("broken_count", 0)),
 		"script_warnings": int(broken_scripts_result.get("warning_count", 0)),
 		"scanned_resources": int(missing_dependencies_result.get("scanned_resources", 0)),
 		"missing_dependencies": int(missing_dependencies_result.get("issue_count", 0)),
-		"cyclic_dependencies": int(cyclic_dependencies_result.get("issue_count", 0))
+		"cyclic_dependencies": int(cyclic_dependencies_result.get("issue_count", 0)),
+		"res_write_paths": int(res_write_result.get("issue_count", 0))
 	}
 	var hard_failures: int = summary["broken_scripts"] + summary["missing_dependencies"] + summary["cyclic_dependencies"]
 	var status: String = "healthy"
 	if hard_failures > 0:
 		status = "failing"
-	elif summary["script_warnings"] > 0:
+	elif summary["script_warnings"] > 0 or summary["res_write_paths"] > 0:
 		status = "warning"
 
 	return {
@@ -1801,7 +1805,42 @@ func _tool_audit_project_health(params: Dictionary) -> Dictionary:
 		"broken_scripts": broken_scripts_result.get("issues", []),
 		"missing_dependencies": missing_dependencies_result.get("issues", []),
 		"cyclic_dependencies": cyclic_dependencies_result.get("issues", []),
+		"res_write_paths": res_write_result.get("issues", []),
 		"truncated": bool(broken_scripts_result.get("truncated", false)) or bool(missing_dependencies_result.get("truncated", false)) or bool(cyclic_dependencies_result.get("truncated", false))
+	}
+
+
+## E-3 下沉（知识清单#2）：脚本向 res:// 写文件 = 导出后静默失败的存档陷阱。
+## 扫描用户脚本的 FileAccess.open(..., WRITE/READ_WRITE...) 且首参是 res:// 字面量；
+## 发现即报 user:// 修复。文本级启发（跨行/变量拼接不追），宁可漏报不误伤。
+func _scan_res_write_paths(params: Dictionary) -> Dictionary:
+	var search_path: String = str(params.get("search_path", "res://")).strip_edges()
+	var max_results: int = max(1, int(params.get("max_results", 200)))
+	var files: Array[String] = []
+	ProjectToolsNative._collect_resources(search_path, [".gd"], files, false, false)
+	var open_regex: RegEx = RegEx.new()
+	open_regex.compile("FileAccess\\.open\\s*\\(")
+	var issues: Array = []
+	for file_path in files:
+		var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+		if file == null:
+			continue
+		var line_number: int = 0
+		while not file.eof_reached() and issues.size() < max_results:
+			var line: String = file.get_line()
+			line_number += 1
+			if open_regex.search(line) and "res://" in line 					and ("WRITE" in line or "READ_WRITE" in line):
+				issues.append({
+					"file": file_path,
+					"line": line_number,
+					"message": "FileAccess write to res:// — read-only in exported builds; save under user:// instead"})
+		file.close()
+	return {
+		"search_path": search_path,
+		"scanned_scripts": files.size(),
+		"issue_count": issues.size(),
+		"total_count": issues.size(),
+		"issues": issues
 	}
 
 

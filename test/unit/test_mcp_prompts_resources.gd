@@ -351,7 +351,7 @@ func test_melee_recipe_carries_operational_truths():
 	assert_true(text.contains("attacks_landed"), "single-hit evidence field")
 	assert_true(text.contains("stats resources"), "grunt-vs-boss via stats, not code branches")
 	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
-	assert_true(text.contains("0.22s"), "death-window timing lesson")
+	assert_true(text.contains("assert the counter instead"), "death-window lesson now points at the sunk self-healing hint")
 
 
 func test_juice_recipe_carries_operational_truths():
@@ -433,8 +433,8 @@ func test_pickup_recipe_carries_operational_truths():
 	var text: String = str(result["messages"][0]["content"]["text"])
 	assert_true(text.contains("body_entered SIGNAL") or text.contains("body_entered"),
 		"collect via signal, never polls")
-	assert_true(text.to_lower().contains("death-window") or text.contains("free window"),
-		"queue_free window lesson baked in")
+	assert_true(text.to_lower().contains("self-healing hint"),
+		"freed-node reads point at the sunk hint")
 	assert_true(text.contains("no_double_collect"), "double-collect protection in the contract")
 	assert_true(text.to_lower().contains("fresh"), "per-item FRESH isolation")
 	assert_true(text.contains("verify_change_effect"))
@@ -444,8 +444,8 @@ func test_save_recipe_carries_operational_truths():
 	var result: Dictionary = workflows.get_callable("make_game_save").call({"goal": "autosave"})
 	var text: String = str(result["messages"][0]["content"]["text"])
 	assert_true(text.contains("user://"), "user:// path rule baked in")
-	assert_true(text.contains("READ-ONLY in exported builds") or text.contains("read-only in exported builds"),
-		"the res:// export trap named")
+	assert_true(text.contains("audit_project_health") and text.contains("read-only in exported builds"),
+		"the res:// trap now names its detector (audit_project_health)")
 	assert_true(text.contains("version field"), "schema versioning baked in")
 	assert_true(text.contains("the FILE persisted") or text.contains("FILE persisted"),
 		"the cross-FRESH proof mechanism explained")

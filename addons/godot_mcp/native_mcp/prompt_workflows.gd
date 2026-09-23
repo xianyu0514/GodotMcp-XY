@@ -198,7 +198,7 @@ Step 1 — Locate the existing enemy via gather_task_context scene_objects (an A
 
 Step 2 — Boss-vs-grunt tuning is DATA, not code: grunt and boss are the same script with different EnemyStats resources (knockback_resistance 0 vs 0.9). "Normal enemies knock back easily, boss resists" = edit the stats resources, never branch the behavior script.
 
-Step 3 — Contract-verify with run_verification_queue (strict, requirements: detect+chase, windup telegraphs, single hit per swing, death stops attacking, drop exactly once; each item boots a FRESH run). Timing facts that bite: death-window reads must land inside the ~0.22s before queue_free; each requirement item boots its own run, so an item that needs a dead enemy must kill it itself; enemy instances without a stats resource silently refuse take_damage — wire stats.
+Step 3 — Contract-verify with run_verification_queue (strict, requirements: detect+chase, windup telegraphs, single hit per swing, death stops attacking, drop exactly once; each item boots a FRESH run). Timing facts that bite: each requirement item boots its own run, so an item that needs a dead enemy must kill it itself; reads on nodes that queue_free fail with a self-healing hint (assert the counter instead); enemy instances without a stats resource silently refuse take_damage — wire stats.
 
 Step 4 — Natural-language tuning maps to @export reads: "attack windup more obvious" -> windup_seconds up; "chase shorter" -> chase_range down. After ANY script change, re-verify the affected requirements only.
 """
@@ -255,7 +255,7 @@ Goal: {{goal}}
 
 Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "level design tilemap tileset scene input verify"}}
 
-Step 1 — Locate context with gather_task_context (which scene the level is entered FROM, where the player and enemy scenes live — never assume names). Create the level scene, then build the tile layer in order: create_tileset -> configure_tileset_layers (physics layer FIRST — walls need collision before painting matters) -> set_tile_collision_polygon per wall tile -> ASSIGN the TileSet to the TileMapLayer or painted cells will not render. Paint with set_tilemap_layer_cells (4.x single-layer API; the runtime probe's region tools are dual-compatible with legacy TileMap).
+Step 1 — Locate context with gather_task_context (which scene the level is entered FROM, where the player and enemy scenes live — never assume names). Create the level scene, then build the tile layer in order: create_tileset -> configure_tileset_layers (physics layer FIRST — walls need collision before painting matters) -> set_tile_collision_polygon per wall tile -> assign the TileSet to the TileMapLayer (the paint tool warns when the layer has none). Paint with set_tilemap_layer_cells (4.x single-layer API; the runtime probe's region tools are dual-compatible with legacy TileMap).
 
 Step 2 — Populate by instancing: the player at the spawn tile, enemies from their scenes, pickups along the route. HOST rule: the level INSTANCES those scenes, so verify against the LEVEL scene, and property overrides placed here WIN over base-scene values (verify_change_effect's hosts step names any mask with the exact fix).
 
@@ -273,7 +273,7 @@ Goal: {{goal}}
 
 Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "item pickup area2d signal scene verify"}}
 
-Step 1 — Locate context with gather_task_context (player scene, where state lives, whether an autoload exists). Build the pickup: Area2D root + visual child + monitoring on; collect on the body_entered SIGNAL (never poll in _physics_process); the collected pickup queue_frees itself — reads about the NODE must land inside the free window or assert on the COUNTER instead (the death-window lesson: reads after queue_free see nothing).
+Step 1 — Locate context with gather_task_context (player scene, where state lives, whether an autoload exists). Build the pickup: Area2D root + visual child + monitoring on; collect on the body_entered SIGNAL (never poll in _physics_process); the collected pickup queue_frees itself — assert the COUNTER, not the node (reads on a freed node fail with a self-healing hint).
 
 Step 2 — State: the counter lives on the player or a state autoload and is updated THROUGH a signal (decoupled, per project convention). Double-collect protection: disable/queue_free in the same callback that increments — assert it with two quick walks over the same spot.
 
@@ -291,7 +291,7 @@ Goal: {{goal}}
 
 Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "save load file scene verify"}}
 
-Step 1 — THE PATH RULE: save files MUST live under user:// (res:// is READ-ONLY in exported builds — writing there works in the editor and silently fails after export, the trap that only bites at ship time). Write via FileAccess with a version field, and save an EXPLICIT field list (position, hp, collected ids) — never serialized object references.
+Step 1 — Save under user:// with a version field and an EXPLICIT field list (position, hp, collected ids — never object references): res:// is read-only in exported builds, and audit_project_health flags any script writing res://.
 
 Step 2 — Triggers: a save point, autosave on milestone, or a menu entry (wire the menu via make_game_menu). Load path: on boot, if the save exists, restore state BEFORE the first frame of gameplay (continue), else start fresh. The save MODULE is one external script (attach_script keeps the EXTERNAL reference) reading/writing user:// and exposing save()/load() through signals.
 
@@ -379,7 +379,7 @@ Goal: {{goal}}
 
 Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "project input scene script player enemy verify"}}
 
-Step 1 — Guard: confirm with gather_task_context that the project is actually empty. If real content already exists, STOP and switch to make_any_game — this recipe scaffolds from zero and must never overwrite existing work. The INPUT MAP comes first (move_left/move_right/jump or attack actions via the project input tools): every later gameplay proof simulates those actions, so a missing action fails every contract with "input unbound".
+Step 1 — Guard: confirm with gather_task_context that the project is actually empty. If real content already exists, STOP and switch to make_any_game — this recipe scaffolds from zero and must never overwrite existing work. The INPUT MAP comes first (move_left/move_right/jump or attack actions via the project input tools): every later gameplay proof simulates those actions — an unbound action's failure message names the exact fix.
 
 Step 2 — Genre is DATA, not a fork: platformer | top_down | shooter are three knob-sets on ONE player script (gravity+coyote-jump vs 8-way movement vs 8-way+fire), a small map (make_game_map), one melee enemy (make_melee_enemy), and a win/lose condition (defeat N enemies / reach the goal tile; lose at hp 0). Build the SMALLEST COMPLETE LOOP: a game is first-playable only when WIN and LOSE are both reachable in a single run.
 

@@ -1296,12 +1296,17 @@ func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 
 	editor_interface.mark_scene_as_unsaved()
 
-	return {
+	# E-3 下沉（知识清单#4）：无 TileSet 的图层刷了格子不渲染——静默陷阱
+	# 变成响应内警告（格子合法地可以先刷后赋，故不报错）。
+	var result_payload: Dictionary = {
 		"status": "success",
 		"node_path": node_path,
 		"cells_set": cells_set,
 		"cells_erased": cells_erased
 	}
+	if layer.tile_set == null:
+		result_payload["warning"] = "layer has no TileSet — these cells will NOT render; create_tileset then set the layer's tile_set property"
+	return result_payload
 
 # ============================================================================
 # get_tilemap_layer_cells - Read cells from a TileMapLayer (Godot 4.x)

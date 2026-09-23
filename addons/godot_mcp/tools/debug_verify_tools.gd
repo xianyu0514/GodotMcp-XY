@@ -196,7 +196,8 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 			# 非成功状态（timeout/no_active_sessions）以前被静默放过——输入
 			# 步假完成，后续断言在错误状态下测量。非 success 一律记为步错误。
 			if action_result.has("error") or String(action_result.get("status", "success")) != "success":
-				errors.append({"step": i, "phase": "input", "error": str(action_result.get("error", "input step status: " + str(action_result.get("status", ""))))})
+				errors.append({"step": i, "phase": "input",
+					"error": str(action_result.get("error", "input step status: " + str(action_result.get("status", "")))) + _unbound_input_hint(String(step.get("action", "")))})
 		elif step.has("event"):
 			var event_params: Dictionary = _merge_runtime_params(params, {"event": step["event"]})
 			var event_result: Dictionary = await _get_runtime_tools()._tool_simulate_runtime_input_event(event_params)
@@ -366,6 +367,12 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 		if include_trajectory:
 			report["trajectory"] = trajectory
 	return report
+
+## 输入步失败的自愈提示（E-3 下沉#3）：未绑定的 action 是契约全灭的头号原因。
+static func _unbound_input_hint(action_name: String) -> String:
+	if action_name.is_empty():
+		return ""
+	return " — if '%s' is unbound, upsert_project_input_action('%s', ...) first" % [action_name, action_name]
 
 ## 求值一条运行时表达式断言。步内 assert 与末尾 assertions 共用同一
 ## 求值路径，保证 mid-sequence 与 final 断言的语义完全一致。

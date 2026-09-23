@@ -1392,6 +1392,10 @@ func _register_await_runtime_condition(server_core: RefCounted) -> void:
 		"supplementary", "Debug-Advanced"
 	)
 
+## 表达式执行失败的自愈提示：最常见的静默失败是节点已 queue_free（死亡窗口）。
+static func _expression_failure_hint() -> String:
+	return " — common cause: the target node freed itself (queue_free); assert a COUNTER or state field that outlives it instead, or read inside the free window before it frees"
+
 func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 	var expression: String = params.get("expression", "")
 	if expression.is_empty():
@@ -1410,6 +1414,9 @@ func _tool_await_runtime_condition(params: Dictionary) -> Dictionary:
 		attempts += 1
 		var result: Dictionary = await _tool_evaluate_runtime_expression(params)
 		if result.has("error"):
+			# E-3 下沉（知识清单#1）：表达式执行失败的最常见静默原因是目标节点
+			# 已 queue_free——把"死亡窗口"教训做成自愈报错，而不是配方文本。
+			result["error"] = str(result["error"]) + _expression_failure_hint()
 			return result
 		# 陈旧应答不算成功（CI run 35343562660 取证：手感腿 before=114.73
 		# 是陈旧缓存、after=4.33 是新值——"按右键左移 110px"实为测量造假，
