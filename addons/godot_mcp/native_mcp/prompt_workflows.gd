@@ -220,34 +220,21 @@ Step 3 — Interaction verification is CLICK-THROUGH, not screenshots: play_and_
 Step 4 — After ANY script or theme change, prove it reached the running game with verify_change_effect (names the embedded-copy / unsaved-buffer / instance-override killers when they bite). Visual tuning is theme data, not per-node overrides: create_theme + set_theme_item ("bigger text" = font_size) + set_default_theme.
 """
 const ANY_GAME_RECIPE_TEMPLATE: String = """
-You are executing the "Any Game" universal making method against the Godot project through MCP tools. Ships WITH the plugin.
-
 Goal: {{goal}}
 
-This is the UNIVERSAL entry: route every piece of the goal to the fastest safe path, and never fake completion. Quality here is genre-independent — the evidence surface (runtime expressions, simulated input, FRESH boots, strict contracts) is identical for a platformer, a puzzle, a card game or something nobody has shipped with this plugin before.
+This is a CAPABILITY CARD, not a procedure. You decide everything: order, structure, approach, style. Nothing below tells you what to do — it tells you what exists, what is true, and what counts as proven. The only hard rule lives at claims, never at thoughts: never claim completion without evidence.
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "game creation scene script input verify"}}
+WHAT YOU CAN MAKE (no discovery ceiling): 244 atomic tools cover scenes, nodes, scripts, shaders, particles, cameras, audio, UI, tilemaps, navigation, scene variants, cross-file batching and exports — exact tool names are always routable (enable_tools by workflow_query or explicit list; the routing budget is not a capability ceiling). Any genre: mechanics are yours to design; genre knobs are data, never permission. Reference knowledge exists for known pillars (make_game_character, make_melee_enemy, make_game_menu, make_game_map, make_game_pickup, make_game_save, make_game_juice, make_game_audio, make_game_boss, make_game_ranged_enemy, make_game_camera, make_game_particles, make_game_shader) — consult them for their earned truths or ignore them and build your own way; both are fully legal. A durable evidence-gated goal DAG exists for long multi-phase work (plan_game_workflow / run_game_workflow), and finished work can be recorded durably (manage_task_plan) so the next session's get_game_project_brief resumes without re-discovery.
 
-Step 1 — Decompose the goal into pillars (movement, combat, enemies, items/pickups, maps/levels, menus/HUD, save, audio, game feel, win/lose, plus the goal's unique mechanic). For each pillar, prefer a SHIPPED recipe when it matches — they carry session-tested operational truths:
-  character visuals + hit feedback -> make_game_character
-  melee enemy (patrol/detect/chase/windup/hit/death-drop) -> make_melee_enemy
-  menus, HUD, pause -> make_game_menu
-  one cross-file change -> make_game_change
-  a long multi-phase goal -> plan_game_workflow (durable DAG, evidence-gated completion)
+WHAT YOU CAN MEASURE (per-frame, one round trip): frame-timed timelines replay input scripts deterministically and sample expressions every frame — input latency is the first-changed-frame of a trajectory; fairness is telegraph frames; displacement, feedback coverage and density, performance percentiles (desktop/mobile profiles), runtime errors and visual baselines are all measurable. A game is first-playable only when win AND lose are both reachable in one run.
 
-Step 2 — For a pillar with NO shipped recipe, run the general loop (this is the method that makes "any game" safe):
-  a) gather_task_context — never assume names; find the real scenes, scripts and the input map.
-  b) Build the SMALLEST PLAYABLE SLICE of that pillar: one external script (attach_script keeps the EXTERNAL reference), signals wired (never polls), values exposed as @export knobs.
-  c) BEFORE tuning, write acceptance as a strict requirement contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["<r1>", "<r2>"], "items": [{"kind": "behavior_check", "requirement": "<r1>", "detail": {"scene_path": "<res://scenes/main.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<one runtime expression proving r1>", "description": "<what this proves>"}}]}}]}} — one behavior_check per requirement, each item boots a FRESH run and carries at least one assertion; zero-assertion runs are smoke and the strict contract rejects them.
-  d) Advance to a terminal state; ANY unverified requirement = the overall outcome is incomplete — report it as incomplete, never summarize past a gap.
-  e) Iterate smallest-loop: change ONE knob -> verify_change_effect proves it reached the running game (embedded script copy / unsaved editor buffer / host-scene instance override are named with the exact fix when they bite) -> re-verify only the affected requirements.
+WHAT COUNTS AS PROVEN: strict requirement contracts — zero-assertion runs are smoke, any unverified requirement makes the overall outcome incomplete, every item boots a FRESH run. verify_change_effect proves a change reached the running game and names the exact fix when an embedded script copy, an unsaved buffer or a host-scene instance override is masking it. The quality ladder defines perfect (R1 playable / R2 solid / R3 polished / R4 perfect — every item green or explicitly waived): game_quality_report measures it, make_game_perfect climbs it. Shipping is a chain that exists when you want it (bump_version -> release_export_flow).
 
-Step 3 — Genre guidance is DATA, not permission: turn-based = state machines and timers, not physics; physics-driven = rigid bodies + applied forces (assert DISPLACEMENT, never vibes); puzzle = deterministic input sequences (play_and_verify deterministic=true, frame-stepped); card/strategy = data tables + rules script, UI via the menu recipe; dialogue/narrative = data + the UI recipe; 3D = same atomic tools (nodes/scripts/expressions are dimension-agnostic) with generate_3d_asset for placeholders.
+TRUTHS THAT HOLD (details: godot://engine/expression-rules): the Expression class bans ternary, self and 'is', and evaluates against the current scene; get_shader_parameter reads NULL for never-set uniforms; connect_signal connects the editor instance only — script-side _ready wiring persists; save under user:// (res:// is read-only after export and the health audit flags res:// writes); reads after queue_free see nothing (assert counters or read inside the window); text-level scene-file edits refresh the resource cache on write — close and reopen the tab to re-instantiate; invalid shader content is refused before writing; a nested plugin copy inside the project breaks class registration.
 
-Step 4 — Quality floor (every game, no exceptions): game_quality_report is the one-call version — static after every milestone, full (scene + platform profile: desktop/mobile) once gameplay stabilizes; release_export_flow (export smoke) before calling the game done.
-
-Step 5 — Close honestly AND durably: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why; record the finished pillar as a done task via manage_task_plan so the next session's get_game_project_brief resumes without re-discovery; suggest the next three sentences (tune a knob / add a pillar / ship it — shipping is a chain: game_quality_report full -> bump_version -> release_export_flow, plus manage_localization for bilingual).
+You decide everything else. Claim only what evidence supports, name what you did NOT verify, and when the user asks for perfect, the ladder is yours to climb your own way.
 """
+
 const GAME_MAP_RECIPE_TEMPLATE: String = """
 You are executing the "Game Map / Level" recipe against the Godot project through MCP tools. Ships WITH the plugin.
 
@@ -669,7 +656,7 @@ func _register_all() -> void:
 	)
 	_add_prompt(
 		"make_any_game",
-		"The universal entry for ANY game: route each pillar to a shipped recipe when one matches, run the general make->strict-contract->verify loop for pillars that have none, keep the genre-independent quality floor (no runtime errors, performance budget, export smoke), and close with the plugin-built checklist. Quality does not depend on the genre being known.",
+		"The universal entry as a CAPABILITY CARD, not a procedure: what can be made (no discovery ceiling, any genre), what can be measured (per-frame timelines: latency, fairness, density), what counts as proven (strict contracts, verify_change_effect, the perfect ladder), and the truths that hold. You decide everything; the only hard rule lives at claims — never claim completion without evidence.",
 		[
 			{"name": "goal", "description": "The game or game part wanted, any genre, e.g. 'a physics golf game with 9 holes and par tracking'.", "required": true}
 		],

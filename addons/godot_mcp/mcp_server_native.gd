@@ -889,6 +889,13 @@ func _register_session_resources() -> void:
 		"The engine truths for expressions sent to the runtime probe (assertions, readbacks): what the Expression class does NOT support and how to write legal ones. Read BEFORE writing assertions."
 	)
 	_native_server.register_resource(
+		"godot://capabilities",
+		"Capability map: what can be made, measured, proven",
+		"text/plain",
+		Callable(self, "_resource_capabilities"),
+		"The declarative capability card (same content as the make_any_game prompt): what you CAN make (no discovery ceiling), what you CAN measure (per-frame timelines), what counts as PROVEN (contracts, verify_change_effect, the perfect ladder), and the truths that hold. No procedures — you decide everything."
+	)
+	_native_server.register_resource(
 		"godot://recipes",
 		"Making-recipe catalog",
 		"application/json",
@@ -918,6 +925,22 @@ static func _resource_expression_rules(params: Dictionary) -> Dictionary:
 6. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
 """
 	return {"contents": [{"uri": "godot://engine/expression-rules", "mimeType": "text/plain", "text": rules}]}
+
+static func _resource_capabilities(params: Dictionary) -> Dictionary:
+	# 与 make_any_game 能力卡同源同文（声明式：能力/测量/证据/真理，无步骤）。
+	var card := """CAPABILITY MAP (declarative — what exists, what is true, what counts as proven; you decide everything).
+
+WHAT YOU CAN MAKE (no discovery ceiling): 244 atomic tools cover scenes, nodes, scripts, shaders, particles, cameras, audio, UI, tilemaps, navigation, scene variants, cross-file batching and exports — exact tool names are always routable. Any genre: mechanics are yours to design; genre knobs are data, never permission. Reference knowledge exists as 26 making recipes — consult them for earned truths or ignore them; both are fully legal. A durable evidence-gated goal DAG exists for long work (plan_game_workflow / run_game_workflow).
+
+WHAT YOU CAN MEASURE (per-frame, one round trip): frame-timed timelines replay input scripts deterministically and sample expressions every frame — input latency is the first-changed-frame of a trajectory; fairness is telegraph frames; displacement, feedback coverage and density, performance percentiles (desktop/mobile), runtime errors and visual baselines are all measurable.
+
+WHAT COUNTS AS PROVEN: strict requirement contracts — zero-assertion runs are smoke, any unverified requirement makes the outcome incomplete, every item boots a FRESH run. verify_change_effect proves a change reached the running game and names the exact fix when an embedded copy, unsaved buffer or host-scene instance override masks it. The quality ladder defines perfect (R1 playable / R2 solid / R3 polished / R4 perfect — every item green or explicitly waived): game_quality_report measures it, make_game_perfect climbs it.
+
+TRUTHS THAT HOLD: see godot://engine/expression-rules (Expression bans ternary/self/'is'; current-scene base; null uniforms; queue_free window) plus: connect_signal connects the editor instance only (script-side _ready persists); save under user:// (res:// is read-only after export); text-level scene-file edits refresh the cache — close and reopen to re-instantiate.
+
+The only hard rule lives at claims, never at thoughts: never claim completion without evidence.
+"""
+	return {"contents": [{"uri": "godot://capabilities", "mimeType": "text/plain", "text": card}]}
 
 static func _resource_recipes(params: Dictionary) -> Dictionary:
 	var recipes: Array = []

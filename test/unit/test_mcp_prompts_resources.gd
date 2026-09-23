@@ -506,27 +506,25 @@ func test_save_recipe_carries_operational_truths():
 	assert_true(text.contains("fresh_boot_restores"), "restore proven by a FRESH boot")
 	assert_true(text.contains("verify_change_effect"))
 
-func test_any_game_recipe_carries_the_universal_method():
+func test_any_game_recipe_is_a_capability_card_not_a_procedure():
 	var workflows: RefCounted = _new_workflows()
 	var result: Dictionary = workflows.get_callable("make_any_game").call({"goal": "physics golf"})
 	var text: String = str(result["messages"][0]["content"]["text"])
-	# 三层路由：已知支柱 -> 配方；未知支柱 -> 通用循环；长目标 -> 引擎
-	assert_true(text.contains("make_game_character") and text.contains("make_melee_enemy") and text.contains("make_game_menu"),
-		"routes known pillars to shipped recipes")
-	assert_true(text.contains("plan_game_workflow"), "long goals delegate to the durable workflow engine")
-	assert_true(text.contains("SMALLEST PLAYABLE SLICE"), "unknown pillars get the general loop")
-	# 诚实契约不变量照搬
-	assert_true(text.contains("strict") and text.contains("zero-assertion"), "strict contract with smoke rejection")
-	assert_true(text.contains("verify_change_effect"), "post-change effectiveness proof named")
-	assert_true(text.to_lower().contains("fresh"), "FRESH-run isolation lesson")
-	assert_true(text.contains("never summarize past a gap"), "no summarizing past unverified requirements")
-	# 品类无关的品类指南与质量地板
-	assert_true(text.contains("Genre guidance is DATA"), "genre is data, not permission")
-	assert_true(text.contains("game_quality_report") and text.contains("desktop/mobile") and text.contains("release_export_flow"),
-		"quality floor: one-call report + platform profiles + export smoke")
-	assert_true(text.contains("did NOT verify"), "closing names the unverified")
-	assert_true(text.contains("manage_task_plan"), "closing records durable progress")
-	assert_true(text.contains("bump_version") and text.contains("release_export_flow"), "ship chain named")
+	# 声明式：能力 + 真理 + 证据门，不教步骤
+	assert_true(text.contains("CAPABILITY CARD, not a procedure"), "declarative, not imperative")
+	assert_true(text.contains("You decide everything"), "the AI decides, the card informs")
+	assert_true(text.to_lower().contains("no discovery ceiling"), "no capability ceiling")
+	assert_true(text.contains("WHAT YOU CAN MAKE") and text.contains("WHAT YOU CAN MEASURE") and text.contains("WHAT COUNTS AS PROVEN"),
+		"three capability sections")
+	assert_true(text.contains("both are fully legal"), "reference recipes are optional knowledge, never mandatory")
+	# 证据门保留（唯一硬规则在声称处）
+	assert_true(text.contains("never claim completion without evidence"), "the claim gate survives")
+	assert_true(text.contains("zero-assertion runs are smoke"), "smoke rejection survives")
+	assert_true(text.contains("verify_change_effect") and text.to_lower().contains("fresh"), "proof tools named")
+	# 真理与天梯
+	assert_true(text.contains("TRUTHS THAT HOLD") and text.contains("expression-rules"),
+		"truths link their source")
+	assert_true(text.contains("R4 perfect") and text.contains("game_quality_report"), "ladder reachable")
 
 func test_menu_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()

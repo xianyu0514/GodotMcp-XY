@@ -30,6 +30,17 @@ func test_expression_rules_carry_the_hard_truths() -> void:
 	assert_true(text.to_lower().contains("queue_free") and text.to_lower().contains("counter"),
 		"death-window guidance shipped")
 
+func test_capabilities_resource_is_the_declarative_card():
+	var result: Dictionary = PluginScript._resource_capabilities({})
+	var text: String = String(((result.get("contents", [{}])[0]) as Dictionary).get("text", ""))
+	assert_true(text.contains("CAPABILITY MAP"), "the card exists")
+	assert_true(text.contains("WHAT YOU CAN MAKE") and text.contains("WHAT YOU CAN MEASURE") and text.contains("WHAT COUNTS AS PROVEN"),
+		"three capability sections")
+	assert_true(text.to_lower().contains("no discovery ceiling"), "no ceiling declared")
+	assert_true(text.contains("you decide everything"), "agency declared")
+	assert_false(text.contains("Step 1") and text.contains("Step 2"), "no imperative steps")
+	assert_true(text.contains("never claim completion without evidence"), "claim gate survives")
+
 func test_recipes_resource_is_valid_catalog_headless() -> void:
 	var result: Dictionary = PluginScript._resource_recipes({})
 	var entry: Dictionary = ((result.get("contents", [{}])[0]) as Dictionary)
