@@ -24,7 +24,26 @@ def rpc(method, params=None, timeout=300):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
+# --- 注意力指标（M2 WP3）：游戏注意力 = 内容创作 + 验证；管道 = 发现/编排/重读 ---
+CONTENT_PREFIXES = ("create_", "set_", "upsert_", "batch_", "apply_", "generate_",
+                    "add_", "write_", "rename_", "attach_", "save_", "delete_",
+                    "remove_", "insert_", "bump_")
+VERIFY_TOOLS = {"run_verification_queue", "verify_change_effect", "play_and_verify",
+                "assert_no_runtime_errors", "assert_performance_budget"}
+CALLS = {"content": 0, "verify": 0, "discovery": 0}
+T0 = {"v": None}
+
+def _classify(name: str) -> str:
+    if name in VERIFY_TOOLS:
+        return "verify"
+    if name.startswith(CONTENT_PREFIXES):
+        return "content"
+    return "discovery"  # enable_tools / get_* / list_* / read_* / gather_* / prompts
+
 def tool(name, args=None, timeout=300):
+    if T0["v"] is None:
+        T0["v"] = time.time()
+    CALLS[_classify(name)] += 1
     resp = rpc("tools/call", {"name": name, "arguments": args or {}}, timeout)
     result = resp.get("result", {})
     if result.get("isError"):
@@ -82,7 +101,8 @@ try:
         "set_node_subresource", "batch_scene_node_edits", "create_script",
         "read_script", "apply_change_set", "validate_script", "save_scene",
         "set_project_setting", "upsert_project_input_action",
-        "generate_asset", "run_verification_queue", "get_scene_structure"]})
+        "generate_asset", "run_verification_queue", "get_scene_structure",
+        "get_game_project_brief"]})
     tool("upsert_project_input_action", {"action_name": "move_left", "erase_existing": True,
         "events": [{"type": "key", "physical_keycode": 65}]})
     tool("upsert_project_input_action", {"action_name": "move_right", "erase_existing": True,
@@ -298,6 +318,25 @@ func _do_hitstop() -> void:
         print(f"  [{e.get('status')}] {e.get('requirement')}")
     overall = str(checklist.get("overall", "incomplete"))
     print(f"=== OVERALL: {overall.upper()} ===")
+    ttfp_seconds = time.time() - T0["v"] if T0["v"] else -1
+    ttfp_calls = sum(CALLS.values())
+
+    # 会话二场景（M2 DoD）：一次调用重建上下文（TTFP 之后计量，不污染首跑）
+    brief = tool("get_game_project_brief")
+    brief_ok = (not brief.get("error") and isinstance(brief.get("next_sentences"), list)
+                and len(brief["next_sentences"]) > 0)
+    check("session-2 one-call resume (get_game_project_brief)", brief_ok,
+          str(brief.get("next_sentences", brief.get("error", "")))[:120])
+
+    total = sum(CALLS.values()) or 1
+    game_calls = CALLS["content"] + CALLS["verify"]
+    attention_ratio = game_calls / total
+    print()
+    print("=== ATTENTION METRICS (M2 WP3 baseline) ===")
+    print(f"  TTFP: {ttfp_seconds:.0f}s wall, {ttfp_calls} calls (first tool -> contract {overall.upper()})")
+    print(f"  calls: content={CALLS['content']} verify={CALLS['verify']} discovery(plumbing)={CALLS['discovery']}")
+    print(f"  attention ratio (content+verify)/total: {attention_ratio:.2f}")
+    print("  (baseline record; regression gate to follow once CI baselines exist)")
     sys.exit(0 if overall == "complete" else 1)
 finally:
     proc.terminate()
