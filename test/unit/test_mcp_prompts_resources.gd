@@ -332,6 +332,7 @@ func test_plugin_shipped_making_recipes_registered():
 	assert_true("make_game_audio" in names, "audio recipe ships with the plugin")
 	assert_true("make_game_boss" in names, "boss recipe ships with the plugin")
 	assert_true("make_game_ranged_enemy" in names, "ranged-enemy recipe ships with the plugin")
+	assert_true("make_first_game" in names, "first-game entry recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -400,6 +401,18 @@ func test_ranged_recipe_carries_operational_truths():
 		"leak and range gates in the contract")
 	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
 	assert_true(text.contains("verify_change_effect"))
+
+func test_first_game_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_first_game").call({"goal": "platformer"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("must never overwrite"), "existing-project guard bakes in")
+	assert_true(text.contains("INPUT MAP comes first"), "input map before anything — every contract simulates actions")
+	assert_true(text.contains("Genre is DATA"), "genre is knob-sets, not forks")
+	assert_true(text.contains("WIN and LOSE are both reachable"), "smallest COMPLETE loop")
+	assert_true(text.contains("win_reachable") and text.contains("lose_reachable"), "both ends in the contract")
+	assert_true(text.contains("get_game_project_brief"), "hands off to the one-call session brief")
+	assert_true(text.to_lower().contains("fresh"), "FRESH isolation")
 
 func test_map_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()

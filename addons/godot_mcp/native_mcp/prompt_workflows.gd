@@ -372,6 +372,24 @@ Step 4 — Tuning: projectile speed / fire rate / windup / range are @export kno
 
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (leading shots / a spread variant / ammo drops).
 """
+const FIRST_GAME_RECIPE_TEMPLATE: String = """
+You are executing the "First Game" entry recipe against a NEW or EMPTY Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "project input scene script player enemy verify"}}
+
+Step 1 — Guard: confirm with gather_task_context that the project is actually empty. If real content already exists, STOP and switch to make_any_game — this recipe scaffolds from zero and must never overwrite existing work. The INPUT MAP comes first (move_left/move_right/jump or attack actions via the project input tools): every later gameplay proof simulates those actions, so a missing action fails every contract with "input unbound".
+
+Step 2 — Genre is DATA, not a fork: platformer | top_down | shooter are three knob-sets on ONE player script (gravity+coyote-jump vs 8-way movement vs 8-way+fire), a small map (make_game_map), one melee enemy (make_melee_enemy), and a win/lose condition (defeat N enemies / reach the goal tile; lose at hp 0). Build the SMALLEST COMPLETE LOOP: a game is first-playable only when WIN and LOSE are both reachable in a single run.
+
+Step 3 — Strict contract BEFORE polish: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "wall_blocks", "enemy_fight", "win_reachable", "lose_reachable"], "items": [{"kind": "behavior_check", "requirement": "win_reachable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<win state expression>", "description": "the win state is reachable by playing"}}]}}]}} — each item boots a FRESH run and is self-contained (an item that needs a kill deals it itself). Zero-assertion runs are smoke; the strict contract rejects them.
+
+Step 4 — Polish by pointer, not improvisation: feel -> make_game_juice; audio -> make_game_audio; menus/HUD/pause -> make_game_menu; progress -> make_game_save; more enemies/levels/pickups -> the pillar recipes. Screenshot the playable result and show it.
+
+Step 5 — Close honestly and HAND OFF: checklist verbatim, unverified named; then tell the user the next session opens with ONE call — get_game_project_brief rebuilds everything this session established (plan state, unverified requirements, next sentences) without re-discovery.
+"""
+
 
 
 
@@ -641,6 +659,14 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_ranged_enemy")
 	)
+	_add_prompt(
+		"make_first_game",
+		"The empty-project entry: input map first, genre as knob-sets on one player script, a smallest COMPLETE loop (win AND lose both reachable), strict five-requirement contract before polish, polish by pointer to pillar recipes — and a one-call hand-off to the next session.",
+		[
+			{"name": "goal", "description": "The first game wanted, any genre, e.g. 'a small platformer where you stomp slimes'.", "required": true}
+		],
+		Callable(self, "_get_make_first_game")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -693,7 +719,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_boss": ["boss", "boss fight", "boss phase", "final boss",
 		"首领", "头目", "Boss 战", "最终 Boss"],
 	"make_game_ranged_enemy": ["ranged enemy", "archer", "shooter", "projectile", "turret",
-		"远程敌人", "弓箭手", "射手", "炮塔", "投掷"]
+		"远程敌人", "弓箭手", "射手", "炮塔", "投掷"],
+	"make_first_game": ["first game", "from scratch", "empty project", "brand new game", "start a game",
+		"第一个游戏", "从零开始", "空项目", "新游戏"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -878,6 +906,10 @@ func _get_make_game_boss(args: Dictionary) -> Dictionary:
 
 func _get_make_game_ranged_enemy(args: Dictionary) -> Dictionary:
 	return _render(GAME_RANGED_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_first_game(args: Dictionary) -> Dictionary:
+	return _render(FIRST_GAME_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:
