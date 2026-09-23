@@ -1,6 +1,6 @@
 # Tools Reference
 
-Godot MCP Native registers **240 MCP tools**: 28 core tools, 206 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
+Godot MCP Native registers **241 MCP tools**: 28 core tools, 207 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
 
 ## Category summary
 
@@ -11,9 +11,9 @@ Godot MCP Native registers **240 MCP tools**: 28 core tools, 206 advanced tools 
 | Scene | 13 | 4 | 9 | [scene-tools.md](scene-tools.md) |
 | Editor | 27 | 3 | 24 | [editor-tools.md](editor-tools.md) |
 | Debug & Runtime | 77 | 3 | 74 | [debug-tools.md](debug-tools.md) |
-| Project | 73 | 3 | 70 | [project-tools.md](project-tools.md) |
+| Project | 74 | 3 | 71 | [project-tools.md](project-tools.md) |
 | Meta | 6 | — | — | [meta-tools.md](meta-tools.md) |
-| **Total** | **240** | **28** | **206** | |
+| **Total** | **241** | **28** | **207** | |
 
 Meta tools are counted separately because they are always enabled and exist to manage the visible tool surface.
 
@@ -75,4 +75,4 @@ To add or change a tool, follow [Contributing → Adding a new MCP tool](../cont
 
 Script writes include immediate compiler diagnostics; run/stop results expose observed readiness and shutdown; batch scene edits preserve original nodes across undo/redo. See [Script](script-tools.md), [Editor](editor-tools.md) and [Node](node-tools.md) for response contracts. These changes add no tools or groups.
 
-Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 240 tools (28 core, 206 advanced, 6 meta).
+Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 241 tools (28 core, 207 advanced, 6 meta).

@@ -59,6 +59,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_set_project_setting(server_core)
 	_register_add_project_autoload(server_core)
 	_register_remove_project_autoload(server_core)
+	_register_get_game_project_brief(server_core)
 
 # ============================================================================
 # Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
@@ -2458,4 +2459,182 @@ func _tool_remove_project_autoload(params: Dictionary) -> Dictionary:
 		"setting": setting_key,
 		"removed_value": removed_value,
 		"persisted": persisted
+	}
+
+# ============================================================================
+# get_game_project_brief（M2 WP2 · 注意力里程碑）：一次调用重建会话上下文。
+#
+# 消除每个会话开头的"状态重建税"：项目身份/主场景/输入动作、内容体量、
+# 任务图状态、验证队列的未验证需求（逐项点名）、最近变更、以及按状态推导的
+# "建议下三句话"。答案同行（宪章 E-2）；无任务图时自披露建议而不是报错（S-1）。
+# 只读，无副作用；store 路径与内容根可注入（单测）。
+# ============================================================================
+
+## 单测注入点：覆盖三个 store 路径与内容扫描根（生产走默认 res:// 与 .mcp/）。
+var _brief_overrides: Dictionary = {}
+
+func _register_get_game_project_brief(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_game_project_brief",
+		"One call rebuilds the session context for a game project: identity (name, main scene, input actions), content volume (user scenes/scripts), task-plan state (per-status counts + active tasks), verification queues with UNVERIFIED requirements named one by one, recent change-journal operations, and derived next sentences (what to say next, chosen from live state — no plan => plan it; blocked task => unblock it; unverified requirement => close the gap; all green => tune/add-pillar/ship; empty project => make_first_game). Read-only; replaces the ~10-call state re-discovery at the top of every session.",
+		{
+			"type": "object",
+			"properties": {
+				"max_tasks": {"type": "integer", "default": 8, "description": "Cap on active tasks listed."},
+				"max_queues": {"type": "integer", "default": 6, "description": "Cap on verification queues listed."},
+				"max_changes": {"type": "integer", "default": 8, "description": "Cap on recent change-journal entries."}
+			}
+		},
+		Callable(self, "_tool_get_game_project_brief"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"project": {"type": "object"},
+			"content": {"type": "object"},
+			"task_plan": {"type": "object"},
+			"verification": {"type": "array"},
+			"recent_changes": {"type": "array"},
+			"next_sentences": {"type": "array", "items": {"type": "string"}},
+			"generated_at": {"type": "string"}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_get_game_project_brief(params: Dictionary) -> Dictionary:
+	var max_tasks: int = clampi(int(params.get("max_tasks", 8)), 1, 50)
+	var max_queues: int = clampi(int(params.get("max_queues", 6)), 1, 20)
+	var max_changes: int = clampi(int(params.get("max_changes", 8)), 1, 50)
+
+	# ---- 项目身份 + 输入动作数（一次属性表扫描，前缀 input/ 计数）-----------
+	var project: Dictionary = {
+		"name": String(ProjectSettings.get_setting("application/config/name", "")),
+		"main_scene": String(ProjectSettings.get_setting("application/run/main_scene", "")),
+	}
+	var input_actions: int = 0
+	for setting in ProjectSettings.get_property_list():
+		if String(setting.get("name", "")).begins_with("input/"):
+			input_actions += 1
+	project["input_actions_count"] = input_actions
+
+	# ---- 内容体量（用户内容，排除 addons/测试等工具域）-----------------------
+	var content_root: String = String(_brief_overrides.get("content_root", "res://"))
+	var scenes: Array[String] = []
+	var scripts: Array[String] = []
+	ProjectToolsNative._collect_resources(content_root, [".tscn"], scenes, false, false)
+	ProjectToolsNative._collect_resources(content_root, [".gd"], scripts, false, false)
+	var content: Dictionary = {
+		"scenes_count": scenes.size(),
+		"scripts_count": scripts.size(),
+		"main_scenes_sample": scenes.slice(0, mini(5, scenes.size())),
+	}
+
+	# ---- 任务图状态 ----------------------------------------------------------
+	var plan_path: String = String(_brief_overrides.get("plan", TaskPlanStore.DEFAULT_PLAN_PATH))
+	var task_plan: Dictionary = {"exists": false}
+	var next_sentences: Array = []
+	if FileAccess.file_exists(plan_path):
+		var loaded_plan: Dictionary = TaskPlanStore.load_plan(plan_path)
+		if not loaded_plan.has("error"):
+			# load_plan 成功时直接返回 plan 本体（失败才包 {"error": ...}）。
+			var tasks: Array = loaded_plan.get("tasks", []) \
+				if loaded_plan.get("tasks", []) is Array else []
+			var by_status: Dictionary = {"pending": 0, "in_progress": 0, "blocked": 0, "done": 0}
+			var active: Array = []
+			var blocked_title: String = ""
+			for task_value in tasks:
+				if not (task_value is Dictionary):
+					continue
+				var task: Dictionary = task_value
+				var status: String = String(task.get("status", "pending"))
+				if by_status.has(status):
+					by_status[status] = int(by_status[status]) + 1
+				if status != "done" and active.size() < max_tasks:
+					active.append({
+						"id": String(task.get("id", "")),
+						"title": String(task.get("title", "")),
+						"status": status})
+				if status == "blocked" and blocked_title.is_empty():
+					blocked_title = String(task.get("title", String(task.get("id", "?"))))
+			task_plan = {"exists": true, "total": tasks.size(), "by_status": by_status, "active": active}
+			if int(by_status["blocked"]) > 0:
+				next_sentences.append("unblock '%s' — the task graph marks it blocked (manage_task_plan)" % blocked_title)
+	if not bool(task_plan.get("exists", false)):
+		next_sentences.append("no durable task plan found — create one with plan_game_feature so progress survives sessions")
+
+	# ---- 验证队列：逐项点名未验证需求（与需求契约同一判定口径）----------------
+	var store_path: String = String(_brief_overrides.get("queues", VerificationQueueStore.DEFAULT_STORE_PATH))
+	var verification: Array = []
+	var store_result: Dictionary = VerificationQueueStore.load_store(store_path)
+	if not store_result.has("error"):
+		var queues: Array = store_result.get("queues", []) if store_result.get("queues", []) is Array else []
+		var first_gap: String = ""
+		for queue_value in queues:
+			if not (queue_value is Dictionary):
+				continue
+			var queue: Dictionary = queue_value
+			var requirements: Array = queue.get("requirements", []) if queue.get("requirements", []) is Array else []
+			if requirements.is_empty():
+				continue
+			# requirement => verdict：passed 且带断言=verified；external_claim 不算；
+			# 其余（pending/failed/零断言通过/缺项）一律点名。
+			var verdicts: Dictionary = {}
+			for item_value in queue.get("items", []):
+				if not (item_value is Dictionary):
+					continue
+				var item: Dictionary = item_value
+				var requirement_id: String = String(item.get("requirement", ""))
+				if requirement_id.is_empty():
+					continue
+				var evidence: Dictionary = item.get("evidence", {}) if item.get("evidence", {}) is Dictionary else {}
+				var verified: bool = String(item.get("status", "")) == "passed" \
+					and int(evidence.get("assertions_total", 0)) > 0 \
+					and String(evidence.get("evidence_level", "")) != "external_claim"
+				verdicts[requirement_id] = verified
+			var unverified: Array = []
+			for requirement_value in requirements:
+				var requirement_id: String = String(requirement_value)
+				if not verdicts.has(requirement_id) or not bool(verdicts[requirement_id]):
+					unverified.append(requirement_id)
+			var entry: Dictionary = {
+				"queue_id": String(queue.get("queue_id", "")),
+				"goal": String(queue.get("goal", "")),
+				"phase": String(queue.get("phase", "")),
+				"unverified": unverified,
+			}
+			if not unverified.is_empty() and first_gap.is_empty():
+				first_gap = "%s: %s" % [String(queue.get("goal", queue.get("queue_id", ""))), ", ".join(unverified)]
+			if verification.size() < max_queues:
+				verification.append(entry)
+		if not first_gap.is_empty():
+			next_sentences.append("close the verification gap — '%s' (run_verification_queue advance)" % first_gap)
+
+	# ---- 最近变更（journal 尾部）---------------------------------------------
+	var recent_changes: Array = []
+	var journal_result: Dictionary = ChangeJournal.load_journal(
+		String(_brief_overrides.get("journal", ChangeJournal.DEFAULT_JOURNAL_PATH)))
+	if not journal_result.has("error"):
+		var operations: Array = journal_result.get("operations", []) if journal_result.get("operations", []) is Array else []
+		for i in range(maxi(0, operations.size() - max_changes), operations.size()):
+			var operation: Dictionary = operations[i] if operations[i] is Dictionary else {}
+			recent_changes.append({
+				"title": String(operation.get("title", operation.get("description", ""))),
+				"path": String(operation.get("path", operation.get("target", ""))),
+				"status": String(operation.get("status", ""))})
+
+	# ---- 建议下三句话：按状态优先级补齐 --------------------------------------
+	if content["scenes_count"] == 0 and content["scripts_count"] == 0:
+		next_sentences.append("empty project — start with make_first_game (input map, smallest complete loop, strict contract)")
+	elif next_sentences.is_empty():
+		next_sentences.append("tune the feel (make_game_juice), add a pillar (make_any_game routes all ten), or ship it (release_export_flow)")
+	if next_sentences.size() > 3:
+		next_sentences = next_sentences.slice(0, 3)
+
+	return {
+		"status": "success",
+		"project": project,
+		"content": content,
+		"task_plan": task_plan,
+		"verification": verification,
+		"recent_changes": recent_changes,
+		"next_sentences": next_sentences,
+		"generated_at": Time.get_datetime_string_from_system(true, true),
 	}

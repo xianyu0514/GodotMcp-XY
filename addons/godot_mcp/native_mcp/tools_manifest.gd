@@ -128,6 +128,7 @@ const TOOLS: Dictionary = {
 	"get_node_subresource": {"category": "supplementary", "group": "Node-Advanced"},
 	"get_performance_metrics": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_cache_diagnostics": {"category": "supplementary", "group": "Debug-Advanced"},
+	"get_game_project_brief": {"category": "supplementary", "group": "Project-Advanced"},
 	"get_project_info": {"category": "core", "group": "Project"},
 	"get_project_settings": {"category": "core", "group": "Project"},
 	"get_project_structure": {"category": "supplementary", "group": "Project-Advanced"},
