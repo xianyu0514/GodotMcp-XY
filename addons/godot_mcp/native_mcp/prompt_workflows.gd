@@ -406,6 +406,26 @@ Step 4 — Tuning is data: smoother/laggier = position_smoothing_speed down/up; 
 
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (per-level limits via batch_update_scene_files with expect_current keeping arena specials / zoom punch on hit via the juice recipe).
 """
+const GAME_SHADER_RECIPE_TEMPLATE: String = """
+You are executing the "Game Shader" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 1 — Locate the target with gather_task_context (which visual node needs the effect — the CanvasItem child, e.g. Player/Visual). Shaders are TEXT: write them with create_script (path ending .gdshader) — invalid shader content is REFUSED BEFORE writing (nothing lands in the project; force=true overrides). attach_to_node on a .gdshader MOUNTS a ShaderMaterial on that CanvasItem automatically — attach to the VISUAL child, not the body (attaching to a non-CanvasItem warns instead of silently no-oping).
+
+Step 2 — Start from a proven template, tune uniforms as data:
+- HIT FLASH (canvas_item): uniforms flash_amount (0..1) + flash_color; COLOR = mix(texture(TEXTURE, UV), flash_color, flash_amount). The game code drives flash_amount (1.0 on hit, back to 0.0) — the juice recipe's flash audit fields apply.
+- DISSOLVE: uniform progress (0..1) + noise-based alpha cutoff; COLOR.a = step(progress, noise(UV)).
+- OUTLINE: sample neighbors at ±outline_width; tint the rim where base alpha is 0.
+- SPATIAL (3D): same uniform-as-data pattern in shader_type spatial.
+
+Step 3 — Contract (timeline, one round trip): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["shader_mounted", "uniform_readable"], "items": [{"kind": "behavior_check", "requirement": "uniform_readable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [], "settle_frames": 30, "assertions": [{"label": "mounted", "expression": "get_node('<Player/Visual>').material.get_class() == 'ShaderMaterial'", "expected": true, "description": "material mounted"}, {"label": "shader_live", "expression": "get_node('<Player/Visual>').material.shader != null", "expected": true, "description": "shader assigned"}]}}}]}} — an empty events timeline still boots a FRESH run and reads the material. ENGINE TRUTH: get_shader_parameter returns NULL for uniforms never explicitly set (defaults live in shader code, not the material) — to read a value at runtime, set it first via set_runtime_shader_parameter, then read it back. Zero-assertion runs are smoke.
+
+Step 4 — Tuning is uniforms: edit the .gdshader or drive values via set_runtime_shader_parameter at runtime (test values without re-saving); after ANY file change verify_change_effect proves it reached the running game (embedded/unsaved/instance traps are named when they bite).
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (drive flash_amount from the hit signal / dissolve on death / outline on the selected enemy).
+"""
+
 
 const GAME_PARTICLES_RECIPE_TEMPLATE: String = """
 You are executing the "Game Particles / VFX" recipe against the Godot project through MCP tools. Ships WITH the plugin.
@@ -717,6 +737,14 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_particles")
 	)
+	_add_prompt(
+		"make_game_shader",
+		"Write and mount shaders as text: create_script with a .gdshader path (invalid content refused BEFORE writing), attach_to_node auto-mounts a ShaderMaterial on the visual CanvasItem, proven effect templates (hit flash / dissolve / outline), uniforms tuned as data, runtime-readable via timeline contracts.",
+		[
+			{"name": "goal", "description": "The effect wanted, e.g. 'white hit flash on the player sprite' / 'death dissolve'.", "required": true}
+		],
+		Callable(self, "_get_make_game_shader")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -775,7 +803,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_camera": ["camera follow", "camera setup", "camera limits", "camera preset",
 		"镜头跟随", "相机设置", "摄像机", "镜头限制"],
 	"make_game_particles": ["particles", "vfx", "particle effect", "hit sparks", "confetti",
-		"粒子", "特效", "打击火花"]
+		"粒子", "特效", "打击火花"],
+	"make_game_shader": ["shader", "custom shader", "visual shader code", "shader effect",
+		"着色器", "自定义着色器", "shader 特效"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -972,6 +1002,10 @@ func _get_make_game_camera(args: Dictionary) -> Dictionary:
 
 func _get_make_game_particles(args: Dictionary) -> Dictionary:
 	return _render(GAME_PARTICLES_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_shader(args: Dictionary) -> Dictionary:
+	return _render(GAME_SHADER_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:

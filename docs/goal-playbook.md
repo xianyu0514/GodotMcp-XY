@@ -195,6 +195,16 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - create_scene_variant 生成的继承场景经真引擎加载验证（零错误、覆盖可读回）；
   变体节点段 parent 语义与解析器一致（相对根，"."=根的直接子级）。
 
+## 着色器两条实测铁律（make_game_shader 首跑）
+
+- **uniform 默认值读回是 null**：`get_shader_parameter` 只读材质上显式 set 过的值，
+  默认值活在着色器代码里。运行时读值必须先 `set_runtime_shader_parameter` 再读回；
+  挂载证明用 `material is ShaderMaterial` + `material.shader != null`。
+- **Expression 不支持 is 运算符**（同禁三元）：类型断言用
+  `material.get_class() == 'ShaderMaterial'` 这类字符串比较。
+- **无效着色器先拒后写**：create_script 的 .gdshader 分支在落盘前做文本校验
+  （shader_type/括号/结构），无效内容不写盘——坏文件不进项目，也避开导入器噪音。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

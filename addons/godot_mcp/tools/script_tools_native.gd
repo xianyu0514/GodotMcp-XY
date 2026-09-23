@@ -1691,12 +1691,14 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 	var script_path: String = params.get("script_path", "")
 	var content: String = params.get("content", "")
 	var template: String = params.get("template", "empty")
+	var is_shader: bool = false
 	var attach_to_node: String = params.get("attach_to_node", "")
 
 	if script_path.is_empty():
 		return {"error": "Missing required parameter: script_path"}
 
-	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
+	is_shader = script_path.strip_edges().ends_with(".gdshader")
+	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs", ".gdshader"])
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
 
@@ -1706,10 +1708,28 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		return {"error": "File already exists: " + script_path}
 
 	if content.is_empty():
-		if script_path.ends_with(".cs"):
+		if is_shader:
+			content = "shader_type canvas_item;\n\nvoid fragment() {\n	COLOR = texture(TEXTURE, UV);\n}\n"
+		elif script_path.ends_with(".cs"):
 			content = _get_csharp_script_template(template, script_path.get_file().get_basename())
 		else:
 			content = _get_script_template(template)
+
+	# 着色器先校验后落盘：无效内容不写盘（坏文件不进项目，也避开导入器
+	# 引擎噪音）；force=true 可强制写入。
+	var shader_precheck: Dictionary = {}
+	if is_shader:
+		shader_precheck = _tool_validate_shader({"content": content})
+		if int(shader_precheck.get("issue_count", 0)) > 0 and not bool(params.get("force", false)):
+			return {
+				"status": "failed",
+				"script_path": script_path,
+				"has_errors": true,
+				"shader_type": str(shader_precheck.get("shader_type", "")),
+				"diagnostics": shader_precheck.get("issues", []) if shader_precheck.get("issues", []) is Array else [],
+				"diagnostics_truncated": false,
+				"hint": "shader content invalid — nothing written (pass force=true to write anyway)",
+			}
 
 	# 目标目录不存在时先创建（工作流按 profile 推导的 res://scripts/ 等新目录）。
 	var script_parent: String = script_path.get_base_dir()
@@ -1734,7 +1754,43 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
 			_get_editor_interface(), script_path).get("status", "")
 	}
-	result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path))
+	if is_shader:
+		# 着色器不走 GDScript 诊断：复用 validate_shader 的文本校验
+		# （shader_type/括号平衡/基本结构），结果并入同一形状。
+		var shader_check: Dictionary = _tool_validate_shader({"content": content})
+		result["validation_status"] = "failed" if int(shader_check.get("issue_count", 0)) > 0 else "passed"
+		var shader_issues: Array = shader_check.get("issues", []) if shader_check.get("issues", []) is Array else []
+		result["diagnostics"] = shader_issues
+		result["diagnostics_truncated"] = false
+		result["has_errors"] = int(shader_check.get("issue_count", 0)) > 0
+		result["shader_type"] = str(shader_check.get("shader_type", ""))
+	else:
+		result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path))
+
+	if is_shader and not attach_to_node.is_empty():
+		# 着色器挂载语义：load(.gdshader) -> ShaderMaterial(内联) -> node.material。
+		# CanvasItem 节点挂 material；其余类型给出可操作警告而不是静默失败。
+		var shader_editor: EditorInterface = _get_editor_interface()
+		if shader_editor == null:
+			result["attach_warning"] = "Editor interface not available for shader attachment"
+		else:
+			var target_node: Node = _resolve_node_path(shader_editor, attach_to_node)
+			if target_node == null:
+				result["attach_warning"] = "Node not found: " + attach_to_node
+			elif not (target_node is CanvasItem):
+				result["attach_warning"] = "shader attach expects a CanvasItem (use the visual child, e.g. Player/Visual): " + attach_to_node
+			else:
+				var shader_res: Shader = load(script_path)
+				if shader_res == null:
+					result["attach_warning"] = "Shader file written but failed to load: " + script_path
+				else:
+					var material := ShaderMaterial.new()
+					material.shader = shader_res
+					(target_node as CanvasItem).material = material
+					shader_editor.mark_scene_as_unsaved()
+					result["attached_to"] = attach_to_node
+					result["attach_kind"] = "shader_material"
+		return result
 
 	if not attach_to_node.is_empty():
 		if result.get("validation_status", "") == "failed":

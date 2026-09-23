@@ -96,6 +96,10 @@ def tool(name, args=None, timeout=300.0):
         return {"raw": text[:300]}
 
 
+
+def FileAccess_file_exists(proj: Path, rel: str) -> bool:
+    return (proj / rel).exists()
+
 def check(label, ok, detail=""):
     print(f"  [{'OK' if ok else 'FAIL':4}] {label}" + (f": {detail}" if detail else ""))
     if not ok:
@@ -282,6 +286,46 @@ def main() -> int:
         check("baked nav mesh present at RUNTIME",
               str(q2.get("checklist", {}).get("overall", "")) == "complete",
               json.dumps(q2.get("items", []))[:300])
+
+        # ---- shader：写 .gdshader -> 自动挂 ShaderMaterial -> 运行时可读 ----
+        tool("open_scene", {"scene_path": SCENE, "allow_ui_focus": True})
+        tool("create_node", {"parent_path": "Ball", "node_type": "ColorRect", "node_name": "Glow"})
+        FLASH = "shader_type canvas_item;\n\nuniform float flash_amount : hint_range(0.0, 1.0) = 0.0;\n\nvoid fragment() {\n\tvec4 base = texture(TEXTURE, UV);\n\tCOLOR = mix(base, vec4(1.0), flash_amount);\n}\n"
+        created_shader = tool("create_script", {
+            "script_path": "res://scripts/hit_flash.gdshader", "content": FLASH,
+            "attach_to_node": "Ball/Glow"})
+        check("shader written clean", not created_shader.get("has_errors", True),
+              json.dumps(created_shader)[:220])
+        check("shader mounted on the visual child",
+              created_shader.get("attach_kind", "") == "shader_material",
+              json.dumps(created_shader)[:220])
+        bad_shader = tool("create_script", {
+            "script_path": "res://scripts/broken.gdshader",
+            "content": "void fragment() { COLOR = vec4(1.0); }"})
+        check("invalid shader refused before write",
+              bad_shader.get("status", "") == "failed" and not FileAccess_file_exists(USER_PROJ, "scripts/broken.gdshader"),
+              json.dumps(bad_shader)[:200])
+        tool("save_scene", {"scene_path": SCENE})
+        q3 = tool("run_verification_queue", {"command": "create", "strict": True,
+            "goal": "shader proof", "requirements": ["shader_uniform_runtime_readable"],
+            "items": [{"kind": "behavior_check", "requirement": "shader_uniform_runtime_readable",
+                "label": "r9", "detail": {"scene_path": SCENE, "timeline": {
+                    "events": [{"frame": 0, "action": "launch", "pressed": False}], "settle_frames": 30,
+                    "assertions": [{"label": "mounted",
+                        "expression": "get_node('Ball/Glow').material.get_class() == 'ShaderMaterial'",
+                        "expected": True, "description": "ShaderMaterial mounted"},
+                        {"label": "shader_live",
+                        "expression": "get_node('Ball/Glow').material.shader != null",
+                        "expected": True, "description": "shader assigned at runtime"}]}}}]},
+            timeout=600.0)
+        advances = 0
+        while q3.get("outcome") in ("pending_more", "open") and advances < 10:
+            q3 = tool("run_verification_queue", {"command": "advance", "queue_id": q3.get("queue_id", "")}, timeout=600.0)
+            advances += 1
+        check("shader uniform readable at RUNTIME",
+              str(q3.get("checklist", {}).get("overall", "")) == "complete",
+              json.dumps(q3.get("items", []))[:300])
+
 
         print("\n=== M6 REAL-ENGINE VALIDATION: ALL CHECKS PASSED ===")
         return 0

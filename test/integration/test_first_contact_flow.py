@@ -207,7 +207,7 @@ def main() -> int:
         # 10) prompts: catalog + the unified change recipe.
         prompts = rpc_call("prompts/list").get("result", {}).get("prompts", [])
         prompt_names = {p["name"] for p in prompts}
-        check("24 recipes registered", len(prompts) == 24, f"{len(prompts)}: {sorted(prompt_names)}")
+        check("25 recipes registered", len(prompts) == 25, f"{len(prompts)}: {sorted(prompt_names)}")
         check("make_game_change listed", "make_game_change" in prompt_names)
         recipe = rpc_call("prompts/get", {
             "name": "make_game_change",

@@ -404,6 +404,19 @@ func test_ranged_recipe_carries_operational_truths():
 	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
 	assert_true(text.contains("verify_change_effect"))
 
+func test_shader_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_shader").call({"goal": "hit flash"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("REFUSED BEFORE writing"), "invalid shaders never touch the project")
+	assert_true(text.contains("ShaderMaterial") and text.contains("VISUAL child"),
+		"attach mounts material on the visual child, not the body")
+	assert_true(text.contains("flash_amount") and text.contains("create_script"),
+		"proven template + write path named")
+	assert_true(text.contains("set_runtime_shader_parameter") and text.contains("NULL"),
+		"the null-default uniform truth baked in")
+	assert_true(text.to_lower().contains("fresh"), "FRESH timeline contract")
+
 func test_camera_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
 	var result: Dictionary = workflows.get_callable("make_game_camera").call({"goal": "soft follow"})
