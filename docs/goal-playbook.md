@@ -133,6 +133,11 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 3. **实例覆盖（最隐蔽）**：直跑基场景全通过，但真实游戏跑的是宿主场景——宿主里 `[node name="X" parent="." instance=ExtResource(...)]` 的属性覆盖值胜过基值。verify_change_effect 的 hosts 步会点名宿主文件+节点，needs 直接给出带 `expect_current` 的 `batch_update_scene_files` 修复调用。
 4. **只在内存生效**：第二次磁盘启动读回不一致 => 改动没落盘。
 
+**GDScript 值语义三连坑**（本会话实测三次，写 GDScript 前先想引用还是值）：
+- lambda 按值捕获局部变量——计数器/状态跨调用不持久，用 Dictionary 单元格当可变盒子；
+- `PackedStringArray` 等打包数组是值类型——`as` 转换后 append 改的是副本，容器里存的
+  不变；要可变集合用 `Array`，或取值-修改-写回。
+
 **.tscn 文本解析的两个实测陷阱**（解析器已按此实现，改动前先读这里）：
 - `parent` 属性**不含根名**：`[node name="Leaf" parent="Mid"]` 的完整路径是 `Root/Mid/Leaf`，不是 `Mid/Leaf`（TestScene.tscn 实测）。
 - `instance=ExtResource("id")` 的 id 前面是 `(`，键值正则 `key="value"` 匹配不到——必须从原始头部行直接提取，否则宿主实例永远识别不出。
