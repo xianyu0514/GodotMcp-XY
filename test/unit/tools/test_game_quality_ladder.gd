@@ -76,6 +76,38 @@ func test_ladder_assembly_with_injected_legs() -> void:
 	assert_eq(String(result.get("rung_reached", "")), "r3" if String(ladder.get("r1", {}).get("status", "")) == "green" else "r1",
 		"rung_reached never skips a failing rung")
 
+func test_review_moments_attach_evidence() -> void:
+	var tools: RefCounted = ToolsScript.new()
+	tools._quality_runtime_gates_override = func(_detail: Dictionary) -> Dictionary:
+		return {"checks": [
+			{"id": "runtime_errors", "status": "green", "detail": {}},
+			{"id": "performance", "status": "green", "detail": {}},
+			{"id": "key_screen", "status": "green", "detail": {}}], "needs": []}
+	tools._ladder_run_override = func(detail: Dictionary) -> Dictionary:
+		match String(detail.get("kind", "")):
+			"latency":
+				return {"latency_frames": 2, "passed": true}
+			"review":
+				return {"passed": true, "evidence": {
+					"screenshots": [{"step": 0, "save_path": "user://mcp_play_and_verify/step_00.png"}]}}
+			_:
+				return {"passed": true, "evidence": {"assertions_total": 1, "assertions_passed": 1}}
+	var result: Dictionary = await tools._tool_game_quality_ladder({
+		"scene_path": "res://scenes/whatever.tscn",
+		"movement": {"action": "move_right", "node": "Player"},
+		"review_moments": [
+			{"id": "visual_coherence", "steps": [{"wait_ms": 800, "screenshot": true}]}]})
+	assert_false(result.has("error"))
+	var a_items: Array = result.get("ladder", {}).get("r4", {}).get("a_items_awaiting_review", [])
+	var attached: Dictionary = {}
+	for item_value in a_items:
+		var item: Dictionary = item_value
+		attached[String(item.get("id", ""))] = item.get("evidence", [])
+	assert_true(attached.get("visual_coherence", []) is Array and (attached.get("visual_coherence", []) as Array).size() == 1,
+		"screenshot evidence attached to its awaiting_review item")
+	assert_true(str(attached.get("balance", "")).contains("runs") or str(attached.get("balance", "")).contains("dominant"),
+		"un-shot dimensions keep their guidance hints")
+
 func test_waivers_keep_rungs_honest() -> void:
 	var tools: RefCounted = ToolsScript.new()
 	tools._quality_runtime_gates_override = func(_detail: Dictionary) -> Dictionary:

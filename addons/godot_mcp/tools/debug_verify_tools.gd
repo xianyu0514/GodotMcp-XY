@@ -1932,6 +1932,8 @@ func _register_game_quality_ladder(server_core: RefCounted) -> void:
 					"description": "R3/R4 machine items: [{requirement, rung: 'r3'|'r4', detail: behavior_check detail (timeline or steps shape)}]."},
 				"waivers": {"type": "array", "items": {"type": "object"},
 					"description": "[{rung, id, reason}] — explicitly waived items keep their rung honest instead of silently passing."},
+				"review_moments": {"type": "array", "items": {"type": "object"},
+					"description": "A-item evidence scaffolding: [{id, steps}] — each runs a FRESH boot through play_and_verify steps (screenshot:true captures shots) and the shot paths attach to that awaiting_review item (visual_coherence / first_30_seconds / balance / stakes)."},
 				"platform": {"type": "string", "enum": ["desktop", "mobile"], "default": "desktop"},
 				"sample_seconds": {"type": "number", "default": 1.5}
 			},
@@ -2006,6 +2008,27 @@ func _tool_game_quality_ladder(params: Dictionary) -> Dictionary:
 			"passed": bool(run_result.get("passed", false)) and not run_result.has("error"),
 			"evidence": _ladder_compact_evidence(run_result.get("evidence", {}))})
 
+	# ---- A 项证据脚手架：评审时刻（FRESH 启动 + 截图步骤）----
+	var review_evidence: Dictionary = {}
+	var moments_raw: Variant = params.get("review_moments", [])
+	if moments_raw is Array:
+		for moment_value in moments_raw:
+			if not (moment_value is Dictionary):
+				continue
+			var moment: Dictionary = moment_value
+			var moment_id: String = String(moment.get("id", "")).strip_edges()
+			var moment_steps: Variant = moment.get("steps", [])
+			if moment_id.is_empty() or not (moment_steps is Array) or (moment_steps as Array).is_empty():
+				continue
+			var moment_result: Dictionary
+			if _ladder_run_override.is_valid():
+				moment_result = await _ladder_run_override.call({"kind": "review", "moment": moment})
+			else:
+				moment_result = await _effect_queue_behavior_run({
+					"scene_path": scene_path, "steps": moment_steps})
+			var moment_evidence: Dictionary = moment_result.get("evidence", {}) if moment_result.get("evidence", {}) is Dictionary else {}
+			review_evidence[moment_id] = moment_evidence.get("screenshots", [])
+
 	# ---- 组装天梯 ----
 	var waivers_by_key: Dictionary = {}
 	for w_value in waivers:
@@ -2079,10 +2102,10 @@ func _tool_game_quality_ladder(params: Dictionary) -> Dictionary:
 			"r4": {"status": "green" if r4_green else "red",
 				"m_items": r4_items,
 				"a_items_awaiting_review": [
-					{"id": "visual_coherence", "evidence": "screenshots from key_screen"},
-					{"id": "first_30_seconds", "evidence": "play via timelines, screenshot every 5s, judge controls+goal clarity"},
-					{"id": "balance", "evidence": "multiple runs, look for dominant strategy"},
-					{"id": "stakes", "evidence": "review death cost and victory payoff"}]},
+					{"id": "visual_coherence", "evidence": review_evidence.get("visual_coherence", ["pass review_moments with screenshot steps to attach shots"])},
+					{"id": "first_30_seconds", "evidence": review_evidence.get("first_30_seconds", ["play as a newcomer via timelines, screenshot every 5s, judge controls+goal clarity"])},
+					{"id": "balance", "evidence": review_evidence.get("balance", ["multiple runs, look for dominant strategy"])},
+					{"id": "stakes", "evidence": review_evidence.get("stakes", ["review death cost and victory payoff"])}]},
 		},
 		"needs": needs,
 	}

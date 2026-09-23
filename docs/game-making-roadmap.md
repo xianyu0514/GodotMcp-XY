@@ -229,14 +229,15 @@ A 项（视觉一致/平衡/前 30 秒上手）必须带截图证据被评审；
 - 纯内核 `_ladder_latency_frames(trajectory) -> int`（首变帧）单测钉死；计数 244→245 全同步。
 - DoD：对高尔夫真机一次调用产出 R1-R4 状态；延迟/覆盖/豁免三项与 WP1 手测一致。
 
-**WP3 A 项证据脚手架** — full 档自动抓四张关键时刻截图（开始/战斗/死亡/胜利），
-评审记录 schema（judgment + evidence_urIs + reviewer）文档化；判断仍在代理侧（宪章：不伪造判断）。
+**WP3 A 项证据脚手架** — ✅ 已完成：`game_quality_ladder` 的 `review_moments` 参数
+（[{id, steps}]，FRESH 启动 + screenshot 步骤）自动把截图路径挂到对应 awaiting_review 项；
+未采集的维度保留评审指引；判断仍在代理侧（宪章）。
 
-**WP4 天梯基线与回归** — golf + arena 双基线（延迟帧数/覆盖密度）写入路线图指标表；
-CI 稳定后把延迟上限设为回归门禁（≤3 帧）。
+**WP4 天梯基线与回归** — ✅ 基线已录：voxel 延迟 **2 帧（~33ms@60Hz）**（rung_reached=r4）；
+回归门禁 = test_benchmark_voxel_flow 断言 latency<=3（CI 即生效）。arena/golf 补测待后续跑。
 
-**WP5 收口** — make_any_game 质量地板指向 ladder 工具；phrase 测试与 first_contact 计数同步；
-新真理下沉（若 WP1 又逼出 Expression/物理类陷阱，按 E-3 入清单）。
+**WP5 收口** — ✅ 能力卡与 make_game_perfect 均已点名 game_quality_ladder（一次调用）；
+短语测试同步（26 配方计数不变，无新增 prompt）。
 
 **顺序理由**：WP1 证明天梯测得出真东西（防标准空转）→ WP2 把攀爬变成一次调用（用户要的"轻松"）
 → WP3/WP4 让 A 项有据、M 项有基线 → 一切既有诚实系统照常守门。
