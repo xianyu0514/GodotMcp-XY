@@ -2739,6 +2739,8 @@ func _tool_connect_signal(params: Dictionary) -> Dictionary:
 		"receiver": receiver_path,
 		"method": receiver_method
 	}
+	if not (flags & 1):  # CONNECT_PERSIST
+		result["warning"] = "runtime-only connection — it will NOT survive into the saved scene file; pass flags=1 (CONNECT_PERSIST) to persist it as a [connection] in the .tscn"
 	if flags & CONNECT_PERSIST:
 		result["warning"] = "PERSIST flag is set. If the receiver script also connects this signal in _ready(), it will fire twice at runtime."
 	return result

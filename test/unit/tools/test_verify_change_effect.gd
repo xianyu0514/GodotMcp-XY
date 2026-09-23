@@ -98,14 +98,18 @@ func test_resolve_bare_name_falls_back_to_name_match() -> void:
 # 读回表达式与数值比较（纯函数）
 # ---------------------------------------------------------------------------
 
-func test_build_readback_expression_covers_three_runtime_shapes() -> void:
-	var deep: String = ToolsScript._build_readback_expression("Arena/Player/Attack", "cooldown_seconds")
-	assert_true(deep.contains("has_node('Arena/Player/Attack')"), "full path first: %s" % deep)
-	assert_true(deep.contains("has_node('Player/Attack')"), "root-stripped fallback: %s" % deep)
-	assert_true(deep.contains("else self)).cooldown_seconds"), "self covers the node-is-root case: %s" % deep)
-	var root_only: String = ToolsScript._build_readback_expression("Player", "speed")
-	assert_true(root_only.contains("has_node('Player')"), "single-segment still tries the name: %s" % root_only)
-	assert_true(root_only.contains("self).speed"), "falls back to self when the name misses: %s" % root_only)
+func test_build_readback_expression_is_expression_legal() -> void:
+	# 实测铁律：Expression 不支持三元/self——所有生成式必须可直接 parse。
+	var deep: String = ToolsScript._build_readback_expression("Arena/Player/Attack", "cooldown_seconds", "Arena")
+	assert_eq(deep, "get_node('Player/Attack').cooldown_seconds", "root stripped, no ternary")
+	var child: String = ToolsScript._build_readback_expression("Ball", "launch_power", "Golf")
+	assert_eq(child, "get_node('Ball').launch_power", "child resolves relative to current_scene")
+	var root_case: String = ToolsScript._build_readback_expression("Golf", "level", "Golf")
+	assert_eq(root_case, "level", "node-is-root uses the bare property (no self in Expression)")
+	# 全部生成式在真实 Expression 引擎下可解析（防止再引入三元类语法）。
+	var probe: Expression = Expression.new()
+	for expr in [deep, child, root_case]:
+		assert_eq(probe.parse(expr, []), OK, "parseable: %s" % expr)
 
 func test_values_match_is_numeric_tolerant() -> void:
 	assert_true(ToolsScript._values_match(0.25, 0.25))

@@ -587,13 +587,16 @@ func _run_apply_timeline(compiled: Dictionary, frame_type: String,
 		samples.append(_sample_frame(i + 1, compiled_samples))
 
 	# 末帧求值：一次往返带回断言输入值（编辑器侧完成期望比对）。
+	# 基点与 evaluate_expression 同语义——current_scene（get_node('Ball') 这类
+	# 相对路径才解析得到；以探针自身为基点会全部求值失败返回 null）。
+	var eval_base: Object = get_tree().current_scene if get_tree() and get_tree().current_scene else self
 	var finals: Dictionary = {}
 	for final_spec in compiled_finals:
 		var label: String = str(final_spec.get("label", ""))
 		if not bool(final_spec.get("parse_ok", false)):
 			finals[label] = null
 			continue
-		var value: Variant = (final_spec["expr"] as Expression).execute([], self, false)
+		var value: Variant = (final_spec["expr"] as Expression).execute([], eval_base, false)
 		finals[label] = value if not (final_spec["expr"] as Expression).has_execute_failed() else null
 
 	EngineDebugger.send_message("mcp:timeline_applied", [{

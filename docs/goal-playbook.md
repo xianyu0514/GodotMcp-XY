@@ -175,6 +175,17 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   计数递增都没更新（本机"跑不了"就没人看它）。凡是 pin 计数的测试，计数变更的
   同步清单必须包含集成层。
 
+## L3 终局验收实测出的两条铁律（2026-09-23，俯视迷你高尔夫首跑）
+
+- **Godot 的 Expression 类不支持三元语法**：`x if c else y` 连 `(1 if true else 2)`
+  都是 parse error 31；`self` 标识符同样非法。任何要送进探针求值的表达式只能用
+  裸属性/方法调用/比较。verify_change_effect 的读回表达式已按"根名已知"重写
+  （根=>裸属性，子=>get_node 相对路径），并有单测钉死"生成式必须可 parse"。
+- **connect_signal 连的是编辑器实例**：连接不写进 .tscn 的 [connection]，
+  flags=1（CONNECT_PERSIST）经此保存路径也不落盘——运行时游戏里是死按钮。
+  可靠持久路径是脚本侧 `_ready` 里 `signal.connect(...)`（代码即持久）。
+  工具现会在缺 PERSIST 位时自愈警告；menu 配方已改为教脚本侧接线。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

@@ -1127,7 +1127,8 @@ func _tool_verify_change_effect(params: Dictionary) -> Dictionary:
 		needs.append(need_value)
 
 	# ---- step: applied（FRESH 启动 + 运行时读回）-----------------------------
-	var readback: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms)
+	var readback: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms,
+		String(resolved.get("entity", {}).get("root_name", "")) if resolved.get("entity", {}) is Dictionary else "")
 	var applied_ok: bool = readback.has("value") and _values_match(readback.get("value", null), expected)
 	if applied_ok:
 		checklist.append({"step": "applied", "status": "verified",
@@ -1178,7 +1179,8 @@ func _tool_verify_change_effect(params: Dictionary) -> Dictionary:
 		checklist.append({"step": "persist", "status": "skipped",
 			"evidence": "persistence check disabled (check_persistence=false)"})
 	else:
-		var readback2: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms)
+		var readback2: Dictionary = await _effect_readback(scene_path, node_path, property, timeout_ms,
+			String(resolved.get("entity", {}).get("root_name", "")) if resolved.get("entity", {}) is Dictionary else "")
 		var persist_ok: bool = readback2.has("value") and _values_match(readback2.get("value", null), expected)
 		if persist_ok:
 			checklist.append({"step": "persist", "status": "verified",
@@ -1206,12 +1208,12 @@ func _effect_report(checklist: Array, needs: Array, resolved: Dictionary) -> Dic
 ## 读回一次运行时属性值（FRESH 启动 → 探针求值 → 停止）。真实路径复用验证
 ## 队列的原生编排（probe → run → 就绪等待 → play_and_verify → stop），
 ## 单测用 _effect_readback_override 替换。返回 {"value": v} 或 {"error": ...}。
-func _effect_readback(scene_path: String, node_path: String, property: String, timeout_ms: int) -> Dictionary:
+func _effect_readback(scene_path: String, node_path: String, property: String, timeout_ms: int, root_name: String = "") -> Dictionary:
 	if _effect_readback_override.is_valid():
 		return await _effect_readback_override.call({
 			"scene_path": scene_path, "node_path": node_path,
-			"property": property, "timeout_ms": timeout_ms})
-	var expression: String = _build_readback_expression(node_path, property)
+			"property": property, "timeout_ms": timeout_ms, "root_name": root_name})
+	var expression: String = _build_readback_expression(node_path, property, root_name)
 	var run: Dictionary = await _effect_queue_behavior_run({
 		"scene_path": scene_path,
 		"steps": [{"wait_ms": 1200}],
@@ -1282,15 +1284,17 @@ func _effect_queue_behavior_run(detail: Dictionary) -> Dictionary:
 ## 构造读回表达式：探针以 current_scene 为基点求值，一次表达式覆盖三种
 ## 运行时路径形态 —— 完整相对路径（被实例场景托管时）、去根路径（场景根
 ## 直跑时）、以及节点即根自身（self 兜底）。
-static func _build_readback_expression(node_path: String, property: String) -> String:
+## 实测铁律：Expression 类不支持三元 `x if c else y`（连 (1 if true else 2)
+## 都是 parse error 31），也不支持 self。探针以 current_scene 为基点求值，
+## 因此：节点即根（root_name 已知）=> 裸属性；否则 get_node('<去根相对路径>').属性。
+static func _build_readback_expression(node_path: String, property: String, root_name: String = "") -> String:
 	var full: String = node_path.strip_edges().trim_prefix("/").trim_suffix("/")
-	var stripped: String = full.substr(full.find("/") + 1) if full.contains("/") else ""
-	var chain: String = "self"
-	if not stripped.is_empty():
-		chain = "(get_node('%s') if has_node('%s') else self)" % [stripped, stripped]
-	if not full.is_empty() and full != stripped:
-		chain = "(get_node('%s') if has_node('%s') else %s)" % [full, full, chain]
-	return "%s.%s" % [chain, property]
+	if root_name != "" and full == root_name:
+		return property
+	var relative: String = full
+	if root_name != "" and full.begins_with(root_name + "/"):
+		relative = full.substr(root_name.length() + 1)
+	return "get_node('%s').%s" % [relative, property]
 
 ## 数值宽容比较：浮点用 is_equal_approx（0.25 == 0.25 之类的 JSON 往返），
 ## 布尔精确相等，其余按字符串比较（"0.25" 与 0.25 视为相等）。

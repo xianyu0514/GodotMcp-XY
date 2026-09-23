@@ -161,8 +161,10 @@ func _command_create(params: Dictionary) -> Dictionary:
 		if kind == "behavior_check":
 			var detail: Variant = (item_value as Dictionary).get("detail", {})
 			var steps: Variant = (detail as Dictionary).get("steps", []) if detail is Dictionary else []
-			if not (steps is Array) or (steps as Array).is_empty():
-				return {"error": "behavior_check detail requires a non-empty steps array (same shape play_and_verify accepts; optional scene_path, assertions, deterministic, timeout_ms)"}
+			var timeline: Variant = (detail as Dictionary).get("timeline", {}) if detail is Dictionary else {}
+			var has_timeline: bool = timeline is Dictionary and not (timeline as Dictionary).is_empty() 				and (timeline as Dictionary).get("events", []) is Array 				and not ((timeline as Dictionary).get("events", []) as Array).is_empty()
+			if (not (steps is Array) or (steps as Array).is_empty()) and not has_timeline:
+				return {"error": "behavior_check detail requires a non-empty steps array OR a timeline {events, assertions} (one probe round trip); optional scene_path, assertions, deterministic, timeout_ms"}
 			# 严格完成门禁（包②）：零断言的 behavior_check 只是冒烟结果，
 			# 不能充当严格队列的功能完成证据——建队即拒绝并点名缺断言的项。
 			if bool(params.get("strict", false)):
@@ -173,8 +175,10 @@ func _command_create(params: Dictionary) -> Dictionary:
 				var finals: Variant = (detail as Dictionary).get("assertions", []) if detail is Dictionary else []
 				if finals is Array:
 					assertion_count += (finals as Array).size()
+				if has_timeline and (timeline as Dictionary).get("assertions", []) is Array:
+					assertion_count += ((timeline as Dictionary).get("assertions", []) as Array).size()
 				if assertion_count == 0:
-					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts or a final assertions list" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
+					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts, a final assertions list, or timeline assertions" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
 
 	var store: Dictionary = StoreScript.load_store(_resolved_store_path())
 	if store.has("error"):
@@ -339,9 +343,13 @@ func _execute_item(item: Dictionary) -> Dictionary:
 ## 步数、逐断言实际/期望、运行错误、截图路径、会话标识）。
 func _check_behavior(detail: Dictionary) -> Dictionary:
 	var steps: Variant = detail.get("steps", [])
-	if not (steps is Array) or (steps as Array).is_empty():
+	var steps_valid: bool = steps is Array and not (steps as Array).is_empty()
+	var timeline: Variant = detail.get("timeline", {})
+	var timeline_valid: bool = timeline is Dictionary and not (timeline as Dictionary).is_empty() 		and (timeline as Dictionary).get("events", []) is Array 		and not ((timeline as Dictionary).get("events", []) as Array).is_empty()
+	if not steps_valid and not timeline_valid:
 		return {"passed": false, "evidence": {
-			"evidence_level": "native_run", "issue": "behavior_check detail needs a non-empty steps array"}}
+			"evidence_level": "native_run",
+			"issue": "behavior_check detail needs a non-empty steps array OR a timeline {events, assertions}"}}
 	if _behavior_run_override.is_valid():
 		return await _behavior_run_override.call(detail)
 	return await _behavior_run_impl(detail)
