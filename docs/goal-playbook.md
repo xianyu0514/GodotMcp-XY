@@ -186,6 +186,15 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   可靠持久路径是脚本侧 `_ready` 里 `signal.connect(...)`（代码即持久）。
   工具现会在缺 PERSIST 位时自愈警告；menu 配方已改为教脚本侧接线。
 
+## 文本级 .tscn 改写与编辑器缓存（M6 真机验证实测）
+
+- 文本改写绕过编辑器 → **资源缓存仍是旧场景**；batch_update_scene_files 已在写盘后
+  做 `ResourceLoader.load(..., CACHE_MODE_REPLACE)` 自行刷新（答案同行）。
+- 已打开的场景标签聚焦的是**旧实例**（open_scene 的 already_open 路径）——
+  完整调用流是"改盘 → close_scene_tab → open_scene"重新实例化。
+- create_scene_variant 生成的继承场景经真引擎加载验证（零错误、覆盖可读回）；
+  变体节点段 parent 语义与解析器一致（相对根，"."=根的直接子级）。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
