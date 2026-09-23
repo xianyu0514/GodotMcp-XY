@@ -4,7 +4,7 @@ Launches a headless Godot editor with the MCP server on this project, then
 walks the real first-contact sequence over HTTP JSON-RPC and asserts the
 answers an AI needs before it can do any work:
 
-  initialize           -> protocol answer + accurate instructions (244-tool truth)
+  initialize           -> protocol answer + accurate instructions (245-tool truth)
   tools/list           -> small core+meta surface (lazy loading by design)
   get_project_info     -> correct project identity (the G0 target check)
   get_editor_state     -> editor state readable
@@ -112,7 +112,7 @@ def main() -> int:
         check("initialize answers", "result" in init)
         instructions = str(init.get("result", {}).get("instructions", ""))
         check("instructions present", len(instructions) > 0)
-        check("instructions cite 244-tool truth", "244-tool catalog" in instructions, instructions[:120])
+        check("instructions cite 245-tool truth", "245-tool catalog" in instructions, instructions[:120])
 
         # 1b) Hermetic baseline: sequential tests on one runner share user://,
         #     so previously-enabled supplementary tools leak in. Reset to the
