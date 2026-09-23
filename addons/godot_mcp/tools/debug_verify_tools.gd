@@ -86,6 +86,7 @@ func _register_play_and_verify(server_core: RefCounted) -> void:
 					"items": {"type": "object"}
 				},
 				"deterministic": {"type": "boolean", "default": false, "description": "Frame-step waits in-game."},
+				"timeline": {"type": "object", "description": "ONE round trip, frame-timed inputs (input_sequence-style): {events: [{frame, action, pressed, strength?}], settle_frames?, sample?: [{label, expression}] (per-frame), assertions?: [{label, expression, expected?, operator?}] (evaluated IN-GAME on the last frame, values returned once)}. When present, steps are ignored and the whole run replays deterministically in a single probe call."},
 				"frame_type": {"type": "string", "enum": ["physics", "process"], "default": "physics"},
 				"sample": {"type": "array", "items": {"type": "object"}, "description": "Per-frame expression samples."},
 				"include_trajectory": {"type": "boolean", "default": true},
@@ -126,6 +127,10 @@ func _tool_play_and_verify(params: Dictionary) -> Dictionary:
 	var progress_token: Variant = null
 	if params.has("_meta") and params["_meta"] is Dictionary:
 		progress_token = (params["_meta"] as Dictionary).get("progressToken", null)
+
+	var timeline: Dictionary = params.get("timeline", {}) if params.get("timeline", {}) is Dictionary else {}
+	if not timeline.is_empty():
+		return await _run_timeline_mode(params, timeline)
 
 	# Verify a runtime session with the probe is reachable before doing anything.
 	if _get_runtime_tools() == null:
@@ -374,6 +379,114 @@ static func _unbound_input_hint(action_name: String) -> String:
 	if action_name.is_empty():
 		return ""
 	return " — if '%s' is unbound, upsert_project_input_action('%s', ...) first" % [action_name, action_name]
+
+## timeline 模式：一次探针往返执行帧定时输入时间线，末帧断言值随响应带回，
+## 期望比对在编辑器侧完成（零额外往返）。报告形状与常规模式兼容。
+func _run_timeline_mode(params: Dictionary, timeline: Dictionary) -> Dictionary:
+	var events: Array = timeline.get("events", []) if timeline.get("events", []) is Array else []
+	if events.is_empty():
+		return {"error": "timeline requires a non-empty events array [{frame, action, pressed}]"}
+	var sample_specs: Array = timeline.get("sample", []) if timeline.get("sample", []) is Array else []
+	var assertion_specs: Array = timeline.get("assertions", []) if timeline.get("assertions", []) is Array else []
+	var frame_type: String = "process" if String(params.get("frame_type", "physics")) == "process" else "physics"
+	var needed_ms: int = timeline_total_frames(events, int(timeline.get("settle_frames", 0))) * 20 + 2000
+	var probe_params: Dictionary = _merge_runtime_params(params, {})
+	probe_params["timeout_ms"] = maxi(int(params.get("timeout_ms", 3000)), needed_ms)
+	var run: Dictionary = await DebugToolsNative._request_runtime_probe_poll(
+		"apply_timeline", [events, sample_specs, assertion_specs, frame_type,
+			int(timeline.get("settle_frames", 0))],
+		["mcp:timeline_applied"], probe_params)
+	if run.has("error"):
+		return {"status": "failed", "passed": false, "errors": [
+			{"phase": "timeline", "error": str(run.get("error"))}],
+			"assertions": [], "assertions_total": 0, "assertions_passed": 0}
+	var finals: Dictionary = run.get("finals", {}) if run.get("finals", {}) is Dictionary else {}
+	var assertion_results: Array = fold_timeline_assertions(assertion_specs, finals)
+	var passed_count: int = 0
+	for result_value in assertion_results:
+		if result_value is Dictionary and bool((result_value as Dictionary).get("passed", false)):
+			passed_count += 1
+	var trajectory: Array = []
+	var frame_cursor: int = 0
+	for sample_value in run.get("samples", []) if run.get("samples", []) is Array else []:
+		if frame_cursor > 0 and not trajectory.is_empty():
+			pass  # 首样本为步前状态，与 advance 语义一致地保留全部帧样本
+		trajectory.append({"frame_index": frame_cursor, "values": (sample_value as Dictionary).get("values", {}) if sample_value is Dictionary else {}})
+		frame_cursor += 1
+	var all_passed: bool = passed_count == assertion_results.size()
+	return {
+		"status": "success" if all_passed else "failed",
+		"passed": all_passed,
+		"deterministic": true,
+		"mode": "timeline",
+		"frames_advanced": maxi(frame_cursor - 1, 0),
+		"events_applied": int(run.get("events_applied", 0)),
+		"steps_executed": 0,
+		"assertions_total": assertion_results.size(),
+		"assertions_passed": passed_count,
+		"assertions": assertion_results,
+		"errors": [],
+		"runtime_errors": [],
+	}
+
+## 纯函数（可单测）：末帧值 + 断言规格 -> 断言结果（期望比对编辑器侧完成）。
+static func fold_timeline_assertions(specs: Array, finals: Dictionary) -> Array:
+	var results: Array = []
+	for spec_value in specs:
+		if not (spec_value is Dictionary):
+			continue
+		var spec: Dictionary = spec_value
+		var label: String = String(spec.get("label", spec.get("description", spec.get("expression", ""))))
+		var result: Dictionary = {
+			"description": label,
+			"expression": String(spec.get("expression", "")),
+			"passed": false}
+		if not finals.has(label):
+			result["error"] = "no final value for '%s' (label mismatch or expression failed in-game)" % label
+			results.append(result)
+			continue
+		var actual: Variant = finals[label]
+		result["actual"] = actual
+		if not spec.has("expected"):
+			result["passed"] = bool(actual)
+			results.append(result)
+			continue
+		result["expected"] = spec["expected"]
+		result["operator"] = String(spec.get("operator", "eq"))
+		result["passed"] = _timeline_value_matches(actual, spec["expected"], String(spec.get("operator", "eq")))
+		results.append(result)
+	return results
+
+static func _timeline_value_matches(actual: Variant, expected: Variant, operator_name: String) -> bool:
+	var a: float = float(actual) if actual is float or actual is int else 0.0
+	var b: float = float(expected) if expected is float or expected is int else 0.0
+	if not (actual is float or actual is int) or not (expected is float or expected is int):
+		match operator_name:
+			"ne":
+				return str(actual) != str(expected)
+			_:
+				return str(actual) == str(expected)
+	match operator_name:
+		"ne":
+			return not is_equal_approx(a, b)
+		"gt":
+			return a > b
+		"gte":
+			return a >= b
+		"lt":
+			return a < b
+		"lte":
+			return a <= b
+		_:
+			return is_equal_approx(a, b)
+
+## 纯函数（可单测）：总帧数 = max(事件帧)+1+settle（与探针 compile_timeline 同口径）。
+static func timeline_total_frames(events: Array, settle_frames: int) -> int:
+	var last_frame: int = -1
+	for event_value in events:
+		if event_value is Dictionary:
+			last_frame = maxi(last_frame, int((event_value as Dictionary).get("frame", 0)))
+	return maxi(last_frame + 1 + maxi(settle_frames, 0), 1)
 
 ## 求值一条运行时表达式断言。步内 assert 与末尾 assertions 共用同一
 ## 求值路径，保证 mid-sequence 与 final 断言的语义完全一致。

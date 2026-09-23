@@ -151,6 +151,8 @@ func _capture_mcp_message(message: String, data: Array) -> bool:
 			return _handle_get_runtime_screenshot(data)
 		"advance_frames":
 			return _handle_advance_frames(data)
+		"apply_timeline":
+			return _handle_apply_timeline(data)
 		"debug_break":
 			EngineDebugger.debug(true, false)
 			return true
@@ -485,6 +487,122 @@ func _handle_advance_frames(data: Array) -> bool:
 	var sample_specs: Array = data[2] if data.size() >= 3 and data[2] is Array else []
 	_run_advance_frames(frames, frame_type, sample_specs)
 	return true
+
+## apply_timeline：一次往返执行帧定时输入时间线（学习自竞品 input_sequence，
+## 保留我方断言/采样语义）。事件在计划帧的步进前应用（直接写 Input 状态，
+## 与 simulate_input_action 同一可靠路径），末帧求值 final_expressions，
+## 单条 mcp:timeline_applied 回复全部结果。
+func _handle_apply_timeline(data: Array) -> bool:
+	var events: Array = data[0] if data.size() >= 1 and data[0] is Array else []
+	var sample_specs: Array = data[1] if data.size() >= 2 and data[1] is Array else []
+	var final_specs: Array = data[2] if data.size() >= 2 and data.size() >= 3 and data[2] is Array else []
+	var frame_type: String = String(data[3]) if data.size() >= 4 and data[3] is String else "physics"
+	var settle_frames: int = int(data[4]) if data.size() >= 5 else 0
+	var compiled_timeline: Dictionary = compile_timeline(events, maxi(settle_frames, 0))
+	_run_apply_timeline(compiled_timeline, frame_type, sample_specs, final_specs)
+	return true
+
+## 纯函数（可单测）：事件表 -> {total_frames, by_frame:{frame:[event]}}。
+static func compile_timeline(events: Array, settle_frames: int) -> Dictionary:
+	var by_frame: Dictionary = {}
+	var last_frame: int = -1
+	for event_value in events:
+		if not (event_value is Dictionary):
+			continue
+		var event: Dictionary = event_value
+		var frame: int = maxi(int(event.get("frame", 0)), 0)
+		var action: String = str(event.get("action", "")).strip_edges()
+		if action.is_empty():
+			continue
+		if not by_frame.has(frame):
+			by_frame[frame] = []
+		(by_frame[frame] as Array).append(event)
+		last_frame = maxi(last_frame, frame)
+	return {
+		"total_frames": maxi(last_frame + 1 + maxi(settle_frames, 0), 1),
+		"by_frame": by_frame,
+		"events_count": events.size()}
+
+func _run_apply_timeline(compiled: Dictionary, frame_type: String,
+		sample_specs: Array, final_specs: Array) -> void:
+	var tree: SceneTree = get_tree()
+	var use_physics: bool = frame_type != "process"
+	var total_frames: int = int(compiled.get("total_frames", 1))
+	var by_frame: Dictionary = compiled.get("by_frame", {})
+
+	# 采样表达式编译（与 _run_advance_frames 同构）。
+	var compiled_samples: Array = []
+	for spec in sample_specs:
+		if not (spec is Dictionary):
+			continue
+		var expr_text: String = str(spec.get("expression", "")).strip_edges()
+		if expr_text.is_empty():
+			continue
+		var ex: Expression = Expression.new()
+		var parse_error: int = ex.parse(expr_text, [])
+		compiled_samples.append({
+			"label": str(spec.get("label", expr_text)),
+			"expr": ex,
+			"parse_ok": parse_error == OK})
+	# 末帧断言表达式编译。
+	var compiled_finals: Array = []
+	for spec in final_specs:
+		if not (spec is Dictionary):
+			continue
+		var final_text: String = str(spec.get("expression", "")).strip_edges()
+		if final_text.is_empty():
+			continue
+		var fx: Expression = Expression.new()
+		var final_error: int = fx.parse(final_text, [])
+		compiled_finals.append({
+			"label": str(spec.get("label", spec.get("description", final_text))),
+			"expr": fx,
+			"parse_ok": final_error == OK})
+
+	var step_delta: float = 1.0 / float(maxi(Engine.physics_ticks_per_second, 1))
+	if not use_physics:
+		var target_fps: int = Engine.max_fps
+		step_delta = (1.0 / float(target_fps)) if target_fps > 0 else 0.0
+
+	var samples: Array = []
+	samples.append(_sample_frame(0, compiled_samples))
+	var applied: int = 0
+	for i in range(total_frames):
+		if not is_inside_tree() or not tree:
+			break
+		for event_value in by_frame.get(i, []):
+			var event: Dictionary = event_value
+			var action: StringName = StringName(str(event.get("action", "")))
+			var pressed: bool = bool(event.get("pressed", true))
+			var strength: float = float(event.get("strength", 1.0 if pressed else 0.0))
+			if pressed:
+				Input.action_press(action, strength)
+			else:
+				Input.action_release(action)
+			applied += 1
+		if use_physics:
+			await tree.physics_frame
+		else:
+			await tree.process_frame
+		samples.append(_sample_frame(i + 1, compiled_samples))
+
+	# 末帧求值：一次往返带回断言输入值（编辑器侧完成期望比对）。
+	var finals: Dictionary = {}
+	for final_spec in compiled_finals:
+		var label: String = str(final_spec.get("label", ""))
+		if not bool(final_spec.get("parse_ok", false)):
+			finals[label] = null
+			continue
+		var value: Variant = (final_spec["expr"] as Expression).execute([], self, false)
+		finals[label] = value if not (final_spec["expr"] as Expression).has_execute_failed() else null
+
+	EngineDebugger.send_message("mcp:timeline_applied", [{
+		"frames": total_frames,
+		"events_applied": applied,
+		"frame_type": "physics" if use_physics else "process",
+		"step_delta": step_delta,
+		"samples": samples,
+		"finals": finals}])
 
 func _run_advance_frames(frames: int, frame_type: String, sample_specs: Array) -> void:
 	var tree: SceneTree = get_tree()
