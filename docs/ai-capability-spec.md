@@ -62,6 +62,22 @@
 | E-2 | 答案同行：证据/失败原因/修复调用内嵌响应，调用方不得为了拿到结果再去挖文件。 | 审查 |
 | E-3 | 知识注入是权宜：每次向配方添加文本真理时，同提交必须评估"能否下沉为工具检测"；不能时在 playbook 说明原因。 | 审查 + 沉淀 |
 
+## C-6 声明式迁移范式与债清单（2026-09-23）
+
+**已迁移（声明式知识卡）**：make_any_game（能力卡）、make_first_game（空项目知识卡：
+SCOPE FACT / LOAD-BEARING FACTS / PROOF SHAPE / AVAILABLE KNOWLEDGE 四段式）。
+
+**迁移范式**（参照 make_first_game）：`Step N —` 命令式标题改为四段式知识区——
+作用域事实、承重事实（依赖与定义，不含顺序命令）、证明形状（JSON 契约示例保留）、
+可得知识（后续能力清单）；`A before B` 类次序指令改写为"A 是 B 的依赖"的依赖陈述，
+顺序由 AI 自行推断。短语测试同步改为钉声明式形态（含"无 Step 1"反向断言）。
+
+**剩余债（24 个参照配方）**：make_game_change/character/melee_enemy/menu/map/pickup/
+save/juice/audio/boss/ranged_enemy/camera/particles/shader/perfect 及工具类 prompt
+（plan/debug/review/visual/test/onboard/iterate/release/fix）。参照配方经能力卡声明为
+"可选知识、永不强制"（both legal），故此项为一致性债而非性能债，按接触顺序渐进迁移
+（改哪个配方时顺手迁移哪个）。
+
 ## 例外流程
 
 任何规则的不适用必须在**提交信息中显式声明**违反的条款 + 理由 + 补偿措施，并在下个相关包复审。无声违反按漂移处理（工作流纪律失职）。

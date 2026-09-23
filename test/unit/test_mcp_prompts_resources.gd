@@ -456,17 +456,24 @@ func test_particles_recipe_carries_operational_truths():
 	assert_true(text.contains("set_node_subresource"), "inline sub-resource path named")
 	assert_true(text.contains("timeline") and text.contains("verify_change_effect"))
 
-func test_first_game_recipe_carries_operational_truths():
+func test_first_game_recipe_is_a_declarative_knowledge_card():
 	var workflows: RefCounted = _new_workflows()
 	var result: Dictionary = workflows.get_callable("make_first_game").call({"goal": "platformer"})
 	var text: String = str(result["messages"][0]["content"]["text"])
-	assert_true(text.contains("must never overwrite"), "existing-project guard bakes in")
-	assert_true(text.contains("INPUT MAP comes first"), "input map before anything — every contract simulates actions")
-	assert_true(text.contains("Genre is DATA"), "genre is knob-sets, not forks")
-	assert_true(text.contains("WIN and LOSE are both reachable"), "smallest COMPLETE loop")
-	assert_true(text.contains("win_reachable") and text.contains("lose_reachable"), "both ends in the contract")
-	assert_true(text.contains("get_game_project_brief"), "hands off to the one-call session brief")
-	assert_true(text.to_lower().contains("fresh"), "FRESH isolation")
+	assert_true(text.contains("knowledge card") and text.contains("you decide everything"),
+		"declarative, agency declared")
+	assert_false(text.contains("Step 1"), "no imperative steps")
+	assert_true(text.contains("never required"), "overwriting existing work never required")
+	assert_true(text.contains("dependency everything else leans on"),
+		"input map as load-bearing dependency (not an ordering command)")
+	assert_true(text.contains("Genre is data, not forks"), "genre is knob-sets")
+	assert_true(text.contains("WIN and LOSE both reachable"), "first-playable definition")
+	assert_true(text.contains("win_reachable") and text.contains("lose_reachable"),
+		"both ends in the contract shape")
+	assert_true(text.to_lower().contains("fresh") and text.contains("smoke"),
+		"FRESH isolation + smoke rejection in the proof shape")
+	assert_true(text.contains("get_game_project_brief") and text.contains("manage_task_plan"),
+		"durability + one-call hand-off")
 
 func test_map_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()

@@ -360,21 +360,20 @@ Step 4 — Tuning: projectile speed / fire rate / windup / range are @export kno
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (leading shots / a spread variant / ammo drops).
 """
 const FIRST_GAME_RECIPE_TEMPLATE: String = """
-You are executing the "First Game" entry recipe against a NEW or EMPTY Godot project through MCP tools. Ships WITH the plugin.
-
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "project input scene script player enemy verify"}}
+A knowledge card for starting from an EMPTY project — declarative like the universal card: you decide everything (order, structure, approach); only claims need evidence.
 
-Step 1 — Guard: confirm with gather_task_context that the project is actually empty. If real content already exists, STOP and switch to make_any_game — this recipe scaffolds from zero and must never overwrite existing work. The INPUT MAP comes first (move_left/move_right/jump or attack actions via the project input tools): every later gameplay proof simulates those actions — an unbound action's failure message names the exact fix.
+SCOPE FACT: this card's knowledge assumes an empty project. If real content already exists, the universal capability card (make_any_game) fits better — overwriting existing work is never required for anything here.
 
-Step 2 — Genre is DATA, not a fork: platformer | top_down | shooter are three knob-sets on ONE player script (gravity+coyote-jump vs 8-way movement vs 8-way+fire), a small map (make_game_map), one melee enemy (make_melee_enemy), and a win/lose condition (defeat N enemies / reach the goal tile; lose at hp 0). Build the SMALLEST COMPLETE LOOP: a game is first-playable only when WIN and LOSE are both reachable in a single run.
+LOAD-BEARING FACTS:
+- Gameplay proof depends on the input map: every proof simulates actions, and an unbound action fails its contract with a self-healing hint naming the exact fix (upsert_project_input_action). The map is the dependency everything else leans on.
+- Genre is data, not forks: platformer | top_down | shooter are three knob-sets on ONE player script (gravity+coyote-jump vs 8-way movement vs 8-way+fire).
+- First-playable has a definition: WIN and LOSE both reachable in a single run — a loop missing either end is not playable yet.
 
-Step 3 — Strict contract BEFORE polish: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "wall_blocks", "enemy_fight", "win_reachable", "lose_reachable"], "items": [{"kind": "behavior_check", "requirement": "win_reachable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<win state expression>", "description": "the win state is reachable by playing"}}]}}]}} — each item boots a FRESH run and is self-contained (an item that needs a kill deals it itself). Zero-assertion runs are smoke; the strict contract rejects them.
+PROOF SHAPE (yours to adapt): a strict contract is the proven way to claim the loop — {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "wall_blocks", "enemy_fight", "win_reachable", "lose_reachable"], "items": [{"kind": "behavior_check", "requirement": "win_reachable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<win state expression>", "description": "the win state is reachable by playing"}}]}}]}} — every item boots a FRESH run, is self-contained (an item needing a kill deals it itself), and zero-assertion runs are smoke.
 
-Step 4 — Polish by pointer, not improvisation: feel -> make_game_juice; audio -> make_game_audio; menus/HUD/pause -> make_game_menu; progress -> make_game_save; more enemies/levels/pickups -> the pillar recipes. Screenshot the playable result and show it.
-
-Step 5 — Close honestly and HAND OFF: checklist verbatim, unverified named; record the built loop as done tasks via manage_task_plan (durable progress); then tell the user the next session opens with ONE call — get_game_project_brief rebuilds everything without re-discovery, and shipping later is the chain: game_quality_report full -> bump_version -> release_export_flow (+ manage_localization for bilingual).
+AVAILABLE KNOWLEDGE once the loop exists: feel (make_game_juice), audio (make_game_audio), menus/HUD/pause (make_game_menu), progress (make_game_save), every other pillar (the reference recipes), change-proof (verify_change_effect), the perfect ladder (game_quality_ladder). Durability: finished work records via manage_task_plan, and the next session opens with ONE call — get_game_project_brief rebuilds everything this session established without re-discovery. Shipping is a chain that exists when wanted: game_quality_ladder full -> bump_version -> release_export_flow (+ manage_localization for bilingual).
 """
 const GAME_CAMERA_RECIPE_TEMPLATE: String = """
 You are executing the "Game Camera" recipe against the Godot project through MCP tools. Ships WITH the plugin.
@@ -720,7 +719,7 @@ func _register_all() -> void:
 	)
 	_add_prompt(
 		"make_first_game",
-		"The empty-project entry: input map first, genre as knob-sets on one player script, a smallest COMPLETE loop (win AND lose both reachable), strict five-requirement contract before polish, polish by pointer to pillar recipes — and a one-call hand-off to the next session.",
+		"The empty-project knowledge card (declarative): scope fact, load-bearing facts (proof depends on the input map; genre is data; first-playable = win AND lose reachable), the proven contract shape, and the available knowledge once the loop exists — with the one-call next-session hand-off. You decide everything; only claims need evidence.",
 		[
 			{"name": "goal", "description": "The first game wanted, any genre, e.g. 'a small platformer where you stomp slimes'.", "required": true}
 		],
