@@ -442,6 +442,24 @@ Step 4 — Tuning is material data: bigger blast = spread/velocity/amount up; af
 
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (wire a new event / trails via the juice recipe / color ramp per damage type).
 """
+const PERFECT_GAME_RECIPE_TEMPLATE: String = """
+You are executing the "Perfect Game" ladder against the Godot project through MCP tools. Ships WITH the plugin. The rubric is docs/perfect-game-ladder.md: four rungs, machine (M) and agent-judged (A) dimensions. PERFECT is a ladder, not a switch — climb rung by rung, never skip, and never claim R4 while any item is red or unreviewed.
+
+Goal: {{goal}}
+
+Step 0 — Baseline: game_quality_report scope=full (scene + platform). Static reds (broken scripts, missing deps, res:// writes, no plan) are R1 blockers — fix before anything else.
+
+Step 1 — R1 Playable (all M): strict contracts for win_reachable AND lose_reachable (FRESH run each); assert_no_runtime_errors after every milestone; every input action bound (an unbound action's failure message names the fix).
+
+Step 2 — R2 Solid (all M, timeline-measured): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["input_latency", "collision_honesty"], "items": [{"kind": "behavior_check", "requirement": "input_latency", "label": "r2a", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}], "settle_frames": 12, "sample": [{"label": "px", "expression": "get_node('<Player>').position.x"}], "assertions": [{"label": "px", "expression": "get_node('<Player>').position.x", "expected": 2, "operator": "gte", "description": "moved within the window"}]}}}]}} — INPUT LATENCY = the first frame index where the px sample CHANGES (the per-frame trajectory IS the measurement; <= 3 physics frames passes, > 3 needs a faster response path). Collision honesty: walk into a wall with displacement_max. Persistence via the save recipe's cross-FRESH file proof.
+
+Step 3 — R3 Polished (M+A): feedback coverage — every damage/pickup/attack event leaves at least one juice response (audit fields, the juice recipe); FAIRNESS — every damage source telegraphs: timeline-sample the threat's windup state, first damage possible >= 12 frames after threat visible (undodgeable = defect, not difficulty); audio state asserts (bgm playing, hit sfx fires). Then the A items WITH EVIDENCE: screenshots of start/combat/death/victory via the timeline steps' screenshot option, and YOU judge visual coherence + stakes against the screenshots — record the verdict and keep the screenshots as evidence. No evidence = unreviewed = not R3.
+
+Step 4 — R4 Perfect (A-heavy, M-guarded): the FIRST-30-SECONDS test — play as a brand-new player via timeline scripts, screenshot every 5 seconds, then judge only from those shots: can a newcomer tell what the controls do and what the goal is? Feedback density: responses/total events >= 1.0 (machine). Balance: play several runs, look for a dominant strategy or a flat difficulty curve (record your reasoning). The gate: EVERY ladder item is green or explicitly waived with a reason — print the full ladder state and, if anything stands between the game and perfect, name it precisely (that list IS the deliverable when R4 is not yet true).
+
+Step 5 — The fix loop, rung-ordered: one knob per fix -> verify_change_effect proves it reached the running game -> re-verify ONLY the affected item -> re-ask the ladder. Stop when R4 or when the remaining gaps are all waived with reasons. Close honestly: ladder state verbatim, unreviewed named, next sentences suggested.
+"""
+
 
 
 
@@ -745,6 +763,14 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_game_shader")
 	)
+	_add_prompt(
+		"make_game_perfect",
+		"Climb the four-rung quality ladder — Playable, Solid, Polished, Perfect — with machine-measured dimensions (input latency from per-frame timelines, fairness telegraph frames, feedback coverage, density) and evidence-backed agent reviews (screenshots judged, never vibes). Perfect is claimed only when every item is green or explicitly waived; otherwise the precise gap list is the deliverable.",
+		[
+			{"name": "goal", "description": "The game to perfect, e.g. 'take the golf game to perfect'.", "required": true}
+		],
+		Callable(self, "_get_make_game_perfect")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -805,7 +831,9 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_particles": ["particles", "vfx", "particle effect", "hit sparks", "confetti",
 		"粒子", "特效", "打击火花"],
 	"make_game_shader": ["shader", "custom shader", "visual shader code", "shader effect",
-		"着色器", "自定义着色器", "shader 特效"]
+		"着色器", "自定义着色器", "shader 特效"],
+	"make_game_perfect": ["perfect the game", "polish pass", "quality ladder", "make it perfect", "ship quality",
+		"完美游戏", "打磨游戏", "提升质量", "做到完美"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -1006,6 +1034,10 @@ func _get_make_game_particles(args: Dictionary) -> Dictionary:
 
 func _get_make_game_shader(args: Dictionary) -> Dictionary:
 	return _render(GAME_SHADER_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_perfect(args: Dictionary) -> Dictionary:
+	return _render(PERFECT_GAME_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:

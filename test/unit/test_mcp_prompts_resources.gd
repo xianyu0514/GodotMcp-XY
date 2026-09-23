@@ -325,6 +325,7 @@ func test_plugin_shipped_making_recipes_registered():
 	assert_true("make_melee_enemy" in names, "melee-enemy recipe ships with the plugin")
 	assert_true("make_game_menu" in names, "menu recipe ships with the plugin")
 	assert_true("make_any_game" in names, "universal any-game entry ships with the plugin")
+	assert_true("make_game_perfect" in names, "perfect-ladder recipe ships with the plugin")
 	assert_true("make_game_map" in names, "map recipe ships with the plugin")
 	assert_true("make_game_pickup" in names, "pickup recipe ships with the plugin")
 	assert_true("make_game_save" in names, "save recipe ships with the plugin")
@@ -403,6 +404,21 @@ func test_ranged_recipe_carries_operational_truths():
 		"leak and range gates in the contract")
 	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
 	assert_true(text.contains("verify_change_effect"))
+
+func test_perfect_recipe_carries_the_ladder():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_perfect").call({"goal": "the golf game"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("ladder, not a switch"), "perfect is a ladder, not a switch")
+	assert_true(text.contains("input_latency") and text.contains("first frame index"),
+		"latency measured from the per-frame trajectory")
+	assert_true(text.contains("12 frames") and text.to_lower().contains("undodgeable"),
+		"fairness telegraph floor + undodgeable-is-a-defect")
+	assert_true(text.contains("feedback coverage") and text.contains("density"),
+		"R3 coverage + R4 density named")
+	assert_true(text.to_lower().contains("evidence"), "A items require evidence, never vibes")
+	assert_true(text.contains("explicitly waived"), "waiver discipline")
+	assert_true(text.contains("FIRST-30-SECONDS"), "newcomer onboarding test")
 
 func test_shader_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
