@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**76 tools** — 3 core, 73 advanced.
+**77 tools** — 3 core, 74 advanced.
 
 Debug edit-time logs and debugger sessions, then inspect and control a running game through the runtime probe. This is the largest category and includes deterministic play verification, performance budgets and runtime error gates.
 
@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (73 advanced)
+### Debug-Advanced (74 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -55,6 +55,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `assert_no_runtime_errors` | advanced | Runtime-error hard gate: scan the categorized debugger output captured from the running game and fail if any error events are present. By default it inspects the 'stderr' category; pass 'categories' to widen or narrow it, and 'since_sequence' to only consider events newer than a previously recorded sequence number (so you can gate a specific window of a run). Returns passed=false with the captured error events when any are found. |
 | `verify_change_effect` | advanced | Proof that a change actually reaches the game — the 'I edited it but nothing changed' chain, as one checklist with per-step evidence. Resolves the node's REAL script from the scene file (external `.gd` reference vs an EMBEDDED sub-resource copy — the classic silent killer where edits to the external file never reach the game), flags unsaved editor buffers (run_project boots the disk copy), boots the scene FRESH and reads the property back at runtime against `expected_value`, optionally runs behavior steps+assertions (play_and_verify shape; zero-assertion specs are rejected as smoke), then boots once more to prove persistence. The `hosts` step discovers which scenes INSTANCE this one and whether any host OVERRIDES the property (running the host serves the override, masking the base value — the fix names the exact host scene, node and a `batch_update_scene_files` call with `expect_current`); pin candidates via `host_scenes`, skip with `check_instance_hosts=false`. `overall=effective` only when every non-skipped step verified; `needs` names the exact next call for each failure. |
 | `game_quality_report` | advanced | One call runs every quality gate and returns a red/green report with a needs-style fix per red light. `static` (no game run): project health (broken scripts, missing/cyclic deps, res:// write traps), unverified delivery requirements named one by one, task-plan state, main-scene and input-map sanity. `full` boots the scene FRESH and gates on zero runtime errors, a platform performance profile (desktop/mobile: p1 fps + p95 frame time + node budget) and a key-screen screenshot, then stops. `verdict=green` only when every check is green — warnings never fake green. |
+| `game_quality_ladder` | advanced | One call measures every MACHINE rung of the quality ladder (R1 playable / R2 solid / R3 polished / R4 perfect). R1 + performance + runtime errors + key screen reuse game_quality_report full; R2 input latency is measured from a `movement` hint via a frame-timed timeline (first-changed-frame <= 3 passes); R3/R4 machine items (fairness telegraphs, coverage, density) arrive as timeline-shaped `extra_items` labelled by rung; agent-judged dimensions return as awaiting_review — never faked green. `rung_reached` is the highest all-green rung; waivers must carry reasons. |
 | `get_debug_threads` | advanced | Return DAP-style debugger threads visible from the active Godot debug session. |
 | `get_debug_state_events` | advanced | Read recorded debugger break/resume/stop state transitions from the bridge. |
 | `get_debug_output` | advanced | Read categorized runtime debugger output captured by the editor bridge. |

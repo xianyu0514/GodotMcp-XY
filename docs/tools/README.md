@@ -1,6 +1,6 @@
 # Tools Reference
 
-Godot MCP Native registers **244 MCP tools**: 28 core tools, 210 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
+Godot MCP Native registers **245 MCP tools**: 28 core tools, 211 advanced tools and 6 always-on meta tools. The manifest in `addons/godot_mcp/native_mcp/tools_manifest.gd` is the source of truth for tier and group membership.
 
 ## Category summary
 
@@ -10,10 +10,10 @@ Godot MCP Native registers **244 MCP tools**: 28 core tools, 210 advanced tools 
 | Script | 18 | 6 | 12 | [script-tools.md](script-tools.md) |
 | Scene | 15 | 4 | 11 | [scene-tools.md](scene-tools.md) |
 | Editor | 27 | 3 | 24 | [editor-tools.md](editor-tools.md) |
-| Debug & Runtime | 78 | 3 | 75 | [debug-tools.md](debug-tools.md) |
+| Debug & Runtime | 79 | 3 | 76 | [debug-tools.md](debug-tools.md) |
 | Project | 74 | 3 | 71 | [project-tools.md](project-tools.md) |
 | Meta | 6 | — | — | [meta-tools.md](meta-tools.md) |
-| **Total** | **244** | **28** | **210** | |
+| **Total** | **245** | **28** | **211** | |
 
 Meta tools are counted separately because they are always enabled and exist to manage the visible tool surface.
 
@@ -75,4 +75,4 @@ To add or change a tool, follow [Contributing → Adding a new MCP tool](../cont
 
 Script writes include immediate compiler diagnostics; run/stop results expose observed readiness and shutdown; batch scene edits preserve original nodes across undo/redo. See [Script](script-tools.md), [Editor](editor-tools.md) and [Node](node-tools.md) for response contracts. These changes add no tools or groups.
 
-Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 244 tools (28 core, 210 advanced, 6 meta).
+Existing-script edits additionally support unique text replacement and optional content-hash preconditions, and reject known unsaved target buffers. Invalid line edits preserve the file. Counts remain 245 tools (28 core, 211 advanced, 6 meta).

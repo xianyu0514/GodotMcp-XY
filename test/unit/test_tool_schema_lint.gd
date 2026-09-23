@@ -157,6 +157,7 @@ const KNOWN_OVER_BUDGET_TOOLS: Dictionary = {
 	"assert_visual_baseline": "视觉回归门禁：富参数 schema（历史基线，待精简）",
 	"batch_scene_node_edits": "幂等配方核心：on_exists=skip 语义必须内联说明（409 token，2026-09 角色工作流引入；精简需先审计配方依赖）",
 	"verify_change_effect": "修改生效确认链（P0-2 公共能力）：五步证据语义（实体解析/内嵌副本/未保存缓冲/行为断言/持久化）必须内联在描述里，精简会丢掉 needs 自愈指引的可用性说明（539 token）",
+	"game_quality_ladder": "质量天梯汇总（§8.8 WP2）：四级 M 项语义（延迟首变帧/豁免纪律/awaiting_review）必须内联在 schema 里，精简会丢掉天梯判定语义（409 token）",
 	"batch_update_scene_files": "场景批量修改（P1）：expect_current 守卫/preserve 清单/类型跟随/dry_run 语义必须内联，精简会丢掉保留特殊配置的守卫语义（452 token）",
 }
 

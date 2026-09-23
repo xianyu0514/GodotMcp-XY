@@ -242,5 +242,6 @@
   "get_game_project_brief": "One call rebuilds the session context: project identity, content volume, task-plan state, verification queues with unverified requirements named one by one, recent changes, and derived next sentences. Read-only.",
   "create_scene_variant": "Create a scene variant by inheritance with property overrides: the variant keeps only its differences, base changes flow in automatically, and later batch retunes keep specials via expect_current.",
   "game_quality_report": "One call runs every quality gate: project health, unverified delivery requirements, task-plan state, config sanity; optionally boots the scene for runtime-error, platform-performance and key-screen gates. Red/green verdict with needs-style fixes.",
-  "create_navigation_region": "Create a NavigationRegion2D with an outline-driven baked navigation polygon in the edited scene: outlines as [x,y] point arrays, agent_radius shrink margin, quiet 4.6 bake path, vertex/polygon counts inline."
+  "create_navigation_region": "Create a NavigationRegion2D with an outline-driven baked navigation polygon in the edited scene: outlines as [x,y] point arrays, agent_radius shrink margin, quiet 4.6 bake path, vertex/polygon counts inline.",
+  "game_quality_ladder": "One call measures every machine rung of the quality ladder: R1 static checks, R2 input latency from a movement hint (first-changed-frame of a per-frame timeline), performance, runtime errors, plus caller-supplied R3/R4 timeline items; agent-judged dimensions return awaiting_review."
 }

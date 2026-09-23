@@ -52,6 +52,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_assert_no_runtime_errors(server_core)
 	_register_verify_change_effect(server_core)
 	_register_game_quality_report(server_core)
+	_register_game_quality_ladder(server_core)
 # ============================================================================
 # Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
 # ============================================================================
@@ -1905,3 +1906,243 @@ func _quality_runtime_gates(scene_path: String, platform: String, sample_seconds
 
 	await editor_tools._tool_stop_project({"allow_window": true})
 	return {"checks": checks, "needs": needs}
+
+# ============================================================================
+# game_quality_ladder（§8.8 WP2）：一次调用测齐 R1-R4 全部 M 项并给出天梯状态。
+# R1/性能/报错/截图复用 game_quality_report full；R2 延迟由 movement hint 驱动的
+# 帧定时时间线实测（轨迹首变帧）；R3/R4 的公平性/覆盖/密度等 M 项由调用方以
+# behavior_check 形状供给（extra_items，按 rung 归类）；A 项一律 awaiting_review。
+# rung_reached = 自下而上首个非全绿之前的最高全绿级；豁免必须带理由。
+# ============================================================================
+
+## 单测注入点：替代 ladder 的运行时测量腿（延迟 + extra_items 执行）。
+var _ladder_run_override: Callable = Callable()
+
+func _register_game_quality_ladder(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"game_quality_ladder",
+		"One call measures every MACHINE rung of the quality ladder (R1 playable / R2 solid / R3 polished / R4 perfect) and returns the ladder state. R1 + performance + runtime errors + key screen reuse game_quality_report full. R2 input LATENCY is measured from a movement hint: a frame-timed timeline presses the action at frame 0, samples the property per frame, and the first-changed-frame IS the latency (<=3 physics frames passes). R3/R4 machine items (fairness telegraph frames, feedback coverage, density — anything timeline-measurable) come as extra_items: behavior_check details labelled with their rung. Agent-judged dimensions are returned as awaiting_review (never faked green). rung_reached is the highest rung with all items green; waivers must carry a reason.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "The scene to boot and measure."},
+				"movement": {"type": "object",
+					"description": "R2 latency hint: {action, node, property (default 'global_position.x'), settle_frames (default 8)}. The timeline presses action at frame 0 and samples node.property per frame."},
+				"extra_items": {"type": "array", "items": {"type": "object"},
+					"description": "R3/R4 machine items: [{requirement, rung: 'r3'|'r4', detail: behavior_check detail (timeline or steps shape)}]."},
+				"waivers": {"type": "array", "items": {"type": "object"},
+					"description": "[{rung, id, reason}] — explicitly waived items keep their rung honest instead of silently passing."},
+				"platform": {"type": "string", "enum": ["desktop", "mobile"], "default": "desktop"},
+				"sample_seconds": {"type": "number", "default": 1.5}
+			},
+			"required": ["scene_path", "movement"]
+		},
+		Callable(self, "_tool_game_quality_ladder"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"rung_reached": {"type": "string", "description": "r1|r2|r3|r4"},
+			"ladder": {"type": "object"},
+			"needs": {"type": "array", "items": {"type": "string"}}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_game_quality_ladder(params: Dictionary) -> Dictionary:
+	var scene_path: String = String(params.get("scene_path", "")).strip_edges()
+	if scene_path.is_empty():
+		return {"error": "scene_path is required (the scene to boot and measure)"}
+	var movement: Dictionary = params.get("movement", {}) if params.get("movement", {}) is Dictionary else {}
+	var action: String = String(movement.get("action", "")).strip_edges()
+	var node: String = String(movement.get("node", "")).strip_edges()
+	if action.is_empty() or node.is_empty():
+		return {"error": "movement hint requires {action, node} for the latency measurement"}
+	var extra_items: Array = []
+	var extras_raw: Variant = params.get("extra_items", [])
+	if extras_raw is Array:
+		for item_value in extras_raw:
+			if item_value is Dictionary:
+				extra_items.append(item_value)
+	var waivers: Array = []
+	var waivers_raw: Variant = params.get("waivers", [])
+	if waivers_raw is Array:
+		for w_value in waivers_raw:
+			if w_value is Dictionary:
+				waivers.append(w_value)
+	var property: String = String(movement.get("property", "global_position.x"))
+	var settle_frames: int = clampi(int(movement.get("settle_frames", 8)), 2, 120)
+	var platform: String = "mobile" if String(params.get("platform", "desktop")) == "mobile" else "desktop"
+
+	# ---- R1 + 性能 + 报错 + 截图：复用 full 报告 ----
+	var report: Dictionary = await _tool_game_quality_report({
+		"scope": "full", "scene_path": scene_path, "platform": platform,
+		"sample_seconds": float(params.get("sample_seconds", 1.5))})
+	if report.has("error"):
+		return {"error": "quality report leg failed: " + str(report.get("error"))}
+	var by_id: Dictionary = {}
+	for check_value in report.get("checks", []):
+		if check_value is Dictionary:
+			by_id[String((check_value as Dictionary).get("id", ""))] = check_value
+
+	# ---- R2 延迟：movement hint -> 帧定时时间线 -> 轨迹首变帧 ----
+	var latency_result: Dictionary
+	if _ladder_run_override.is_valid():
+		latency_result = await _ladder_run_override.call({
+			"kind": "latency", "scene_path": scene_path, "action": action,
+			"node": node, "property": property, "settle_frames": settle_frames})
+	else:
+		latency_result = await _ladder_run_latency(scene_path, action, node, property, settle_frames)
+	var extra_results: Array = []
+	for item_value in extra_items:
+		var item: Dictionary = item_value
+		var detail: Dictionary = item.get("detail", {}) if item.get("detail", {}) is Dictionary else {}
+		var run_result: Dictionary
+		if _ladder_run_override.is_valid():
+			run_result = await _ladder_run_override.call({"kind": "extra", "item": item})
+		else:
+			run_result = await _effect_queue_behavior_run(detail)
+		extra_results.append({
+			"requirement": String(item.get("requirement", "")),
+			"rung": String(item.get("rung", "r3")),
+			"passed": bool(run_result.get("passed", false)) and not run_result.has("error"),
+			"evidence": _ladder_compact_evidence(run_result.get("evidence", {}))})
+
+	# ---- 组装天梯 ----
+	var waivers_by_key: Dictionary = {}
+	for w_value in waivers:
+		var w: Dictionary = w_value
+		waivers_by_key["%s|%s" % [String(w.get("rung", "")), String(w.get("id", ""))]] = String(w.get("reason", ""))
+	var r3_items: Array = []
+	var r4_items: Array = []
+	for result_value in extra_results:
+		var result: Dictionary = result_value
+		var key: String = "%s|%s" % [String(result.get("rung", "")), String(result.get("requirement", ""))]
+		if waivers_by_key.has(key):
+			result["waived"] = true
+			result["waiver_reason"] = waivers_by_key[key]
+		if String(result.get("rung", "r3")) == "r4":
+			r4_items.append(result)
+		else:
+			r3_items.append(result)
+
+	var latency_frames: int = int(latency_result.get("latency_frames", -1))
+	var latency_ok: bool = latency_frames >= 1 and latency_frames <= 3
+	if waivers_by_key.has("r2|input_latency"):
+		latency_ok = true
+
+	var r1_green: bool = _check_green(by_id, "project_health") and _check_green(by_id, "project_config")
+	var r2_green: bool = latency_ok and _check_green(by_id, "performance")
+	var r3_green: bool = _check_green(by_id, "runtime_errors") and _check_green(by_id, "key_screen") \
+		and _all_ok(r3_items)
+	var r4_green: bool = _all_ok(r4_items)
+
+	var rung_reached: String = "r1"
+	if r1_green:
+		rung_reached = "r2"
+		if r2_green:
+			rung_reached = "r3"
+			if r3_green:
+				rung_reached = "r4"
+
+	var needs: Array = []
+	if not r1_green:
+		needs.append("R1: project health/config red — fix before anything else")
+	if not latency_ok and latency_frames < 1:
+		needs.append("R2: latency not measurable — check the movement hint (action bound? node path?)")
+	elif not latency_ok:
+		needs.append("R2: input latency %d frames > 3 — faster response path needed" % latency_frames)
+	if not _check_green(by_id, "performance"):
+		needs.append("R2: performance below the %s profile" % platform)
+	if not _check_green(by_id, "runtime_errors"):
+		needs.append("R3: runtime errors present")
+	for result_value in r3_items:
+		if not bool((result_value as Dictionary).get("passed", false)) and not bool((result_value as Dictionary).get("waived", false)):
+			needs.append("R3: %s failed" % String((result_value as Dictionary).get("requirement", "?")))
+	for result_value in r4_items:
+		if not bool((result_value as Dictionary).get("passed", false)) and not bool((result_value as Dictionary).get("waived", false)):
+			needs.append("R4: %s failed" % String((result_value as Dictionary).get("requirement", "?")))
+
+	return {
+		"status": "success",
+		"rung_reached": rung_reached,
+		"ladder": {
+			"r1": {"status": "green" if r1_green else "red",
+				"checks": [by_id.get("project_health", {}), by_id.get("project_config", {})]},
+			"r2": {"status": "green" if r2_green else "red",
+				"latency_frames": latency_frames,
+				"latency_threshold": 3,
+				"latency_waived": waivers_by_key.has("r2|input_latency"),
+				"performance": by_id.get("performance", {})},
+			"r3": {"status": "green" if r3_green else "red",
+				"runtime_errors": by_id.get("runtime_errors", {}),
+				"key_screen": by_id.get("key_screen", {}),
+				"items": r3_items},
+			"r4": {"status": "green" if r4_green else "red",
+				"m_items": r4_items,
+				"a_items_awaiting_review": [
+					{"id": "visual_coherence", "evidence": "screenshots from key_screen"},
+					{"id": "first_30_seconds", "evidence": "play via timelines, screenshot every 5s, judge controls+goal clarity"},
+					{"id": "balance", "evidence": "multiple runs, look for dominant strategy"},
+					{"id": "stakes", "evidence": "review death cost and victory payoff"}]},
+		},
+		"needs": needs,
+	}
+
+## 延迟测量腿：帧定时时间线（frame0 按下）+ 每帧采样 -> 首变帧。
+func _ladder_run_latency(scene_path: String, action: String, node: String,
+		property: String, settle_frames: int) -> Dictionary:
+	var expression: String = "get_node('%s').%s" % [node, property]
+	var run: Dictionary = await _effect_queue_behavior_run({
+		"scene_path": scene_path,
+		"timeline": {
+			"events": [{"frame": 0, "action": action, "pressed": true}],
+			"settle_frames": settle_frames,
+			"sample": [{"label": "p", "expression": expression}],
+			"assertions": [{"label": "p", "expression": expression,
+				"expected": 1, "operator": "gt",
+				"description": "movement observed in the window"}]}})
+	if run.has("error"):
+		return {"latency_frames": -1, "issue": str(run.get("error"))}
+	var evidence: Dictionary = run.get("evidence", {}) if run.get("evidence", {}) is Dictionary else {}
+	var trajectory: Array = evidence.get("trajectory", []) if evidence.get("trajectory", []) is Array else []
+	return {"latency_frames": ladder_latency_frames(trajectory), "passed": bool(run.get("passed", false))}
+
+## 纯函数（可单测）：轨迹 + 标签 -> 首变帧序号（从未变化返回 -1）。
+## 首样本是步前状态；样本 i 与样本 0 的差 > 0.5 视为"已变"。
+static func ladder_latency_frames(trajectory: Array) -> int:
+	if trajectory.is_empty():
+		return -1
+	var first_value: Variant = null
+	for entry_value in trajectory:
+		if entry_value is Dictionary and (entry_value as Dictionary).get("values", {}) is Dictionary:
+			var values: Dictionary = (entry_value as Dictionary).get("values", {})
+			if values.has("p"):
+				first_value = values["p"]
+				break
+	if first_value == null or not (first_value is float or first_value is int):
+		return -1
+	var base: float = float(first_value)
+	for entry_value in trajectory:
+		if not (entry_value is Dictionary):
+			continue
+		var values: Dictionary = (entry_value as Dictionary).get("values", {}) if (entry_value as Dictionary).get("values", {}) is Dictionary else {}
+		if not values.has("p"):
+			continue
+		if absf(float(values["p"]) - base) > 0.5:
+			return int((entry_value as Dictionary).get("frame_index", 0))
+	return -1
+
+static func _ladder_compact_evidence(evidence: Dictionary) -> Dictionary:
+	var compact: Dictionary = {
+		"evidence_level": String(evidence.get("evidence_level", "")),
+		"assertions_passed": int(evidence.get("assertions_passed", 0)),
+		"assertions_total": int(evidence.get("assertions_total", 0))}
+	return compact
+
+static func _check_green(by_id: Dictionary, id: String) -> bool:
+	return by_id.has(id) and String((by_id.get(id) as Dictionary).get("status", "")) == "green"
+
+static func _all_ok(items: Array) -> bool:
+	for item_value in items:
+		if not (bool((item_value as Dictionary).get("passed", false)) or bool((item_value as Dictionary).get("waived", false))):
+			return false
+	return true

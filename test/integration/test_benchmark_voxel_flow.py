@@ -223,7 +223,7 @@ def main() -> int:
             "create_scene", "open_scene", "create_node", "set_node_subresource",
             "batch_scene_node_edits", "create_script", "save_scene",
             "set_project_setting", "upsert_project_input_action",
-            "run_verification_queue", "install_runtime_probe"]})
+            "run_verification_queue", "install_runtime_probe", "game_quality_ladder"]})
         for action, key in [("move_left", 65), ("move_right", 68), ("jump", 32),
                             ("place", 69), ("destroy", 81), ("save", 75)]:
             tool("upsert_project_input_action", {"action_name": action, "erase_existing": True,
@@ -342,7 +342,33 @@ def main() -> int:
         print(f"  LADDER BASELINE: input latency = {latency_frames} frames "
               f"(~{round((latency_frames or 0) * 1000 / 60)}ms @60Hz)")
 
-        # 3) 天梯豁免纪律（该游戏诚实缺省的维度）
+        # 3) WP2 一键天梯（真机）：movement hint 驱动，含 R1-R4 M 项与 awaiting_review
+        ladder = tool("game_quality_ladder", {
+            "scene_path": SCENE,
+            "movement": {"action": "move_right", "node": "Player"},
+            "platform": "desktop", "sample_seconds": 1.2,
+            "extra_items": [
+                {"requirement": "density_proxy_blocks", "rung": "r3",
+                 "detail": {"timeline": {
+                     "events": [{"frame": 30, "action": "place", "pressed": True},
+                                {"frame": 34, "action": "place", "pressed": False}],
+                     "settle_frames": 20,
+                     "assertions": [{"label": "place_works",
+                         "expression": "get_node('World').blocks.size()", "expected": 1,
+                         "description": "interaction responds (feedback density proxy)"}]}}},
+            ],
+            "waivers": []}, timeout=600.0)
+        rung = str(ladder.get("rung_reached", ""))
+        lat_frames = int(ladder.get("ladder", {}).get("r2", {}).get("latency_frames", -1))
+        print(f"  LADDER TOOL: rung_reached={rung} latency={lat_frames} frames")
+        for entry in ladder.get("ladder", {}).get("r4", {}).get("a_items_awaiting_review", []):
+            print(f"    [awaiting_review] {entry.get('id')}")
+        check("ladder tool runs for real and reports a rung",
+              rung in ("r1", "r2", "r3", "r4"), json.dumps(ladder)[:300])
+        check("ladder latency matches the manual baseline (<=3)",
+              1 <= lat_frames <= 3, f"latency={lat_frames}")
+
+        # 4) 天梯豁免纪律（该游戏诚实缺省的维度）
         print("  LADDER WAIVERS: fairness=N/A (no damage source); audio=waived (no files); "
               "persistence=PROVEN (r4 cross-FRESH)")
 
