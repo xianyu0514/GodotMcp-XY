@@ -244,7 +244,7 @@ Step 2 — For a pillar with NO shipped recipe, run the general loop (this is th
 
 Step 3 — Genre guidance is DATA, not permission: turn-based = state machines and timers, not physics; physics-driven = rigid bodies + applied forces (assert DISPLACEMENT, never vibes); puzzle = deterministic input sequences (play_and_verify deterministic=true, frame-stepped); card/strategy = data tables + rules script, UI via the menu recipe; dialogue/narrative = data + the UI recipe; 3D = same atomic tools (nodes/scripts/expressions are dimension-agnostic) with generate_3d_asset for placeholders.
 
-Step 4 — Quality floor (every game, no exceptions): assert_no_runtime_errors after every milestone; assert_performance_budget once gameplay stabilizes; screenshot key screens; release_export_flow (export smoke) before calling the game done.
+Step 4 — Quality floor (every game, no exceptions): game_quality_report is the one-call version — static after every milestone, full (scene + platform profile: desktop/mobile) once gameplay stabilizes; release_export_flow (export smoke) before calling the game done.
 
 Step 5 — Close honestly: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why, and suggest the next three sentences the user could say (tune a knob / add a pillar / ship it).
 """

@@ -468,8 +468,8 @@ func test_any_game_recipe_carries_the_universal_method():
 	assert_true(text.contains("never summarize past a gap"), "no summarizing past unverified requirements")
 	# 品类无关的品类指南与质量地板
 	assert_true(text.contains("Genre guidance is DATA"), "genre is data, not permission")
-	assert_true(text.contains("assert_no_runtime_errors") and text.contains("assert_performance_budget") and text.contains("release_export_flow"),
-		"quality floor: errors + performance + export smoke")
+	assert_true(text.contains("game_quality_report") and text.contains("desktop/mobile") and text.contains("release_export_flow"),
+		"quality floor: one-call report + platform profiles + export smoke")
 	assert_true(text.contains("did NOT verify"), "closing names the unverified")
 
 func test_menu_recipe_carries_operational_truths():

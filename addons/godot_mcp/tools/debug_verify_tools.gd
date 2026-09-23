@@ -51,6 +51,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_assert_performance_budget(server_core)
 	_register_assert_no_runtime_errors(server_core)
 	_register_verify_change_effect(server_core)
+	_register_game_quality_report(server_core)
 # ============================================================================
 # Progress / 取消支持辅助（配合 mcp_server_core 的 progress 与 cancelled 支持）
 # ============================================================================
@@ -1509,3 +1510,280 @@ static func _parse_header_attrs(header: String) -> Dictionary:
 	for m in regex.search_all(header):
 		attrs[String(m.get_string(1))] = m.get_string(2)
 	return attrs
+
+# ============================================================================
+# game_quality_report（M4 优质硬门槛）：一次调用跑齐质量门禁，红绿灯报告，
+# 每个红灯附 needs 式精确修复。scope=static（默认，无需运行游戏）聚合项目
+# 健康/未验证需求/任务图/主场景/输入映射；scope=full 额外 FRESH 启动指定
+# 场景跑运行时门禁（零报错 + 平台性能画像 + 关键画面截图）。
+# ============================================================================
+
+## 平台性能画像（assert_performance_budget 预算档）。
+const QUALITY_PROFILE_DESKTOP: Dictionary = {
+	"min_p1_fps": 55.0, "max_p95_frame_time_ms": 20.0, "max_node_count": 20000}
+const QUALITY_PROFILE_MOBILE: Dictionary = {
+	"min_p1_fps": 30.0, "max_p95_frame_time_ms": 50.0, "max_node_count": 8000}
+
+## 单测注入点：替代 full 场景的运行时门禁编排（避免依赖编辑器/运行时）。
+var _quality_runtime_gates_override: Callable = Callable()
+
+func _register_game_quality_report(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"game_quality_report",
+		"One call runs every quality gate and returns a red/green report with a needs-style fix per red light. scope='static' (default, no game run): project health (broken scripts, missing/cyclic deps, res:// write traps), unverified delivery requirements named one by one, task-plan state, main-scene and input-map sanity. scope='full' additionally boots the scene FRESH and gates on zero runtime errors, a platform performance profile (desktop/mobile: p1 fps + p95 frame time + node budget) and a key-screen screenshot, then stops. verdict=green only when every check is green; warnings never fake green.",
+		{
+			"type": "object",
+			"properties": {
+				"scope": {"type": "string", "enum": ["static", "full"], "default": "static"},
+				"scene_path": {"type": "string", "description": "full only: the scene to boot for runtime gates."},
+				"platform": {"type": "string", "enum": ["desktop", "mobile"], "default": "desktop",
+					"description": "full only: performance profile tier."},
+				"sample_seconds": {"type": "number", "default": 2.0, "description": "full only: performance sampling window (percentiles need it)."}
+			}
+		},
+		Callable(self, "_tool_game_quality_report"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"scope": {"type": "string"},
+			"verdict": {"type": "string", "description": "green|red"},
+			"checks": {"type": "array"},
+			"needs": {"type": "array", "items": {"type": "string"}}}},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_game_quality_report(params: Dictionary) -> Dictionary:
+	var scope: String = String(params.get("scope", "static"))
+	if scope != "static" and scope != "full":
+		return {"error": "scope must be 'static' or 'full'"}
+	var scene_path: String = String(params.get("scene_path", "")).strip_edges()
+	if scope == "full" and scene_path.is_empty():
+		return {"error": "scope='full' requires scene_path (the scene to boot)"}
+	var platform: String = "mobile" if String(params.get("platform", "desktop")) == "mobile" else "desktop"
+
+	var checks: Array = []
+	var needs: Array = []
+
+	# ---- static 门禁 ---------------------------------------------------------
+	var health: Dictionary = _quality_static_health_check()
+	checks.append(health["check"])
+	for need_value in health.get("needs", []):
+		needs.append(need_value)
+
+	var brief: Dictionary = _quality_brief()
+	checks.append(_quality_check_unverified(brief, needs))
+	checks.append(_quality_check_plan(brief, needs))
+	checks.append(_quality_check_config(needs))
+
+	# ---- full：运行时门禁（FRESH 启动 → 零报错 + 性能画像 + 截图 → 停止）----
+	if scope == "full":
+		if _quality_runtime_gates_override.is_valid():
+			var gates: Dictionary = await _quality_runtime_gates_override.call({
+				"scene_path": scene_path, "platform": platform,
+				"sample_seconds": float(params.get("sample_seconds", 2.0))})
+			for check_value in gates.get("checks", []):
+				checks.append(check_value)
+			for need_value in gates.get("needs", []):
+				needs.append(need_value)
+		else:
+			var runtime_gates: Dictionary = await _quality_runtime_gates(
+				scene_path, platform, float(params.get("sample_seconds", 2.0)))
+			for check_value in runtime_gates.get("checks", []):
+				checks.append(check_value)
+			for need_value in runtime_gates.get("needs", []):
+				needs.append(need_value)
+
+	var verdict: String = "green"
+	for check_value in checks:
+		if String((check_value as Dictionary).get("status", "")) != "green":
+			verdict = "red"
+	return {
+		"status": "success",
+		"scope": scope,
+		"platform": platform if scope == "full" else "",
+		"verdict": verdict,
+		"checks": checks,
+		"needs": needs,
+	}
+
+## 项目健康门禁（组合既有审计：坏脚本/缺失依赖/循环依赖/res:// 写入）。
+func _quality_static_health_check() -> Dictionary:
+	var resources_tools: RefCounted = _quality_module("ProjectResourcesTools")
+	if resources_tools == null or not resources_tools.has_method("_tool_audit_project_health"):
+		return {"check": {"id": "project_health", "status": "red",
+			"detail": "audit module unavailable"}}
+	var audit: Dictionary = resources_tools._tool_audit_project_health({})
+	if audit.has("error"):
+		return {"check": {"id": "project_health", "status": "red",
+			"detail": str(audit.get("error"))}}
+	var summary: Dictionary = audit.get("summary", {}) if audit.get("summary", {}) is Dictionary else {}
+	var status: String = "green"
+	if String(audit.get("status", "")) == "failing":
+		status = "red"
+	elif String(audit.get("status", "")) == "warning":
+		status = "red"  # 质量门禁不放过 warning：res:// 写入也是发布级缺陷
+	var check: Dictionary = {"id": "project_health", "status": status, "detail": summary}
+	var needs: Array = []
+	if int(summary.get("broken_scripts", 0)) > 0:
+		needs.append("%d broken scripts — run detect_broken_scripts for the exact list" % int(summary.get("broken_scripts", 0)))
+	if int(summary.get("missing_dependencies", 0)) > 0:
+		needs.append("%d missing resource dependencies — scan_missing_resource_dependencies names them" % int(summary.get("missing_dependencies", 0)))
+	if int(summary.get("res_write_paths", 0)) > 0:
+		needs.append("%d scripts write res:// (read-only after export) — save under user://" % int(summary.get("res_write_paths", 0)))
+	return {"check": check, "needs": needs}
+
+## 复用会话简报的队列/任务图读数（同源同口径，不另起炉灶）。
+func _quality_brief() -> Dictionary:
+	var project_tools: RefCounted = _quality_module("ProjectToolsNative")
+	if project_tools != null and project_tools.has_method("_tool_get_game_project_brief"):
+		return project_tools._tool_get_game_project_brief({})
+	return {}
+
+func _quality_module(class_key: String) -> RefCounted:
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has(class_key) and instances[class_key] is RefCounted:
+				return instances[class_key]
+	return null
+
+func _quality_check_unverified(brief: Dictionary, needs: Array) -> Dictionary:
+	var verification: Array = brief.get("verification", []) if brief.get("verification", []) is Array else []
+	var unverified_total: int = 0
+	var first_gap: String = ""
+	for entry_value in verification:
+		var entry: Dictionary = entry_value
+		var unverified: Array = entry.get("unverified", []) if entry.get("unverified", []) is Array else []
+		unverified_total += unverified.size()
+		if unverified.size() > 0 and first_gap.is_empty():
+			first_gap = "'%s': %s" % [String(entry.get("goal", "")), ", ".join(unverified)]
+	var status: String = "red" if unverified_total > 0 else "green"
+	if unverified_total > 0:
+		needs.append("close the delivery gap — %s (run_verification_queue advance)" % first_gap)
+	return {"id": "unverified_requirements", "status": status,
+		"detail": {"count": unverified_total}}
+
+func _quality_check_plan(brief: Dictionary, needs: Array) -> Dictionary:
+	var plan: Dictionary = brief.get("task_plan", {}) if brief.get("task_plan", {}) is Dictionary else {}
+	if not bool(plan.get("exists", false)):
+		needs.append("no durable task plan — plan_game_feature makes progress survive sessions")
+		return {"id": "task_plan", "status": "red", "detail": {"exists": false}}
+	var by_status: Dictionary = plan.get("by_status", {}) if plan.get("by_status", {}) is Dictionary else {}
+	var status: String = "green"
+	if int(by_status.get("blocked", 0)) > 0:
+		status = "red"
+		needs.append("%d blocked tasks — manage_task_plan to unblock or replan" % int(by_status.get("blocked", 0)))
+	return {"id": "task_plan", "status": status, "detail": by_status}
+
+func _quality_check_config(needs: Array) -> Dictionary:
+	var main_scene: String = String(ProjectSettings.get_setting("application/run/main_scene", ""))
+	var input_count: int = 0
+	for setting in ProjectSettings.get_property_list():
+		if String(setting.get("name", "")).begins_with("input/"):
+			input_count += 1
+	var status: String = "green"
+	if main_scene.is_empty():
+		status = "red"
+		needs.append("no main scene set — set_project_setting('application/run/main_scene', <scene>)")
+	if input_count == 0:
+		status = "red"
+		needs.append("no input actions — the input map is the first thing make_first_game builds for a reason")
+	return {"id": "project_config", "status": status,
+		"detail": {"main_scene": main_scene, "input_actions": input_count}}
+
+## 运行时编排所需模块：注册表优先，load() 兜底（跨模块协作既有模式）。
+func _quality_runtime_module(class_key: String, script_path: String) -> RefCounted:
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has(class_key) and instances[class_key] is RefCounted:
+				return instances[class_key]
+	var loaded: Resource = load(script_path)
+	if loaded is GDScript:
+		return (loaded as GDScript).new()
+	return null
+
+## full 场景运行时门禁：探针 → FRESH 启动 → 就绪 → 零报错 + 性能画像 + 截图 → 停止。
+func _quality_runtime_gates(scene_path: String, platform: String, sample_seconds: float) -> Dictionary:
+	var checks: Array = []
+	var needs: Array = []
+	var editor_tools: RefCounted = _quality_runtime_module("EditorToolsNative",
+		"res://addons/godot_mcp/tools/editor_tools_native.gd")
+	var bridge_tools: RefCounted = _quality_runtime_module("DebugBridgeTools",
+		"res://addons/godot_mcp/tools/debug_bridge_tools.gd")
+	var runtime_tools: RefCounted = _get_runtime_tools()
+	if runtime_tools == null:
+		runtime_tools = _quality_runtime_module("DebugRuntimeTools",
+			"res://addons/godot_mcp/tools/debug_runtime_tools.gd")
+
+	var probe: Dictionary = await bridge_tools._tool_install_runtime_probe(
+		{"node_name": "MCPRuntimeProbe", "persistent": true})
+	if probe.has("error") and String(probe.get("status", "")) != "already_installed":
+		checks.append({"id": "runtime_errors", "status": "red", "detail": "probe install failed: " + str(probe.get("error"))})
+		return {"checks": checks, "needs": needs}
+	var run: Dictionary = await editor_tools._tool_run_project({"scene_path": scene_path, "allow_window": true})
+	if run.has("error") or String(run.get("status", "")) == "error":
+		checks.append({"id": "runtime_errors", "status": "red",
+			"detail": "run_project failed: " + str(run.get("error", run.get("game_status", "")))})
+		return {"checks": checks, "needs": needs}
+	# 就绪等待（与验证队列同模式）。
+	var deadline_ms: int = Time.get_ticks_msec() + 20000
+	var session_ready: bool = false
+	while Time.get_ticks_msec() < deadline_ms:
+		var sessions: Dictionary = await bridge_tools._tool_get_debugger_sessions({})
+		var list: Array = sessions.get("sessions", []) if sessions.get("sessions", []) is Array else []
+		for session_value in list:
+			if session_value is Dictionary and bool((session_value as Dictionary).get("active", false)):
+				var info: Dictionary = await runtime_tools._tool_get_runtime_info({"timeout_ms": 2000})
+				if int(info.get("node_count", 0)) > 0:
+					session_ready = true
+				break
+		if session_ready:
+			break
+		await Engine.get_main_loop().process_frame
+	if not session_ready:
+		await editor_tools._tool_stop_project({"allow_window": true})
+		checks.append({"id": "runtime_errors", "status": "red", "detail": "runtime never became observable"})
+		return {"checks": checks, "needs": needs}
+
+	# 门禁 1：运行时零报错。
+	var errors_gate: Dictionary = _tool_assert_no_runtime_errors({"count": 200})
+	var error_count: int = int(errors_gate.get("error_count", 0))
+	var error_status: String = "red" if error_count > 0 else "green"
+	if error_count > 0:
+		var first_error: String = ""
+		var error_events: Array = errors_gate.get("errors", []) if errors_gate.get("errors", []) is Array else []
+		if not error_events.is_empty() and (error_events[0] is Dictionary):
+			first_error = (String((error_events[0] as Dictionary).get("message", ""))).substr(0, 120)
+		needs.append("%d runtime errors — first: %s" % [error_count, first_error])
+	checks.append({"id": "runtime_errors", "status": error_status, "detail": {"count": error_count}})
+
+	# 门禁 2：平台性能画像（分位数需要采样窗口）。
+	var profile: Dictionary = QUALITY_PROFILE_MOBILE if platform == "mobile" else QUALITY_PROFILE_DESKTOP
+	var perf: Dictionary = await _tool_assert_performance_budget({
+		"budget": profile, "sample_seconds": maxf(sample_seconds, 1.0)})
+	var perf_status: String = "red" if not bool(perf.get("passed", false)) or perf.has("error") else "green"
+	var perf_checks: Array = perf.get("checks", []) if perf.get("checks", []) is Array else []
+	for perf_check_value in perf_checks:
+		if perf_check_value is Dictionary and not bool((perf_check_value as Dictionary).get("passed", true)):
+			needs.append("perf %s: actual %s vs limit %s" % [
+				String((perf_check_value as Dictionary).get("metric", "")),
+				str((perf_check_value as Dictionary).get("actual", "?")),
+				str((perf_check_value as Dictionary).get("limit", "?"))])
+	checks.append({"id": "performance", "status": perf_status,
+		"detail": {"platform": platform, "budget": profile, "checks": perf_checks}})
+
+	# 门禁 3：关键画面截图（存证，差异基线由 assert_visual_baseline 另行判定）。
+	var shot: Dictionary = await runtime_tools._tool_get_runtime_screenshot({
+		"save_path": "user://mcp_quality_report.%s" % ("png"),
+		"format": "png"})
+	var shot_status: String = "green" if not shot.has("error") else "red"
+	if shot.has("error"):
+		needs.append("key-screen screenshot failed: " + str(shot.get("error")))
+	checks.append({"id": "key_screen", "status": shot_status,
+		"detail": {"save_path": String(shot.get("save_path", ""))}})
+
+	await editor_tools._tool_stop_project({"allow_window": true})
+	return {"checks": checks, "needs": needs}

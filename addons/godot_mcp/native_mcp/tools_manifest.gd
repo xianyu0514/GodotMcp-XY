@@ -104,6 +104,7 @@ const TOOLS: Dictionary = {
 	"find_script_symbol_references": {"category": "supplementary", "group": "Script-Advanced"},
 	"fix_resource_uid": {"category": "supplementary", "group": "Project-Advanced"},
 	"generate_3d_asset": {"category": "supplementary", "group": "Project-Advanced"},
+	"game_quality_report": {"category": "supplementary", "group": "Debug-Advanced"},
 	"generate_asset": {"category": "supplementary", "group": "Project-Advanced"},
 	"gather_task_context": {"category": "supplementary", "group": "Project-Advanced"},
 	"get_class_api_metadata": {"category": "supplementary", "group": "Project-Advanced"},
