@@ -333,6 +333,8 @@ func test_plugin_shipped_making_recipes_registered():
 	assert_true("make_game_boss" in names, "boss recipe ships with the plugin")
 	assert_true("make_game_ranged_enemy" in names, "ranged-enemy recipe ships with the plugin")
 	assert_true("make_first_game" in names, "first-game entry recipe ships with the plugin")
+	assert_true("make_game_camera" in names, "camera recipe ships with the plugin")
+	assert_true("make_game_particles" in names, "particles recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -401,6 +403,29 @@ func test_ranged_recipe_carries_operational_truths():
 		"leak and range gates in the contract")
 	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
 	assert_true(text.contains("verify_change_effect"))
+
+func test_camera_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_camera").call({"goal": "soft follow"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.to_lower().contains("presets as data"), "camera is property data, not scripts")
+	assert_true(text.contains("position_smoothing") and text.contains("limit_"),
+		"smoothing + world limits named as the knobs")
+	assert_true(text.contains("timeline"), "contract uses the one-round-trip timeline")
+	assert_true(text.to_lower().contains("fresh"), "per-item isolation")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_particles_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_particles").call({"goal": "hit sparks"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.to_lower().contains("particles are data"), "vfx is material data")
+	assert_true(text.contains("one_shot") and text.contains("explosiveness"),
+		"burst preset semantics named")
+	assert_true(text.contains("re-arm") or text.contains("re-armed"),
+		"the one_shot re-arm trap baked in")
+	assert_true(text.contains("set_node_subresource"), "inline sub-resource path named")
+	assert_true(text.contains("timeline") and text.contains("verify_change_effect"))
 
 func test_first_game_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()

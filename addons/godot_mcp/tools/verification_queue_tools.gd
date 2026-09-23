@@ -45,7 +45,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_run_verification_queue(server_core: RefCounted) -> void:
 	var tool_name: String = "run_verification_queue"
-	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check items each boot a FRESH run of the scene (full isolation - do not assume state from a previous item carries over; an item that needs a dead enemy must kill it itself); the queue drives the session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
+	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check items each boot a FRESH run of the scene (full isolation - do not assume state from a previous item carries over; an item that needs a dead enemy must kill it itself); detail may carry a 'timeline' ({events, sample, assertions}) replayed frame-accurately in ONE probe round trip with in-game final assertions; the queue drives the session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -463,6 +463,10 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 		"assertions": detail.get("assertions", []),
 		"deterministic": bool(detail.get("deterministic", false)),
 	}
+	# timeline 透传（M7）：契约项可用单次往返的帧定时时间线——每个需求
+	# 的验证从 N 次网络往返降到 1 次，且免疫网络抖动。
+	if detail.has("timeline") and detail.get("timeline", {}) is Dictionary:
+		verify_params["timeline"] = detail.get("timeline", {})
 	if detail.has("timeout_ms"):
 		verify_params["timeout_ms"] = int(detail["timeout_ms"])
 	var report: Dictionary = await verify_tools._tool_play_and_verify(verify_params)

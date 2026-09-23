@@ -52,6 +52,24 @@ func test_behavior_check_executes_and_records_native_evidence() -> void:
 		"native execution must be distinguishable from external claims")
 	assert_eq(String(evidence.get("scene_path", "")), "res://scenes/arena.tscn")
 
+func test_behavior_check_passes_timeline_through() -> void:
+	# M7：契约项可携带 timeline（单次往返帧定时时间线）——执行器必须透传给
+	# play_and_verify，否则该能力对契约不可用。
+	var seen: Dictionary = {}
+	_tools._behavior_run_override = func(detail: Dictionary) -> Dictionary:
+		seen["timeline"] = detail.get("timeline", null)
+		return {"passed": true, "evidence": {"evidence_level": "native_run", "assertions_total": 1, "assertions_passed": 1}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "camera contract",
+		"items": [{"kind": "behavior_check", "label": "follow",
+			"detail": {"scene_path": "res://scenes/level_01.tscn",
+				"steps": [{"wait_ms": 100}],
+				"timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}],
+					"assertions": [{"label": "cam_x", "expected": 300, "operator": "gte"}]}}}]})
+	assert_false(result.has("error"), str(result))
+	assert_true(seen.get("timeline", null) is Dictionary, "timeline reached the executor verbatim")
+	assert_true((seen.get("timeline", {}) as Dictionary).has("events"), "events intact")
+
 func test_behavior_check_failure_fails_the_queue() -> void:
 	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
 		return {"passed": false, "evidence": {

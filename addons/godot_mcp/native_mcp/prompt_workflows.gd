@@ -389,6 +389,40 @@ Step 4 — Polish by pointer, not improvisation: feel -> make_game_juice; audio 
 
 Step 5 — Close honestly and HAND OFF: checklist verbatim, unverified named; record the built loop as done tasks via manage_task_plan (durable progress); then tell the user the next session opens with ONE call — get_game_project_brief rebuilds everything without re-discovery, and shipping later is the chain: game_quality_report full -> bump_version -> release_export_flow (+ manage_localization for bilingual).
 """
+const GAME_CAMERA_RECIPE_TEMPLATE: String = """
+You are executing the "Game Camera" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "camera scene node property verify"}}
+
+Step 1 — Locate the player with gather_task_context (never assume names). A camera is PRESETS AS DATA on one Camera2D node, not code: platformer-follow = position_smoothing_enabled + position_smoothing_speed (lag/catch-up) + limit_left/right (world bounds — the camera stops at edges while the player keeps moving); top-down follow = smoothing + optional limit_top/bottom; locked = no smoothing (rigid). Create the node (on_name_conflict=skip) with batch_scene_node_edits property sets — every knob is a built-in Camera2D property, zero scripts.
+
+Step 2 — Placement truths: the camera may be the player's CHILD (rigid follow, offset baked) or a SIBLING with smoothing (lag) — pick by feel, both legal. Limits are WORLD-space pixels and only matter once the level is larger than the viewport. Multiple cameras: only one is current; make sure exactly one has enabled=true or the wrong one wins silently. Shake later needs this camera to exist (the juice recipe's shake moves it — never assume).
+
+Step 3 — Contract with the ONE-ROUND-TRIP timeline (frame-timed, jitter-immune): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["camera_follows_player", "camera_respects_limits"], "items": [{"kind": "behavior_check", "requirement": "camera_follows_player", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}, {"frame": 90, "action": "move_right", "pressed": false}], "settle_frames": 30, "sample": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x"}], "assertions": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x", "expected": 300, "operator": "gte", "description": "camera tracked the run"}]}}}]}} — each item boots a FRESH run; sampling cam_x per frame gives the follow CURVE (lag then catch-up), and the limits item walks into a wall and asserts the camera clamped. Zero-assertion runs are smoke; the strict contract rejects them.
+
+Step 4 — Tuning is data: smoother/laggier = position_smoothing_speed down/up; show more ahead = drag margins or an offset; after ANY change verify_change_effect proves it reached the running game.
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (per-level limits via batch_update_scene_files with expect_current keeping arena specials / zoom punch on hit via the juice recipe).
+"""
+
+const GAME_PARTICLES_RECIPE_TEMPLATE: String = """
+You are executing the "Game Particles / VFX" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+
+Goal: {{goal}}
+
+Step 1 — Locate the events with gather_task_context (hit lands, pickup, death, ambience). PARTICLES ARE DATA on a GPUParticles2D node: the process material (ParticleProcessMaterial) carries the knobs — direction/spread, initial velocity, gravity, scale curve, color. Presets: hit_burst = one_shot + explosiveness 1.0 + small amount + short lifetime (fires once per event); ambient = looping + low amount + long lifetime + gentle drift; confetti_pickup = burst + spread 180 + gravity + hue via color ramp.
+
+Step 2 — Wiring truths: set the process material as an INLINE sub-resource via set_node_subresource (knobs stay data, no .gd needed); a burst fires by setting emitting=true FROM the event signal (never per-frame polls); one_shot bursts reset themselves — set emitting=false then true to re-arm before the next burst, or the second hit shows nothing; without a texture particles render as default squares (assign one via generate_asset placeholder if the project has none).
+
+Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["burst_fires_on_event", "burst_completes", "ambient_loops"], "items": [{"kind": "behavior_check", "requirement": "burst_completes", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "attack", "pressed": true}, {"frame": 5, "action": "attack", "pressed": false}], "settle_frames": 90, "sample": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting"}], "assertions": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting", "expected": false, "description": "one_shot burst finished and re-armed"}]}}}]}} — the per-frame emitting sample shows fire-then-complete as a curve, not a vibe. FRESH run per item; the item that needs a hit deals it itself.
+
+Step 4 — Tuning is material data: bigger blast = spread/velocity/amount up; after ANY change verify_change_effect proves it reached the running game; per-scene special bursts survive batch retunes via expect_current.
+
+Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (wire a new event / trails via the juice recipe / color ramp per damage type).
+"""
+
 
 
 
@@ -667,6 +701,22 @@ func _register_all() -> void:
 		],
 		Callable(self, "_get_make_first_game")
 	)
+	_add_prompt(
+		"make_game_camera",
+		"Camera presets as pure data on one Camera2D — platformer follow (smoothing + world limits), top-down, locked — zero scripts, contract-proven via the ONE-round-trip frame-timed timeline (follow curve sampled per frame, limits clamp at walls).",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'platformer camera with soft follow and level bounds' / 'hit sparks and pickup confetti'.", "required": true}
+		],
+		Callable(self, "_get_make_game_camera")
+	)
+	_add_prompt(
+		"make_game_particles",
+		"VFX as data: hit bursts (one_shot + explosiveness 1, re-armed before the next hit), ambient loops, pickup confetti — inline ParticleProcessMaterial sub-resources, event-signal fired, contract shows fire-then-complete as a sampled curve.",
+		[
+			{"name": "goal", "description": "What is wanted, e.g. 'platformer camera with soft follow and level bounds' / 'hit sparks and pickup confetti'.", "required": true}
+		],
+		Callable(self, "_get_make_game_particles")
+	)
 
 func _add_prompt(name: String, description: String, arguments: Array[Dictionary], callable: Callable) -> void:
 	_prompts[name] = {
@@ -721,7 +771,11 @@ const PROMPT_KEYWORDS: Dictionary = {
 	"make_game_ranged_enemy": ["ranged enemy", "archer", "shooter", "projectile", "turret",
 		"远程敌人", "弓箭手", "射手", "炮塔", "投掷"],
 	"make_first_game": ["first game", "from scratch", "empty project", "brand new game", "start a game",
-		"第一个游戏", "从零开始", "空项目", "新游戏"]
+		"第一个游戏", "从零开始", "空项目", "新游戏"],
+	"make_game_camera": ["camera follow", "camera setup", "camera limits", "camera preset",
+		"镜头跟随", "相机设置", "摄像机", "镜头限制"],
+	"make_game_particles": ["particles", "vfx", "particle effect", "hit sparks", "confetti",
+		"粒子", "特效", "打击火花"]
 }
 
 ## 目标语句命中的第一个配方（关键词出现即命中，长关键词优先）；
@@ -910,6 +964,14 @@ func _get_make_game_ranged_enemy(args: Dictionary) -> Dictionary:
 
 func _get_make_first_game(args: Dictionary) -> Dictionary:
 	return _render(FIRST_GAME_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_camera(args: Dictionary) -> Dictionary:
+	return _render(GAME_CAMERA_RECIPE_TEMPLATE, args, ["goal"])
+
+
+func _get_make_game_particles(args: Dictionary) -> Dictionary:
+	return _render(GAME_PARTICLES_RECIPE_TEMPLATE, args, ["goal"])
 
 
 func _get_make_game_change(args: Dictionary) -> Dictionary:
