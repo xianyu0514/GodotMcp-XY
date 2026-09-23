@@ -21,6 +21,7 @@
 
 | 实现 | 架构 | 工具数 | 传输 | 资源/提示支持 | 安全 | 活跃度（⭐ / 最后推送） |
 |---|---|---|---|---|---|---|
+| **hi-godot/godot-ai**（2026-09 新晋强竞品） | GDScript 插件 + **Python(uv) 桥**：stdio attach → Python HTTP:8000 → 插件 WebSocket:9500（旋转能力、仅回环） | **46 工具 / 120+ 操作**（14 常驻 + `<domain>_manage` 卷积：scene/node/script/material/audio/particle/camera/tilemap/tileset/**gridmap/navigation/CSG**/visual-shader/theme/ui/filesystem/test…） | stdio attach | **无 prompts**；MCP resources 丰富（`godot://` 15+：类文档/节点属性/材质/着色器） | 旋转能力认证 + 仅回环 + 签名发布；**默认遥测（可退）** | **2563⭐ / 155F**（2026-04 建，当日仍活跃），CI+codecov，Discord，一键更新/客户端自动配置（10+），C# 文本级支持 | 
 | **Coding-Solo/godot-mcp**（最流行 Godot MCP） | Node/TS bridge：`npx @coding-solo/godot-mcp` 启动 Godot CLI + 内置 `godot_operations.gd` JSON 驱动脚本 | **~14**（launch_editor / run_project / get_debug_output / stop_project / create_scene / add_node / load_sprite / save_scene / get_uid 等） | stdio | 无 resources / 无 prompts | ⚠️ 曾报 RCE（#64 未消毒 projectPath）、autoload 注入（#112）；无 auth | **5301⭐ / 460F**，2026-04 仍在推 |
 | **yurineko73/Godot-MCP-Native（本项目）** | 纯 GDScript `EditorPlugin` 原生实现，无任何外部依赖 | **232**（28 核心 + 198 补充 + 6 meta，6 大类 + meta） | HTTP/SSE `:9080` + stdio | resources ✓；prompts **capability 已声明但 0 个已注册**；`instructions` ✓（渐进披露引导，业界罕见） | Bearer Token（HTTP）；path_validator 路径校验；原生插件不引入额外攻击面 | **716⭐ / 66F**，16 open issues，2026-08 活跃 |
 | **IvanMurzak/Godot-MCP** | C# 编辑器 addon（NuGet 反射栈与 Unity-MCP 共享）+ 云端 ai-game.dev 或自托管 MCP server | **42**（12 families） | stdio / 云端 HTTP（OAuth 2.1 设备登录） | 无独立 prompts；有"自然对话" | 云端账号体系；自托管可选 | 220⭐，2026-08 活跃 |
@@ -232,3 +233,38 @@
 ---
 
 *报告由 MCP 生态调研生成；star/issue 数据来自 GitHub API 实时抓取（2026-08），工具数量来自各仓库 README。*
+
+
+---
+
+## 8. hi-godot/godot-ai 对位分析与超越计划（2026-09-23 增补）
+
+### 对位事实
+
+**他们的强项（一手证据：README + docs/TOOLS.md）**
+- 创作便利广度：material/visual-shader/particle/camera/gridmap/navigation/CSG 卷积工具 + 预设（fade/slide/shake/pulse 等）
+- `game_manage(input_sequence)`：**一次调用**下发帧定时输入时间线（每步按帧应用 + settle_frames，单次往返可复现）
+- editor_screenshot 四模式 + **Vision Routing**（无视觉客户端拿文字描述）
+- 分发成熟度：签名发布、一键更新/迁移、10+ 客户端自动配置、遥测、Discord、CI+codecov
+- MCP resources 深（godot:// 类文档/节点/材质/着色器）；插件自热重载；C# 文本级
+
+**我们的护城河（全部有测试证据）**
+- **可信自主开发闭环**：strict 需求契约（零假完成按构造成立）+ verify_change_effect 六步链（内嵌副本/未保存缓冲/实例覆盖点名修复）+ 证据门禁目标 DAG——对方全无对等物
+- 行为验证深度：play_and_verify 步内断言/位移语义（陈旧快照拒绝）/帧步进/轨迹度量 + 性能分位预算 + 视觉基线 + 运行时报错门禁 + game_quality_report 红绿灯
+- 方法论分发：22 个可执行配方（操作真理内联）；注意力经济（路由 ≤8 + token 门禁 + 会话简报一次调用续会话）
+- 零依赖原生（无 Python/uv）；243 原子工具 + 8 步出厂流程
+
+**诚实差距**：3D/视觉创作便利（navigation 烘焙、gridmap、CSG、材质/着色器/粒子/相机预设）无专工具；
+单调用帧定时时间线；Vision Routing；分发与自动配置体验；MCP resources 深度。
+
+### 超越计划（按杠杆排序）
+
+| 包 | 内容 | 判定 |
+| --- | --- | --- |
+| **M6 视觉/3D 创作包** | 着色器 create/patch/预设、材质参数/预设、粒子预设、相机预设（follow/limits/damping）、navigation region 创建+**烘焙**、CSG、gridmap；优先配方化（K-原则：能配方的先配方，不新工具） | 关闭用户肉眼可见的最大差距 |
+| **M7 单调用帧定时时间线** | 探针增 apply_timeline 命令（一次往返按帧应用步骤表）+ play_and_verify timeline 模式（保留断言语义） | 对齐对方的 input_sequence 且更强（带断言） |
+| **M8 分发/信任 UX** | 一键客户端配置（已有生成器，升级为一键）、发布签名/更新检查、resources 扩到 godot:// 深度；**"零遥测 by design"作为隐私差异点** | 对齐体验，放大隐私差异 |
+| **护城河持续** | "自主 1 小时构建、零假完成"对比演示（同一任务双平台跑，我方出证据清单） | 把不可模仿的哲学变成可感知的营销 |
+
+胜负手：他们赢在**广度便利与分发**，我们赢在**可信与自主**。创作包（M6）关闭感知差距后，
+"AI 独立干活几小时、每个完成都有证据"是他们短期内难以复制的结构性优势（需要整套验证引擎+诚实哲学）。
