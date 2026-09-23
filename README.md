@@ -147,6 +147,10 @@ See [Configuration](docs/configuration.md) for transports, auth, CLI overrides, 
 
 Issues and pull requests are welcome. Read [Contributing](docs/contributing.md) before adding tools or changing MCP behavior so code, tests, translations and docs stay in sync.
 
+## Privacy: zero telemetry by design
+
+This plugin collects NOTHING — no usage events, no project names, no identifiers, no phone-home of any kind. All processing stays in your editor; the only network surface is the local MCP transport you configure. (Some MCP Godot plugins ship with opt-out usage telemetry; we ship with none to opt out of.)
+
 ## License
 
 Released under the [MIT License](LICENSE).

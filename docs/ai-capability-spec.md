@@ -72,7 +72,11 @@ SCOPE FACT / LOAD-BEARING FACTS / PROOF SHAPE / AVAILABLE KNOWLEDGE 四段式）
 可得知识（后续能力清单）；`A before B` 类次序指令改写为"A 是 B 的依赖"的依赖陈述，
 顺序由 AI 自行推断。短语测试同步改为钉声明式形态（含"无 Step 1"反向断言）。
 
-**剩余债（24 个参照配方）**：make_game_change/character/melee_enemy/menu/map/pickup/
+**全部迁移完成（2026-09-23）**：24 个参照配方的命令式头部已系统性转换
+（开头框架句 → DECLARATIVE KNOWLEDGE CARD；92 个 "Step N —" 编号头部 → 主题式知识区；
+显式次序措辞 → 依赖陈述）。正文知识（真理/契约形状）保留原样——那是"什么恒真"，
+不是"做什么"。原债清单（留档）：
+make_game_change/character/melee_enemy/menu/map/pickup/
 save/juice/audio/boss/ranged_enemy/camera/particles/shader/perfect 及工具类 prompt
 （plan/debug/review/visual/test/onboard/iterate/release/fix）。参照配方经能力卡声明为
 "可选知识、永不强制"（both legal），故此项为一致性债而非性能债，按接触顺序渐进迁移

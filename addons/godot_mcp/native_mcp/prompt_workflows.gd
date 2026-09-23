@@ -13,18 +13,18 @@ extends RefCounted
 # ============================================================================
 
 const PLAN_GAME_FEATURE_TEMPLATE: String = """
-You are executing the "GDD to Task Graph" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: follow the steps and call the tools in order.
 
 Goal: {{goal}}
 GDD / feature summary: {{gdd_summary}}
 
-Step 1 — Initialize the plan:
+Initialize the plan:
 {"tool": "manage_task_plan", "args": {"action": "init", "goal": "{{goal}}", "reset": false}}
 reset:false refuses to overwrite an existing healthy plan; use reset:true only when you
 intend to discard the previous plan.
 
-Step 2 — Add tasks with dependencies and gated DoD:
+Add tasks with dependencies and gated DoD:
 Break the summary into one task per vertical-slice step. Every Definition-of-Done (DoD)
 criterion that can be measured objectively carries a "gate"; inherently manual criteria omit it.
 {"tool": "manage_task_plan", "args": {"action": "add_task", "task": {"title": "<task title>", "tags": ["<tag>"], "dod": [{"criterion": "<objective criterion>"}]}}}
@@ -34,11 +34,11 @@ Gate cheat-sheet: performance_budget (budget: min_fps >=, max_frame_time_ms / ma
 no_runtime_errors (max_errors, default 0), visual_baseline (max_diff_pixels and/or max_diff_ratio).
 A missing observed metric counts as a failure — you can't prove it, so it isn't met.
 
-Step 3 — Verify the graph is sound:
+Verify the graph is sound:
 {"tool": "manage_task_plan", "args": {"action": "get"}}
 Confirm: no cycle error, every depends_on resolves, and progress totals look right.
 
-Step 4 — Hand off to execution:
+Hand off to execution:
 {"tool": "manage_task_plan", "args": {"action": "next"}}
 next returns dependency-ready tasks plus blocked tasks and progress. Take the first ready
 task and run the single-slice loop (execute -> run -> verify -> fix) on it.
@@ -48,7 +48,7 @@ criterion has a gate, get reports no cycles, and next returns at least one ready
 """
 
 const DEBUG_RUNTIME_ERROR_TEMPLATE: String = """
-You are executing the "Runtime Error Debugging" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: follow the loop and call the tools in order.
 
 Reported error:
@@ -72,7 +72,7 @@ Stop and ask a human only if the fix would require a design decision or would re
 """
 
 const REVIEW_SCENE_TEMPLATE: String = """
-You are executing the "Scene Structure Review" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: call the tools in order and report findings.
 
 {{focus_block}}
@@ -91,7 +91,7 @@ persistence/inheritance issues, and a prioritized fix list with the smallest saf
 """
 
 const RUN_TEST_SUITE_TEMPLATE: String = """
-You are executing the "Run Test Suite" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: call the tools in order.
 
 {{target_dir_block}}
@@ -109,7 +109,7 @@ This is an executable workflow template: call the tools in order.
 """
 
 const VISUAL_PLAYTEST_TEMPLATE: String = """
-You are executing the "Visual Playtest" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: run the loop and call the tools in order.
 
 Scenario: {{scenario}}
@@ -130,7 +130,7 @@ Scenario: {{scenario}}
 """
 
 const ONBOARD_NEW_PROJECT_TEMPLATE: String = """
-You are executing the "New Project Onboarding" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: call the tools in order.
 
 1. {"tool": "get_project_info", "args": {}} — project name, version, renderer, main scene, feature tags.
@@ -145,7 +145,7 @@ you noticed, available tooling, and a recommended first task.
 """
 
 const FIX_COMPILE_ERRORS_TEMPLATE: String = """
-You are executing the "Fix Compile Errors" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: run the loop until validation is clean.
 
 Script paths: {{script_paths_block}}
@@ -165,59 +165,59 @@ Script paths: {{script_paths_block}}
 
 
 const CHARACTER_RECIPE_TEMPLATE: String = """
-You are executing the "Character Visuals + Hit Feedback" recipe against the Godot project through MCP tools. Everything here ships WITH the plugin — no external scripts.
+DECLARATIVE KNOWLEDGE CARD — you decide everything; only claims need evidence.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset (supplementary tools are off by design):
+Activate toolset (supplementary tools are off by design):
 {"tool": "enable_tools", "args": {"workflow_query": "{{goal}}"}}
 
-Step 1 — Locate the existing player (never assume node names):
+Locate the existing player (never assume node names):
 {"tool": "gather_task_context", "args": {"goal": "{{goal}} player visual"}}
 scene_objects classifies each scene's nodes by role (body/visual/collision/camera/audio). Bind to a scene whose root is the CharacterBody2D when possible; instanced players bind their instance_of source; per-scene player children bind directly.
 
-Step 2 — Ensure the Skin component (idempotent; re-runs update, never duplicate):
+Ensure the Skin component (idempotent; re-runs update, never duplicate):
 Create res://scripts/player/character_skin.gd (Sprite2D script: idle/move rows from one sheet, facing flip, pixel_offset pivot alignment, use_block_visual toggle keeps the original ColorRect reachable), then ensure the node with {"tool": "create_node", "args": {"parent_path": "<player>", "node_type": "Sprite2D", "node_name": "Skin", "on_name_conflict": "skip"}} and attach via batch attach_script — it saves an EXTERNAL reference (updates to the .gd reach the game).
 
-Step 3 — Ensure the HitFeedback component (idempotent): a Node2D script with flash_color/flash_seconds, one-shot particles, camera_shake (auto-creates a Camera2D when the scene has none — shake must never silently no-op), and hitstop (Engine.time_scale dip with an ignore_time_scale timer). Wire it into the existing damage entry by apply_change_set: read_script for the hash, replace the block that plays the hit SFX with the same block plus a play_hit_feedback call. No damage entry yet? Attach the component and say so — do not invent wiring.
+Ensure the HitFeedback component (idempotent): a Node2D script with flash_color/flash_seconds, one-shot particles, camera_shake (auto-creates a Camera2D when the scene has none — shake must never silently no-op), and hitstop (Engine.time_scale dip with an ignore_time_scale timer). Wire it into the existing damage entry by apply_change_set: read_script for the hash, replace the block that plays the hit SFX with the same block plus a play_hit_feedback call. No damage entry yet? Attach the component and say so — do not invent wiring.
 
-Step 4 — Sheet (placeholder when the user has none): {"tool": "generate_asset", "args": {"resource_path": "res://art/player_skin.tres", "prompt": "player sheet", "type": "sprite", "provider": "placeholder", "pattern": "sprite_sheet", "width": 120, "height": 60, "frame_columns": 4, "frame_rows": 2, "colors": [{"r": 0.25, "g": 0.55, "b": 0.95}, {"r": 0.98, "g": 0.85, "b": 0.35}]}} — .tres is immediately referenceable. A user-provided PNG needs an import scan first.
+Sheet (placeholder when the user has none): {"tool": "generate_asset", "args": {"resource_path": "res://art/player_skin.tres", "prompt": "player sheet", "type": "sprite", "provider": "placeholder", "pattern": "sprite_sheet", "width": 120, "height": 60, "frame_columns": 4, "frame_rows": 2, "colors": [{"r": 0.25, "g": 0.55, "b": 0.95}, {"r": 0.98, "g": 0.85, "b": 0.35}]}} — .tres is immediately referenceable. A user-provided PNG needs an import scan first.
 
-Step 5 — Verify with a requirement contract (the delivery checklist is plugin-built). Shape (fill the items with one behavior_check per requirement, built per the facts below — each item boots a FRESH run and must be self-contained):
+Verify with a requirement contract (the delivery checklist is plugin-built). Shape (fill the items with one behavior_check per requirement, built per the facts below — each item boots a FRESH run and must be self-contained):
 {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "flash", "shake", "particles", "hitstop"], "items": [{"kind": "behavior_check", "requirement": "movement", "label": "r1", "detail": {"scene_path": "<scene>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 600, "assert": {"expression": "<expr>", "displacement_min": 60, "description": "movement held"}}]}}]}} Assert per-effect audit fields, not vibes: flash set then recovered, shake magnitude >= 1 and reset, particles emitted, hitstop engaged and restored, movement displacement. Advance slices to a terminal state and read the checklist: ANY requirement not verified = the overall outcome is incomplete — report it as incomplete.
 """
 
 const MELEE_ENEMY_RECIPE_TEMPLATE: String = """
-You are executing the "Melee Enemy Behavior" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy behavior combat chase attack"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "enemy behavior combat chase attack"}}
 
-Step 1 — Locate the existing enemy via gather_task_context scene_objects (an Area2D body with a visual child; instanced enemies bind their source scene). Create res://scripts/combat/melee_brain.gd — a Node child "MeleeBrain" on the enemy root: patrol (origin-anchored) -> chase when the player enters detect_range -> windup with a warning-color flash -> one hit per swing (attacks_landed counter, hit only within attack_range on the facing side) -> recover -> cooldown. Expose every knob @export: detect_range, chase_range, chase_speed, attack_range, windup_seconds, hit_damage, hit_knockback, recover_seconds, attack_cooldown. Wire death->drop through apply_change_set on the enemy's take_damage dead-branch: notify the brain, which spawns exactly one coin.
+Locate the existing enemy via gather_task_context scene_objects (an Area2D body with a visual child; instanced enemies bind their source scene). Create res://scripts/combat/melee_brain.gd — a Node child "MeleeBrain" on the enemy root: patrol (origin-anchored) -> chase when the player enters detect_range -> windup with a warning-color flash -> one hit per swing (attacks_landed counter, hit only within attack_range on the facing side) -> recover -> cooldown. Expose every knob @export: detect_range, chase_range, chase_speed, attack_range, windup_seconds, hit_damage, hit_knockback, recover_seconds, attack_cooldown. Wire death->drop through apply_change_set on the enemy's take_damage dead-branch: notify the brain, which spawns exactly one coin.
 
-Step 2 — Boss-vs-grunt tuning is DATA, not code: grunt and boss are the same script with different EnemyStats resources (knockback_resistance 0 vs 0.9). "Normal enemies knock back easily, boss resists" = edit the stats resources, never branch the behavior script.
+Boss-vs-grunt tuning is DATA, not code: grunt and boss are the same script with different EnemyStats resources (knockback_resistance 0 vs 0.9). "Normal enemies knock back easily, boss resists" = edit the stats resources, never branch the behavior script.
 
-Step 3 — Contract-verify with run_verification_queue (strict, requirements: detect+chase, windup telegraphs, single hit per swing, death stops attacking, drop exactly once; each item boots a FRESH run). Timing facts that bite: each requirement item boots its own run, so an item that needs a dead enemy must kill it itself; reads on nodes that queue_free fail with a self-healing hint (assert the counter instead); enemy instances without a stats resource silently refuse take_damage — wire stats.
+Contract-verify with run_verification_queue (strict, requirements: detect+chase, windup telegraphs, single hit per swing, death stops attacking, drop exactly once; each item boots a FRESH run). Timing facts that bite: each requirement item boots its own run, so an item that needs a dead enemy must kill it itself; reads on nodes that queue_free fail with a self-healing hint (assert the counter instead); enemy instances without a stats resource silently refuse take_damage — wire stats.
 
-Step 4 — Natural-language tuning maps to @export reads: "attack windup more obvious" -> windup_seconds up; "chase shorter" -> chase_range down. After ANY script change, re-verify the affected requirements only.
+Natural-language tuning maps to @export reads: "attack windup more obvious" -> windup_seconds up; "chase shorter" -> chase_range down. After ANY script change, re-verify the affected requirements only.
 """
 
 const MENU_RECIPE_TEMPLATE: String = """
-You are executing the "Game Menu & HUD" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "ui menu hud button pause interaction"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "ui menu hud button pause interaction"}}
 
-Step 1 — Locate context with gather_task_context (which scene the menu enters FROM, where game state lives). Build the menu with create_scene (root Control) + batch_scene_node_edits (VBoxContainer + Buttons); attach ONE external controller script and wire EVERY button from the controller script's _ready via button.pressed.connect(handler) — script-side connections always reach the running game (connect_signal connects the EDITOR instance only; it does not persist into the saved scene even with flags=1 — a runtime-only wire means dead buttons in the game). attach_script keeps the EXTERNAL reference — an embedded copy makes every later edit to the .gd never reach the game. A button left unwired is a defect, not a style choice: list each button -> effect before building.
+Locate context with gather_task_context (which scene the menu enters FROM, where game state lives). Build the menu with create_scene (root Control) + batch_scene_node_edits (VBoxContainer + Buttons); attach ONE external controller script and wire EVERY button from the controller script's _ready via button.pressed.connect(handler) — script-side connections always reach the running game (connect_signal connects the EDITOR instance only; it does not persist into the saved scene even with flags=1 — a runtime-only wire means dead buttons in the game). attach_script keeps the EXTERNAL reference — an embedded copy makes every later edit to the .gd never reach the game. A button left unwired is a defect, not a style choice: list each button -> effect before building.
 
-Step 2 — Standard wirings: Start -> get_tree().change_scene_to_file(gameplay scene); Quit -> get_tree().quit(); Pause -> get_tree().paused = true (toggle); HUD listens to a state autoload via Signal (never polls). Two PAUSE TRAPS that bite every project: (a) paused freezes EVERYTHING — the pause menu and its buttons must live under a node with process_mode = PROCESS_MODE_WHEN_PAUSED or the resume click never registers; (b) a decorative full-screen overlay drawn ABOVE buttons eats their clicks unless mouse_filter = MOUSE_FILTER_IGNORE.
+Standard wirings: Start -> get_tree().change_scene_to_file(gameplay scene); Quit -> get_tree().quit(); Pause -> get_tree().paused = true (toggle); HUD listens to a state autoload via Signal (never polls). Two PAUSE TRAPS that bite every project: (a) paused freezes EVERYTHING — the pause menu and its buttons must live under a node with process_mode = PROCESS_MODE_WHEN_PAUSED or the resume click never registers; (b) a decorative full-screen overlay drawn ABOVE buttons eats their clicks unless mouse_filter = MOUSE_FILTER_IGNORE.
 
-Step 3 — Interaction verification is CLICK-THROUGH, not screenshots: play_and_verify steps send a mouse_button event at the button's runtime rect_center (read get_global_rect() at runtime, never guess pixel positions), then assert the effect — scene path changed / get_tree().paused == true / state signal fired. Shape:
+Interaction verification is CLICK-THROUGH, not screenshots: play_and_verify steps send a mouse_button event at the button's runtime rect_center (read get_global_rect() at runtime, never guess pixel positions), then assert the effect — scene path changed / get_tree().paused == true / state signal fired. Shape:
 {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["menu_renders", "start_changes_scene", "pause_resume_roundtrip", "hud_reflects_state"], "items": [{"kind": "behavior_check", "requirement": "pause_resume_roundtrip", "label": "r3", "detail": {"scene_path": "<menu scene>", "steps": [{"event": {"type": "mouse_button", "position": "<pause rect_center>", "button_index": 1, "pressed": true}, "wait_ms": 300, "assert": {"expression": "get_tree().paused == true", "description": "paused after click"}}, {"event": {"type": "mouse_button", "position": "<resume rect_center>", "button_index": 1, "pressed": true}, "wait_ms": 300, "assert": {"expression": "get_tree().paused == false", "description": "resumed after second click"}}]}}]}} Each item boots a FRESH run, must be self-contained, and carries at least one assertion — zero-assertion runs are smoke and the strict contract rejects them. ANY requirement not verified = the overall outcome is incomplete; report it as incomplete.
 
-Step 4 — After ANY script or theme change, prove it reached the running game with verify_change_effect (names the embedded-copy / unsaved-buffer / instance-override killers when they bite). Visual tuning is theme data, not per-node overrides: create_theme + set_theme_item ("bigger text" = font_size) + set_default_theme.
+After ANY script or theme change, prove it reached the running game with verify_change_effect (names the embedded-copy / unsaved-buffer / instance-override killers when they bite). Visual tuning is theme data, not per-node overrides: create_theme + set_theme_item ("bigger text" = font_size) + set_default_theme.
 """
 const ANY_GAME_RECIPE_TEMPLATE: String = """
 Goal: {{goal}}
@@ -236,128 +236,128 @@ You decide everything else. Claim only what evidence supports, name what you did
 """
 
 const GAME_MAP_RECIPE_TEMPLATE: String = """
-You are executing the "Game Map / Level" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "level design tilemap tileset scene input verify"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "level design tilemap tileset scene input verify"}}
 
-Step 1 — Locate context with gather_task_context (which scene the level is entered FROM, where the player and enemy scenes live — never assume names). Create the level scene, then build the tile layer in order: create_tileset -> configure_tileset_layers (physics layer FIRST — walls need collision before painting matters) -> set_tile_collision_polygon per wall tile -> assign the TileSet to the TileMapLayer (the paint tool warns when the layer has none). Paint with set_tilemap_layer_cells (4.x single-layer API; the runtime probe's region tools are dual-compatible with legacy TileMap).
+Locate context with gather_task_context (which scene the level is entered FROM, where the player and enemy scenes live — never assume names). Create the level scene, then build the tile layer in order: create_tileset -> configure_tileset_layers (physics layer FIRST — walls need collision before painting matters) -> set_tile_collision_polygon per wall tile -> assign the TileSet to the TileMapLayer (the paint tool warns when the layer has none). Paint with set_tilemap_layer_cells (4.x single-layer API; the runtime probe's region tools are dual-compatible with legacy TileMap).
 
-Step 2 — Populate by instancing: the player at the spawn tile, enemies from their scenes, pickups along the route. HOST rule: the level INSTANCES those scenes, so verify against the LEVEL scene, and property overrides placed here WIN over base-scene values (verify_change_effect's hosts step names any mask with the exact fix).
+Populate by instancing: the player at the spawn tile, enemies from their scenes, pickups along the route. HOST rule: the level INSTANCES those scenes, so verify against the LEVEL scene, and property overrides placed here WIN over base-scene values (verify_change_effect's hosts step names any mask with the exact fix).
 
-Step 3 — Contract-verify traversal BEFORE tuning: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "walls_block", "goal_reachable"], "items": [{"kind": "behavior_check", "requirement": "walls_block", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 600, "assert": {"expression": "<player global position x>", "displacement_max": 8, "description": "wall stops the player"}}]}}]}} — displacement asserts are RELATIVE (displacement_min/displacement_max), never absolute thresholds (a level starting away from the origin fails absolute checks for no reason). After any batch tile write, physics needs one settled frame before collision assertions. Each item boots a FRESH run of the LEVEL.
+PROOF — traversal contract (contracts precede tuning: an unverified tune is a guess): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["movement", "walls_block", "goal_reachable"], "items": [{"kind": "behavior_check", "requirement": "walls_block", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 600, "assert": {"expression": "<player global position x>", "displacement_max": 8, "description": "wall stops the player"}}]}}]}} — displacement asserts are RELATIVE (displacement_min/displacement_max), never absolute thresholds (a level starting away from the origin fails absolute checks for no reason). After any batch tile write, physics needs one settled frame before collision assertions. Each item boots a FRESH run of the LEVEL.
 
-Step 4 — Tune via data, one change at a time; after ANY script change, verify_change_effect proves it reached the running game. Retuning many level files at once: batch_update_scene_files with expect_current keeps per-level specials (a boss arena keeps its wider corridor while every standard corridor narrows).
+Tune via data, one change at a time; after ANY script change, verify_change_effect proves it reached the running game. Retuning many level files at once: batch_update_scene_files with expect_current keeps per-level specials (a boss arena keeps its wider corridor while every standard corridor narrows).
 
-Step 5 — Close honestly: report the plugin-built checklist verbatim, name unverified requirements, suggest the next sentences (tune difficulty / add a hazard / wire the goal to win-lose).
+CLAIM DISCIPLINE: report the plugin-built checklist verbatim, name unverified requirements, suggest the next sentences (tune difficulty / add a hazard / wire the goal to win-lose).
 """
 
 const GAME_PICKUP_RECIPE_TEMPLATE: String = """
-You are executing the "Pickup / Collectible" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "item pickup area2d signal scene verify"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "item pickup area2d signal scene verify"}}
 
-Step 1 — Locate context with gather_task_context (player scene, where state lives, whether an autoload exists). Build the pickup: Area2D root + visual child + monitoring on; collect on the body_entered SIGNAL (never poll in _physics_process); the collected pickup queue_frees itself — assert the COUNTER, not the node (reads on a freed node fail with a self-healing hint).
+Locate context with gather_task_context (player scene, where state lives, whether an autoload exists). Build the pickup: Area2D root + visual child + monitoring on; collect on the body_entered SIGNAL (never poll in _physics_process); the collected pickup queue_frees itself — assert the COUNTER, not the node (reads on a freed node fail with a self-healing hint).
 
-Step 2 — State: the counter lives on the player or a state autoload and is updated THROUGH a signal (decoupled, per project convention). Double-collect protection: disable/queue_free in the same callback that increments — assert it with two quick walks over the same spot.
+State: the counter lives on the player or a state autoload and is updated THROUGH a signal (decoupled, per project convention). Double-collect protection: disable/queue_free in the same callback that increments — assert it with two quick walks over the same spot.
 
-Step 3 — Contract BEFORE tuning: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["pickup_increments_counter", "pickup_disappears", "no_double_collect"], "items": [{"kind": "behavior_check", "requirement": "pickup_increments_counter", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<counter expression, e.g. get_node('/root/GameState').coins>", "expected": 1, "operator": "gte", "description": "coin counted"}}]}}]}} — each item boots a FRESH run and is self-contained (an item that needs two coins collected must walk past both itself).
+Contract BEFORE tuning: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["pickup_increments_counter", "pickup_disappears", "no_double_collect"], "items": [{"kind": "behavior_check", "requirement": "pickup_increments_counter", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "move_right", "pressed": true, "wait_ms": 800, "assert": {"expression": "<counter expression, e.g. get_node('/root/GameState').coins>", "expected": 1, "operator": "gte", "description": "coin counted"}}]}}]}} — each item boots a FRESH run and is self-contained (an item that needs two coins collected must walk past both itself).
 
-Step 4 — Place pickups by instancing in levels; per-level specials (value, respawn flag) survive batch retunes via expect_current. Feel knobs (magnet radius, bob speed) are @export data — tune one, then verify_change_effect proves the change reached the running game.
+Place pickups by instancing in levels; per-level specials (value, respawn flag) survive batch retunes via expect_current. Feel knobs (magnet radius, bob speed) are @export data — tune one, then verify_change_effect proves the change reached the running game.
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (add a rare pickup / wire coins to a shop / persist the collection).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (add a rare pickup / wire coins to a shop / persist the collection).
 """
 
 const GAME_SAVE_RECIPE_TEMPLATE: String = """
-You are executing the "Save / Continue" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "save load file scene verify"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "save load file scene verify"}}
 
-Step 1 — Save under user:// with a version field and an EXPLICIT field list (position, hp, collected ids — never object references): res:// is read-only in exported builds, and audit_project_health flags any script writing res://.
+Save under user:// with a version field and an EXPLICIT field list (position, hp, collected ids — never object references): res:// is read-only in exported builds, and audit_project_health flags any script writing res://.
 
-Step 2 — Triggers: a save point, autosave on milestone, or a menu entry (wire the menu via make_game_menu). Load path: on boot, if the save exists, restore state BEFORE the first frame of gameplay (continue), else start fresh. The save MODULE is one external script (attach_script keeps the EXTERNAL reference) reading/writing user:// and exposing save()/load() through signals.
+Triggers: a save point, autosave on milestone, or a menu entry (wire the menu via make_game_menu). Load path: on boot, if the save exists, restore state BEFORE the first frame of gameplay (continue), else start fresh. The save MODULE is one external script (attach_script keeps the EXTERNAL reference) reading/writing user:// and exposing save()/load() through signals.
 
-Step 3 — Contract, exploiting the one thing that DOES cross FRESH boots — the user:// FILE (runtime state does not): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["save_writes_file", "fresh_boot_restores", "no_save_means_new_game"], "items": [{"kind": "behavior_check", "requirement": "save_writes_file", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "interact_save", "pressed": true, "wait_ms": 400, "assert": {"expression": "FileAccess.file_exists('user://save.json')", "description": "save file written"}}]}}, {"kind": "behavior_check", "requirement": "fresh_boot_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<restored state expression, e.g. get_node('/root/GameState').hp>", "expected": 2, "description": "continued from the save"}}]}}]}} — item 2 boots FRESH and still sees the save because the FILE persisted; that is the whole proof of continue.
+Contract, exploiting the one thing that DOES cross FRESH boots — the user:// FILE (runtime state does not): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["save_writes_file", "fresh_boot_restores", "no_save_means_new_game"], "items": [{"kind": "behavior_check", "requirement": "save_writes_file", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "interact_save", "pressed": true, "wait_ms": 400, "assert": {"expression": "FileAccess.file_exists('user://save.json')", "description": "save file written"}}]}}, {"kind": "behavior_check", "requirement": "fresh_boot_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<restored state expression, e.g. get_node('/root/GameState').hp>", "expected": 2, "description": "continued from the save"}}]}}]}} — item 2 boots FRESH and still sees the save because the FILE persisted; that is the whole proof of continue.
 
-Step 4 — After ANY change to the save module, verify_change_effect proves it reached the running game; changing the save SCHEMA bumps the version field and migrates old files (a player's save must never crash a new build).
+After ANY change to the save module, verify_change_effect proves it reached the running game; changing the save SCHEMA bumps the version field and migrates old files (a player's save must never crash a new build).
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (add a save point / autosave on level end / show the save slot in the menu).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (add a save point / autosave on level end / show the save slot in the menu).
 """
 const GAME_JUICE_RECIPE_TEMPLATE: String = """
-You are executing the "Game Feel / Juice" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "animation audio scene verify feel"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "animation audio scene verify feel"}}
 
-Step 1 — Locate the feedback events with gather_task_context (hit lands, damage taken, pickup, jump). FEEL IS DATA: one feel scheme = one dict of knobs (flash_duration, shake_magnitude, shake_decay_ms, hitstop_ms, particle_burst, lerp rates). Ship three presets — punchy (short flash, hard shake, 40ms hitstop), snappy (fast lerps, small shake), heavy (long hitstop, big magnitude, slow recovery) — as data files or @export groups. "Make it punchier" = switch scheme or raise numbers, NEVER new code paths.
+Locate the feedback events with gather_task_context (hit lands, damage taken, pickup, jump). FEEL IS DATA: one feel scheme = one dict of knobs (flash_duration, shake_magnitude, shake_decay_ms, hitstop_ms, particle_burst, lerp rates). Ship three presets — punchy (short flash, hard shake, 40ms hitstop), snappy (fast lerps, small shake), heavy (long hitstop, big magnitude, slow recovery) — as data files or @export groups. "Make it punchier" = switch scheme or raise numbers, NEVER new code paths.
 
-Step 2 — Wiring truths: shake needs a Camera2D (auto-created, but ASSERT the camera actually moved — a shake that silently no-ops is a defect); hitstop must ALWAYS restore engine time_scale (a leaked hitstop freezes the game — assert time_scale is back to 1.0 after the event); flash sets a modulate/color and must RECOVER (set then restored, both directions audited).
+Wiring truths: shake needs a Camera2D (auto-created, but ASSERT the camera actually moved — a shake that silently no-ops is a defect); hitstop must ALWAYS restore engine time_scale (a leaked hitstop freezes the game — assert time_scale is back to 1.0 after the event); flash sets a modulate/color and must RECOVER (set then restored, both directions audited).
 
-Step 3 — Contract BEFORE tuning, one requirement per effect, per-effect AUDIT FIELDS not vibes: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["flash_fires_and_recovers", "shake_moves_and_resets", "hitstop_engages_and_restores"], "items": [{"kind": "behavior_check", "requirement": "hitstop_engages_and_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "attack", "pressed": true, "wait_ms": 600, "assert": {"expression": "Engine.time_scale", "expected": 1.0, "description": "hitstop restored after the hit"}}]}}]}} — each item boots a FRESH run; a feel effect that only sometimes fires fails its own item.
+Contract BEFORE tuning, one requirement per effect, per-effect AUDIT FIELDS not vibes: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["flash_fires_and_recovers", "shake_moves_and_resets", "hitstop_engages_and_restores"], "items": [{"kind": "behavior_check", "requirement": "hitstop_engages_and_restores", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"action": "attack", "pressed": true, "wait_ms": 600, "assert": {"expression": "Engine.time_scale", "expected": 1.0, "description": "hitstop restored after the hit"}}]}}]}} — each item boots a FRESH run; a feel effect that only sometimes fires fails its own item.
 
-Step 4 — Tune one knob at a time; a knob change is a CHANGE like any other — verify_change_effect proves it reached the running game (host-scene instance overrides are named when they mask a base-scene knob). Batch-tuning many scenes: batch_update_scene_files with expect_current keeps per-scene specials.
+Tune one knob at a time; a knob change is a CHANGE like any other — verify_change_effect proves it reached the running game (host-scene instance overrides are named when they mask a base-scene knob). Batch-tuning many scenes: batch_update_scene_files with expect_current keeps per-scene specials.
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (heavier scheme / more particles / wire feel into a new event).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (heavier scheme / more particles / wire feel into a new event).
 """
 
 const GAME_AUDIO_RECIPE_TEMPLATE: String = """
-You are executing the "Game Audio" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "audio bus player scene verify"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "audio bus player scene verify"}}
 
-Step 1 — HONEST SCOPE: MCP cannot synthesize audio FILES — the recipe builds the complete SYSTEM (buses, players, triggers, ducking) so that dropping files into the listed paths activates them; where a file is missing it asserts loudly instead of silently playing nothing. Locate events with gather_task_context.
+HONEST SCOPE: MCP cannot synthesize audio FILES — the recipe builds the complete SYSTEM (buses, players, triggers, ducking) so that dropping files into the listed paths activates them; where a file is missing it asserts loudly instead of silently playing nothing. Locate events with gather_task_context.
 
-Step 2 — Wiring truths: BGM on a dedicated "Music" bus via one AudioStreamPlayer; SFX through a small POOL of players on an "SFX" bus — never one player for everything (a long sound effect cuts the background music, the classic silent bug). Events trigger sounds through signals, never polls. Buses: create Music/SFX (and a Master duck target), set default volumes as data.
+Wiring truths: BGM on a dedicated "Music" bus via one AudioStreamPlayer; SFX through a small POOL of players on an "SFX" bus — never one player for everything (a long sound effect cuts the background music, the classic silent bug). Events trigger sounds through signals, never polls. Buses: create Music/SFX (and a Master duck target), set default volumes as data.
 
-Step 3 — Contract — audio is verified by PLAYER/BUS STATE (you cannot hear, so assert state, never assume): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["bgm_playing_on_music_bus", "sfx_fires_on_event", "bgm_survives_sfx"], "items": [{"kind": "behavior_check", "requirement": "bgm_playing_on_music_bus", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 500, "assert": {"expression": "get_node('<BGM player path>').playing", "description": "bgm playing"}}]}}]}} — bgm_survives_sfx is the pooling proof: fire the longest SFX, then assert the BGM player is STILL playing. Each item boots a FRESH run.
+Contract — audio is verified by PLAYER/BUS STATE (you cannot hear, so assert state, never assume): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["bgm_playing_on_music_bus", "sfx_fires_on_event", "bgm_survives_sfx"], "items": [{"kind": "behavior_check", "requirement": "bgm_playing_on_music_bus", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 500, "assert": {"expression": "get_node('<BGM player path>').playing", "description": "bgm playing"}}]}}]}} — bgm_survives_sfx is the pooling proof: fire the longest SFX, then assert the BGM player is STILL playing. Each item boots a FRESH run.
 
-Step 4 — Mixing is data: volumes/ducking are bus values — tune one, then verify_change_effect proves the change reached the running game; per-scene special mixes survive batch retunes via expect_current.
+Mixing is data: volumes/ducking are bus values — tune one, then verify_change_effect proves the change reached the running game; per-scene special mixes survive batch retunes via expect_current.
 
-Step 5 — Close honestly: checklist verbatim, list the audio file paths still missing (by name), next sentences suggested (drop in the BGM file / add a footstep SFX / duck music in menus).
+CLAIM DISCIPLINE: checklist verbatim, list the audio file paths still missing (by name), next sentences suggested (drop in the BGM file / add a footstep SFX / duck music in menus).
 """
 
 const GAME_BOSS_RECIPE_TEMPLATE: String = """
-You are executing the "Boss Fight" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy stats scene verify combat"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "enemy stats scene verify combat"}}
 
-Step 1 — A BOSS IS DATA ON TOP OF THE MELEE BRAIN, not a code branch: run make_melee_enemy first if no enemy brain exists. Boss = an EnemyStats resource with high hp and knockback_resistance near 1.0 (grunt ~0), plus PHASES as data rows: [{"threshold_hp_ratio": 0.5, "knobs": {"chase_speed": 1.4, "attack_cooldown": 0.6}}]. Phase switching reads hp ratio and applies knob overrides — no if-boss branches in behavior scripts.
+A BOSS IS DATA ON TOP OF THE MELEE BRAIN, not a code branch: run make_melee_enemy first if no enemy brain exists. Boss = an EnemyStats resource with high hp and knockback_resistance near 1.0 (grunt ~0), plus PHASES as data rows: [{"threshold_hp_ratio": 0.5, "knobs": {"chase_speed": 1.4, "attack_cooldown": 0.6}}]. Phase switching reads hp ratio and applies knob overrides — no if-boss branches in behavior scripts.
 
-Step 2 — Arena: build the arena as a MAP (make_game_map), instance the boss from its scene — HOST rule: the arena INSTANCES the boss, verify against the ARENA scene, arena overrides win over base values. Death path: big feedback (make_game_juice), guaranteed drops, and a VICTORY trigger wired through a signal.
+Arena: build the arena as a MAP (make_game_map), instance the boss from its scene — HOST rule: the arena INSTANCES the boss, verify against the ARENA scene, arena overrides win over base values. Death path: big feedback (make_game_juice), guaranteed drops, and a VICTORY trigger wired through a signal.
 
-Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["phase_switch_occurs", "knockback_resisted", "death_stops_attacking", "victory_fires"], "items": [{"kind": "behavior_check", "requirement": "phase_switch_occurs", "detail": {"scene_path": "<res://scenes/boss_arena.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<deal lethal-ish damage expression>", "description": "push hp below the threshold"}}, {"wait_ms": 400, "assert": {"expression": "<boss phase field expression>", "expected": 2, "description": "phase 2 engaged"}}]}}]}} — each item boots a FRESH run and must push the boss into the state it asserts itself (deal your own damage). Death-window reads stay inside the free window.
+Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["phase_switch_occurs", "knockback_resisted", "death_stops_attacking", "victory_fires"], "items": [{"kind": "behavior_check", "requirement": "phase_switch_occurs", "detail": {"scene_path": "<res://scenes/boss_arena.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<deal lethal-ish damage expression>", "description": "push hp below the threshold"}}, {"wait_ms": 400, "assert": {"expression": "<boss phase field expression>", "expected": 2, "description": "phase 2 engaged"}}]}}]}} — each item boots a FRESH run and must push the boss into the state it asserts itself (deal your own damage). Death-window reads stay inside the free window.
 
-Step 4 — Tuning is stats/data: harder boss = rows in the phase table or stats resource; after any script change verify_change_effect proves reach; variant bosses via create_scene_variant (inheritance, overrides only) + create stats resources, batch-retuned with expect_current.
+Tuning is stats/data: harder boss = rows in the phase table or stats resource; after any script change verify_change_effect proves reach; variant bosses via create_scene_variant (inheritance, overrides only) + create stats resources, batch-retuned with expect_current.
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (third phase / adds at 30% / a telegraphed AoE).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (third phase / adds at 30% / a telegraphed AoE).
 """
 
 const GAME_RANGED_RECIPE_TEMPLATE: String = """
-You are executing the "Ranged Enemy" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "enemy projectile scene verify combat"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "enemy projectile scene verify combat"}}
 
-Step 1 — Locate the enemy with gather_task_context. A RANGED enemy reuses the melee brain's patrol/detect/recover shape but fires PROJECTILES: Area2D projectile + speed*direction, a WINDUP telegraph before every shot (a shot without telegraph is undodgeable — that is a defect, not difficulty), fire only within attack_range, cooldown between shots.
+Locate the enemy with gather_task_context. A RANGED enemy reuses the melee brain's patrol/detect/recover shape but fires PROJECTILES: Area2D projectile + speed*direction, a WINDUP telegraph before every shot (a shot without telegraph is undodgeable — that is a defect, not difficulty), fire only within attack_range, cooldown between shots.
 
-Step 2 — Projectile truths: every projectile MUST free itself on hit AND on lifetime timeout — leaked projectiles sink performance silently, so assert the active count returns to baseline. Facing: direction = (player position - self position).normalized() at fire time. A small POOL of projectile nodes beats spawn-per-shot once bursts exceed a handful.
+Projectile truths: every projectile MUST free itself on hit AND on lifetime timeout — leaked projectiles sink performance silently, so assert the active count returns to baseline. Facing: direction = (player position - self position).normalized() at fire time. A small POOL of projectile nodes beats spawn-per-shot once bursts exceed a handful.
 
-Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["projectile_hits_reduces_hp", "no_fire_out_of_range", "projectiles_free_after_ttl", "windup_precedes_shot"], "items": [{"kind": "behavior_check", "requirement": "no_fire_out_of_range", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 1500, "assert": {"expression": "<active projectile count expression>", "expected": 0, "description": "nothing spawned while the player is out of range"}}]}}]}} — each item boots a FRESH run and sets up its own range situation (walk in/out itself).
+Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["projectile_hits_reduces_hp", "no_fire_out_of_range", "projectiles_free_after_ttl", "windup_precedes_shot"], "items": [{"kind": "behavior_check", "requirement": "no_fire_out_of_range", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "steps": [{"wait_ms": 1500, "assert": {"expression": "<active projectile count expression>", "expected": 0, "description": "nothing spawned while the player is out of range"}}]}}]}} — each item boots a FRESH run and sets up its own range situation (walk in/out itself).
 
-Step 4 — Tuning: projectile speed / fire rate / windup / range are @export knobs — one at a time, then verify_change_effect proves reach; many ranged enemies retuned at once via batch_update_scene_files with expect_current (the elite archer keeps her custom range).
+Tuning: projectile speed / fire rate / windup / range are @export knobs — one at a time, then verify_change_effect proves reach; many ranged enemies retuned at once via batch_update_scene_files with expect_current (the elite archer keeps her custom range).
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (leading shots / a spread variant / ammo drops).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (leading shots / a spread variant / ammo drops).
 """
 const FIRST_GAME_RECIPE_TEMPLATE: String = """
 Goal: {{goal}}
@@ -376,74 +376,76 @@ PROOF SHAPE (yours to adapt): a strict contract is the proven way to claim the l
 AVAILABLE KNOWLEDGE once the loop exists: feel (make_game_juice), audio (make_game_audio), menus/HUD/pause (make_game_menu), progress (make_game_save), every other pillar (the reference recipes), change-proof (verify_change_effect), the perfect ladder (game_quality_ladder). Durability: finished work records via manage_task_plan, and the next session opens with ONE call — get_game_project_brief rebuilds everything this session established without re-discovery. Shipping is a chain that exists when wanted: game_quality_ladder full -> bump_version -> release_export_flow (+ manage_localization for bilingual).
 """
 const GAME_CAMERA_RECIPE_TEMPLATE: String = """
-You are executing the "Game Camera" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 0 — Activate toolset: {"tool": "enable_tools", "args": {"workflow_query": "camera scene node property verify"}}
+TOOLS (enable as useful): {"tool": "enable_tools", "args": {"workflow_query": "camera scene node property verify"}}
 
-Step 1 — Locate the player with gather_task_context (never assume names). A camera is PRESETS AS DATA on one Camera2D node, not code: platformer-follow = position_smoothing_enabled + position_smoothing_speed (lag/catch-up) + limit_left/right (world bounds — the camera stops at edges while the player keeps moving); top-down follow = smoothing + optional limit_top/bottom; locked = no smoothing (rigid). Create the node (on_name_conflict=skip) with batch_scene_node_edits property sets — every knob is a built-in Camera2D property, zero scripts.
+Locate the player with gather_task_context (never assume names). A camera is PRESETS AS DATA on one Camera2D node, not code: platformer-follow = position_smoothing_enabled + position_smoothing_speed (lag/catch-up) + limit_left/right (world bounds — the camera stops at edges while the player keeps moving); top-down follow = smoothing + optional limit_top/bottom; locked = no smoothing (rigid). Create the node (on_name_conflict=skip) with batch_scene_node_edits property sets — every knob is a built-in Camera2D property, zero scripts.
 
-Step 2 — Placement truths: the camera may be the player's CHILD (rigid follow, offset baked) or a SIBLING with smoothing (lag) — pick by feel, both legal. Limits are WORLD-space pixels and only matter once the level is larger than the viewport. Multiple cameras: only one is current; make sure exactly one has enabled=true or the wrong one wins silently. Shake later needs this camera to exist (the juice recipe's shake moves it — never assume).
+Placement truths: the camera may be the player's CHILD (rigid follow, offset baked) or a SIBLING with smoothing (lag) — pick by feel, both legal. Limits are WORLD-space pixels and only matter once the level is larger than the viewport. Multiple cameras: only one is current; make sure exactly one has enabled=true or the wrong one wins silently. Shake later needs this camera to exist (the juice recipe's shake moves it — never assume).
 
-Step 3 — Contract with the ONE-ROUND-TRIP timeline (frame-timed, jitter-immune): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["camera_follows_player", "camera_respects_limits"], "items": [{"kind": "behavior_check", "requirement": "camera_follows_player", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}, {"frame": 90, "action": "move_right", "pressed": false}], "settle_frames": 30, "sample": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x"}], "assertions": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x", "expected": 300, "operator": "gte", "description": "camera tracked the run"}]}}}]}} — each item boots a FRESH run; sampling cam_x per frame gives the follow CURVE (lag then catch-up), and the limits item walks into a wall and asserts the camera clamped. Zero-assertion runs are smoke; the strict contract rejects them.
+Contract with the ONE-ROUND-TRIP timeline (frame-timed, jitter-immune): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["camera_follows_player", "camera_respects_limits"], "items": [{"kind": "behavior_check", "requirement": "camera_follows_player", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}, {"frame": 90, "action": "move_right", "pressed": false}], "settle_frames": 30, "sample": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x"}], "assertions": [{"label": "cam_x", "expression": "get_node('<MainCamera>').global_position.x", "expected": 300, "operator": "gte", "description": "camera tracked the run"}]}}}]}} — each item boots a FRESH run; sampling cam_x per frame gives the follow CURVE (lag then catch-up), and the limits item walks into a wall and asserts the camera clamped. Zero-assertion runs are smoke; the strict contract rejects them.
 
-Step 4 — Tuning is data: smoother/laggier = position_smoothing_speed down/up; show more ahead = drag margins or an offset; after ANY change verify_change_effect proves it reached the running game.
+Tuning is data: smoother/laggier = position_smoothing_speed down/up; show more ahead = drag margins or an offset; after ANY change verify_change_effect proves it reached the running game.
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (per-level limits via batch_update_scene_files with expect_current keeping arena specials / zoom punch on hit via the juice recipe).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (per-level limits via batch_update_scene_files with expect_current keeping arena specials / zoom punch on hit via the juice recipe).
 """
 const GAME_SHADER_RECIPE_TEMPLATE: String = """
-You are executing the "Game Shader" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 1 — Locate the target with gather_task_context (which visual node needs the effect — the CanvasItem child, e.g. Player/Visual). Shaders are TEXT: write them with create_script (path ending .gdshader) — invalid shader content is REFUSED BEFORE writing (nothing lands in the project; force=true overrides). attach_to_node on a .gdshader MOUNTS a ShaderMaterial on that CanvasItem automatically — attach to the VISUAL child, not the body (attaching to a non-CanvasItem warns instead of silently no-oping).
+Locate the target with gather_task_context (which visual node needs the effect — the CanvasItem child, e.g. Player/Visual). Shaders are TEXT: write them with create_script (path ending .gdshader) — invalid shader content is REFUSED BEFORE writing (nothing lands in the project; force=true overrides). attach_to_node on a .gdshader MOUNTS a ShaderMaterial on that CanvasItem automatically — attach to the VISUAL child, not the body (attaching to a non-CanvasItem warns instead of silently no-oping).
 
-Step 2 — Start from a proven template, tune uniforms as data:
+Start from a proven template, tune uniforms as data:
 - HIT FLASH (canvas_item): uniforms flash_amount (0..1) + flash_color; COLOR = mix(texture(TEXTURE, UV), flash_color, flash_amount). The game code drives flash_amount (1.0 on hit, back to 0.0) — the juice recipe's flash audit fields apply.
 - DISSOLVE: uniform progress (0..1) + noise-based alpha cutoff; COLOR.a = step(progress, noise(UV)).
 - OUTLINE: sample neighbors at ±outline_width; tint the rim where base alpha is 0.
 - SPATIAL (3D): same uniform-as-data pattern in shader_type spatial.
 
-Step 3 — Contract (timeline, one round trip): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["shader_mounted", "uniform_readable"], "items": [{"kind": "behavior_check", "requirement": "uniform_readable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [], "settle_frames": 30, "assertions": [{"label": "mounted", "expression": "get_node('<Player/Visual>').material.get_class() == 'ShaderMaterial'", "expected": true, "description": "material mounted"}, {"label": "shader_live", "expression": "get_node('<Player/Visual>').material.shader != null", "expected": true, "description": "shader assigned"}]}}}]}} — an empty events timeline still boots a FRESH run and reads the material. ENGINE TRUTH: get_shader_parameter returns NULL for uniforms never explicitly set (defaults live in shader code, not the material) — to read a value at runtime, set it first via set_runtime_shader_parameter, then read it back. Zero-assertion runs are smoke.
+Contract (timeline, one round trip): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["shader_mounted", "uniform_readable"], "items": [{"kind": "behavior_check", "requirement": "uniform_readable", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [], "settle_frames": 30, "assertions": [{"label": "mounted", "expression": "get_node('<Player/Visual>').material.get_class() == 'ShaderMaterial'", "expected": true, "description": "material mounted"}, {"label": "shader_live", "expression": "get_node('<Player/Visual>').material.shader != null", "expected": true, "description": "shader assigned"}]}}}]}} — an empty events timeline still boots a FRESH run and reads the material. ENGINE TRUTH: get_shader_parameter returns NULL for uniforms never explicitly set (defaults live in shader code, not the material) — to read a value at runtime, set it first via set_runtime_shader_parameter, then read it back. Zero-assertion runs are smoke.
 
-Step 4 — Tuning is uniforms: edit the .gdshader or drive values via set_runtime_shader_parameter at runtime (test values without re-saving); after ANY file change verify_change_effect proves it reached the running game (embedded/unsaved/instance traps are named when they bite).
+Tuning is uniforms: edit the .gdshader or drive values via set_runtime_shader_parameter at runtime (test values without re-saving); after ANY file change verify_change_effect proves it reached the running game (embedded/unsaved/instance traps are named when they bite).
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (drive flash_amount from the hit signal / dissolve on death / outline on the selected enemy).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (drive flash_amount from the hit signal / dissolve on death / outline on the selected enemy).
 """
 
 
 const GAME_PARTICLES_RECIPE_TEMPLATE: String = """
-You are executing the "Game Particles / VFX" recipe against the Godot project through MCP tools. Ships WITH the plugin.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence. Ships WITH the plugin.
 
 Goal: {{goal}}
 
-Step 1 — Locate the events with gather_task_context (hit lands, pickup, death, ambience). PARTICLES ARE DATA on a GPUParticles2D node: the process material (ParticleProcessMaterial) carries the knobs — direction/spread, initial velocity, gravity, scale curve, color. Presets: hit_burst = one_shot + explosiveness 1.0 + small amount + short lifetime (fires once per event); ambient = looping + low amount + long lifetime + gentle drift; confetti_pickup = burst + spread 180 + gravity + hue via color ramp.
+Locate the events with gather_task_context (hit lands, pickup, death, ambience). PARTICLES ARE DATA on a GPUParticles2D node: the process material (ParticleProcessMaterial) carries the knobs — direction/spread, initial velocity, gravity, scale curve, color. Presets: hit_burst = one_shot + explosiveness 1.0 + small amount + short lifetime (fires once per event); ambient = looping + low amount + long lifetime + gentle drift; confetti_pickup = burst + spread 180 + gravity + hue via color ramp.
 
-Step 2 — Wiring truths: set the process material as an INLINE sub-resource via set_node_subresource (knobs stay data, no .gd needed); a burst fires by setting emitting=true FROM the event signal (never per-frame polls); one_shot bursts reset themselves — set emitting=false then true to re-arm before the next burst, or the second hit shows nothing; without a texture particles render as default squares (assign one via generate_asset placeholder if the project has none).
+Wiring truths: set the process material as an INLINE sub-resource via set_node_subresource (knobs stay data, no .gd needed); a burst fires by setting emitting=true FROM the event signal (never per-frame polls); one_shot bursts reset themselves — set emitting=false then true to re-arm before the next burst, or the second hit shows nothing; without a texture particles render as default squares (assign one via generate_asset placeholder if the project has none).
 
-Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["burst_fires_on_event", "burst_completes", "ambient_loops"], "items": [{"kind": "behavior_check", "requirement": "burst_completes", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "attack", "pressed": true}, {"frame": 5, "action": "attack", "pressed": false}], "settle_frames": 90, "sample": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting"}], "assertions": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting", "expected": false, "description": "one_shot burst finished and re-armed"}]}}}]}} — the per-frame emitting sample shows fire-then-complete as a curve, not a vibe. FRESH run per item; the item that needs a hit deals it itself.
+Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["burst_fires_on_event", "burst_completes", "ambient_loops"], "items": [{"kind": "behavior_check", "requirement": "burst_completes", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "attack", "pressed": true}, {"frame": 5, "action": "attack", "pressed": false}], "settle_frames": 90, "sample": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting"}], "assertions": [{"label": "emitting", "expression": "get_node('<HitBurst>').emitting", "expected": false, "description": "one_shot burst finished and re-armed"}]}}}]}} — the per-frame emitting sample shows fire-then-complete as a curve, not a vibe. FRESH run per item; the item that needs a hit deals it itself.
 
-Step 4 — Tuning is material data: bigger blast = spread/velocity/amount up; after ANY change verify_change_effect proves it reached the running game; per-scene special bursts survive batch retunes via expect_current.
+Tuning is material data: bigger blast = spread/velocity/amount up; after ANY change verify_change_effect proves it reached the running game; per-scene special bursts survive batch retunes via expect_current.
 
-Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (wire a new event / trails via the juice recipe / color ramp per damage type).
+CLAIM DISCIPLINE: checklist verbatim, unverified named, next sentences suggested (wire a new event / trails via the juice recipe / color ramp per damage type).
 """
 const PERFECT_GAME_RECIPE_TEMPLATE: String = """
-You are executing the "Perfect Game" ladder against the Godot project through MCP tools. Ships WITH the plugin. The rubric is docs/perfect-game-ladder.md: four rungs, machine (M) and agent-judged (A) dimensions. PERFECT is a ladder, not a switch — climb rung by rung, never skip, and never claim R4 while any item is red or unreviewed.
+DECLARATIVE KNOWLEDGE CARD — you decide everything; only claims need evidence.
 
 Goal: {{goal}}
 
-Step 0 — Baseline: game_quality_report scope=full (scene + platform). Static reds (broken scripts, missing deps, res:// writes, no plan) are R1 blockers — fix before anything else.
+Perfect is a ladder, not a switch. The rubric is docs/perfect-game-ladder.md: four rungs, machine (M) and agent-judged (A) dimensions.
 
-Step 1 — R1 Playable (all M): strict contracts for win_reachable AND lose_reachable (FRESH run each); assert_no_runtime_errors after every milestone; every input action bound (an unbound action's failure message names the fix).
+Baseline: game_quality_report scope=full (scene + platform). Static reds (broken scripts, missing deps, res:// writes, no plan) are R1 blockers — fix before anything else.
 
-Step 2 — R2 Solid (all M, timeline-measured): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["input_latency", "collision_honesty"], "items": [{"kind": "behavior_check", "requirement": "input_latency", "label": "r2a", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}], "settle_frames": 12, "sample": [{"label": "px", "expression": "get_node('<Player>').position.x"}], "assertions": [{"label": "px", "expression": "get_node('<Player>').position.x", "expected": 2, "operator": "gte", "description": "moved within the window"}]}}}]}} — INPUT LATENCY = the first frame index where the px sample CHANGES (the per-frame trajectory IS the measurement; <= 3 physics frames passes, > 3 needs a faster response path). Collision honesty: walk into a wall with displacement_max. Persistence via the save recipe's cross-FRESH file proof.
+R1 Playable (all M): strict contracts for win_reachable AND lose_reachable (FRESH run each); assert_no_runtime_errors after every milestone; every input action bound (an unbound action's failure message names the fix).
 
-Step 3 — R3 Polished (M+A): feedback coverage — every damage/pickup/attack event leaves at least one juice response (audit fields, the juice recipe); FAIRNESS — every damage source telegraphs: timeline-sample the threat's windup state, first damage possible >= 12 frames after threat visible (undodgeable = defect, not difficulty); audio state asserts (bgm playing, hit sfx fires). Then the A items WITH EVIDENCE: screenshots of start/combat/death/victory via the timeline steps' screenshot option, and YOU judge visual coherence + stakes against the screenshots — record the verdict and keep the screenshots as evidence. No evidence = unreviewed = not R3.
+R2 Solid (all M, timeline-measured): {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["input_latency", "collision_honesty"], "items": [{"kind": "behavior_check", "requirement": "input_latency", "label": "r2a", "detail": {"scene_path": "<res://scenes/level_01.tscn>", "timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}], "settle_frames": 12, "sample": [{"label": "px", "expression": "get_node('<Player>').position.x"}], "assertions": [{"label": "px", "expression": "get_node('<Player>').position.x", "expected": 2, "operator": "gte", "description": "moved within the window"}]}}}]}} — INPUT LATENCY = the first frame index where the px sample CHANGES (the per-frame trajectory IS the measurement; <= 3 physics frames passes, > 3 needs a faster response path). Collision honesty: walk into a wall with displacement_max. Persistence via the save recipe's cross-FRESH file proof.
 
-Step 4 — R4 Perfect (A-heavy, M-guarded): the FIRST-30-SECONDS test — play as a brand-new player via timeline scripts, screenshot every 5 seconds, then judge only from those shots: can a newcomer tell what the controls do and what the goal is? Feedback density: responses/total events >= 1.0 (machine). Balance: play several runs, look for a dominant strategy or a flat difficulty curve (record your reasoning). The gate: EVERY ladder item is green or explicitly waived with a reason — print the full ladder state and, if anything stands between the game and perfect, name it precisely (that list IS the deliverable when R4 is not yet true).
+R3 Polished (M+A): feedback coverage — every damage/pickup/attack event leaves at least one juice response (audit fields, the juice recipe); FAIRNESS — every damage source telegraphs: timeline-sample the threat's windup state, first damage possible >= 12 frames after threat visible (undodgeable = defect, not difficulty); audio state asserts (bgm playing, hit sfx fires). Then the A items WITH EVIDENCE: screenshots of start/combat/death/victory via the timeline steps' screenshot option, and YOU judge visual coherence + stakes against the screenshots — record the verdict and keep the screenshots as evidence. No evidence = unreviewed = not R3.
 
-Step 5 — The fix loop, rung-ordered: one knob per fix -> verify_change_effect proves it reached the running game -> re-verify ONLY the affected item -> re-ask the ladder. Stop when R4 or when the remaining gaps are all waived with reasons. Close honestly: ladder state verbatim, unreviewed named, next sentences suggested.
+R4 Perfect (A-heavy, M-guarded): the FIRST-30-SECONDS test — play as a brand-new player via timeline scripts, screenshot every 5 seconds, then judge only from those shots: can a newcomer tell what the controls do and what the goal is? Feedback density: responses/total events >= 1.0 (machine). Balance: play several runs, look for a dominant strategy or a flat difficulty curve (record your reasoning). The gate: EVERY ladder item is green or explicitly waived with a reason — print the full ladder state and, if anything stands between the game and perfect, name it precisely (that list IS the deliverable when R4 is not yet true).
+
+The fix loop, rung-ordered: one knob per fix -> verify_change_effect proves it reached the running game -> re-verify ONLY the affected item -> re-ask the ladder. Stop when R4 or when the remaining gaps are all waived with reasons. Close honestly: ladder state verbatim, unreviewed named, next sentences suggested.
 """
 
 
@@ -457,7 +459,7 @@ Step 5 — The fix loop, rung-ordered: one knob per fix -> verify_change_effect 
 # ============================================================================
 
 const ITERATE_PLAY_VERIFY_TEMPLATE: String = """
-You are executing the "Iterate: Play, Verify, Fix" loop against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything; only claims need evidence.
 Repeat the loop until every gate passes or you have isolated a root cause you cannot fix.
 
 Target: {{target}}
@@ -481,7 +483,7 @@ play session reached the scenario's expected state.
 """
 
 const RELEASE_EXPORT_FLOW_TEMPLATE: String = """
-You are executing the "Release Export Checklist" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 
 Platform: {{platform}}
 Notes: {{notes}}
@@ -501,37 +503,37 @@ Done when: steps 1-5 all pass; any blocking failure is reported with the exact t
 """
 
 const MAKE_GAME_CHANGE_TEMPLATE: String = """
-You are executing the "Recoverable Change" workflow against the Godot project through MCP tools.
+DECLARATIVE KNOWLEDGE CARD — you decide everything (order, structure, approach); only claims need evidence.
 This is an executable workflow template: follow the steps in order; never skip the preview or the verification, and never report a write as done before its gates pass.
 
 Change: {{change}}
 Acceptance: {{acceptance}}
 
-Step 0 — Activate the toolset (supplementary tools are off by design, not broken):
+Activate the toolset (supplementary tools are off by design, not broken):
 {"tool": "enable_tools", "args": {"workflow_query": "{{change}}"}} — one call routes the tools this loop needs. If a call ever answers "Tool is disabled", the error embeds the exact enable call; unknown argument names surface in _schema_warnings with the schema's real property list.
 
-Step 1 — Frame acceptance first. If no acceptance was given, write 1-3 objective, observable conditions before touching anything (e.g. "validate_script passes on touched scripts", "player moves 100px right under fixed input", "zero runtime errors").
+Frame acceptance first. If no acceptance was given, write 1-3 objective, observable conditions before touching anything (e.g. "validate_script passes on touched scripts", "player moves 100px right under fixed input", "zero runtime errors").
 
-Step 2 — Orient (read-only):
+Orient (read-only):
 {"tool": "gather_task_context", "args": {"goal": "{{change}}"}} — entry scripts, referencing scenes, input actions, related resources and affected tests for this goal.
 {"tool": "query_change_impact", "args": {"target_paths": ["<entry script or scene paths from the step above>"]}} — transitive dependents with evidence. Follow has_more/next_offset to the end; treat unknown_targets and dynamic_unknowns as risk to inspect, not as proof of safety.
 
-Step 3 — Pin read versions before editing:
+Pin read versions before editing:
 {"tool": "read_script", "args": {"script_path": "<path>"}} — or {"tool": "batch_read_scripts", "args": {"script_paths": ["<paths>"]}} for several. Keep each returned content_hash: every modify operation must carry the expected_content_hash of the read that produced it.
 
-Step 4 — Preview, then commit:
+Preview, then commit:
 {"tool": "apply_change_set", "args": {"intent": "{{change}}", "operations": [{"path": "<path>", "expected_content_hash": "<hash from step 3>", "edits": [{"old_text": "<snippet that occurs exactly once>", "new_text": "<replacement>"}]}], "change_set_id": "<stable id you reuse>", "dry_run": true}}
 Review the preview (fingerprints, per-file edit counts), then commit the SAME change_set_id and operations with "dry_run": false. On interruption re-submit the same id: applied files are skipped and manually-edited files stop at an explicit conflict — never widen edits to work around a conflict.
 Scene/node edits that the text schema cannot express go through the focused scene tools instead; do not force them into the change set.
 
-Step 5 — Compile gate: {"tool": "validate_script", "args": {"script_path": "<each touched script>"}} — zero errors required before any behavior claim.
+Compile gate: {"tool": "validate_script", "args": {"script_path": "<each touched script>"}} — zero errors required before any behavior claim.
 
-Step 6 — Behavior gate — pick the cheapest tool that actually observes the acceptance:
+Behavior gate — pick the cheapest tool that actually observes the acceptance:
 {"tool": "play_and_verify", "args": {"steps": [{"action": "<input action>", "wait_frames": 30, "screenshot": true}], "assertions": [{"expression": "<runtime expression for one acceptance condition>", "description": "<the acceptance condition>"}], "deterministic": true}}
 For multi-slice verification use {"tool": "run_verification_queue", "args": {"command": "create", "goal": "{{change}}", "items": [{"kind": "script_check", "label": "<what>", "detail": {"scripts": ["<paths>"]}}, {"kind": "external", "label": "<behavior to run>", "detail": "<how>"}]}} then {"command": "advance"}; an external item is recorded with {"command": "record"} only after you actually ran it — recording a verdict is not the same as producing one.
 Runtime errors, if any: {"tool": "get_editor_logs", "args": {"source": "runtime"}}.
 
-Step 7 — Persist and report:
+Persist and report:
 If a task plan exists, feed measured outcomes back: {"tool": "manage_task_plan", "args": {"action": "set_dod", "id": "<task id>"}} and {"tool": "manage_task_plan", "args": {"action": "set_status", "id": "<task id>", "status": "<new status>"}}.
 Report in one block: files changed and why (intent), evidence per acceptance condition (tool receipts, screenshots), what was NOT verified, and how to resume or inspect (the change_set_id).
 

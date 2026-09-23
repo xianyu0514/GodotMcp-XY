@@ -146,6 +146,10 @@ godot --editor --path /path/to/project -- --mcp-server --mcp-port=9080
 
 欢迎提交 Issue 和 Pull Request。新增工具或修改 MCP 行为前，请先阅读 [Contributing](docs/contributing.md)，确保代码、测试、翻译和文档同步更新。
 
+## 隐私：零遥测 by design
+
+本插件不收集任何东西——无使用事件、无项目名、无标识符、无任何回传。全部处理留在你的编辑器内；唯一的网络面是你自己配置的本地 MCP 传输。（部分 MCP Godot 插件自带可退出的使用遥测；我们让你无遥测可退。）
+
 ## 许可证
 
 本项目基于 [MIT License](LICENSE) 发布。
