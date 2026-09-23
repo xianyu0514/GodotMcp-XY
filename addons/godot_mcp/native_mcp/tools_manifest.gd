@@ -67,6 +67,7 @@ const TOOLS: Dictionary = {
 	"create_project_smoke_test": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_resource": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_runtime_node": {"category": "supplementary", "group": "Debug-Advanced"},
+	"create_scene_variant": {"category": "supplementary", "group": "Scene-Advanced"},
 	"create_scene": {"category": "core", "group": "Scene"},
 	"create_script": {"category": "core", "group": "Script"},
 	"create_theme": {"category": "supplementary", "group": "Project-Advanced"},

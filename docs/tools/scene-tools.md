@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**13 tools** — 4 core, 9 advanced.
+**14 tools** — 4 core, 10 advanced.
 
 Open, save, inspect and compose scenes. Advanced tools cover tab management, scene instancing, branch saving and TileMapLayer cell access.
 
@@ -24,7 +24,7 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 | `open_scene` | core | Open a scene file from the project. Closes the current scene if one is open. |
 | `get_current_scene` | core | Get information about the currently open scene, including name, path, and root node type. |
 
-### Scene-Advanced (9 advanced)
+### Scene-Advanced (10 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -37,3 +37,4 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 | `set_tilemap_layer_cells` | advanced | Set or erase a batch of cells on a TileMapLayer node (Godot 4.x) in the currently edited scene using the single-layer TileMapLayer API. Each cell is {coords:[x,y], source_id, atlas_coords:[x,y], alternative} or {coords:[x,y], erase:true}. Assign a TileSet to the layer so painted cells render. Wrapped in editor UndoRedo. |
 | `get_tilemap_layer_cells` | advanced | Read cells from a TileMapLayer node (Godot 4.x) in the currently edited scene. Without 'coords' it returns every used cell; with 'coords' (array of [x,y]) it returns just those. Each cell reports source_id, atlas_coords and alternative (source_id -1 means empty). |
 | `batch_update_scene_files` | advanced | Semantic batch property edit across many .tscn FILES at once (text-level — everything but the edited lines stays byte-identical). Each edit targets {node, property, value} with an optional `expect_current` guard: only nodes whose current serialized value equals the guard are rewritten, so tuning every grunt while the boss keeps its special value is one call; drifted values are reported as preserved (special config kept). An explicit `preserve` list is an absolute keep. The existing serialized type is followed when lossless (220.0 over int 200 stays `220`). Unserialized properties are reported missing, never silently appended. `dry_run` defaults to true — first call previews, re-run with `dry_run=false` to write. |
+| `create_scene_variant` | advanced | Create a scene VARIANT by inheritance: boss.tscn <- enemy.tscn with property overrides. The variant keeps only its differences — every base-scene change flows into all variants; `batch_update_scene_files` retunes them later with the `expect_current` guard. Overrides are {node, property, value} relative to the root (''/'.' = root, 'Brain' = child, 'Mid/Leaf' = deeper). Idempotent (on_exists=skip default); text-level generation; open_after_create goes through the scene-ready barrier. |

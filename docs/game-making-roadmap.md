@@ -118,7 +118,7 @@ E-3 存量文本真理下沉清单（每条标注候选工具分支）。
 **目标**：从"一个杂兵"到"一个怪物图鉴"是一条链，不是 N 次重复劳动。
 
 1. `create_scene_variant(base, overrides)` 新工具：基于场景继承生成 boss.tscn ← enemy.tscn
-   （`audit_scene_inheritance` 已有审计能力，缺创建端）。
+   （✅ 2026-09-23 已交付：覆盖段语义/uid 透传/幂等 skip，单测含实体解析器回读闭环）。
 2. 数值即资源：EnemyStats 一族 .tres（`batch_create_resources` 已有），配方里"强化版/敏捷版"= 数据差异。
 3. 跨变体调参：`batch_update_scene_files`（已交付，expect_current 守卫保留特殊配置）。
 

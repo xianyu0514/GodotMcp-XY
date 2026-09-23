@@ -64,6 +64,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_set_tilemap_layer_cells(server_core)
 	_register_get_tilemap_layer_cells(server_core)
 	_register_batch_update_scene_files(server_core)
+	_register_create_scene_variant(server_core)
 
 # ============================================================================
 # create_scene - 创建新场�?
@@ -1640,3 +1641,164 @@ static func _batch_parse_attrs(header: String) -> Dictionary:
 	for m in regex.search_all(header):
 		attrs[String(m.get_string(1))] = m.get_string(2)
 	return attrs
+
+# ============================================================================
+# create_scene_variant（M3 变体与规模）：基于场景继承创建变体 —— boss.tscn
+# 继承 enemy.tscn 并带属性覆盖；基场景改动自动流到变体，变体只保留差异。
+# 纯文本生成（继承关系的 .tscn 结构稳定），on_exists 默认 skip 幂等。
+# ============================================================================
+
+func _register_create_scene_variant(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_scene_variant",
+		"Create a scene VARIANT by inheritance: boss.tscn <- enemy.tscn with property overrides. The variant keeps only its differences (stats knobs, exported values) — every base-scene change flows into all variants automatically, and batch_update_scene_files can retune them later while expect_current keeps each variant's specials. Overrides are {node, property, value} with node relative to the root ('' or '.' = the root itself, 'Brain' = child, 'Mid/Leaf' = deeper). Idempotent: an existing scene_path is skipped by default (on_exists='skip'|'error'). Text-level generation, no editor round-trip; open_after_create opens it through the scene-ready barrier.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "The variant scene to create, e.g. 'res://scenes/boss.tscn'."},
+				"base_scene": {"type": "string", "description": "Existing scene to inherit from."},
+				"overrides": {"type": "array", "items": {"type": "object"},
+					"description": "[{node: '.' | 'Brain' | 'Mid/Leaf', property: 'detect_range', value: 300.0}]"},
+				"on_exists": {"type": "string", "enum": ["skip", "error"], "default": "skip"},
+				"open_after_create": {"type": "boolean", "default": false}
+			},
+			"required": ["scene_path", "base_scene"]
+		},
+		Callable(self, "_tool_create_scene_variant"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"scene_path": {"type": "string"},
+			"base_scene": {"type": "string"},
+			"root_name": {"type": "string"},
+			"overrides_applied": {"type": "integer"},
+			"warning": {"type": "string"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_scene_variant(params: Dictionary) -> Dictionary:
+	var scene_path: String = String(params.get("scene_path", "")).strip_edges()
+	var base_scene: String = String(params.get("base_scene", "")).strip_edges()
+	if scene_path.is_empty():
+		return {"error": "scene_path is required (e.g. 'res://scenes/boss.tscn')"}
+	if base_scene.is_empty():
+		return {"error": "base_scene is required (the scene to inherit from)"}
+	if scene_path == base_scene:
+		return {"error": "scene_path and base_scene must differ"}
+	if not FileAccess.file_exists(base_scene):
+		return {"error": "base_scene not found: %s" % base_scene}
+	if FileAccess.file_exists(scene_path):
+		if String(params.get("on_exists", "skip")) == "error":
+			return {"error": "scene already exists: %s" % scene_path}
+		return {"status": "exists", "scene_path": scene_path, "base_scene": base_scene,
+			"note": "variant already present (on_exists=skip) — untouched"}
+
+	var overrides: Array = []
+	var overrides_raw: Variant = params.get("overrides", [])
+	if overrides_raw is Array:
+		for override_value in overrides_raw:
+			if not (override_value is Dictionary):
+				return {"error": "each override must be an object {node, property, value}"}
+			var override: Dictionary = override_value
+			var property: String = String(override.get("property", "")).strip_edges()
+			if property.is_empty() or not property.is_valid_identifier():
+				return {"error": "override requires a valid 'property' identifier (got '%s')" % property}
+			if not override.has("value") or override.get("value", null) == null:
+				return {"error": "override for '%s' requires a non-null 'value'" % property}
+			overrides.append(override)
+
+	# 基场景：根名 + 自身 uid（4.4+ 存在 gd_scene 头里，透传给 ext_resource）。
+	var base_text: String = _variant_read_text(base_scene)
+	var root_name: String = _variant_base_root_name(base_text)
+	if root_name.is_empty():
+		return {"error": "could not parse the base scene's root node name"}
+	var base_uid: String = _variant_base_uid(base_text)
+
+	# 组装继承场景：根 = instance=ExtResource；根覆盖写根段体；子覆盖
+	# parent 相对根（"."=根的直接子级），与仓库解析器同一语义。
+	var lines: PackedStringArray = []
+	lines.append("[gd_scene load_steps=2 format=3]")
+	lines.append("")
+	var uid_attr: String = "" if base_uid.is_empty() else "uid=\"%s\" " % base_uid
+	lines.append("[ext_resource type=\"PackedScene\" %spath=\"%s\" id=\"1_base\"]" % [uid_attr, base_scene])
+	lines.append("")
+	lines.append("[node name=\"%s\" instance=ExtResource(\"1_base\")]" % root_name)
+	var applied: int = 0
+	# 子覆盖行用 Array（引用类型）——PackedStringArray 是值类型，as 转换后 append
+	# 改的是副本，字典里的存量不变（本会话实测坑）。
+	var child_sections: Dictionary = {}  # 相对路径 -> 属性行 Array
+	for override_value in overrides:
+		var override: Dictionary = override_value
+		var property: String = String(override.get("property", "")).strip_edges()
+		var node: String = String(override.get("node", ".")).strip_edges()
+		if node.is_empty():
+			node = "."
+		var line: String = "\t%s = %s" % [property, var_to_str(override.get("value", null))]
+		if node == ".":
+			lines.append(line)
+		else:
+			var normalized: String = node.trim_prefix("./").trim_prefix("/")
+			if not child_sections.has(normalized):
+				child_sections[normalized] = []
+			(child_sections[normalized] as Array).append(line)
+		applied += 1
+	# 子覆盖段：路径 A/B => name=B, parent=A（A 为空即 "."）。
+	for path_value in child_sections.keys():
+		var path: String = String(path_value)
+		var segments: PackedStringArray = path.split("/")
+		var section_name: String = String(segments[segments.size() - 1])
+		var parent_attr: String = "." if segments.size() == 1 else "/".join(segments.slice(0, segments.size() - 1))
+		lines.append("")
+		lines.append("[node name=\"%s\" parent=\"%s\"]" % [section_name, parent_attr])
+		for body_line in child_sections[path_value]:
+			lines.append(body_line)
+
+	var writer: FileAccess = FileAccess.open(scene_path, FileAccess.WRITE)
+	if writer == null:
+		return {"error": "could not write %s" % scene_path}
+	writer.store_string("\n".join(lines) + "\n")
+	writer.close()
+
+	var result: Dictionary = {
+		"status": "success",
+		"scene_path": scene_path,
+		"base_scene": base_scene,
+		"root_name": root_name,
+		"overrides_applied": applied,
+	}
+	if applied == 0:
+		result["warning"] = "no overrides given — the variant is a pure alias of the base for now"
+	if bool(params.get("open_after_create", false)):
+		var editor_interface: EditorInterface = _get_editor_interface()
+		if editor_interface:
+			await SCENE_CONTEXT.open_scene_and_wait(editor_interface, scene_path)
+	return result
+
+static func _variant_read_text(path: String) -> String:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content: String = file.get_as_text()
+	file.close()
+	return content
+
+## 基场景根名：第一个无 parent 属性的 [node ...] 段的名字。
+static func _variant_base_root_name(base_text: String) -> String:
+	for line_value in base_text.split("\n"):
+		var line: String = line_value.strip_edges()
+		if line.begins_with("[node"):
+			var attrs: Dictionary = _batch_parse_attrs(line)
+			if not attrs.has("parent"):
+				return String(attrs.get("name", ""))
+	return ""
+
+## 基场景自身 uid：gd_scene 头部的 uid 属性（4.4+）。
+static func _variant_base_uid(base_text: String) -> String:
+	for line_value in base_text.split("\n"):
+		var line: String = line_value.strip_edges()
+		if line.begins_with("[gd_scene"):
+			var attrs: Dictionary = _batch_parse_attrs(line)
+			return String(attrs.get("uid", ""))
+		if line.begins_with("["):
+			break
+	return ""

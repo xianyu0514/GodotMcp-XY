@@ -350,7 +350,7 @@ Step 2 — Arena: build the arena as a MAP (make_game_map), instance the boss fr
 
 Step 3 — Contract: {"tool": "run_verification_queue", "args": {"command": "create", "strict": true, "requirements": ["phase_switch_occurs", "knockback_resisted", "death_stops_attacking", "victory_fires"], "items": [{"kind": "behavior_check", "requirement": "phase_switch_occurs", "detail": {"scene_path": "<res://scenes/boss_arena.tscn>", "steps": [{"wait_ms": 300, "assert": {"expression": "<deal lethal-ish damage expression>", "description": "push hp below the threshold"}}, {"wait_ms": 400, "assert": {"expression": "<boss phase field expression>", "expected": 2, "description": "phase 2 engaged"}}]}}]}} — each item boots a FRESH run and must push the boss into the state it asserts itself (deal your own damage). Death-window reads stay inside the free window.
 
-Step 4 — Tuning is stats/data: harder boss = rows in the phase table or stats resource; after any script change verify_change_effect proves reach; variant bosses via create stats resources, batch-retuned with expect_current.
+Step 4 — Tuning is stats/data: harder boss = rows in the phase table or stats resource; after any script change verify_change_effect proves reach; variant bosses via create_scene_variant (inheritance, overrides only) + create stats resources, batch-retuned with expect_current.
 
 Step 5 — Close honestly: checklist verbatim, unverified named, next sentences suggested (third phase / adds at 30% / a telegraphed AoE).
 """
