@@ -790,6 +790,7 @@ func _register_all_resources() -> void:
 	
 	# 注册编辑器资源
 	_register_editor_resources()
+	_register_session_resources()
 	
 	_log_info("All MCP resources registered successfully")
 
@@ -870,6 +871,62 @@ func _register_project_resources() -> void:
 		Callable(self, "_resource_project_settings"),
 		"Project setting values and configuration"
 	)
+
+func _register_session_resources() -> void:
+	# 会话层资源：注意力里程碑的"一次调用重建上下文"以可订阅资源面暴露。
+	_native_server.register_resource(
+		"godot://project/brief",
+		"Game project session brief",
+		"application/json",
+		Callable(self, "_resource_project_brief"),
+		"One-read session context: identity, content volume, task-plan state, verification gaps named one by one, recent changes, next sentences. The get_game_project_brief tool's output as a subscribable resource."
+	)
+	_native_server.register_resource(
+		"godot://engine/expression-rules",
+		"Runtime Expression mini-language rules",
+		"text/plain",
+		Callable(self, "_resource_expression_rules"),
+		"The engine truths for expressions sent to the runtime probe (assertions, readbacks): what the Expression class does NOT support and how to write legal ones. Read BEFORE writing assertions."
+	)
+	_native_server.register_resource(
+		"godot://recipes",
+		"Making-recipe catalog",
+		"application/json",
+		Callable(self, "_resource_recipes"),
+		"All shipped game-making recipes with descriptions and required arguments."
+	)
+
+static func _resource_project_brief(params: Dictionary) -> Dictionary:
+	var brief: Dictionary = {}
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has("ProjectToolsNative") and instances["ProjectToolsNative"] is RefCounted:
+				brief = instances["ProjectToolsNative"]._tool_get_game_project_brief({})
+	var text: String = JSON.stringify(brief if not brief.is_empty() else {"status": "unavailable", "detail": "brief module not ready"}, "  ")
+	return {"contents": [{"uri": "godot://project/brief", "mimeType": "application/json", "text": text}]}
+
+static func _resource_expression_rules(params: Dictionary) -> Dictionary:
+	var rules := """Runtime Expression rules (learned the hard way, read before writing assertions):
+
+1. NO ternary syntax: 'x if cond else y' is a PARSE ERROR in the Expression class (even '(1 if true else 2)').
+2. NO 'self' identifier: to reference the evaluation base use bare property/method names.
+3. NO 'is' operator: type checks use get_class() string comparison, e.g. material.get_class() == 'ShaderMaterial'.
+4. The evaluation base is the CURRENT SCENE: get_node('Child') resolves relative to it; for the scene root itself use bare properties.
+5. get_shader_parameter returns NULL for uniforms never explicitly set — set via set_runtime_shader_parameter first, then read.
+6. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
+"""
+	return {"contents": [{"uri": "godot://engine/expression-rules", "mimeType": "text/plain", "text": rules}]}
+
+static func _resource_recipes(params: Dictionary) -> Dictionary:
+	var recipes: Array = []
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_prompt_workflows") is RefCounted:
+			recipes = plugin.get("_prompt_workflows").get_prompts()
+	var text: String = JSON.stringify({"recipes": recipes}, "  ")
+	return {"contents": [{"uri": "godot://recipes", "mimeType": "application/json", "text": text}]}
 
 func _register_editor_resources() -> void:
 	# godot://editor/state
