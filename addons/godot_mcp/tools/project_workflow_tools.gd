@@ -23,6 +23,9 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_set_default_theme(server_core)
 	_register_create_animation(server_core)
 	_register_insert_animation_keys(server_core)
+	_register_apply_animation_preset(server_core)
+	_register_set_material_parameter(server_core)
+	_register_create_audio_player(server_core)
 	_register_manage_task_plan(server_core)
 	_register_manage_localization(server_core)
 
@@ -1407,3 +1410,291 @@ func _i18n_export(params: Dictionary) -> Dictionary:
 		"key_count": key_order.size(),
 		"dry_run": dry_run
 	}
+
+func _get_editor_interface() -> EditorInterface:
+	if _editor_interface:
+		return _editor_interface
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.has_method("get_editor_interface"):
+			return plugin.get_editor_interface()
+	return null
+
+# ============================================================================
+# 2D 创作面完胜三件套（对位 godot-ai 的 animation preset / shader param /
+# audio player 编辑期操作）：
+#   apply_animation_preset — fade/slide/shake/pulse 一键生成 Animation 资源
+#   set_material_parameter — 编辑期 ShaderMaterial/材质参数（此前只有运行期）
+#   create_audio_player   — AudioStreamPlayer(2D) + 流 + 总线一步到位
+# ============================================================================
+
+func _register_apply_animation_preset(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"apply_animation_preset",
+		"One call authors a preset Animation resource (.tres) ready for an AnimationPlayer: fade (modulate:a 1->0 by default), slide (position offset there-and-back), shake (position jitter, N oscillations), pulse (scale up and back). Presets are DATA: every knob (duration, magnitude, from/to, loop) is a parameter, so 'longer fade' or 'bigger shake' is a re-call, not new authoring. node_label names the track target inside the animation ('Sprite2D:modulate' style paths derive from the preset; pass node_label to match the player's node name).",
+		{
+			"type": "object",
+			"properties": {
+				"save_path": {"type": "string", "description": "Animation resource path to create, e.g. 'res://anim/hit_fade.tres'."},
+				"preset": {"type": "string", "enum": ["fade", "slide", "shake", "pulse"],
+					"description": "fade: modulate alpha from->to; slide: position offset +offset then back; shake: position jitter magnitude x oscillations; pulse: scale 1->magnitude->1."},
+				"node_label": {"type": "string", "default": ".", "description": "Track target node label as the AnimationPlayer sees it ('.' = the player's root, 'Sprite2D' = a child)."},
+				"duration": {"type": "number", "default": 0.4, "description": "Seconds."},
+				"magnitude": {"type": "number", "default": 8.0, "description": "slide pixel offset / shake jitter px / pulse scale peak."},
+				"oscillations": {"type": "integer", "default": 6, "description": "shake only: position oscillation count."},
+				"from": {"type": "number", "default": 1.0, "description": "fade only: starting alpha."},
+				"to": {"type": "number", "default": 0.0, "description": "fade only: ending alpha."},
+				"loop": {"type": "boolean", "default": false, "description": "loop_mode linear when true."},
+				"on_exists": {"type": "string", "enum": ["skip", "error", "overwrite"], "default": "overwrite"}
+			},
+			"required": ["save_path", "preset"]
+		},
+		Callable(self, "_tool_apply_animation_preset"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"save_path": {"type": "string"},
+			"preset": {"type": "string"},
+			"tracks": {"type": "integer"},
+			"keys": {"type": "integer"},
+			"duration": {"type": "number"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_apply_animation_preset(params: Dictionary) -> Dictionary:
+	var save_path: String = String(params.get("save_path", "")).strip_edges()
+	var preset: String = String(params.get("preset", "")).strip_edges()
+	if save_path.is_empty():
+		return {"error": "save_path is required (e.g. 'res://anim/hit_fade.tres')"}
+	if not ["fade", "slide", "shake", "pulse"].has(preset):
+		return {"error": "preset must be fade | slide | shake | pulse (got '%s')" % preset}
+	if FileAccess.file_exists(save_path) and String(params.get("on_exists", "overwrite")) == "error":
+		return {"error": "file already exists: %s" % save_path}
+	if FileAccess.file_exists(save_path) and String(params.get("on_exists", "overwrite")) == "skip":
+		return {"status": "exists", "save_path": save_path, "preset": preset}
+	var duration: float = maxf(float(params.get("duration", 0.4)), 0.05)
+	var magnitude: float = float(params.get("magnitude", 8.0))
+	var oscillations: int = clampi(int(params.get("oscillations", 6)), 1, 64)
+	var node_label: String = String(params.get("node_label", ".")).strip_edges()
+	if node_label.is_empty():
+		node_label = "."
+	var from_a: float = float(params.get("from", 1.0))
+	var to_a: float = float(params.get("to", 0.0))
+	var loop: bool = bool(params.get("loop", false))
+
+	var anim := Animation.new()
+	anim.length = duration
+	anim.loop_mode = Animation.LOOP_LINEAR if loop else Animation.LOOP_NONE
+
+	var track_path: String = "%s:modulate" % node_label
+	var key_count: int = 0
+	match preset:
+		"fade":
+			var t := anim.add_track(Animation.TYPE_VALUE)
+			anim.track_set_path(t, track_path)
+			anim.value_track_set_update_mode(t, Animation.UPDATE_CONTINUOUS)
+			anim.track_insert_key(t, 0.0, Color(1, 1, 1, from_a))
+			anim.track_insert_key(t, duration, Color(1, 1, 1, to_a))
+			key_count = 2
+		"slide":
+			var t := anim.add_track(Animation.TYPE_VALUE)
+			anim.track_set_path(t, "%s:position" % node_label)
+			anim.value_track_set_update_mode(t, Animation.UPDATE_CONTINUOUS)
+			anim.track_insert_key(t, 0.0, Vector2.ZERO)
+			anim.track_insert_key(t, duration * 0.5, Vector2(magnitude, 0))
+			anim.track_insert_key(t, duration, Vector2.ZERO)
+			key_count = 3
+		"shake":
+			var t := anim.add_track(Animation.TYPE_VALUE)
+			anim.track_set_path(t, "%s:position" % node_label)
+			anim.value_track_set_update_mode(t, Animation.UPDATE_DISCRETE)
+			var steps: int = oscillations * 2
+			for i in steps + 1:
+				var phase: float = 1.0 if i % 2 == 0 else -1.0
+				var decay: float = 1.0 - float(i) / float(steps + 1)
+				anim.track_insert_key(t, duration * float(i) / float(steps), Vector2(phase * magnitude * decay, 0))
+				key_count += 1
+		"pulse":
+			var t := anim.add_track(Animation.TYPE_VALUE)
+			anim.track_set_path(t, "%s:scale" % node_label)
+			anim.value_track_set_update_mode(t, Animation.UPDATE_CONTINUOUS)
+			var peak: float = 1.0 + magnitude / 100.0
+			anim.track_insert_key(t, 0.0, Vector2.ONE)
+			anim.track_insert_key(t, duration * 0.5, Vector2(peak, peak))
+			anim.track_insert_key(t, duration, Vector2.ONE)
+			key_count = 3
+
+	var saved: Error = ResourceSaver.save(anim, save_path)
+	if saved != OK:
+		return {"error": "could not save animation to %s (error %d)" % [save_path, saved]}
+	return {
+		"status": "success",
+		"save_path": save_path,
+		"preset": preset,
+		"tracks": anim.get_track_count(),
+		"keys": key_count,
+		"duration": duration,
+		"hint": "assign to an AnimationPlayer (create_node AnimationPlayer + set its 'root_node' and add_library/autoplay via properties), or play at runtime with play_runtime_animation"}
+
+func _register_set_material_parameter(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_material_parameter",
+		"EDIT-TIME material parameter set (the runtime variant is set_runtime_shader_parameter): sets a shader uniform or plain property on a CanvasItem node's material in the edited scene and marks it unsaved. If the node has no material yet, pass shader_path to create a ShaderMaterial first (same mount path as create_script's .gdshader attach). Base material (non-shader) properties like 'albedo' also work when the material has them.",
+		{
+			"type": "object",
+			"properties": {
+				"node_path": {"type": "string", "description": "CanvasItem node in the edited scene (the visual child, e.g. 'Player/Visual')."},
+				"parameter": {"type": "string", "description": "Shader uniform name (e.g. 'flash_amount') or plain material property."},
+				"value": {"description": "The value (numbers, vectors as [x,y] or {x,y}, colors as [r,g,b,a])."},
+				"shader_path": {"type": "string", "description": "Optional: create the ShaderMaterial from this .gdshader when the node has none."}
+			},
+			"required": ["node_path", "parameter", "value"]
+		},
+		Callable(self, "_tool_set_material_parameter"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"parameter": {"type": "string"},
+			"material_class": {"type": "string"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Node-Write-Advanced"
+	)
+
+func _tool_set_material_parameter(params: Dictionary) -> Dictionary:
+	var node_path: String = String(params.get("node_path", "")).strip_edges()
+	var parameter: String = String(params.get("parameter", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "node_path is required (the CanvasItem visual child)"}
+	if parameter.is_empty() or not parameter.is_valid_identifier():
+		return {"error": "parameter must be a valid identifier (got '%s')" % parameter}
+	if not params.has("value"):
+		return {"error": "value is required"}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"error": "Editor interface not available (open the scene first)"}
+	var scene_root: Node = editor_interface.get_edited_scene_root()
+	if scene_root == null:
+		return {"error": "No edited scene — open_scene first"}
+	var node: Node = scene_root.get_node_or_null(NodePath(node_path))
+	if node == null:
+		return {"error": "node not found in the edited scene: %s" % node_path}
+	if not (node is CanvasItem):
+		return {"error": "node is not a CanvasItem (use the visual child): %s" % node_path}
+	var visual := node as CanvasItem
+	var material: Material = visual.material
+	if material == null:
+		var shader_path: String = String(params.get("shader_path", "")).strip_edges()
+		if shader_path.is_empty():
+			return {"error": "node has no material — pass shader_path to create a ShaderMaterial from a .gdshader"}
+		var shader: Shader = load(shader_path)
+		if shader == null:
+			return {"error": "could not load shader: %s (write it first via create_script .gdshader)" % shader_path}
+		var created := ShaderMaterial.new()
+		created.shader = shader
+		visual.material = created
+		material = created
+	if material is ShaderMaterial:
+		(material as ShaderMaterial).set_shader_parameter(parameter, _coerce_material_value(params["value"]))
+	else:
+		if not ("params/" + parameter) in material and not parameter in material:
+			return {"error": "material %s has no parameter '%s'" % [material.get_class(), parameter]}
+		material.set(parameter, _coerce_material_value(params["value"]))
+	editor_interface.mark_scene_as_unsaved()
+	return {
+		"status": "success",
+		"node_path": node_path,
+		"parameter": parameter,
+		"material_class": material.get_class(),
+		"hint": "runtime reads of never-set uniforms return NULL (see godot://engine/expression-rules); this edit-time set makes the value durable in the scene"}
+
+func _register_create_audio_player(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_audio_player",
+		"Create an AudioStreamPlayer or AudioStreamPlayer2D in the edited scene with stream and bus set in one call. stream_path loads an imported audio resource (.ogg/.wav/.mp3 — import the file first; generate_asset cannot synthesize audio); bus defaults to 'Master' — the audio recipe's truth applies: BGM on 'Music', pooled SFX on 'SFX'. Idempotent by node name (on_name_conflict=skip).",
+		{
+			"type": "object",
+			"properties": {
+				"node_name": {"type": "string", "default": "SFX"},
+				"parent_path": {"type": "string", "default": "", "description": "Parent in the edited scene; default is the scene root."},
+				"spatial": {"type": "boolean", "default": false, "description": "true => AudioStreamPlayer2D (positioned); false => AudioStreamPlayer (global BGF/BGM)."},
+				"stream_path": {"type": "string", "description": "Imported audio resource, e.g. 'res://audio/hit.ogg'."},
+				"bus": {"type": "string", "default": "Master"},
+				"volume_db": {"type": "number", "default": 0.0},
+				"autoplay": {"type": "boolean", "default": false},
+				"on_name_conflict": {"type": "string", "enum": ["skip", "error"], "default": "skip"}
+			},
+			"required": ["node_name"]
+		},
+		Callable(self, "_tool_create_audio_player"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"player_class": {"type": "string"},
+			"stream_loaded": {"type": "boolean"},
+			"warning": {"type": "string"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Node-Write-Advanced"
+	)
+
+func _tool_create_audio_player(params: Dictionary) -> Dictionary:
+	var node_name: String = String(params.get("node_name", "SFX")).strip_edges()
+	if node_name.is_empty():
+		return {"error": "node_name is required"}
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"error": "Editor interface not available (open the scene first)"}
+	var scene_root: Node = editor_interface.get_edited_scene_root()
+	if scene_root == null:
+		return {"error": "No edited scene — open_scene first"}
+	var parent_path: String = String(params.get("parent_path", "")).strip_edges()
+	var parent: Node = scene_root if parent_path.is_empty() else scene_root.get_node_or_null(NodePath(parent_path))
+	if parent == null:
+		return {"error": "parent_path not found: %s" % parent_path}
+	var existing: Node = parent.get_node_or_null(NodePath(node_name))
+	if existing != null:
+		if String(params.get("on_name_conflict", "skip")) == "error":
+			return {"error": "node already exists: %s" % node_name}
+		return {"status": "exists", "node_path": "%s/%s" % [parent_path, node_name] if parent_path != "" else node_name}
+	var spatial: bool = bool(params.get("spatial", false))
+	var player: Node = AudioStreamPlayer2D.new() if spatial else AudioStreamPlayer.new()
+	player.name = node_name
+	parent.add_child(player)
+	player.owner = scene_root
+	var stream_path: String = String(params.get("stream_path", "")).strip_edges()
+	var stream_loaded: bool = false
+	var warning: String = ""
+	if not stream_path.is_empty():
+		var stream: Resource = load(stream_path)
+		if stream is AudioStream:
+			(player as Node).set("stream", stream)
+			stream_loaded = true
+		else:
+			warning = "stream not loadable (import it first): %s" % stream_path
+	(player as Node).set("bus", String(params.get("bus", "Master")))
+	(player as Node).set("volume_db", float(params.get("volume_db", 0.0)))
+	(player as Node).set("autoplay", bool(params.get("autoplay", false)))
+	editor_interface.mark_scene_as_unsaved()
+	var rel: String = node_name if parent_path.is_empty() else "%s/%s" % [parent_path, node_name]
+	var result: Dictionary = {
+		"status": "success",
+		"node_path": rel,
+		"player_class": player.get_class(),
+		"stream_loaded": stream_loaded}
+	if warning != "":
+		result["warning"] = warning
+	return result
+
+## 材质参数值宽容转换（[x,y]/{x,y}/数字/颜色数组）。
+static func _coerce_material_value(value: Variant) -> Variant:
+	if value is Array:
+		var arr: Array = value
+		if arr.size() >= 3:
+			return Color(float(arr[0]), float(arr[1]), float(arr[2]),
+				float(arr[3]) if arr.size() >= 4 else 1.0)
+		if arr.size() == 2:
+			return Vector2(float(arr[0]), float(arr[1]))
+	if value is Dictionary:
+		var d: Dictionary = value
+		if d.has("x") and d.has("y"):
+			return Vector2(float(d.get("x")), float(d.get("y")))
+	return value

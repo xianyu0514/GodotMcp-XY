@@ -23,6 +23,7 @@ extends RefCounted
 
 const TOOLS: Dictionary = {
 	"add_debugger_capture_prefix": {"category": "supplementary", "group": "Debug-Advanced"},
+	"create_audio_player": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"add_project_autoload": {"category": "supplementary", "group": "Project-Advanced"},
 	"add_resource": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"analyze_script": {"category": "supplementary", "group": "Script-Advanced"},
@@ -57,6 +58,7 @@ const TOOLS: Dictionary = {
 	"configure_render_output": {"category": "supplementary", "group": "Project-Advanced"},
 	"configure_tileset_layers": {"category": "supplementary", "group": "Project-Advanced"},
 	"connect_signal": {"category": "supplementary", "group": "Node-Write-Advanced"},
+	"apply_animation_preset": {"category": "supplementary", "group": "Scene-Advanced"},
 	"create_animation": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_custom_resource": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_drawable_texture": {"category": "supplementary", "group": "Project-Advanced"},
@@ -237,6 +239,7 @@ const TOOLS: Dictionary = {
 	"set_default_theme": {"category": "supplementary", "group": "Project-Advanced"},
 	"set_editor_setting": {"category": "supplementary", "group": "Editor-Advanced"},
 	"set_node_groups": {"category": "supplementary", "group": "Node-Write-Advanced"},
+	"set_material_parameter": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"set_node_subresource": {"category": "supplementary", "group": "Node-Write-Advanced"},
 	"set_project_setting": {"category": "supplementary", "group": "Project-Advanced"},
 	"set_runtime_animation_tree_active": {"category": "supplementary", "group": "Debug-Advanced"},

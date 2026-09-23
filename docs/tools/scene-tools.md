@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**15 tools** — 4 core, 11 advanced.
+**16 tools** — 4 core, 12 advanced.
 
 Open, save, inspect and compose scenes. Advanced tools cover tab management, scene instancing, branch saving and TileMapLayer cell access.
 
@@ -24,7 +24,7 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 | `open_scene` | core | Open a scene file from the project. Closes the current scene if one is open. |
 | `get_current_scene` | core | Get information about the currently open scene, including name, path, and root node type. |
 
-### Scene-Advanced (11 advanced)
+### Scene-Advanced (12 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |

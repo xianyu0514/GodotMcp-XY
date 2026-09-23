@@ -112,7 +112,7 @@ def main() -> int:
         check("initialize answers", "result" in init)
         instructions = str(init.get("result", {}).get("instructions", ""))
         check("instructions present", len(instructions) > 0)
-        check("instructions cite 245-tool truth", "245-tool catalog" in instructions, instructions[:120])
+        check("instructions cite 245-tool truth", "248-tool catalog" in instructions, instructions[:120])
 
         # 1b) Hermetic baseline: sequential tests on one runner share user://,
         #     so previously-enabled supplementary tools leak in. Reset to the

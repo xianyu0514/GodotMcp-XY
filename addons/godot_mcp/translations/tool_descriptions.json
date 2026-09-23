@@ -243,5 +243,8 @@
   "create_scene_variant": "Create a scene variant by inheritance with property overrides: the variant keeps only its differences, base changes flow in automatically, and later batch retunes keep specials via expect_current.",
   "game_quality_report": "One call runs every quality gate: project health, unverified delivery requirements, task-plan state, config sanity; optionally boots the scene for runtime-error, platform-performance and key-screen gates. Red/green verdict with needs-style fixes.",
   "create_navigation_region": "Create a NavigationRegion2D with an outline-driven baked navigation polygon in the edited scene: outlines as [x,y] point arrays, agent_radius shrink margin, quiet 4.6 bake path, vertex/polygon counts inline.",
-  "game_quality_ladder": "One call measures every machine rung of the quality ladder: R1 static checks, R2 input latency from a movement hint (first-changed-frame of a per-frame timeline), performance, runtime errors, plus caller-supplied R3/R4 timeline items; agent-judged dimensions return awaiting_review."
+  "game_quality_ladder": "One call measures every machine rung of the quality ladder: R1 static checks, R2 input latency from a movement hint (first-changed-frame of a per-frame timeline), performance, runtime errors, plus caller-supplied R3/R4 timeline items; agent-judged dimensions return awaiting_review.",
+  "apply_animation_preset": "One call authors a preset Animation resource (fade/slide/shake/pulse) ready for an AnimationPlayer — every knob is a parameter.",
+  "set_material_parameter": "Edit-time material parameter set: shader uniform or plain property on a CanvasItem's material; creates the ShaderMaterial from a shader_path when the node has none.",
+  "create_audio_player": "AudioStreamPlayer(2D) with stream and bus in one call; spatial toggle; idempotent by node name."
 }
