@@ -1612,7 +1612,10 @@ func _tool_batch_update_scene_files(params: Dictionary) -> Dictionary:
 				totals["scenes_touched"] = int(totals["scenes_touched"]) + 1
 				# 文本级改写绕过编辑器：资源缓存里还是旧场景，重开场景会实例化
 				# 旧值（实测坑）。写盘即刷新缓存——答案同行，调用方无需知道缓存语义。
-				ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_REPLACE)
+				# headless（无编辑器）跳过：夹具场景常引用不存在的资源，强行加载
+				# 只产生引擎解析噪音（GUT 计为 Unexpected Errors）。
+				if _get_editor_interface() != null:
+					ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_REPLACE)
 		reports.append(report)
 		totals["changed"] = int(totals["changed"]) + (report["changed"] as Array).size()
 		totals["preserved"] = int(totals["preserved"]) + (report["preserved"] as Array).size()
