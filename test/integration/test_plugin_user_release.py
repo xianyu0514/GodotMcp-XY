@@ -66,7 +66,7 @@ if USER_PROJ.exists():
 (USER_PROJ / "addons").mkdir(parents=True)
 shutil.copytree(REPO / "addons" / "godot_mcp", USER_PROJ / "addons" / "godot_mcp")
 (USER_PROJ / "project.godot").write_text(
-    "config_version=5\n\n[application]\n\nconfig_name=\"PluginUserSim\"\n\n"
+    "config_version=5\n\n[application]\n\nconfig/name=\"PluginUserSim\"\n\n"
     "[editor_plugins]\n\nenabled=PackedStringArray(\"res://addons/godot_mcp/plugin.cfg\")\n",
     encoding="utf-8")
 

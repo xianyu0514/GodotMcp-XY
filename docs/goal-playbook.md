@@ -162,6 +162,19 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - **远程敌人**：每次射击前必须有前摇（无前摇=不可闪避=缺陷）；投射物命中**和**超时
   都要 free（泄漏静默拖垮性能，断言活跃数回到基线）。
 
+## 本地集成验证的三个实测坑（2026-09-23 首次本地跑通全链路）
+
+- **嵌套项目残留会杀掉整个插件**：仓库根下未跟踪的 stress_game/（含插件全量副本，
+  连 .uid 一起复制）被编辑器扫描 → 同名全局类 "hides a global script class" →
+  真插件编译链失败 → MCP 服务器起不来。CI 绿是因为干净 checkout 无残留；
+  本地"服务器没起来"先查根目录嵌套项目。移出后还要清 .godot/（UID 缓存仍指向
+  已移走的副本路径）。
+- **project.godot 的键是 `config/name=` 不是 `config_name=`**：写错时项目名静默为空，
+  不报错——plugin_user_release 的项目名断言就是这么挂的（测试自身的键名笔误）。
+- **集成测试里的硬编码计数会静默漂移**：first_contact 的 "238-tool" 历经五次工具
+  计数递增都没更新（本机"跑不了"就没人看它）。凡是 pin 计数的测试，计数变更的
+  同步清单必须包含集成层。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
