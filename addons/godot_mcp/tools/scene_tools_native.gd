@@ -65,6 +65,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_tilemap_layer_cells(server_core)
 	_register_batch_update_scene_files(server_core)
 	_register_create_scene_variant(server_core)
+	_register_create_navigation_region(server_core)
 
 # ============================================================================
 # create_scene - 创建新场�?
@@ -1808,3 +1809,124 @@ static func _variant_base_uid(base_text: String) -> String:
 		if line.begins_with("["):
 			break
 	return ""
+
+# ============================================================================
+# create_navigation_region（M6 尾·3D/寻路补强）：在当前编辑场景创建
+# NavigationRegion2D + 轮廓驱动的烘焙导航网格（4.6 静默路径：轮廓即源几何，
+# 跳过 parse 直接 bake_from_source_geometry_data）。答案同行：顶点/多边形数
+# 直接进响应；agent_radius 为数据旋钮。
+# ============================================================================
+
+func _register_create_navigation_region(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_navigation_region",
+		"Create a NavigationRegion2D in the currently edited scene with an OUTLINE-DRIVEN baked navigation polygon. Give outlines as arrays of [x, y] points (world space, same space as the nodes); agent_radius grows the shrink margin so baked paths keep distance from walls. Baking uses the quiet 4.6 path (outlines ARE the source geometry; no scene parse, no engine noise) and the response reports vertex/polygon counts inline. Navigation-obstacle parity: bake again after walls change. For runtime proof, assert get_node('<region>').navigation_polygon.get_vertices().size() >= 4.",
+		{
+			"type": "object",
+			"properties": {
+				"parent_path": {"type": "string", "default": "", "description": "Parent for the region node; default is the edited scene root."},
+				"node_name": {"type": "string", "default": "NavRegion"},
+				"outlines": {"type": "array", "items": {"type": "array"},
+					"description": "One or more outlines, each an array of [x, y] points (clockwise or counter-clockwise, >= 3 points)."},
+				"agent_radius": {"type": "number", "default": 1.0, "description": "Bake shrink margin — keep paths away from outline edges."},
+				"bake": {"type": "boolean", "default": true, "description": "Bake immediately (recommended; the quiet outline path)."}
+			},
+			"required": ["outlines"]
+		},
+		Callable(self, "_tool_create_navigation_region"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"vertices_count": {"type": "integer"},
+			"polygons_count": {"type": "integer"},
+			"baked": {"type": "boolean"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_navigation_region(params: Dictionary) -> Dictionary:
+	var outlines_raw: Variant = params.get("outlines", [])
+	if not (outlines_raw is Array) or (outlines_raw as Array).is_empty():
+		return {"error": "outlines must be a non-empty array of point arrays ([[x, y], ...] per outline)"}
+	var baked_poly: Dictionary = _bake_navigation_outlines(outlines_raw, float(params.get("agent_radius", 1.0)),
+		bool(params.get("bake", true)))
+	if baked_poly.has("error"):
+		return baked_poly
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"error": "Editor interface not available (open the scene in the editor first)"}
+	var scene_root: Node = SCENE_CONTEXT.get_edited_user_scene_root(editor_interface)
+	if scene_root == null:
+		return {"error": "No edited scene — open_scene first"}
+	var parent_path: String = String(params.get("parent_path", "")).strip_edges()
+	var parent: Node = scene_root if parent_path.is_empty() else scene_root.get_node_or_null(NodePath(parent_path))
+	if parent == null:
+		return {"error": "parent_path not found in the edited scene: %s" % parent_path}
+	var node_name: String = String(params.get("node_name", "NavRegion")).strip_edges()
+	if node_name.is_empty():
+		node_name = "NavRegion"
+	var existing: Node = parent.get_node_or_null(NodePath(node_name))
+	var region: NavigationRegion2D = null
+	if existing is NavigationRegion2D:
+		region = existing  # 幂等：同名区域复用并重烘
+	else:
+		region = NavigationRegion2D.new()
+		region.name = node_name
+		parent.add_child(region)
+		region.owner = scene_root
+	region.navigation_polygon = baked_poly["navigation_polygon"]
+	editor_interface.mark_scene_as_unsaved()
+	# 场景相对路径（编辑器 get_path 是 @EditorNode@ 内部树，运行时不可用）。
+	var relative_path: String = ""
+	var walker: Node = region
+	while walker != null and walker != scene_root:
+		relative_path = String(walker.name) + "/" + relative_path
+		walker = walker.get_parent()
+	relative_path = relative_path.trim_suffix("/")
+	if relative_path.is_empty():
+		relative_path = String(region.name)
+	return {
+		"status": "success",
+		"node_path": relative_path,
+		"vertices_count": int(baked_poly["vertices_count"]),
+		"polygons_count": int(baked_poly["polygons_count"]),
+		"baked": bool(baked_poly["baked"]),
+	}
+
+## 纯内核（headless 可单测）：轮廓数组 -> 烘焙后的 NavigationPolygon + 计数。
+## 4.6 实测：NavigationPolygon 无 bake_navigation_polygon 方法；静默路径是
+## 跳过 parse、以轮廓为源几何直接 bake_from_source_geometry_data（带 root 的
+## parse 会打 "No parsing root node" 引擎噪音且不需要）。
+static func _bake_navigation_outlines(outlines_raw: Array, agent_radius: float, do_bake: bool) -> Dictionary:
+	if outlines_raw.is_empty():
+		return {"error": "outlines must contain at least one outline"}
+	var poly := NavigationPolygon.new()
+	var outline_count: int = 0
+	for outline_value in outlines_raw:
+		if not (outline_value is Array) or (outline_value as Array).size() < 3:
+			return {"error": "each outline needs at least 3 points (got %s)" % (str(outline_value)).substr(0, 60)}
+		var points: PackedVector2Array = PackedVector2Array()
+		for point_value in outline_value:
+			if point_value is Dictionary:
+				points.append(Vector2(float(point_value.get("x", 0.0)), float(point_value.get("y", 0.0))))
+			elif point_value is Array and (point_value as Array).size() >= 2:
+				points.append(Vector2(float((point_value as Array)[0]), float((point_value as Array)[1])))
+			elif point_value is Vector2:
+				points.append(point_value)
+			else:
+				return {"error": "outline points must be [x, y] arrays, {x, y} objects or Vector2s"}
+		poly.add_outline(points)
+		outline_count += 1
+	poly.agent_radius = maxf(agent_radius, 0.0)
+	var baked: bool = false
+	if do_bake:
+		var source := NavigationMeshSourceGeometryData2D.new()
+		NavigationServer2D.bake_from_source_geometry_data(poly, source)
+		baked = true
+	return {
+		"navigation_polygon": poly,
+		"vertices_count": poly.get_vertices().size(),
+		"polygons_count": poly.get_polygon_count(),
+		"baked": baked,
+		"outlines_used": outline_count}

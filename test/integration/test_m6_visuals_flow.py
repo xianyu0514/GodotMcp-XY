@@ -149,7 +149,7 @@ def main() -> int:
             "set_project_setting", "upsert_project_input_action",
             "run_verification_queue", "create_scene_variant",
             "batch_update_scene_files", "batch_get_node_properties",
-            "get_editor_logs", "close_scene_tab"]})
+            "get_editor_logs", "close_scene_tab", "create_navigation_region"]})
         tool("upsert_project_input_action", {"action_name": "launch", "erase_existing": True,
             "events": [{"type": "key", "physical_keycode": 32}]})
 
@@ -261,6 +261,27 @@ def main() -> int:
                     damp2 = (entry.get("properties", entry) or {}).get("linear_damp")
         check("reload reads the batched value back",
               damp2 is not None and abs(float(damp2) - 0.15) < 0.001, f"linear_damp={damp2}")
+
+        # ---- 导航：工具烘焙 -> 运行时顶点证明 ----
+        tool("open_scene", {"scene_path": SCENE, "allow_ui_focus": True})
+        nav = tool("create_navigation_region", {
+            "outlines": [[[80, 120], [740, 120], [740, 480], [80, 480]]],
+            "agent_radius": 8.0, "node_name": "NavRegion"})
+        check("navigation region baked", nav.get("status") == "success" and int(nav.get("vertices_count", 0)) >= 4,
+              json.dumps(nav)[:220])
+        tool("save_scene", {"scene_path": SCENE})
+        q2 = tool("run_verification_queue", {"command": "create", "strict": True,
+            "goal": "nav proof", "requirements": ["nav_mesh_present"],
+            "items": [tl("nav_mesh_present", "nav_verts",
+                "get_node('NavRegion').navigation_polygon.get_vertices().size()", 4, "gte")]},
+            timeout=600.0)
+        advances = 0
+        while q2.get("outcome") in ("pending_more", "open") and advances < 10:
+            q2 = tool("run_verification_queue", {"command": "advance", "queue_id": q2.get("queue_id", "")}, timeout=600.0)
+            advances += 1
+        check("baked nav mesh present at RUNTIME",
+              str(q2.get("checklist", {}).get("overall", "")) == "complete",
+              json.dumps(q2.get("items", []))[:300])
 
         print("\n=== M6 REAL-ENGINE VALIDATION: ALL CHECKS PASSED ===")
         return 0
