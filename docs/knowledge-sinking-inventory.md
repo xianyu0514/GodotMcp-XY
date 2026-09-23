@@ -36,7 +36,11 @@
 | 存档必须 user://（res:// 导出后只读） | save 配方内联 | audit_project_health / 脚本诊断：扫描用户脚本中 FileAccess 写 res:// 的调用，发现即报 "user:// required (res:// is read-only in exported builds)" |
 | 输入映射先建（缺 action 全契约失败） | first_game 配方内联 | play_and_verify 输入步失败消息附 "action '<x>' unbound — upsert_project_input_action first"（若尚未如此） |
 | TileSet 未赋给图层则不渲染 | map 配方内联 | set_tilemap_layer_cells：图层无 TileSet 时的返回已带提示则视为下沉；否则补自愈提示 |
-| 投射物泄漏（命中/TTL 都要 free） | ranged 配方内联 | 候选：运行时性能/节点计数断言模板；属半价值观，文本保留 + 工具辅助 |
+| ~~投射物泄漏（命中/TTL 都要 free）~~ | ranged 配方内联 | **已覆盖关闭（2026-09-23）**：无需新工具——play_and_verify 的运行时表达式断言（活跃数回到基线）即该检测，配方契约已含 projectiles_free_after_ttl；公平性半价值观留在文本（K-4） |
+
+## 状态：清零
+
+候选全部落地或如实关闭（13 条真理工具化 + 1 条以既有能力覆盖 + 6 条价值观永驻）。新增文本真理须先过 E-3 评估（宪章）。
 
 ## 永驻文本（K-4 设计价值观，无工具可持有）
 

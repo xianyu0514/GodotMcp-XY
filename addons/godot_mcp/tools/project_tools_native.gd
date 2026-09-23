@@ -2624,7 +2624,7 @@ func _tool_get_game_project_brief(params: Dictionary) -> Dictionary:
 	if content["scenes_count"] == 0 and content["scripts_count"] == 0:
 		next_sentences.append("empty project — start with make_first_game (input map, smallest complete loop, strict contract)")
 	elif next_sentences.is_empty():
-		next_sentences.append("tune the feel (make_game_juice), add a pillar (make_any_game routes all ten), or ship it (release_export_flow)")
+		next_sentences.append("tune the feel (make_game_juice), add a pillar (make_any_game routes all ten), or ship it — the chain: game_quality_report full -> bump_version -> release_export_flow (+ manage_localization for bilingual)")
 	if next_sentences.size() > 3:
 		next_sentences = next_sentences.slice(0, 3)
 

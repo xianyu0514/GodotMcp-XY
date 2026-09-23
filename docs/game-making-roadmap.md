@@ -139,7 +139,9 @@ E-3 存量文本真理下沉清单（每条标注候选工具分支）。
 
 ## 6. M5 — 持续开发与团队
 
-既有能力接入配方收尾：`manage_task_plan`（DoD 门禁）跨会话续跑、`manage_localization` 双语打包、
+**状态（2026-09-23）**：入口配方收尾已接 manage_task_plan 持久化 + get_game_project_brief 状态感知交接 + 发布链点名（game_quality_report full → bump_version → release_export_flow + manage_localization）；会话简报绿态建议同步点名发布链。
+
+原有规划：既有能力接入配方收尾：`manage_task_plan`（DoD 门禁）跨会话续跑、`manage_localization` 双语打包、
 `bump_version` + changelog、`smoke_test_export` 发布冒烟。配方在"完成"一步自动给出下一步建议清单。
 
 ---

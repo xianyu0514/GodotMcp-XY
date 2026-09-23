@@ -246,7 +246,7 @@ Step 3 — Genre guidance is DATA, not permission: turn-based = state machines a
 
 Step 4 — Quality floor (every game, no exceptions): game_quality_report is the one-call version — static after every milestone, full (scene + platform profile: desktop/mobile) once gameplay stabilizes; release_export_flow (export smoke) before calling the game done.
 
-Step 5 — Close honestly: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why, and suggest the next three sentences the user could say (tune a knob / add a pillar / ship it).
+Step 5 — Close honestly AND durably: report the plugin-built checklist verbatim (verified/unverified per requirement), name what you did NOT verify and why; record the finished pillar as a done task via manage_task_plan so the next session's get_game_project_brief resumes without re-discovery; suggest the next three sentences (tune a knob / add a pillar / ship it — shipping is a chain: game_quality_report full -> bump_version -> release_export_flow, plus manage_localization for bilingual).
 """
 const GAME_MAP_RECIPE_TEMPLATE: String = """
 You are executing the "Game Map / Level" recipe against the Godot project through MCP tools. Ships WITH the plugin.
@@ -387,7 +387,7 @@ Step 3 — Strict contract BEFORE polish: {"tool": "run_verification_queue", "ar
 
 Step 4 — Polish by pointer, not improvisation: feel -> make_game_juice; audio -> make_game_audio; menus/HUD/pause -> make_game_menu; progress -> make_game_save; more enemies/levels/pickups -> the pillar recipes. Screenshot the playable result and show it.
 
-Step 5 — Close honestly and HAND OFF: checklist verbatim, unverified named; then tell the user the next session opens with ONE call — get_game_project_brief rebuilds everything this session established (plan state, unverified requirements, next sentences) without re-discovery.
+Step 5 — Close honestly and HAND OFF: checklist verbatim, unverified named; record the built loop as done tasks via manage_task_plan (durable progress); then tell the user the next session opens with ONE call — get_game_project_brief rebuilds everything without re-discovery, and shipping later is the chain: game_quality_report full -> bump_version -> release_export_flow (+ manage_localization for bilingual).
 """
 
 
