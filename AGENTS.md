@@ -159,6 +159,9 @@ addons/godot_mcp/
 
 **注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`search_tools`、`get_tool_details`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
 
+### AI 能力规范（强制）
+配方与工具的设计/评审遵循 `docs/ai-capability-spec.md`：约束只挂"完成声明"不挂"思考路径"；知识四分法（通用常识不喂 / 项目事实不写死 / 环境意外优先工具化 / 设计价值观可内联）；违反条款须在提交信息中显式声明理由。K-2 门禁（`test_prompt_knowledge_gates.gd`）已强制。
+
 ### 修改已有工具后的文档更新流程
 
 每次修改已有工具（新增参数、返回值、行为变更）时，必须同步更新以下文档：
