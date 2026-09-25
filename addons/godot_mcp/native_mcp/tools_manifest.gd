@@ -126,6 +126,7 @@ const TOOLS: Dictionary = {
 	"get_editor_logs": {"category": "core", "group": "Debug"},
 	"get_editor_screenshot": {"category": "supplementary", "group": "Editor-Advanced"},
 	"get_editor_state": {"category": "core", "group": "Editor"},
+	"get_client_config": {"category": "supplementary", "group": "Editor"},
 	"get_import_metadata": {"category": "supplementary", "group": "Project-Advanced"},
 	"get_import_status": {"category": "supplementary", "group": "Editor-Advanced"},
 	"get_inspector_properties": {"category": "supplementary", "group": "Editor-Advanced"},

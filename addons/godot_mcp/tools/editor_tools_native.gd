@@ -109,6 +109,7 @@ static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 
 func register_tools(server_core: RefCounted) -> void:
 	_register_get_editor_state(server_core)
+	_register_get_client_config(server_core)
 	_register_run_project(server_core)
 	_register_stop_project(server_core)
 	_register_get_selected_nodes(server_core)
@@ -209,6 +210,102 @@ func _tool_get_editor_state(params: Dictionary) -> Dictionary:
 		"editor_mode": editor_mode,
 		"selected_count": selected_nodes.size()
 	}
+
+func _register_get_client_config(server_core: RefCounted) -> void:
+	var tool_name: String = "get_client_config"
+	var description: String = "Get a ready-to-paste MCP client connection config for THIS running server (Cursor/Cline/Claude Desktop). format http|stdio|remote_http|remote_stdio_bridge; port/godot_executable/project_path default to the LIVE editor values, so the snippet works as-is."
+	var input_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"format": {"type": "string", "enum": ["http", "stdio", "remote_http", "remote_stdio_bridge"],
+				"default": "http",
+				"description": "http = URL clients (Cursor/Cline); stdio = command clients (Claude Desktop) that launch the editor headless; remote_* = over a public tunnel base_url"},
+			"port": {"type": "integer", "description": "HTTP port (default: the live server port)"},
+			"auth_token": {"type": "string", "description": "Bearer token to embed as an Authorization header (leave empty when auth is off)"},
+			"base_url": {"type": "string", "description": "Public tunnel base URL, required for remote_http / remote_stdio_bridge"},
+			"godot_executable": {"type": "string", "description": "stdio only — defaults to the running editor executable"},
+			"project_path": {"type": "string", "description": "stdio only — defaults to THIS project's absolute path"}
+		}
+	}
+	var output_schema: Dictionary = {
+		"type": "object",
+		"properties": {
+			"status": {"type": "string"},
+			"format": {"type": "string"},
+			"config_text": {"type": "string", "description": "paste-ready JSON for the client's mcp config"},
+			"instructions": {"type": "string"},
+			"server": {"type": "object"}
+		}
+	}
+	var annotations: Dictionary = {
+		"readOnlyHint": true,
+		"destructiveHint": false,
+		"idempotentHint": true,
+		"openWorldHint": false
+	}
+	server_core.register_tool(tool_name, description, input_schema,
+						  Callable(self, "_tool_get_client_config"),
+						  output_schema, annotations,
+						  "supplementary", "Editor")
+
+func _tool_get_client_config(params: Dictionary) -> Dictionary:
+	var format: String = String(params.get("format", "http")).strip_edges().to_lower()
+	if format.is_empty():
+		format = "http"
+	var live_port: int = _live_http_port()
+	var token: String = String(params.get("auth_token", "")).strip_edges()
+	var config_text: String = ""
+	var instructions: String = ""
+	match format:
+		"http":
+			var port: int = int(params.get("port", live_port)) if params.has("port") else live_port
+			config_text = MCPClientConfig.http_config(port, token)
+			instructions = "Cursor: .cursor/mcp.json or VS Code settings 'mcp.servers'; Cline: cline_mcp_settings.json — paste config_text under the same 'mcpServers' key. Requires this editor running with the HTTP transport."
+		"stdio":
+			var exe: String = String(params.get("godot_executable", "")).strip_edges()
+			if exe.is_empty():
+				exe = OS.get_executable_path()
+			var project: String = String(params.get("project_path", "")).strip_edges()
+			if project.is_empty():
+				project = ProjectSettings.globalize_path("res://")
+			config_text = MCPClientConfig.stdio_config(exe, project)
+			instructions = "Claude Desktop: claude_desktop_config.json — paste config_text. The editor launches headless with the stdio transport; keep --editor/--headless/--no-header flags as generated."
+		"remote_http":
+			var base: String = String(params.get("base_url", "")).strip_edges()
+			if base.is_empty():
+				return {"error": "remote_http requires base_url (the public tunnel base). Start one with: " + MCPClientConfig.cloudflared_command(live_port)}
+			config_text = MCPClientConfig.remote_http_config(base, token)
+			instructions = "URL clients over the public tunnel — same 'mcpServers' paste. Public exposure: keep auth_token set."
+		"remote_stdio_bridge":
+			var base2: String = String(params.get("base_url", "")).strip_edges()
+			if base2.is_empty():
+				return {"error": "remote_stdio_bridge requires base_url (the public tunnel base). Start one with: " + MCPClientConfig.cloudflared_command(live_port)}
+			config_text = MCPClientConfig.remote_stdio_bridge_config(base2, token)
+			instructions = "stdio-only clients (Claude Desktop) over the public tunnel via the mcp-remote npm bridge (needs npx/node installed)."
+		_:
+			return {"error": "unknown format '%s' — use http | stdio | remote_http | remote_stdio_bridge" % format}
+	return {
+		"status": "success",
+		"format": format,
+		"config_text": config_text,
+		"instructions": instructions,
+		"server": {"http_port": live_port, "running": _plugin_server_running()}
+	}
+
+func _live_http_port() -> int:
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("http_port") != null:
+			return int(plugin.get("http_port"))
+	return MCPClientConfig.DEFAULT_PORT
+
+func _plugin_server_running() -> bool:
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.has_method("get_server_status"):
+			var status: Dictionary = plugin.call("get_server_status")
+			return String(status.get("status", "")) == "running"
+	return false
 
 # ============================================================================
 # run_project - 运行项目

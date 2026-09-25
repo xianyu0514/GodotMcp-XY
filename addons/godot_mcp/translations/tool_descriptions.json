@@ -246,5 +246,6 @@
   "game_quality_ladder": "One call measures every machine rung of the quality ladder: R1 static checks, R2 input latency from a movement hint (first-changed-frame of a per-frame timeline), performance, runtime errors, plus caller-supplied R3/R4 timeline items; agent-judged dimensions return awaiting_review.",
   "apply_animation_preset": "One call authors a preset Animation resource (fade/slide/shake/pulse) ready for an AnimationPlayer — every knob is a parameter.",
   "set_material_parameter": "Edit-time material parameter set: shader uniform or plain property on a CanvasItem's material; creates the ShaderMaterial from a shader_path when the node has none.",
-  "create_audio_player": "AudioStreamPlayer(2D) with stream and bus in one call; spatial toggle; idempotent by node name."
+  "create_audio_player": "AudioStreamPlayer(2D) with stream and bus in one call; spatial toggle; idempotent by node name.",
+  "get_client_config": "Get a ready-to-paste MCP client connection config for this running server (Cursor/Cline/Claude Desktop). Formats http/stdio/remote_http/remote_stdio_bridge; port, executable and project path default to the live editor values."
 }
