@@ -105,6 +105,32 @@ func _resolve_node_path(node_path: String) -> Node:
 # (only reads ClassDB) so it is unit-testable headlessly. This prevents the
 # confusing null-reference crash that used to happen when AI passed a non-Node
 # class (e.g. "Resource") or an abstract Node class (e.g. "CanvasItem").
+## 父路径解析失败时的自愈建议（实测坑：孙节点只写名字会 "Parent node not
+## found: Far"，正确写法是根相对全路径 BG/Far——工具知道场景树，应直接给出）。
+## 唯一候选 => "did you mean"；多候选 => 列前几个并教写法；无候选 => 只教写法。
+static func _suggest_parent_path(scene_root: Node, failed_path: String) -> String:
+	if scene_root == null or failed_path.is_empty():
+		return ""
+	var last_segment: String = failed_path.split("/")[-1]
+	var candidates: Array[String] = []
+	_collect_path_matches(scene_root, "", failed_path, last_segment, candidates)
+	var teach: String = "parent_path is root-relative: nested nodes need the full path from the scene root (e.g. Parent/Child)"
+	if candidates.size() == 1:
+		return " — did you mean '%s'? %s" % [candidates[0], teach]
+	if candidates.size() > 1:
+		return " — name matches several nodes (%s); %s, e.g. %s" % [", ".join(candidates), teach, candidates[0]]
+	return " — %s" % teach
+
+static func _collect_path_matches(node: Node, rel: String, failed_path: String,
+		last_segment: String, out: Array) -> void:
+	if out.size() >= 5:
+		return
+	for child in node.get_children():
+		var child_rel: String = String(child.name) if rel.is_empty() else rel + "/" + String(child.name)
+		if String(child.name) == last_segment and child_rel != failed_path:
+			out.append(child_rel)
+		_collect_path_matches(child, child_rel, failed_path, last_segment, out)
+
 static func _node_type_error(node_type: String) -> String:
 	if node_type.strip_edges().is_empty():
 		return "node_type is required"
@@ -138,7 +164,8 @@ func _tool_create_node(params: Dictionary) -> Dictionary:
 	if not parent:
 		if parent_path.is_empty() or parent_path == "/root":
 			return {"error": "No active edited scene to create nodes in — call open_scene {\"scene_path\": \"...\"} first (create_scene writes the file but does not open it)."}
-		return {"error": "Parent node not found: " + parent_path}
+		return {"error": "Parent node not found: " + parent_path
+			+ _suggest_parent_path(_get_user_scene_root(), parent_path)}
 
 	var type_error: String = _node_type_error(node_type)
 	if not type_error.is_empty():
@@ -874,7 +901,8 @@ func _prepare_batch_scene_node_edits(operations: Array, scene_root: Node) -> Dic
 					if parent_path == "/root":
 						parent_node = scene_root
 					else:
-						return {"error": "Parent node not found: " + parent_path}
+						return {"error": "Parent node not found: " + parent_path
+							+ _suggest_parent_path(scene_root, parent_path)}
 				var on_exists: String = str(operation.get("on_exists", "error")).to_lower()
 				if on_exists == "skip" and parent_node.has_node(node_name):
 					skipped_operations.append({
@@ -1621,7 +1649,8 @@ func _tool_list_nodes(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty() and parent_path != "/root":
 		start_node = _resolve_node_path(parent_path)
 		if not start_node:
-			return {"error": "Parent node not found: " + parent_path}
+			return {"error": "Parent node not found: " + parent_path
+				+ _suggest_parent_path(_get_user_scene_root(), parent_path)}
 	
 	var collected: Array[String] = []
 	_collect_nodes(start_node, "", recursive, collected, scene_root)

@@ -942,7 +942,8 @@ func _tool_instantiate_scene(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = _resolve_node_path(parent_path)
 		if not parent:
-			return {"error": "Parent node not found: " + parent_path}
+			return {"error": "Parent node not found: " + parent_path
+				+ NodeToolsNative._suggest_parent_path(scene_root, parent_path)}
 
 	# Load and instance the packed scene.
 	var packed_scene: PackedScene = ResourceLoader.load(scene_path) as PackedScene

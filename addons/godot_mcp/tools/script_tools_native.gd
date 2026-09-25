@@ -1776,7 +1776,8 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 		else:
 			var target_node: Node = _resolve_node_path(shader_editor, attach_to_node)
 			if target_node == null:
-				result["attach_warning"] = "Node not found: " + attach_to_node
+				result["attach_warning"] = "Node not found: " + attach_to_node \
+					+ NodeToolsNative._suggest_parent_path(shader_editor.get_edited_scene_root(), attach_to_node)
 			elif not (target_node is CanvasItem):
 				result["attach_warning"] = "shader attach expects a CanvasItem (use the visual child, e.g. Player/Visual): " + attach_to_node
 			else:
@@ -1825,7 +1826,8 @@ func _tool_create_script(params: Dictionary) -> Dictionary:
 				else:
 					result["attach_warning"] = "Script created but failed to load for attachment"
 			else:
-				result["attach_warning"] = "Node not found: " + attach_to_node
+				result["attach_warning"] = "Node not found: " + attach_to_node \
+					+ NodeToolsNative._suggest_parent_path(editor_interface.get_edited_scene_root(), attach_to_node)
 		else:
 			result["attach_warning"] = "Editor interface not available for script attachment"
 
