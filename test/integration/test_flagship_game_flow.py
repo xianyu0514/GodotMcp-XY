@@ -10,6 +10,7 @@ review-moment screenshots (A-evidence) and stresses the full chain.
   KEEP_FLAG=1 retains the scratch project.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -141,13 +142,21 @@ func _physics_process(_delta: float) -> void:
 MENU_GD = """extends CanvasLayer
 
 func _ready() -> void:
-	process_mode = Node.PROCESS_MODE_WHEN_PAUSED
+	# ALWAYS：暂停开关必须在任何状态下都能处理（WHEN_PAUSED 只在已暂停时
+	# 运行，永远无法发起第一次暂停——旗舰 A 评审实测坑）。
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	var objective := get_node_or_null("Objective")
+	if objective:
+		objective.visible = true
+	var pause_label := get_node_or_null("PauseLabel")
+	if pause_label:
+		pause_label.visible = false
 
 func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed("ui_cancel"):
 		var tree := get_tree()
 		tree.paused = not tree.paused
-		var label := get_node_or_null("Label")
+		var label := get_node_or_null("PauseLabel")
 		if label:
 			label.visible = tree.paused
 """
@@ -238,12 +247,18 @@ def main() -> int:
             ("Player", "ColorRect", "Visual"),
             ("Player", "Camera2D", "Cam"),
             ("", "StaticBody2D", "Ground"), ("Ground", "CollisionShape2D", "GShape"),
+            ("Ground", "ColorRect", "GVisual"),
             ("", "Area2D", "Spike"), ("Spike", "CollisionShape2D", "SShape"),
+            ("Spike", "ColorRect", "SVisual"),
             ("", "Area2D", "Gem1"), ("Gem1", "CollisionShape2D", "Shape"),
+            ("Gem1", "ColorRect", "V"),
             ("", "Area2D", "Gem2"), ("Gem2", "CollisionShape2D", "Shape"),
+            ("Gem2", "ColorRect", "V"),
             ("", "Area2D", "Gem3"), ("Gem3", "CollisionShape2D", "Shape"),
+            ("Gem3", "ColorRect", "V"),
             ("", "GPUParticles2D", "Burst"),
-            ("", "CanvasLayer", "Menu"), ("Menu", "Label", "Label"),
+            ("", "CanvasLayer", "Menu"), ("Menu", "Label", "Objective"),
+            ("Menu", "Label", "PauseLabel"),
         ]:
             tool("create_node", {"parent_path": parent, "node_type": ntype, "node_name": nname})
         tool("set_node_subresource", {"node_path": "Player/Shape", "property_name": "shape",
@@ -264,15 +279,35 @@ def main() -> int:
             {"type": "set_property", "node_path": "Player/Visual", "property_name": "size", "property_value": [24, 28]},
             {"type": "set_property", "node_path": "Player/Visual", "property_name": "position", "property_value": [-12, -14]},
             {"type": "set_property", "node_path": "Ground", "property_name": "position", "property_value": [1200, 416]},
+            {"type": "set_property", "node_path": "Ground/GVisual", "property_name": "size", "property_value": [2400, 64]},
+            {"type": "set_property", "node_path": "Ground/GVisual", "property_name": "position", "property_value": [-1200, -32]},
+            {"type": "set_property", "node_path": "Ground/GVisual", "property_name": "color", "property_value": [0.35, 0.26, 0.18, 1.0]},
             {"type": "set_property", "node_path": "Spike", "property_name": "position", "property_value": [300, 388]},
+            {"type": "set_property", "node_path": "Spike/SVisual", "property_name": "size", "property_value": [28, 28]},
+            {"type": "set_property", "node_path": "Spike/SVisual", "property_name": "position", "property_value": [-14, -14]},
+            {"type": "set_property", "node_path": "Spike/SVisual", "property_name": "color", "property_value": [0.85, 0.30, 0.25, 1.0]},
             {"type": "set_property", "node_path": "Gem1", "property_name": "position", "property_value": [500, 380]},
             {"type": "set_property", "node_path": "Gem2", "property_name": "position", "property_value": [700, 380]},
             {"type": "set_property", "node_path": "Gem3", "property_name": "position", "property_value": [900, 380]},
+            {"type": "set_property", "node_path": "Gem1/V", "property_name": "size", "property_value": [22, 22]},
+            {"type": "set_property", "node_path": "Gem1/V", "property_name": "position", "property_value": [-11, -11]},
+            {"type": "set_property", "node_path": "Gem1/V", "property_name": "color", "property_value": [0.25, 0.92, 0.82, 1.0]},
+            {"type": "set_property", "node_path": "Gem2/V", "property_name": "size", "property_value": [22, 22]},
+            {"type": "set_property", "node_path": "Gem2/V", "property_name": "position", "property_value": [-11, -11]},
+            {"type": "set_property", "node_path": "Gem2/V", "property_name": "color", "property_value": [0.25, 0.92, 0.82, 1.0]},
+            {"type": "set_property", "node_path": "Gem3/V", "property_name": "size", "property_value": [22, 22]},
+            {"type": "set_property", "node_path": "Gem3/V", "property_name": "position", "property_value": [-11, -11]},
+            {"type": "set_property", "node_path": "Gem3/V", "property_name": "color", "property_value": [0.25, 0.92, 0.82, 1.0]},
             {"type": "set_property", "node_path": "Burst", "property_name": "one_shot", "property_value": True},
             {"type": "set_property", "node_path": "Burst", "property_name": "amount", "property_value": 20},
             {"type": "set_property", "node_path": "Burst", "property_name": "lifetime", "property_value": 0.5},
             {"type": "set_property", "node_path": "Burst", "property_name": "emitting", "property_value": False},
-            {"type": "set_property", "node_path": "Menu/Label", "property_name": "text", "property_value": "PAUSED — Esc resumes"},
+            {"type": "set_property", "node_path": "Menu/Objective", "property_name": "text", "property_value": "Collect 3 gems - dodge the spike! (A/D move, Space jump)"},
+            {"type": "set_property", "node_path": "Menu/Objective", "property_name": "offset_left", "property_value": 16},
+            {"type": "set_property", "node_path": "Menu/Objective", "property_name": "offset_top", "property_value": 12},
+            {"type": "set_property", "node_path": "Menu/PauseLabel", "property_name": "text", "property_value": "PAUSED - Esc resumes"},
+            {"type": "set_property", "node_path": "Menu/PauseLabel", "property_name": "offset_left", "property_value": 16},
+            {"type": "set_property", "node_path": "Menu/PauseLabel", "property_name": "offset_top", "property_value": 44},
         ]})
         for path, content, attach in [
             (GAME_SCRIPT, GAME_GD, "Game"),
@@ -335,12 +370,17 @@ void fragment() {
                 tl("hazard_kills_when_armed", "r3", "get_node('Game').dead", True,
                    [{"frame": 0, "action": "move_right", "pressed": True},
                     {"frame": 60, "action": "move_right", "pressed": False}], 90),
-                tl("pause_roundtrip", "r4", "get_tree().paused", False,
+                # 非空断言的暂停往返：r4a 证明暂停真的发生（旧版只断终态 False，
+                # WHEN_PAUSED 永远无法发起暂停 → 空泛通过——旗舰 A 评审逼出的坑），
+                # r4b 证明按第二次 Esc 能恢复。
+                tl("pause_roundtrip", "r4a", "get_tree().paused", True,
+                   [{"frame": 5, "action": "ui_cancel", "pressed": True},
+                    {"frame": 8, "action": "ui_cancel", "pressed": False}], 15),
+                tl("pause_roundtrip", "r4b", "get_tree().paused", False,
                    [{"frame": 5, "action": "ui_cancel", "pressed": True},
                     {"frame": 8, "action": "ui_cancel", "pressed": False},
                     {"frame": 40, "action": "ui_cancel", "pressed": True},
-                    {"frame": 43, "action": "ui_cancel", "pressed": False}], 20,
-                   samples=[{"label": "paused", "expression": "get_tree().paused"}]),
+                    {"frame": 43, "action": "ui_cancel", "pressed": False}], 20),
                 tl("save_slot_roundtrip", "r5a", "get_node('Game').gems", 1,
                    [{"frame": 30, "action": "move_right", "pressed": True},
                     {"frame": 150, "action": "move_right", "pressed": False},
@@ -439,6 +479,36 @@ void fragment() {
             print(f"    [awaiting_review] {a.get('id')}: {str(a.get('evidence'))[:80]}")
         check("ladder reports a rung", rung in ("r1", "r2", "r3", "r4"), json.dumps(ladder1)[:250])
         check("latency <= 3 frames", 1 <= lat <= 3, f"latency={lat}")
+
+        # ---- A 证据活体检查：截图按 moment 隔离目录 + 移动 moment 画面真的变 ----
+        # （旧缺陷：共用目录 + step index 命名 → 两个 moment 截图字节相同、
+        #   移动证据被静态 moment 覆盖——本次运行直接验证修复在真机上成立）
+        appdata_shots = (Path(os.environ.get("APPDATA", "")) / "Godot" / "app_userdata"
+                         / "GemRush" / "mcp_play_and_verify" / "review_moments")
+        user_root = appdata_shots.parent.parent  # .../app_userdata/GemRush == user://
+        moment_paths: dict = {}
+        for a in a_items:
+            for s_ in (a.get("evidence") or []):
+                if not isinstance(s_, dict):
+                    continue  # 指引型 moment 的 evidence 是字符串提示，不是截图
+                p_ = str(s_.get("save_path", "")).replace("\\", "/")
+                if p_.startswith("user://"):
+                    moment_paths[str(a.get("id", ""))] = user_root / p_[len("user://"):]
+        shot_names = {k_: str(v_) for k_, v_ in moment_paths.items()}
+        check("both review moments wrote screenshots",
+              len(moment_paths) == 2 and all(Path(p_).is_file() for p_ in moment_paths.values()),
+              json.dumps(shot_names))
+        if len(moment_paths) == 2:
+            dirs_ = {Path(p_).parent for p_ in moment_paths.values()}
+            dir_names = sorted(d_.name for d_ in dirs_)
+            check("review moments isolated into separate dirs", len(dirs_) == 2, str(dir_names))
+            digests = {id_: hashlib.md5(Path(p_).read_bytes()).hexdigest()
+                       for id_, p_ in moment_paths.items()}
+            ids = sorted(digests)
+            check("movement moment frame differs from static moment",
+                  digests[ids[0]] != digests[ids[1]],
+                  "md5 %s=%s %s=%s" % (ids[0], digests[ids[0]][:8], ids[1], digests[ids[1]][:8]))
+            print(f"  [A-evidence] {json.dumps({k_: v_[:10] for k_, v_ in digests.items()})}")
         ladder2 = tool("game_quality_ladder", ladder_params, timeout=600.0)
         check("ladder IDEMPOTENT under stress rerun",
               str(ladder2.get("rung_reached", "")) == rung

@@ -234,6 +234,21 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   色彩/明度分层；开始画面要陈述目标；评审 moment 的步骤应包含有分歧的输入，
   否则截图只能证明"启动过"。
 
+### 闭环复跑（同日，A-FAIL → A-PASS）
+
+按上述回流修正后重跑全流程（ALL CHECKS PASSED）：物理节点补可见子节点
+（地面棕/Gem 青/尖刺红）、Menu 改 `PROCESS_MODE_ALWAYS` + PauseLabel 初始
+隐藏、目标 HUD 常显（含操作键位）、暂停契约拆 r4a（断言 paused==True）+r4b。
+验证闭环：
+
+- **契约 COMPLETE 且暂停非空验证**——r4a 证明暂停真实发生（旧 WHEN_PAUSED
+  设计下该项必失败，空泛通过被终结）。
+- **截图隔离在真机成立**——两个 moment 落在不同 `review_moments/<id>/` 目录，
+  移动 moment 与静态 moment 的 md5 不同（fdabb883 vs 05d922d8），移动画面可见。
+- **A 项视觉复判 PASS**——first_30_seconds：目标文本启动即读、无误导性
+  PAUSED 字样、地面/背景分层可读；visual_coherence：玩家移动中、HUD 不遮挡。
+  评审截图从 a_items evidence 的 save_path 直接定位（不再手工猜目录）。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，
