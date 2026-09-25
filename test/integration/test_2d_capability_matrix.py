@@ -60,9 +60,15 @@ PLATFORM_GD = """extends AnimatableBody2D
 
 @export var radius := 120.0
 
+# 帧驱动而非墙钟：帧锁定时间线回放下墙钟几乎不走（实测 flake——
+# get_ticks_msec 的运动在快速回放中被冻结，搭载位移测成 0）。可被
+# 断言的运动必须按物理帧计数推进。
+var t := 0
+
 func _physics_process(_delta: float) -> void:
-	# sync_to_physics=true：平台在 _physics_process 里移动，乘客随行。
-	position.x = 300.0 + sin(Time.get_ticks_msec() * 0.002) * radius
+	t += 1
+	# 0.02 rad/帧：玩家落地（~26 帧）时平台仍在落点覆盖内，之后带着乘客摆动。
+	position.x = 300.0 + sin(float(t) * 0.02) * radius
 """
 
 SHAKE_GD = """extends Camera2D
@@ -97,6 +103,27 @@ func _ready() -> void:
 	texture_scale = 4.0
 	energy = 3.2
 """
+
+SKELETON_GD = """extends Skeleton2D
+
+const ROT_PER_FRAME := 0.03
+
+func _physics_process(_delta: float) -> void:
+	var bone := get_node_or_null("Bone1")
+	if bone:
+		bone.rotation += ROT_PER_FRAME
+"""
+
+FX_GD = """shader_type canvas_item;
+
+uniform sampler2D screen_tex : hint_screen_texture;
+
+void fragment() {
+	vec3 screen = texture(screen_tex, SCREEN_UV).rgb;
+	COLOR = vec4(1.0 - screen, 1.0);
+}
+"""
+
 
 # 实测铁律：ColorRect（canvas_item_add_rect 原语）不接收 2D 光照——被照亮的
 # 表面必须是带纹理的 CanvasItem（Sprite2D 等），开关灯渲染字节才会不同。
@@ -293,6 +320,52 @@ def main() -> int:
         check("platform: player script clean", not cr.get("has_errors", False), json.dumps(cr)[:160])
         tool("save_scene", {"scene_path": M})
 
+        # ---- 2D 骨骼（Skeleton2D/Bone2D 运动链）----
+        K = "res://scenes/skeleton.tscn"
+        tool("create_scene", {"scene_path": K, "root_node_type": "Node2D"})
+        tool("open_scene", {"scene_path": K, "allow_ui_focus": True})
+        for parent, ntype, nname in [
+            ("", "Skeleton2D", "Rig"), ("Rig", "Bone2D", "Bone1"),
+            ("Rig/Bone1", "Bone2D", "Bone2"), ("Rig/Bone1/Bone2", "ColorRect", "V")]:
+            r = tool("create_node", {"parent_path": parent, "node_type": ntype, "node_name": nname})
+            check(f"skeleton: node {nname}", not r.get("error", ""), str(r.get("error", "")))
+        tool("batch_scene_node_edits", {"operations": [
+            {"type": "set_property", "node_path": "Rig", "property_name": "position", "property_value": [400, 324]},
+            {"type": "set_property", "node_path": "Rig/Bone1", "property_name": "length", "property_value": 60},
+            {"type": "set_property", "node_path": "Rig/Bone1/Bone2", "property_name": "position", "property_value": [60, 0]},
+            {"type": "set_property", "node_path": "Rig/Bone1/Bone2", "property_name": "length", "property_value": 50},
+            {"type": "set_property", "node_path": "Rig/Bone1/Bone2/V", "property_name": "size", "property_value": [18, 18]},
+            {"type": "set_property", "node_path": "Rig/Bone1/Bone2/V", "property_name": "position", "property_value": [-9, -9]},
+            {"type": "set_property", "node_path": "Rig/Bone1/Bone2/V", "property_name": "color", "property_value": [0.9, 0.6, 0.2, 1.0]}]})
+        cr = tool("create_script", {"script_path": "res://scripts/matrix_skeleton.gd",
+            "content": SKELETON_GD, "attach_to_node": "Rig"})
+        check("skeleton: script clean", not cr.get("has_errors", False), json.dumps(cr)[:160])
+        tool("save_scene", {"scene_path": K})
+
+        # ---- 屏幕特效（BackBufferCopy + hint_screen_texture）----
+        X = "res://scenes/fx.tscn"
+        tool("create_scene", {"scene_path": X, "root_node_type": "Node2D"})
+        tool("open_scene", {"scene_path": X, "allow_ui_focus": True})
+        for parent, ntype, nname in [
+            ("", "ColorRect", "Floor"), ("", "ColorRect", "FX"), ("", "BackBufferCopy", "FXCopy")]:
+            r = tool("create_node", {"parent_path": parent, "node_type": ntype, "node_name": nname})
+            check(f"fx: node {nname}", not r.get("error", ""), str(r.get("error", "")))
+        tool("batch_scene_node_edits", {"operations": [
+            {"type": "set_property", "node_path": "Floor", "property_name": "size", "property_value": [1152, 648]},
+            {"type": "set_property", "node_path": "Floor", "property_name": "color", "property_value": [0.45, 0.45, 0.45, 1.0]},
+            {"type": "set_property", "node_path": "FX", "property_name": "size", "property_value": [1152, 648]},
+            {"type": "set_property", "node_path": "FXCopy", "property_name": "copy_mode", "property_value": 2}]})
+        cr = tool("create_script", {"script_path": "res://scripts/matrix_fx.gdshader",
+            "content": FX_GD, "attach_to_node": "FX"})
+        check("fx: screen shader clean", not cr.get("has_errors", False), json.dumps(cr)[:160])
+        tool("save_scene", {"scene_path": X})
+        # 实测铁律：4.x 的 hint_screen_texture 会自动插入屏拷贝（BackBufferCopy
+        # 节点并非必需）——copy_mode 开关的变体两帧字节相同。有效对照是特效
+        # 可见 vs 隐藏。
+        variant_fx = tool("create_scene_variant", {"scene_path": "res://scenes/fx_off.tscn",
+            "base_scene": X, "overrides": [{"node": "FX", "property": "visible", "value": False}]})
+        check("fx: off-variant created", variant_fx.get("status", "") == "success", json.dumps(variant_fx)[:180])
+
         # ---- 镜头震动 ----
         S = "res://scenes/shake.tscn"
         tool("create_scene", {"scene_path": S, "root_node_type": "Node2D"})
@@ -327,7 +400,8 @@ def main() -> int:
         q = tool("run_verification_queue", {"command": "create", "strict": True,
             "goal": "2D capability matrix",
             "requirements": ["parallax_differential_scroll", "light_renders_on_vs_off",
-                             "patrol_progress", "platform_riding", "camera_shake"],
+                             "patrol_progress", "platform_riding", "camera_shake",
+                             "bone_chain_moves", "screen_fx_on_vs_off"],
             "items": [
                 tl("parallax_differential_scroll", "px", P,
                    "get_node('Player').global_position.x", 1,
@@ -356,6 +430,19 @@ def main() -> int:
                    [{"frame": 5, "action": "shake", "pressed": True},
                     {"frame": 8, "action": "shake", "pressed": False}], 40, "eq",
                    samples=[{"label": "cx", "expression": "get_node('Cam').offset.x"}]),
+                tl("bone_chain_moves", "bx", "res://scenes/skeleton.tscn",
+                   "get_node('Rig/Bone1/Bone2').global_position.y", 324,
+                   [{"frame": 0, "action": "move_right", "pressed": False}], 120, "ne",
+                   samples=[{"label": "by", "expression": "get_node('Rig/Bone1/Bone2').global_position.y"},
+                            {"label": "vx", "expression": "get_node('Rig/Bone1/Bone2/V').global_position.x"}]),
+                {"kind": "behavior_check", "requirement": "screen_fx_on_vs_off", "label": "fx_on",
+                 "detail": {"scene_path": "res://scenes/fx.tscn", "screenshot_dir": "user://shots/fx_on",
+                     "steps": [{"wait_ms": 900, "screenshot": True,
+                         "assert": {"expression": "get_node('FXCopy').copy_mode", "expected": 2}}]}},
+                {"kind": "behavior_check", "requirement": "screen_fx_on_vs_off", "label": "fx_off",
+                 "detail": {"scene_path": "res://scenes/fx_off.tscn", "screenshot_dir": "user://shots/fx_off",
+                     "steps": [{"wait_ms": 900, "screenshot": True,
+                         "assert": {"expression": "get_node('FX').visible", "expected": False}}]}},
             ]}, timeout=600.0)
         advances = 0
         while q.get("outcome") in ("pending_more", "open") and advances < 12:
@@ -432,8 +519,28 @@ def main() -> int:
             check("light: rendered output differs with light on vs off", d1 != d2,
                   f"on={d1[:8]} off={d2[:8]}")
 
+                # ---- 骨骼链 + 屏幕特效（测试侧定量）----
+        by = series("bx", "by")
+        if by:
+            swing = max(by) - min(by)
+            check("skeleton: bone2 tip moved with parent rotation (y swing > 40px)",
+                  swing > 40.0, f"y swing={swing:.1f}px over {len(by)} samples")
+        vx = series("bx", "vx")
+        if vx:
+            check("skeleton: visual child follows the bone chain", (max(vx) - min(vx)) > 30.0,
+                  f"x swing={max(vx) - min(vx):.1f}px")
+        on_fx = user_root / "shots" / "fx_on" / "step_00.jpg"
+        off_fx = user_root / "shots" / "fx_off" / "step_00.jpg"
+        check("fx: both screenshots recorded", on_fx.is_file() and off_fx.is_file(),
+              f"{on_fx.is_file()}/{off_fx.is_file()}")
+        if on_fx.is_file() and off_fx.is_file():
+            d_on = hashlib.md5(on_fx.read_bytes()).hexdigest()
+            d_off = hashlib.md5(off_fx.read_bytes()).hexdigest()
+            check("fx: BackBufferCopy on/off changes rendered output", d_on != d_off,
+                  f"on={d_on[:8]} off={d_off[:8]}")
+
         print("\n=== 2D CAPABILITY MATRIX: ALL CHECKS PASSED ===")
-        print("[matrix] parallax | 2d-light | path-patrol | moving-platform | camera-shake — all cells verified")
+        print("[matrix] parallax | 2d-light | path-patrol | moving-platform | camera-shake | skeleton | screen-fx — all 7 cells verified")
         return 0
     finally:
         proc.terminate()

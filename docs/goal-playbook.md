@@ -271,6 +271,20 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   y 稳定 0.0px。
 - **确定性震动**可被时间线完全断言：峰值 |offset.x|=13.8px、结束后归 0。
 
+### 补格（同日，Skeleton2D + BackBufferCopy，矩阵 7/7）
+
+- **2D 骨骼链**：Skeleton2D + Bone2D 层级 + 末端 ColorRect 视觉子节点——
+  父骨 rotation 按帧递增，实测子骨尖端 y 摆幅 101.8px、视觉子节点跟随
+  97.5px（运动链语义可被时间线采样断言）。
+- **hint_screen_texture 自动插屏拷贝**：4.x 中 `uniform sampler2D x :
+  hint_screen_texture` 会自动触发屏幕拷贝——**BackBufferCopy 节点并非
+  必需**，其 copy_mode 开关也不影响该 uniform 的行为（开/关变体两帧
+  字节相同）。有效对照是特效节点可见 vs 隐藏（md5 7af7eea9 vs 11fa7db8）。
+- **帧锁定时间线要求帧驱动运动**：被断言的运动不能依赖墙钟
+  （get_ticks_msec）——时间线回放按帧快进时墙钟几乎不走，平台运动被
+  "冻结"（搭载位移测成 0.0px 的 flake）。帧计数驱动 + 落地时序内平台
+  仍在落点覆盖（0.02 rad/帧）后稳定复现 238.9px 摆幅。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

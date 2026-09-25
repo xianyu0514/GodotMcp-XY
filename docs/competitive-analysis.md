@@ -344,7 +344,10 @@ Godot 4.7.2，同一模型（本项目代理）分别驱动两套工具链，产
   uvx 链；我方 headless 原生（CI 友好）、纯插件。
 - **对方独有**：~~CSG/GridMap~~（2026-09-26 已补齐：`set_gridmap_cells`
   五操作 + `create_csg_shape` 一调用布尔原型，真机冒烟全过，工具数
-  251）、batch_execute 带撤销、visual_shader 图编辑、theme 级联。
+  251）、~~batch_execute 带撤销~~（台账误记——复查我方 `create_node` 与
+  `batch_scene_node_edits` 本就全程 UndoRedo 包裹，batch 在无撤销管理器时
+  直接拒绝执行）、visual_shader 图编辑（文本着色器+校验+挂载是 AI 原生
+  更优路径，不追图形编辑器范式）、theme 级联。
 
 **最终裁决（2026-09-26 更新）**：表达力平手且已识别的广度缺口全部
 闭合；我方赢在**可证明质量**（验证引擎——对方产物只能靠我方判据量出
