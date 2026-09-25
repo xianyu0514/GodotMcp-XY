@@ -27,6 +27,8 @@ func test_expression_rules_carry_the_hard_truths() -> void:
 	assert_true(text.contains("current scene") or text.contains("CURRENT SCENE"), "base semantics shipped")
 	assert_true(text.contains("get_shader_parameter") and text.contains("NULL"),
 		"null-uniform truth shipped")
+	assert_true(text.contains("Native class names DO NOT resolve") and text.contains("FileAccess"),
+		"native-class ban shipped (FileAccess/ClassDB static calls fail)")
 	assert_true(text.to_lower().contains("queue_free") and text.to_lower().contains("counter"),
 		"death-window guidance shipped")
 

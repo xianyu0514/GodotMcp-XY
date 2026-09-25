@@ -127,3 +127,54 @@ func test_waivers_keep_rungs_honest() -> void:
 	var r2: Dictionary = result.get("ladder", {}).get("r2", {})
 	assert_true(bool(r2.get("latency_waived", false)), "waiver recorded")
 	assert_eq(int(r2.get("latency_frames", -1)), 99, "honest frames still surfaced")
+
+func test_review_moment_screenshot_dir_sanitizes() -> void:
+	assert_eq(ToolsScript._review_moment_screenshot_dir("user://mcp_play_and_verify", "first_30_seconds"),
+		"user://mcp_play_and_verify/review_moments/first_30_seconds")
+	assert_eq(ToolsScript._review_moment_screenshot_dir("user://mcp_play_and_verify/", "a/b:c 中"),
+		"user://mcp_play_and_verify/review_moments/a_b_c__",
+		"only [A-Za-z0-9_-] survive; everything else becomes _")
+	assert_eq(ToolsScript._review_moment_screenshot_dir("", "x"),
+		"user://mcp_play_and_verify/review_moments/x", "empty base falls back to the default dir")
+	assert_eq(ToolsScript._review_moment_screenshot_dir("user://x", ""),
+		"user://x/review_moments/moment", "empty id degrades to 'moment'")
+
+func test_review_moments_get_isolated_screenshot_dirs() -> void:
+	# 旗舰 A 评审实测：两个 moment 的截图字节相同（互相覆盖）——每个 review
+	# moment 必须跑在独立 screenshot_dir 里，且隔离路径回带到 awaiting_review 证据。
+	var tools: RefCounted = ToolsScript.new()
+	tools._quality_runtime_gates_override = func(_detail: Dictionary) -> Dictionary:
+		return {"checks": [
+			{"id": "runtime_errors", "status": "green", "detail": {}},
+			{"id": "performance", "status": "green", "detail": {}},
+			{"id": "key_screen", "status": "green", "detail": {}}], "needs": []}
+	var captured: Array = []
+	tools._effect_queue_run_override = func(detail: Dictionary) -> Dictionary:
+		captured.append(detail.duplicate(true))
+		if detail.has("screenshot_dir"):
+			return {"passed": true, "evidence": {"screenshots": [
+				{"step": 0, "save_path": String(detail["screenshot_dir"]) + "/step_00.jpg"}]}}
+		# 延迟腿：轨迹首变帧 2。
+		return {"passed": true, "evidence": {"trajectory": [
+			{"frame_index": 0, "values": {"p": 100.0}},
+			{"frame_index": 2, "values": {"p": 103.5}}]}}
+	var result: Dictionary = await tools._tool_game_quality_ladder({
+		"scene_path": "res://scenes/whatever.tscn",
+		"movement": {"action": "move_right", "node": "Player"},
+		"review_moments": [
+			{"id": "first_30_seconds", "steps": [{"wait_ms": 900, "screenshot": true}]},
+			{"id": "combat moments", "steps": [{"wait_ms": 100, "screenshot": true}]}]})
+	assert_false(result.has("error"), str(result).substr(0, 200))
+	var review_dirs: Array = []
+	for detail_value in captured:
+		var detail: Dictionary = detail_value
+		if detail.has("screenshot_dir"):
+			review_dirs.append(String(detail["screenshot_dir"]))
+	assert_eq(review_dirs.size(), 2, "each review moment runs its own behavior leg")
+	assert_true(review_dirs.has("user://mcp_play_and_verify/review_moments/first_30_seconds"),
+		"moment ids isolate screenshot dirs: %s" % str(review_dirs))
+	assert_true(review_dirs.has("user://mcp_play_and_verify/review_moments/combat_moments"),
+		"unsafe id characters sanitized in wiring: %s" % str(review_dirs))
+	var a_items: Array = result.get("ladder", {}).get("r4", {}).get("a_items_awaiting_review", [])
+	assert_true(str(a_items).contains("review_moments/first_30_seconds"),
+		"isolated dir surfaces in awaiting_review evidence: %s" % str(a_items).substr(0, 200))

@@ -1524,6 +1524,10 @@ func _tool_apply_animation_preset(params: Dictionary) -> Dictionary:
 			anim.track_insert_key(t, duration, Vector2.ONE)
 			key_count = 3
 
+	# 目标目录不存在时先创建（create_script 同款行为；首跑实测 error 19 坑）。
+	var anim_parent: String = save_path.get_base_dir()
+	if anim_parent != "res://" and not anim_parent.is_empty():
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(anim_parent))
 	var saved: Error = ResourceSaver.save(anim, save_path)
 	if saved != OK:
 		return {"error": "could not save animation to %s (error %d)" % [save_path, saved]}

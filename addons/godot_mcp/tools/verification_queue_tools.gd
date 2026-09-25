@@ -466,17 +466,7 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 		return {"passed": false, "evidence": evidence}
 	evidence["session"] = ready.get("session", {})
 
-	var verify_params: Dictionary = {
-		"steps": detail.get("steps", []),
-		"assertions": detail.get("assertions", []),
-		"deterministic": bool(detail.get("deterministic", false)),
-	}
-	# timeline 透传（M7）：契约项可用单次往返的帧定时时间线——每个需求
-	# 的验证从 N 次网络往返降到 1 次，且免疫网络抖动。
-	if detail.has("timeline") and detail.get("timeline", {}) is Dictionary:
-		verify_params["timeline"] = detail.get("timeline", {})
-	if detail.has("timeout_ms"):
-		verify_params["timeout_ms"] = int(detail["timeout_ms"])
+	var verify_params: Dictionary = _behavior_verify_params(detail)
 	var report: Dictionary = await verify_tools._tool_play_and_verify(verify_params)
 	await editor_tools._tool_stop_project({"allow_window": true})
 
@@ -495,6 +485,30 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 		var full_traj: Array = report.get("trajectory", [])
 		evidence["trajectory"] = full_traj if full_traj.size() <= 240 else full_traj.slice(full_traj.size() - 240, full_traj.size())
 	return {"passed": bool(report.get("passed", false)), "evidence": evidence}
+
+## behavior 项 detail → play_and_verify 参数的纯映射（抽出为 static 以便单测）。
+## timeline 透传（M7）：契约项可用单次往返的帧定时时间线——每个需求
+## 的验证从 N 次网络往返降到 1 次，且免疫网络抖动。
+## screenshot_dir/format 透传（旗舰 A 评审实测坑）：play_and_verify 的截图按
+## step index 命名（step_NN.jpg），多个 behavior/review moment 共用默认目录时
+## 跨 moment、跨幂等重跑会互相覆盖——调用方用 detail.screenshot_dir 隔离目录。
+static func _behavior_verify_params(detail: Dictionary) -> Dictionary:
+	var params: Dictionary = {
+		"steps": detail.get("steps", []),
+		"assertions": detail.get("assertions", []),
+		"deterministic": bool(detail.get("deterministic", false)),
+	}
+	if detail.has("timeline") and detail.get("timeline", {}) is Dictionary:
+		params["timeline"] = detail.get("timeline", {})
+	if detail.has("timeout_ms"):
+		params["timeout_ms"] = int(detail["timeout_ms"])
+	var shot_dir: String = String(detail.get("screenshot_dir", "")).strip_edges()
+	if not shot_dir.is_empty():
+		params["screenshot_dir"] = shot_dir
+	var shot_format: String = String(detail.get("screenshot_format", "")).strip_edges()
+	if not shot_format.is_empty():
+		params["screenshot_format"] = shot_format
+	return params
 
 func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted) -> Dictionary:
 	var deadline_ms: int = Time.get_ticks_msec() + 20000

@@ -978,8 +978,11 @@ func _merge_runtime_params(params: Dictionary, extra: Dictionary) -> Dictionary:
 # ============================================================================
 
 ## 单测注入点：有效时替代真实读回 / 行为编排（避免依赖编辑器与运行时）。
+## _effect_queue_run_override 拦在 _effect_queue_behavior_run 最前——单测可
+## 断言调用方塞进 detail 的参数（如 review moment 的 screenshot_dir 隔离）。
 var _effect_readback_override: Callable = Callable()
 var _effect_behavior_override: Callable = Callable()
+var _effect_queue_run_override: Callable = Callable()
 
 const _EffectQueueScriptPath: String = "res://addons/godot_mcp/tools/verification_queue_tools.gd"
 const ProjectToolsScript = preload("res://addons/godot_mcp/tools/project_tools_native.gd")
@@ -1268,6 +1271,10 @@ func _effect_behavior(behavior: Dictionary, scene_path: String, timeout_ms: int)
 ## 优先取插件注册表里已 initialize 的实例；不可用时 load() 兜底（避免与
 ## verification_queue_tools.gd 的 preload 形成编译期循环引用）。
 func _effect_queue_behavior_run(detail: Dictionary) -> Dictionary:
+	# 测试注入点：有效时替代真实编排，让单测可以断言调用方塞进 detail 的
+	# 参数（如 review moment 的 screenshot_dir 隔离目录）。
+	if _effect_queue_run_override.is_valid():
+		return await _effect_queue_run_override.call(detail)
 	var queue_tools: RefCounted = null
 	if Engine.has_meta("GodotMCPPlugin"):
 		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
@@ -1282,6 +1289,27 @@ func _effect_queue_behavior_run(detail: Dictionary) -> Dictionary:
 	if queue_tools == null:
 		return {"error": "verification queue module unavailable"}
 	return await queue_tools._behavior_run_impl(detail)
+
+## A 项评审时刻的截图目录：base/review_moments/<路径安全的 moment id>。
+## 实测坑（旗舰 A 评审）：共用 base 时截图按 step index 命名（step_NN.jpg），
+## 跨 moment/跨幂等重跑互相覆盖；隔离后同一 moment 的重跑覆盖是同义内容，
+## 不再吞掉其他 moment 的证据。id 只保留 [A-Za-z0-9_-]，其余替换为 _。
+static func _review_moment_screenshot_dir(base_dir: String, moment_id: String) -> String:
+	var base: String = base_dir.strip_edges()
+	while base.ends_with("/"):
+		base = base.substr(0, base.length() - 1)
+	if base.is_empty():
+		base = "user://mcp_play_and_verify"
+	var safe_id: String = ""
+	for character in moment_id.strip_edges():
+		var is_safe: bool = (character >= "a" and character <= "z") \
+			or (character >= "A" and character <= "Z") \
+			or (character >= "0" and character <= "9") \
+			or character == "_" or character == "-"
+		safe_id += character if is_safe else "_"
+	if safe_id.is_empty():
+		safe_id = "moment"
+	return "%s/review_moments/%s" % [base, safe_id]
 
 ## 构造读回表达式：探针以 current_scene 为基点求值，一次表达式覆盖三种
 ## 运行时路径形态 —— 完整相对路径（被实例场景托管时）、去根路径（场景根
@@ -2024,8 +2052,13 @@ func _tool_game_quality_ladder(params: Dictionary) -> Dictionary:
 			if _ladder_run_override.is_valid():
 				moment_result = await _ladder_run_override.call({"kind": "review", "moment": moment})
 			else:
+				# 截图目录按 moment 隔离：共用默认目录时 step_NN.jpg 按 step index
+				# 命名，跨 moment/幂等重跑互相覆盖（旗舰 A 评审实测：两个 moment
+				# 的截图字节相同、移动 moment 的证据被静态 moment 覆盖丢失）。
 				moment_result = await _effect_queue_behavior_run({
-					"scene_path": scene_path, "steps": moment_steps})
+					"scene_path": scene_path, "steps": moment_steps,
+					"screenshot_dir": _review_moment_screenshot_dir(
+						String(params.get("screenshot_dir", "user://mcp_play_and_verify")), moment_id)})
 			var moment_evidence: Dictionary = moment_result.get("evidence", {}) if moment_result.get("evidence", {}) is Dictionary else {}
 			review_evidence[moment_id] = moment_evidence.get("screenshots", [])
 

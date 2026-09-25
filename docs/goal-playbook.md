@@ -205,6 +205,35 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - **无效着色器先拒后写**：create_script 的 .gdshader 分支在落盘前做文本校验
   （shader_type/括号/结构），无效内容不写盘——坏文件不进项目，也避开导入器噪音。
 
+## Expression 原生类名禁令（旗舰实机检验实测）
+
+- **Expression 不能解析原生类名**：`FileAccess.file_exists(...)`、`ClassDB.class_exists(...)`
+  静态调用必然执行失败（裸引擎与项目内双证；连 `(1 if true else 2)` 三元之外的又一坑）。
+  断言只能用状态字段——存档的证明是 FRESH 重启后还原，不是 file_exists。
+- 存量集成测试里 `FileAccess.file_exists` 断言一律改为状态断言（voxel r4a 的历史"通过"
+  存疑，可能是折叠层字符串强转伪影，已同批修正）。
+
+## A 项评审首跑实测（旗舰 Gem Rush，2026-09-25）
+
+机器测项（M）6/6 契约 COMPLETE、公平前摇 17 帧、天梯 r3/延迟 2 帧×2 幂等——
+但 A 项（代理看截图评审）在**同一游戏**上给出了 FAIL。这正是分层存在的意义：
+
+- **截图证据曾互相覆盖（工具缺陷，已修）**：review moments 与契约运行共用默认截图
+  目录，`step_NN.jpg` 按 step index 命名——跨 moment、跨幂等重跑互相覆盖。实测两个
+  moment 产出**字节级相同**的截图（md5 一致），移动 moment 的证据被静态 moment 吞掉。
+  修复：每个 moment 隔离到 `screenshot_dir/review_moments/<sanitized id>/`（探针侧
+  make_dir_recursive 已保证目录自建）。
+- **评审帧判定（修复前取证的唯一帧）**：深灰单色虚空 + 白色玩家方块 +
+  "PAUSED — Esc resumes" 文字常显；地面/宝石/尖刺在帧内不可读。新玩家无法推断
+  目标与危险 → first_30_seconds FAIL，visual_coherence WEAK。
+- **空断言暂停契约（游戏侧教训）**：menu 用 `PROCESS_MODE_WHEN_PAUSED` 只在暂停时
+  处理输入 → **无法发起**第一次暂停；label 初始可见从不隐藏。契约只断言终态
+  `paused == false` → **空泛通过**。收紧方向：样本必须出现过 `paused == true`，
+  暂停切换放在 PAUSABLE 节点、label 在 `_ready` 显式隐藏。
+- **给配方默认值的回流**（make_first_game 系下次迭代）：背景与地面必须有可读的
+  色彩/明度分层；开始画面要陈述目标；评审 moment 的步骤应包含有分歧的输入，
+  否则截图只能证明"启动过"。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

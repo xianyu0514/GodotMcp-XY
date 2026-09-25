@@ -922,7 +922,8 @@ static func _resource_expression_rules(params: Dictionary) -> Dictionary:
 3. NO 'is' operator: type checks use get_class() string comparison, e.g. material.get_class() == 'ShaderMaterial'.
 4. The evaluation base is the CURRENT SCENE: get_node('Child') resolves relative to it; for the scene root itself use bare properties.
 5. get_shader_parameter returns NULL for uniforms never explicitly set — set via set_runtime_shader_parameter first, then read.
-6. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
+6. Native class names DO NOT resolve: FileAccess.file_exists(...) / ClassDB.class_exists(...) always fail to execute — assert STATE FIELDS instead (a saved file is proven by restoring it in a FRESH boot, not by FileAccess.file_exists).
+7. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
 """
 	return {"contents": [{"uri": "godot://engine/expression-rules", "mimeType": "text/plain", "text": rules}]}
 

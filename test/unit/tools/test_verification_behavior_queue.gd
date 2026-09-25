@@ -261,3 +261,29 @@ func test_all_verified_contracts_complete() -> void:
 	assert_eq(String(result.get("checklist", {}).get("overall", "")), "complete",
 		"all requirements verified => complete")
 	assert_eq(String(result.get("outcome", "")), "completed")
+
+func test_behavior_verify_params_forwards_screenshot_dir() -> void:
+	# 旗舰 A 评审实测坑：共用默认截图目录时 step_NN.jpg 按 step index 命名，
+	# 跨 moment/幂等重跑互相覆盖——detail.screenshot_dir 必须透传到 play_and_verify。
+	var params: Dictionary = ToolsScript._behavior_verify_params({
+		"steps": [{"wait_ms": 100}],
+		"screenshot_dir": "user://mcp_play_and_verify/review_moments/first_30_seconds",
+		"screenshot_format": "png"})
+	assert_eq(String(params.get("screenshot_dir", "")),
+		"user://mcp_play_and_verify/review_moments/first_30_seconds")
+	assert_eq(String(params.get("screenshot_format", "")), "png")
+	assert_eq((params.get("steps", []) as Array).size(), 1)
+
+func test_behavior_verify_params_defaults_and_guards() -> void:
+	var params: Dictionary = ToolsScript._behavior_verify_params({})
+	assert_false(params.has("screenshot_dir"), "empty detail must not inject screenshot_dir")
+	assert_false(params.has("screenshot_format"))
+	assert_false(params.has("timeline"))
+	assert_false(bool(params.get("deterministic", true)), "deterministic defaults to false")
+	var with_optional: Dictionary = ToolsScript._behavior_verify_params({
+		"timeline": {"events": []}, "timeout_ms": 5000, "screenshot_dir": "   "})
+	assert_true(with_optional.has("timeline"), "dict timeline forwards")
+	assert_eq(int(with_optional.get("timeout_ms", 0)), 5000, "timeout forwards as int")
+	assert_false(with_optional.has("screenshot_dir"), "whitespace-only dir must not forward")
+	var bad_timeline: Dictionary = ToolsScript._behavior_verify_params({"timeline": "not-a-dict"})
+	assert_false(bad_timeline.has("timeline"), "non-dict timeline is dropped (not forwarded)")

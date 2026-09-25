@@ -281,7 +281,7 @@ def main() -> int:
                          {"frame": 34, "action": "place", "pressed": False},
                          {"frame": 60, "action": "destroy", "pressed": True},
                          {"frame": 64, "action": "destroy", "pressed": False}], 30),
-                tl_item("save_slot_roundtrip", "r4a", "FileAccess.file_exists('user://voxel_slot1.json')", True,
+                tl_item("save_slot_roundtrip", "r4a", "get_node('World').blocks.size()", 1,
                         [{"frame": 30, "action": "place", "pressed": True},
                          {"frame": 34, "action": "place", "pressed": False},
                          {"frame": 60, "action": "save", "pressed": True},
