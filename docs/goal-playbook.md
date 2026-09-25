@@ -249,6 +249,28 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   PAUSED 字样、地面/背景分层可读；visual_coherence：玩家移动中、HUD 不遮挡。
   评审截图从 a_items evidence 的 save_path 直接定位（不再手工猜目录）。
 
+## 2D 能力矩阵实测（2026-09-25，五格零覆盖冷压）
+
+`test/integration/test_2d_capability_matrix.py`：视差 / 2D 光照 / 路径巡逻 /
+移动平台 / 镜头震动——全部"原子工具构建 → FRESH 运行 → 帧定时时间线 →
+引擎真值断言 + 测试侧轨迹数学"验证通过。逼出的实测铁律：
+
+- **create_node / attach_to_node 的 parent 路径是根相对全路径**：根的直接
+  子节点可以只写名字，孙节点必须写 `Parent/Child`（旗舰只造过直接子节点，
+  矩阵首跑即踩中；attach 失败只给 `attach_warning` 不算 error——调用方要查）。
+- **ParallaxLayer.scroll_offset 在 Expression 里不可执行**（整读都失败）；
+  视差真值 = `layer.position`，随镜头按 `-delta × motion_scale` 变化。实测
+  0.6/0.2 两层速率比 3.00 精确命中。已沉入 expression-rules 第 8 条。
+- **ColorRect 不接收 2D 光照**（rect 原语）：开灯/关灯渲染字节相同；换成
+  Sprite2D（GradientTexture2D 纹理）后开关字节不同——被照亮的表面必须是
+  带纹理的 CanvasItem。径向渐变要显式 `fill_from=(0.5,0.5)` 否则从角落起。
+- **CanvasModulate.color 批量数组设置读回黑色**（000000ff），ColorRect.color
+  同法正常——CanvasModulate 的颜色走脚本侧设置更稳。
+- **移动平台搭载**：AnimatableBody2D + `sync_to_physics=true` + 在
+  `_physics_process` 里改 position，乘客（无输入）实测被带着走 240px、
+  y 稳定 0.0px。
+- **确定性震动**可被时间线完全断言：峰值 |offset.x|=13.8px、结束后归 0。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

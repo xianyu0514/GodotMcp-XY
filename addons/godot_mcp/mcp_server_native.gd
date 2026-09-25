@@ -924,6 +924,7 @@ static func _resource_expression_rules(params: Dictionary) -> Dictionary:
 5. get_shader_parameter returns NULL for uniforms never explicitly set — set via set_runtime_shader_parameter first, then read.
 6. Native class names DO NOT resolve: FileAccess.file_exists(...) / ClassDB.class_exists(...) always fail to execute — assert STATE FIELDS instead (a saved file is proven by restoring it in a FRESH boot, not by FileAccess.file_exists).
 7. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
+8. ParallaxLayer.scroll_offset fails to execute — read layer.position instead (it tracks -camera_delta * motion_scale; differential layer rates prove the parallax).
 """
 	return {"contents": [{"uri": "godot://engine/expression-rules", "mimeType": "text/plain", "text": rules}]}
 

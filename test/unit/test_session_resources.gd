@@ -31,6 +31,8 @@ func test_expression_rules_carry_the_hard_truths() -> void:
 		"native-class ban shipped (FileAccess/ClassDB static calls fail)")
 	assert_true(text.to_lower().contains("queue_free") and text.to_lower().contains("counter"),
 		"death-window guidance shipped")
+	assert_true(text.contains("scroll_offset") and text.contains("layer.position"),
+		"parallax readback truth shipped (scroll_offset unexecutable, position tracks it)")
 
 func test_capabilities_resource_is_the_declarative_card():
 	var result: Dictionary = PluginScript._resource_capabilities({})
