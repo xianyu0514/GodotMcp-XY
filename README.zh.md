@@ -3,7 +3,7 @@
 [![Godot](https://img.shields.io/badge/Godot-4.7-478CBF?logo=godot-engine&logoColor=white)](https://godotengine.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)](docs/changelog.md)
-[![Tools](https://img.shields.io/badge/MCP%20tools-249-blue.svg)](docs/tools/README.md)
+[![Tools](https://img.shields.io/badge/MCP%20tools-251-blue.svg)](docs/tools/README.md)
 [![CI](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml/badge.svg)](https://github.com/xianyu0514/GodotMcp-XY/actions/workflows/ci.yml)
 
 > English documentation: [README.md](README.md)。
@@ -21,7 +21,7 @@
 - **缓存正确性是特性：** 依赖标签失效、single-flight 去重、按文件的编译/依赖 memo 与 `get_cache_diagnostics` 遥测工具；CI 回归断言"重复读必命中、真实变更必失效"。
 - **原生服务器：** MCP 服务运行在 Godot 编辑器进程内，随插件一起发布。
 - **双传输模式：** 默认 HTTP/SSE（`http://localhost:9080/mcp`），也支持面向本地进程客户端的 stdio。
-- **249 个工具且默认面精简：** 28 个核心工具默认启用，215 个高级工具按需启用，另有 6 个常驻元工具负责发现、启用和完整游戏闭环。
+- **251 个工具且默认面精简：** 28 个核心工具默认启用，217 个高级工具按需启用，另有 6 个常驻元工具负责发现、启用和完整游戏闭环。
 - **运行时自动化：** Runtime Probe 可以检查实时场景树、求值表达式、注入输入、控制动画/音频/Shader/TileMap、截图并采集性能指标。
 - **安全控制：** 支持 Bearer Token 鉴权、路径校验、限流和严格安全模式，优先使用 Godot API，避免任意系统命令执行。
 
@@ -67,12 +67,12 @@ Claude Desktop、Cursor、Trae、Cline、OpenCode、Codex 的配置示例见 [Ge
 | --- | ---: | ---: | ---: | --- |
 | [Node](docs/tools/node-tools.md) | 26 | 9 | 17 | 节点增删改查、层级编辑、信号、分组、锚点、批量编辑和场景审计 |
 | [Script](docs/tools/script-tools.md) | 18 | 6 | 12 | 读取/创建/修改/校验 GDScript 与 C#，Shader 校验、搜索、符号和引用 |
-| [Scene](docs/tools/scene-tools.md) | 12 | 4 | 8 | 创建/打开/保存场景、结构检查、场景实例化和 TileMapLayer 单元格 |
+| [Scene](docs/tools/scene-tools.md) | 14 | 4 | 10 | 创建/打开/保存场景、结构检查、场景实例化、TileMapLayer/GridMap 单元格与 CSG 形状 |
 | [Editor](docs/tools/editor-tools.md) | 28 | 3 | 25 | 运行/停止、截图、选择、Inspector、导出模板、脚本缓冲区、撤销/重做和客户端连接配置 |
 | [Debug & Runtime](docs/tools/debug-tools.md) | 76 | 3 | 73 | 日志、调试器、性能分析、运行时探针、确定性游玩验证和回归门禁 |
 | [Project](docs/tools/project-tools.md) | 73 | 3 | 70 | 设置、资源、输入映射、测试、迁移扫描、资产、TileSet、精灵表/glTF 和任务计划 |
 | [Meta](docs/tools/meta-tools.md) | 6 | — | — | 常驻发现、按需启用和持久化完整游戏编排 |
-| **总计** | **249** | **28** | **215** | |
+| **总计** | **251** | **28** | **217** | |
 
 启动时只有核心工具和元工具会出现在 `tools/list` 中。对于完整用户目标，一次 `run_game_workflow({"command": "..."})` 就会从 12 类制作能力创建或恢复持久目标 DAG；发生让步、断线或重启后重复同一命令，会保持原工作流身份且不重新分发已完成步骤。每轮采用自适应 4/8/16/32 次调用切片，不截断完整目标。检查点先验证暂存文件、原子提升并保留上一代备份；加载后重新校验收据摘要，每个完成步骤都必须引用自己的通过证据。不同命令、未知目标、缺失能力/输入、保护路径和无法验证的结果都会明确停止。详见[完整游戏工作流](docs/game-workflows.zh.md)。
 

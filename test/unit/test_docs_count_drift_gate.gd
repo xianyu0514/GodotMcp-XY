@@ -18,8 +18,8 @@ const COUNT_FILES: Array[String] = [
 ]
 
 func test_manifest_counts_are_the_truth() -> void:
-	assert_eq(ManifestScript.TOOLS.size(), 249, "manifest total (update this gate with every tool)")
-	assert_eq(ManifestScript.count_by_category("supplementary"), 215, "supplementary count follows the manifest")
+	assert_eq(ManifestScript.TOOLS.size(), 251, "manifest total (update this gate with every tool)")
+	assert_eq(ManifestScript.count_by_category("supplementary"), 217, "supplementary count follows the manifest")
 
 func test_total_count_appears_in_every_count_file() -> void:
 	var total: int = ManifestScript.TOOLS.size()
@@ -34,8 +34,8 @@ func test_stale_counts_do_not_linger() -> void:
 	# 但旧值随历史增长，这里只钉最近一代，保持测试可维护）。
 	for file_path in COUNT_FILES:
 		var text: String = _read(file_path)
-		assert_false(text.contains("248"),
-			"%s still cites the stale 248 total — update to the manifest count" % file_path)
+		assert_false(text.contains("248") or text.contains("249"),
+			"%s still cites a stale tool total (248/249) — update to the manifest count" % file_path)
 
 func test_server_instructions_cite_the_catalog_truth() -> void:
 	var text: String = String(ServerCoreScript.SERVER_INSTRUCTIONS)

@@ -72,6 +72,8 @@ const TOOLS: Dictionary = {
 	"create_navigation_region": {"category": "supplementary", "group": "Scene-Advanced"},
 	"create_scene_variant": {"category": "supplementary", "group": "Scene-Advanced"},
 	"create_scene": {"category": "core", "group": "Scene"},
+	"set_gridmap_cells": {"category": "supplementary", "group": "Scene-Advanced"},
+	"create_csg_shape": {"category": "supplementary", "group": "Scene-Advanced"},
 	"create_script": {"category": "core", "group": "Script"},
 	"create_theme": {"category": "supplementary", "group": "Project-Advanced"},
 	"create_tileset": {"category": "supplementary", "group": "Project-Advanced"},

@@ -247,5 +247,7 @@
   "apply_animation_preset": "One call authors a preset Animation resource (fade/slide/shake/pulse) ready for an AnimationPlayer — every knob is a parameter.",
   "set_material_parameter": "Edit-time material parameter set: shader uniform or plain property on a CanvasItem's material; creates the ShaderMaterial from a shader_path when the node has none.",
   "create_audio_player": "AudioStreamPlayer(2D) with stream and bus in one call; spatial toggle; idempotent by node name.",
-  "get_client_config": "Get a ready-to-paste MCP client connection config for this running server (Cursor/Cline/Claude Desktop). Formats http/stdio/remote_http/remote_stdio_bridge; port, executable and project path default to the live editor values."
+  "get_client_config": "Get a ready-to-paste MCP client connection config for this running server (Cursor/Cline/Claude Desktop). Formats http/stdio/remote_http/remote_stdio_bridge; port, executable and project path default to the live editor values.",
+  "set_gridmap_cells": "Edit-time GridMap (3D grid, MeshLibrary) cell authoring: op=set cells / fill box region / clear / read region / set_mesh_library. Wrapped in editor UndoRedo; warns when cells cannot render.",
+  "create_csg_shape": "One-call 3D prototyping CSG node: box/sphere/cylinder/torus/polygon/mesh/combiner with dimensions, boolean operation (union/intersection/subtraction), material, collision and name-conflict policy."
 }

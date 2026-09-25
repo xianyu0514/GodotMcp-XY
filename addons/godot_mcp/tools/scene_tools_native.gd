@@ -62,6 +62,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_instantiate_scene(server_core)
 	_register_save_branch_as_scene(server_core)
 	_register_set_tilemap_layer_cells(server_core)
+	_register_set_gridmap_cells(server_core)
+	_register_create_csg_shape(server_core)
 	_register_get_tilemap_layer_cells(server_core)
 	_register_batch_update_scene_files(server_core)
 	_register_create_scene_variant(server_core)
@@ -1423,6 +1425,399 @@ static func _parse_vector2i(value: Variant) -> Variant:
 	if value is Array and value.size() >= 2:
 		return Vector2i(int(value[0]), int(value[1]))
 	return null
+
+# ============================================================================
+# GridMap / CSG（3D 广度补齐，2026-09-26 竞品基准对位）：GridMap 是 3D 的
+# TileMap（网格单元 + MeshLibrary 条目），CSG 是 3D 原型搭建（布尔形状）。
+# 对位 godot-ai 的 gridmap_manage / csg_manage——补齐基准台账上仅存的
+# "对方独有"广度项；自此每个已识别维度都有对位工具。
+# ============================================================================
+
+func _register_set_gridmap_cells(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_gridmap_cells",
+		"Edit-time GridMap cell authoring (3D grid of MeshLibrary items) in the edited scene. op=set writes cells [{coords:[x,y,z], item:int}] (item -1 clears); op=fill paints a box region {from:[x,y,z], to:[x,y,z], item}; op=clear removes every cell; op=read returns items in a region (omit region for all used cells); op=set_mesh_library assigns res:// MeshLibrary so items render. Wrapped in editor UndoRedo.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first."},
+				"node_path": {"type": "string", "description": "Path to the GridMap node in the edited scene (root-relative)."},
+				"op": {"type": "string", "enum": ["set", "fill", "clear", "read", "set_mesh_library"]},
+				"cells": {"type": "array", "items": {"type": "object"},
+					"description": "op=set: [{coords:[x,y,z], item:int}]"},
+				"from": {"type": "array", "description": "op=fill/read: [x,y,z] inclusive corner"},
+				"to": {"type": "array", "description": "op=fill/read: [x,y,z] inclusive corner"},
+				"item": {"type": "integer", "description": "op=fill: MeshLibrary item index"},
+				"mesh_library": {"type": "string", "description": "op=set_mesh_library: res:// path to a MeshLibrary resource"}
+			},
+			"required": ["node_path", "op"]
+		},
+		Callable(self, "_tool_set_gridmap_cells"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"cells_set": {"type": "integer"},
+				"cells_cleared": {"type": "integer"},
+				"cells": {"type": "array", "items": {"type": "object"}},
+				"warning": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_set_gridmap_cells(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	var op: String = str(params.get("op", "")).strip_edges().to_lower()
+	if op.is_empty():
+		return {"error": "Missing required parameter: op (set | fill | clear | read | set_mesh_library)"}
+	# 参数校验先于编辑器依赖（坏输入在无编辑器环境也要干净失败、可单测）。
+	match op:
+		"set":
+			if not (params.get("cells", []) is Array) or (params.get("cells", []) as Array).is_empty():
+				return {"error": "op=set requires a non-empty cells array [{coords:[x,y,z], item:int}]"}
+			for entry_value in (params.get("cells", []) as Array):
+				if not (entry_value is Dictionary) or not (entry_value as Dictionary).has("coords"):
+					return {"error": "Each cell must be an object with coords:[x,y,z] and item:int"}
+				if _parse_vector3i((entry_value as Dictionary)["coords"]) == null:
+					return {"error": "Cell 'coords' must be [x, y, z]"}
+		"fill":
+			if not params.has("from") or not params.has("to") or not params.has("item"):
+				return {"error": "op=fill requires from:[x,y,z], to:[x,y,z] and item:int"}
+			var from_pre: Variant = _parse_vector3i(params["from"])
+			var to_pre: Variant = _parse_vector3i(params["to"])
+			if from_pre == null or to_pre == null:
+				return {"error": "'from'/'to' must be [x, y, z]"}
+			var volume_pre: int = (absi((to_pre as Vector3i).x - (from_pre as Vector3i).x) + 1) \
+				* (absi((to_pre as Vector3i).y - (from_pre as Vector3i).y) + 1) \
+				* (absi((to_pre as Vector3i).z - (from_pre as Vector3i).z) + 1)
+			if volume_pre > 20000:
+				return {"error": "fill region too large (%d cells > 20000) — split into smaller fills" % volume_pre}
+		"set_mesh_library":
+			if str(params.get("mesh_library", "")).strip_edges().is_empty():
+				return {"error": "op=set_mesh_library requires mesh_library (res:// path)"}
+		"clear", "read":
+			pass
+		_:
+			return {"error": "Unknown op '" + op + "' — use set | fill | clear | read | set_mesh_library"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
+	var node: Node = _resolve_node_path(node_path)
+	if not node:
+		return {"error": "Node not found: " + node_path
+			+ NodeToolsNative._suggest_parent_path(_get_user_scene_root(), node_path)}
+	if not (node is GridMap):
+		return {"error": "Node is not a GridMap: " + node_path + " (got " + node.get_class() + ")"}
+	var grid: GridMap = node
+
+	match op:
+		"set_mesh_library":
+			var lib_path: String = str(params.get("mesh_library", "")).strip_edges()
+			if lib_path.is_empty():
+				return {"error": "op=set_mesh_library requires mesh_library (res:// path)"}
+			if not ResourceLoader.exists(lib_path):
+				return {"error": "MeshLibrary not found: " + lib_path}
+			var lib: Resource = load(lib_path)
+			if not (lib is MeshLibrary):
+				return {"error": "Resource is not a MeshLibrary: " + lib_path}
+			grid.mesh_library = lib
+			editor_interface.mark_scene_as_unsaved()
+			return {"status": "success", "node_path": node_path, "mesh_library": lib_path}
+		"read":
+			var cells_out: Array = []
+			if params.has("from") and params.has("to"):
+				var from_v: Variant = _parse_vector3i(params["from"])
+				var to_v: Variant = _parse_vector3i(params["to"])
+				if from_v == null or to_v == null:
+					return {"error": "'from'/'to' must be [x, y, z]"}
+				var from_c: Vector3i = from_v
+				var to_c: Vector3i = to_v
+				for x in range(mini(from_c.x, to_c.x), maxi(from_c.x, to_c.x) + 1):
+					for y in range(mini(from_c.y, to_c.y), maxi(from_c.y, to_c.y) + 1):
+						for z in range(mini(from_c.z, to_c.z), maxi(from_c.z, to_c.z) + 1):
+							var item: int = grid.get_cell_item(Vector3i(x, y, z))
+							if item != -1:
+								cells_out.append({"coords": [x, y, z], "item": item})
+			else:
+				for cell in grid.get_used_cells():
+					cells_out.append({"coords": [cell.x, cell.y, cell.z],
+						"item": grid.get_cell_item(Vector3i(cell.x, cell.y, cell.z))})
+			return {"status": "success", "node_path": node_path, "cells": cells_out}
+		"clear":
+			var used: Array = grid.get_used_cells()
+			var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo:
+				undo_redo.create_action("Clear GridMap Cells")
+			for cell in used:
+				if undo_redo:
+					undo_redo.add_do_method(grid, "set_cell_item", Vector3i(cell.x, cell.y, cell.z), -1)
+					undo_redo.add_undo_method(grid, "set_cell_item", Vector3i(cell.x, cell.y, cell.z),
+						grid.get_cell_item(Vector3i(cell.x, cell.y, cell.z)))
+				else:
+					grid.set_cell_item(Vector3i(cell.x, cell.y, cell.z), -1)
+			if undo_redo:
+				undo_redo.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			return {"status": "success", "node_path": node_path, "cells_cleared": used.size()}
+		"set":
+			if not (params.get("cells", []) is Array) or (params.get("cells", []) as Array).is_empty():
+				return {"error": "op=set requires a non-empty cells array [{coords:[x,y,z], item:int}]"}
+			var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo:
+				undo_redo.create_action("Set GridMap Cells")
+			var cells_set: int = 0
+			for entry in params.get("cells", []) as Array:
+				if not (entry is Dictionary) or not (entry as Dictionary).has("coords"):
+					return {"error": "Each cell must be an object with coords:[x,y,z] and item:int"}
+				var cell_entry: Dictionary = entry
+				var coords_v: Variant = _parse_vector3i(cell_entry["coords"])
+				if coords_v == null:
+					return {"error": "Cell 'coords' must be [x, y, z]"}
+				var coords: Vector3i = coords_v
+				var item_id: int = int(cell_entry.get("item", -1))
+				if undo_redo:
+					undo_redo.add_do_method(grid, "set_cell_item", Vector3i(coords.x, coords.y, coords.z), item_id)
+					undo_redo.add_undo_method(grid, "set_cell_item", Vector3i(coords.x, coords.y, coords.z),
+						grid.get_cell_item(Vector3i(coords.x, coords.y, coords.z)))
+				else:
+					grid.set_cell_item(Vector3i(coords.x, coords.y, coords.z), item_id)
+				cells_set += 1
+			if undo_redo:
+				undo_redo.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			var payload: Dictionary = {"status": "success", "node_path": node_path, "cells_set": cells_set}
+			if grid.mesh_library == null:
+				payload["warning"] = "GridMap has no mesh_library — cells will NOT render; assign one with op=set_mesh_library"
+			return payload
+		"fill":
+			if not params.has("from") or not params.has("to") or not params.has("item"):
+				return {"error": "op=fill requires from:[x,y,z], to:[x,y,z] and item:int"}
+			var from_v2: Variant = _parse_vector3i(params["from"])
+			var to_v2: Variant = _parse_vector3i(params["to"])
+			if from_v2 == null or to_v2 == null:
+				return {"error": "'from'/'to' must be [x, y, z]"}
+			var from_c2: Vector3i = from_v2
+			var to_c2: Vector3i = to_v2
+			var fill_item: int = int(params["item"])
+			var volume: int = (absi(to_c2.x - from_c2.x) + 1) * (absi(to_c2.y - from_c2.y) + 1) * (absi(to_c2.z - from_c2.z) + 1)
+			if volume > 20000:
+				return {"error": "fill region too large (%d cells > 20000) — split into smaller fills" % volume}
+			var undo_redo2: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo2:
+				undo_redo2.create_action("Fill GridMap Region")
+			var filled: int = 0
+			for x in range(mini(from_c2.x, to_c2.x), maxi(from_c2.x, to_c2.x) + 1):
+				for y in range(mini(from_c2.y, to_c2.y), maxi(from_c2.y, to_c2.y) + 1):
+					for z in range(mini(from_c2.z, to_c2.z), maxi(from_c2.z, to_c2.z) + 1):
+						if undo_redo2:
+							undo_redo2.add_do_method(grid, "set_cell_item", Vector3i(x, y, z), fill_item)
+							undo_redo2.add_undo_method(grid, "set_cell_item", Vector3i(x, y, z),
+								grid.get_cell_item(Vector3i(x, y, z)))
+						else:
+							grid.set_cell_item(Vector3i(x, y, z), fill_item)
+						filled += 1
+			if undo_redo2:
+				undo_redo2.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			var fill_payload: Dictionary = {"status": "success", "node_path": node_path, "cells_set": filled}
+			if grid.mesh_library == null:
+				fill_payload["warning"] = "GridMap has no mesh_library — cells will NOT render; assign one with op=set_mesh_library"
+			return fill_payload
+		_:
+			return {"error": "Unknown op '" + op + "' — use set | fill | clear | read | set_mesh_library"}
+
+static func _parse_vector3i(value: Variant) -> Variant:
+	if value is Vector3i:
+		return value
+	if value is Dictionary:
+		var d: Dictionary = value
+		if d.has("x") and d.has("y") and d.has("z"):
+			return Vector3i(int(d["x"]), int(d["y"]), int(d["z"]))
+		return null
+	if value is Array and (value as Array).size() == 3:
+		var a: Array = value
+		return Vector3i(int(a[0]), int(a[1]), int(a[2]))
+	return null
+
+func _register_create_csg_shape(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_csg_shape",
+		"One-call 3D prototyping shape: creates a CSG node (box | sphere | cylinder | torus | polygon | mesh | combiner) with shape dimensions, boolean operation (union | intersection | subtraction), optional material and collision — the node-type/subresource/property dance in a single call. Wrapped in editor UndoRedo.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first."},
+				"parent_path": {"type": "string", "description": "Parent path in the edited scene ('' = root)."},
+				"name": {"type": "string", "description": "Node name (default 'CSGShape')."},
+				"shape": {"type": "string", "enum": ["box", "sphere", "cylinder", "torus", "polygon", "mesh", "combiner"], "default": "box"},
+				"size": {"type": "array", "description": "box: [w,h,d] (default [1,1,1])"},
+				"radius": {"type": "number", "description": "sphere/cylinder radius (default 0.5)"},
+				"height": {"type": "number", "description": "cylinder height (default 1)"},
+				"inner_radius": {"type": "number", "description": "torus inner radius (default 0.2)"},
+				"outer_radius": {"type": "number", "description": "torus outer radius (default 0.5)"},
+				"polygon": {"type": "array", "description": "polygon: array of [x,y] points"},
+				"operation": {"type": "string", "enum": ["union", "intersection", "subtraction"], "default": "union"},
+				"position": {"type": "array", "description": "[x,y,z] world/parent position"},
+				"material": {"type": "string", "description": "Optional res:// path to a Material"},
+				"use_collision": {"type": "boolean", "default": false},
+				"on_name_conflict": {"type": "string", "enum": ["error", "rename", "skip"], "default": "error"}
+			}
+		},
+		Callable(self, "_tool_create_csg_shape"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"node_path": {"type": "string"},
+				"node_type": {"type": "string"},
+				"operation": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_csg_shape(params: Dictionary) -> Dictionary:
+	var shape: String = str(params.get("shape", "box")).strip_edges().to_lower()
+	var type_map: Dictionary = {
+		"box": "CSGBox3D", "sphere": "CSGSphere3D", "cylinder": "CSGCylinder3D",
+		"torus": "CSGTorus3D", "polygon": "CSGPolygon3D", "mesh": "CSGMesh3D",
+		"combiner": "CSGCombiner3D"}
+	if not type_map.has(shape):
+		return {"error": "Unknown shape '" + shape + "' — use box | sphere | cylinder | torus | polygon | mesh | combiner"}
+	var node_type: String = type_map[shape]
+	if shape == "polygon":
+		var poly_pre: Variant = params.get("polygon", [])
+		var poly_points: int = 0
+		if poly_pre is Array:
+			for poly_pt in (poly_pre as Array):
+				if poly_pt is Array and (poly_pt as Array).size() >= 2:
+					poly_points += 1
+		if poly_points < 3:
+			return {"error": "shape=polygon requires polygon: at least 3 [x,y] points (got %d)" % poly_points}
+	if shape == "mesh" and str(params.get("mesh", "")).strip_edges().is_empty():
+		return {"error": "shape=mesh requires mesh: res:// path to an ArrayMesh"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
+	var parent_path: String = str(params.get("parent_path", "")).strip_edges()
+	var parent: Node = _resolve_node_path(parent_path if parent_path != "" else "/root")
+	if not parent:
+		return {"error": "Parent node not found: " + parent_path
+			+ NodeToolsNative._suggest_parent_path(_get_user_scene_root(), parent_path)}
+
+	# 默认名按形状派生（CSGBox/CSGSphere/...）：实测坑——统一 "CSGShape" 默认名
+	# 在第二个形状就撞名；形状派生名让连续创建免撞。
+	var node_name: String = str(params.get("name", "")).strip_edges()
+	if node_name.is_empty():
+		node_name = "CSG" + shape.capitalize()
+	var on_name_conflict: String = str(params.get("on_name_conflict", "error")).to_lower()
+	if parent.has_node(node_name):
+		match on_name_conflict:
+			"skip":
+				var existing: Node = parent.get_node(node_name)
+				return {"status": "skipped", "node_path": String(existing.get_path()),
+					"node_type": existing.get_class(), "detail": "node already exists"}
+			"rename":
+				var counter: int = 2
+				while parent.has_node(node_name + str(counter)):
+					counter += 1
+				node_name = node_name + str(counter)
+			_:
+				return {"error": "A node named '" + node_name + "' already exists under " + (parent_path if parent_path != "" else "the scene root") + ". Use on_name_conflict='rename' or 'skip'."}
+
+	var csg: CSGShape3D = ClassDB.instantiate(node_type) as CSGShape3D
+	if csg == null:
+		return {"error": "Failed to instantiate " + node_type}
+	csg.name = node_name
+
+	# 形状尺寸（各 CSG 子类的专用属性）。
+	match shape:
+		"box":
+			if params.has("size") and (params.get("size", []) is Array) and (params.get("size", []) as Array).size() == 3:
+				var s: Array = params["size"]
+				(csg as CSGBox3D).size = Vector3(float(s[0]), float(s[1]), float(s[2]))
+		"sphere":
+			if params.has("radius"):
+				(csg as CSGSphere3D).radius = float(params["radius"])
+		"cylinder":
+			if params.has("radius"):
+				(csg as CSGCylinder3D).radius = float(params["radius"])
+			if params.has("height"):
+				(csg as CSGCylinder3D).height = float(params["height"])
+		"torus":
+			if params.has("inner_radius"):
+				(csg as CSGTorus3D).inner_radius = float(params["inner_radius"])
+			if params.has("outer_radius"):
+				(csg as CSGTorus3D).outer_radius = float(params["outer_radius"])
+		"polygon":
+			var points: PackedVector2Array = PackedVector2Array()
+			for point_value in (params.get("polygon", []) as Array):
+				if point_value is Array and (point_value as Array).size() >= 2:
+					points.append(Vector2(float((point_value as Array)[0]), float((point_value as Array)[1])))
+			if points.size() < 3:
+				csg.free()
+				return {"error": "polygon needs at least 3 [x,y] points"}
+			(csg as CSGPolygon3D).polygon = points
+		"mesh":
+			var mesh_path: String = str(params.get("mesh", "")).strip_edges()
+			if not ResourceLoader.exists(mesh_path):
+				csg.free()
+				return {"error": "mesh not found: " + mesh_path}
+			(csg as CSGMesh3D).mesh = load(mesh_path)
+
+	var operation: String = str(params.get("operation", "union")).to_lower()
+	var op_map: Dictionary = {"union": 0, "intersection": 1, "subtraction": 2}
+	if not op_map.has(operation):
+		csg.free()
+		return {"error": "Unknown operation '" + operation + "' — use union | intersection | subtraction"}
+	csg.operation = int(op_map[operation])
+	csg.use_collision = bool(params.get("use_collision", false))
+	if params.has("position") and (params.get("position", []) is Array) and (params.get("position", []) as Array).size() == 3:
+		var pos: Array = params["position"]
+		csg.position = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+	var material_path: String = str(params.get("material", "")).strip_edges()
+	if not material_path.is_empty():
+		if not ResourceLoader.exists(material_path):
+			csg.free()
+			return {"error": "material not found: " + material_path}
+		csg.material = load(material_path)
+
+	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+	if undo_redo:
+		undo_redo.create_action("Create CSG " + shape.capitalize())
+		undo_redo.add_do_method(parent, "add_child", csg)
+		undo_redo.add_do_property(csg, "owner", _get_user_scene_root())
+		undo_redo.add_do_reference(csg)
+		undo_redo.add_undo_method(parent, "remove_child", csg)
+		undo_redo.commit_action()
+	else:
+		parent.add_child(csg)
+		csg.owner = _get_user_scene_root()
+
+	editor_interface.mark_scene_as_unsaved()
+	return {"status": "success", "node_path": String(csg.get_path()),
+		"node_type": node_type, "operation": operation}
 
 # ============================================================================
 # batch_update_scene_files（P1 场景变体与批量修改）：跨多个 .tscn 文件的

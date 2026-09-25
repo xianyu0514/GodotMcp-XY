@@ -24,7 +24,7 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 | `open_scene` | core | Open a scene file from the project. Closes the current scene if one is open. |
 | `get_current_scene` | core | Get information about the currently open scene, including name, path, and root node type. |
 
-### Scene-Advanced (12 advanced)
+### Scene-Advanced (14 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -34,6 +34,8 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 | `close_scene_tab` | advanced | Close the active scene tab, or activate a specified scene tab and close it. |
 | `instantiate_scene` | advanced | Instance an existing scene file (.tscn) as a child of a node in the currently edited scene. Useful for placing prefabs such as card UIs or enemy instances into the scene tree. |
 | `save_branch_as_scene` | advanced | Save a node and all of its descendants from the currently edited scene as a reusable scene file (.tscn). Useful for extracting a designed UI branch into a prefab. Does not modify the source scene tree. |
+| `set_gridmap_cells` | advanced | Edit-time GridMap (3D grid, MeshLibrary) cell authoring: op=set cells / fill box region / clear / read region / set_mesh_library. Wrapped in editor UndoRedo; warns when cells cannot render (no mesh_library). |
+| `create_csg_shape` | advanced | One-call 3D prototyping CSG node: box/sphere/cylinder/torus/polygon/mesh/combiner with dimensions, boolean operation (union/intersection/subtraction), material, collision and name-conflict policy. Wrapped in editor UndoRedo. |
 | `set_tilemap_layer_cells` | advanced | Set or erase a batch of cells on a TileMapLayer node (Godot 4.x) in the currently edited scene using the single-layer TileMapLayer API. Each cell is {coords:[x,y], source_id, atlas_coords:[x,y], alternative} or {coords:[x,y], erase:true}. Assign a TileSet to the layer so painted cells render. Wrapped in editor UndoRedo. |
 | `get_tilemap_layer_cells` | advanced | Read cells from a TileMapLayer node (Godot 4.x) in the currently edited scene. Without 'coords' it returns every used cell; with 'coords' (array of [x,y]) it returns just those. Each cell reports source_id, atlas_coords and alternative (source_id -1 means empty). |
 | `batch_update_scene_files` | advanced | Semantic batch property edit across many .tscn FILES at once (text-level — everything but the edited lines stays byte-identical). Each edit targets {node, property, value} with an optional `expect_current` guard: only nodes whose current serialized value equals the guard are rewritten, so tuning every grunt while the boss keeps its special value is one call; drifted values are reported as preserved (special config kept). An explicit `preserve` list is an absolute keep. The existing serialized type is followed when lossless (220.0 over int 200 stays `220`). Unserialized properties are reported missing, never silently appended. `dry_run` defaults to true — first call previews, re-run with `dry_run=false` to write. |
