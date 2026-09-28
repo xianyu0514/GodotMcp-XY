@@ -87,3 +87,59 @@ func test_prepare_project_test_environment_reports_a_state() -> void:
 	assert_true(result.get("status", "") in ["ready", "empty", "unconfigured", "blocked"], str(result))
 	assert_true(result.get("environment") is Array)
 	assert_false((result.get("environment", []) as Array).is_empty())
+
+# ---------------------------------------------------------------------------
+# P0-1 回归（2026-09-27 体检）：测试根目录曾被硬编码为单数 res://test，
+# 复数 res://tests 项目被判"无测试"，显式传 res://tests 反而报错。
+# ---------------------------------------------------------------------------
+
+func _write_text_file(path: String, content: String) -> void:
+	var file: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(content)
+	file.close()
+
+func test_plural_tests_dir_is_whitelisted_and_auto_discovered() -> void:
+	var plural_root: String = "res://tests"
+	if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(plural_root)):
+		# 保险丝：仓库若真有 res://tests，本测试绝不删它，直接跳过造数。
+		assert_true(true, "skip: res://tests already exists")
+		return
+	_tmp_dirs.append(plural_root)
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(plural_root))
+	_write_text_file(plural_root.path_join("test_dummy_plural.gd"), "extends GutTest\n")
+
+	# 显式复数路径必须可用（旧版报 "Test path must stay under res://test/"）
+	var explicit: Dictionary = _tools._tool_list_project_tests({"search_path": "res://tests"})
+	assert_eq(explicit.get("status", ""), "ready", str(explicit))
+	assert_true(int(explicit.get("count", 0)) >= 1)
+
+	# 默认调用必须自动发现复数目录里的测试，而不是误报 unconfigured
+	var default_call: Dictionary = _tools._tool_list_project_tests({})
+	assert_eq(default_call.get("status", ""), "ready", str(default_call))
+	var found_plural: bool = false
+	for entry in default_call.get("tests", []):
+		if String((entry as Dictionary).get("test_path", "")).begins_with("res://tests/"):
+			found_plural = true
+	assert_true(found_plural, "默认调用应自动合并 res://tests 的发现")
+	assert_true((default_call.get("search_paths", []) as Array).size() >= 2,
+		"search_paths 应报告参与合并的候选目录")
+
+func test_invalid_test_path_error_lists_existing_dirs() -> void:
+	var result: Dictionary = _tools._tool_list_project_tests({"search_path": "res://scripts"})
+	assert_true(result.has("error"))
+	assert_true(str(result["error"]).contains("res://tests"), "错误应同时点名复数别名")
+	assert_true(str(result["error"]).contains("Existing test directories"), "错误应列出实际存在的测试目录")
+
+func test_missing_explicit_path_reports_candidates() -> void:
+	var missing: String = "res://test/does_not_exist_%d" % Time.get_ticks_usec()
+	var result: Dictionary = _tools._tool_list_project_tests({"search_path": missing})
+	assert_eq(result.get("status", ""), "unconfigured")
+	assert_true(result.has("candidates_checked"), "应上报检查过的候选目录")
+	assert_true(result.has("hint"))
+
+func test_default_call_reports_per_candidate_counts() -> void:
+	var result: Dictionary = _tools._tool_list_project_tests({})
+	assert_eq(result.get("status", ""), "ready")
+	assert_true(int(result.get("count", 0)) > 0, "本仓库 res://test 存在大量测试")
+	var reports: Array = result.get("search_paths", [])
+	assert_false(reports.is_empty(), "search_paths 应给出口径级计数")
