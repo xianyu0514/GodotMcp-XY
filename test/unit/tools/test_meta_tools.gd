@@ -432,3 +432,74 @@ func test_get_tool_details_missing_returns_not_found():
 	assert_eq(result.get("found"), false, "Unknown tool reports found=false")
 	assert_has(result, "hint", "Not-found response suggests how to search")
 	assert_true(str(result.get("hint", "")).contains("list_tool_catalog"), "Hint points to the catalog")
+
+# --- 多客户端防踩脚守卫（multi-AI concurrent routing guard）---
+
+## 模拟 HTTP 传输层多连接的 core：暴露 get_active_client_count。
+class FakeMultiClientCore:
+	extends FakeServerCore
+	var active_clients: int = 2
+
+	func get_active_client_count() -> int:
+		return active_clients
+
+func _make_multi_client_tool(client_count: int) -> Dictionary:
+	var core: FakeMultiClientCore = FakeMultiClientCore.new()
+	core.active_clients = client_count
+	core.seed("create_node", true, "core", "Node-Write", "Create a node.")
+	core.seed("enable_tools", true, "meta", "Meta", "Enable or disable tools.")
+	core.seed("get_runtime_info", false, "supplementary", "Debug-Advanced", "Get runtime info from the running game.")
+	core.seed("run_export", false, "supplementary", "Project-Advanced", "Run an export preset.")
+	var tool: RefCounted = MetaToolsScript.new()
+	tool._server_core = core
+	return {"tool": tool, "core": core}
+
+func test_multi_client_guard_downgrades_replace_to_additive():
+	var fixture: Dictionary = _make_multi_client_tool(2)
+	var tool: RefCounted = fixture["tool"]
+	var core: FakeMultiClientCore = fixture["core"]
+	core.set_tool_enabled("run_export", true)
+	var result: Dictionary = tool._tool_enable_tools({"workflow_query": "get_runtime_info"})
+	assert_eq(result.get("status", ""), "success")
+	assert_true(core.is_enabled("get_runtime_info"), "路由的工具被启用")
+	assert_true(core.is_enabled("run_export"),
+		"守卫生效：另一 AI 正在用的补充工具不被替换禁用")
+	assert_false(result.get("replaced_supplementary", true), "响应如实报告增量模式")
+	assert_true(result.has("conflict_guard"), "降级必须带自愈说明")
+	assert_true(str(result.get("conflict_guard", "")).contains("force_replace=true"),
+		"自愈说明给出精确的覆盖参数")
+	assert_eq(result.get("active_clients", 0), 2, "上报活跃客户端数")
+
+func test_force_replace_overrides_multi_client_guard():
+	var fixture: Dictionary = _make_multi_client_tool(3)
+	var tool: RefCounted = fixture["tool"]
+	var core: FakeMultiClientCore = fixture["core"]
+	core.set_tool_enabled("run_export", true)
+	var result: Dictionary = tool._tool_enable_tools({
+		"workflow_query": "get_runtime_info",
+		"force_replace": true
+	})
+	assert_false(core.is_enabled("run_export"), "显式 force 恢复替换语义")
+	assert_true(result.get("replaced_supplementary", false))
+	assert_false(result.has("conflict_guard"), "强制替换不再附守卫文案")
+
+func test_single_client_keeps_replace_semantics():
+	var fixture: Dictionary = _make_multi_client_tool(1)
+	var tool: RefCounted = fixture["tool"]
+	var core: FakeMultiClientCore = fixture["core"]
+	core.set_tool_enabled("run_export", true)
+	var result: Dictionary = tool._tool_enable_tools({"workflow_query": "get_runtime_info"})
+	assert_false(core.is_enabled("run_export"), "单客户端替换语义保持不变")
+	assert_true(result.get("replaced_supplementary", false))
+	assert_false(result.has("conflict_guard"), "单客户端不应出现守卫噪音")
+
+func test_explicit_additive_mode_has_no_guard_noise():
+	var fixture: Dictionary = _make_multi_client_tool(2)
+	var tool: RefCounted = fixture["tool"]
+	var result: Dictionary = tool._tool_enable_tools({
+		"workflow_query": "get_runtime_info",
+		"replace_supplementary": false
+	})
+	assert_eq(result.get("status", ""), "success")
+	assert_false(result.has("conflict_guard"),
+		"显式增量本来就不替换，不应误报告守卫")

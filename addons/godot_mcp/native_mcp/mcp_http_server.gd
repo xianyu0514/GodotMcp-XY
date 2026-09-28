@@ -61,6 +61,11 @@ var _thread: Thread = null
 ## 活跃连接列表
 var _connections: Array[StreamPeerTCP] = []
 
+## 客户端连接数的 int 镜像（服务线程是唯一写入方，主线程只读）。
+## 供 get_active_client_count() 的多客户端守卫判定用；读到大一拍的旧值无碍
+## （守卫只需"大约是否 >1"）。GDScript int 在 64 位平台上的赋值是原子的。
+var _client_count_snapshot: int = 0
+
 ## SSE 连接列表（保持打开的连接）
 var _sse_connections: Dictionary = {}  # peer -> session_id
 
@@ -262,6 +267,7 @@ func stop() -> void:
 			peer.disconnect_from_host()
 	
 	_connections.clear()
+	_client_count_snapshot = 0
 	_post_response_formats.clear()
 	_request_states.clear()
 	
@@ -303,6 +309,7 @@ func _http_server_loop() -> void:
 					_log_callback.call("WARN", "Connection rejected: maximum connections reached (" + str(MAX_CONNECTIONS) + ")")
 			else:
 				_connections.append(peer)
+				_client_count_snapshot = _connections.size()
 				if _log_callback.is_valid():
 					_log_callback.call("INFO", "New connection: " + str(peer.get_status()))
 		
@@ -371,6 +378,12 @@ func _remove_connection_at(index: int) -> void:
 	if _request_states.has(p):
 		_request_states.erase(p)
 	_connections.remove_at(index)
+	_client_count_snapshot = _connections.size()
+
+## 多客户端守卫判定用的活跃连接数（线程安全镜像，见 _client_count_snapshot）。
+## 0 连接（无人调用）与 1 连接（单客户端）对守卫语义等价，统一钳到 1。
+func get_active_client_count() -> int:
+	return maxi(_client_count_snapshot, 1)
 
 ## 发送 SSE 心跳
 func _send_sse_keepalive() -> void:

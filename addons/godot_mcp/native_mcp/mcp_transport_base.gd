@@ -69,3 +69,9 @@ func send_response(response: Dictionary, context: Variant) -> void:
 ## @param message: Dictionary - 完整的 JSON-RPC 消息（包含 jsonrpc/method/params）
 func send_raw_message(message: Dictionary) -> void:
 	push_error("McpTransportBase.send_raw_message() is not implemented")
+
+## 当前活跃的客户端连接数（供多客户端守卫判定用）。
+## 基类默认 1：stdio 传输是单客户端，无连接概念。
+## 返回值只需"大约准确"——用于启用集守卫的 >1 判定，允许滞后一拍。
+func get_active_client_count() -> int:
+	return 1
