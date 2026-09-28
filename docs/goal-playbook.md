@@ -124,6 +124,167 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - **改脚本后要确认场景引用的是外部文件**：`create_script` 挂载按外部路径引用；若手工内嵌过源码，改 .gd 文件不会影响场景 —— 用 read_script 与运行实测对照。
 - **传错参数名不会再静默**：调度层会在结果里附 `_schema_warnings` 指出未知键与 schema 实际键集，一次往返即可自纠。
 
+## 修改生效确认链（verify_change_effect 的实测要点）
+
+"代码/属性改了，玩起来没变化" 的四类真凶与逐项证据（verify_change_effect 已固化，这里记录口径）：
+
+1. **内嵌脚本副本**：节点段写 `script = SubResource("GDScript_xxx")` 时，对外部 .gd 的任何修改都到不了游戏（attach_script 曾在保存时嵌入副本——已修，但历史场景仍可能带着内嵌副本）。修复：`attach_script` 换回外部引用 + `save_scene`。
+2. **未保存缓冲**：`run_project` 从磁盘启动，编辑器缓冲里的修改永远不进游戏。修复：`save_scene` / `save_all_scripts`。
+3. **实例覆盖（最隐蔽）**：直跑基场景全通过，但真实游戏跑的是宿主场景——宿主里 `[node name="X" parent="." instance=ExtResource(...)]` 的属性覆盖值胜过基值。verify_change_effect 的 hosts 步会点名宿主文件+节点，needs 直接给出带 `expect_current` 的 `batch_update_scene_files` 修复调用。
+4. **只在内存生效**：第二次磁盘启动读回不一致 => 改动没落盘。
+
+**GDScript 值语义三连坑**（本会话实测三次，写 GDScript 前先想引用还是值）：
+- lambda 按值捕获局部变量——计数器/状态跨调用不持久，用 Dictionary 单元格当可变盒子；
+- `PackedStringArray` 等打包数组是值类型——`as` 转换后 append 改的是副本，容器里存的
+  不变；要可变集合用 `Array`，或取值-修改-写回。
+
+**.tscn 文本解析的两个实测陷阱**（解析器已按此实现，改动前先读这里）：
+- `parent` 属性**不含根名**：`[node name="Leaf" parent="Mid"]` 的完整路径是 `Root/Mid/Leaf`，不是 `Mid/Leaf`（TestScene.tscn 实测）。
+- `instance=ExtResource("id")` 的 id 前面是 `(`，键值正则 `key="value"` 匹配不到——必须从原始头部行直接提取，否则宿主实例永远识别不出。
+
+## M1 三配方的实测要点（地图 / 道具 / 存档）
+
+- **地图**：TileSet 必须显式赋给 TileMapLayer，否则刷了格子不渲染；碰撞层先于涂画配置；
+  位移断言用 displacement_min/max（相对值），起点非原点的关卡会被绝对阈值误杀；
+  批量写瓦片后物理要等一帧再断言。关卡实例化玩家/敌人 => 对关卡场景验收，宿主覆盖胜过基值。
+- **道具**：Area2D + body_entered 信号收集（绝不轮询）；节点 queue_free 后读不到——
+  断言计数器而不是节点；防双拾取要在同一次回调里处理。
+- **存档**：存 user://（res:// 在导出后只读——只在出货时才咬人的陷阱）；显式字段清单 +
+  版本号；跨 FRESH 项的持久证据只有 user:// 文件本身（运行时状态不跨项）——
+  项1 玩+存盘断言文件存在，项2 FRESH 启动断言还原。
+
+- **手感**：feel 即数据（一个方案=一组旋钮）；hitstop 必须 ALWAYS 恢复 time_scale
+  （泄漏的 hitstop 冻结游戏）；闪光要"设置且恢复"双向审计；震屏断言相机真的动了。
+- **音频**：MCP 不能合成音频文件——诚实边界是"系统全接好、文件你来放、缺文件点名"；
+  SFX 用小池（单播放器放长音效会掐断 BGM）；验证靠播放器/总线状态（听不到就断言状态）。
+- **Boss**：= 近战脑 + stats 数据（击退抗性）+ 阶段表（阈值→旋钮覆盖行），
+  行为脚本里没有 if-boss；竞技场实例化 Boss => 对竞技场验收。
+- **远程敌人**：每次射击前必须有前摇（无前摇=不可闪避=缺陷）；投射物命中**和**超时
+  都要 free（泄漏静默拖垮性能，断言活跃数回到基线）。
+
+## 本地集成验证的三个实测坑（2026-09-23 首次本地跑通全链路）
+
+- **嵌套项目残留会杀掉整个插件**：仓库根下未跟踪的 stress_game/（含插件全量副本，
+  连 .uid 一起复制）被编辑器扫描 → 同名全局类 "hides a global script class" →
+  真插件编译链失败 → MCP 服务器起不来。CI 绿是因为干净 checkout 无残留；
+  本地"服务器没起来"先查根目录嵌套项目。移出后还要清 .godot/（UID 缓存仍指向
+  已移走的副本路径）。
+- **project.godot 的键是 `config/name=` 不是 `config_name=`**：写错时项目名静默为空，
+  不报错——plugin_user_release 的项目名断言就是这么挂的（测试自身的键名笔误）。
+- **集成测试里的硬编码计数会静默漂移**：first_contact 的 "238-tool" 历经五次工具
+  计数递增都没更新（本机"跑不了"就没人看它）。凡是 pin 计数的测试，计数变更的
+  同步清单必须包含集成层。
+
+## L3 终局验收实测出的两条铁律（2026-09-23，俯视迷你高尔夫首跑）
+
+- **Godot 的 Expression 类不支持三元语法**：`x if c else y` 连 `(1 if true else 2)`
+  都是 parse error 31；`self` 标识符同样非法。任何要送进探针求值的表达式只能用
+  裸属性/方法调用/比较。verify_change_effect 的读回表达式已按"根名已知"重写
+  （根=>裸属性，子=>get_node 相对路径），并有单测钉死"生成式必须可 parse"。
+- **connect_signal 连的是编辑器实例**：连接不写进 .tscn 的 [connection]，
+  flags=1（CONNECT_PERSIST）经此保存路径也不落盘——运行时游戏里是死按钮。
+  可靠持久路径是脚本侧 `_ready` 里 `signal.connect(...)`（代码即持久）。
+  工具现会在缺 PERSIST 位时自愈警告；menu 配方已改为教脚本侧接线。
+
+## 文本级 .tscn 改写与编辑器缓存（M6 真机验证实测）
+
+- 文本改写绕过编辑器 → **资源缓存仍是旧场景**；batch_update_scene_files 已在写盘后
+  做 `ResourceLoader.load(..., CACHE_MODE_REPLACE)` 自行刷新（答案同行）。
+- 已打开的场景标签聚焦的是**旧实例**（open_scene 的 already_open 路径）——
+  完整调用流是"改盘 → close_scene_tab → open_scene"重新实例化。
+- create_scene_variant 生成的继承场景经真引擎加载验证（零错误、覆盖可读回）；
+  变体节点段 parent 语义与解析器一致（相对根，"."=根的直接子级）。
+
+## 着色器两条实测铁律（make_game_shader 首跑）
+
+- **uniform 默认值读回是 null**：`get_shader_parameter` 只读材质上显式 set 过的值，
+  默认值活在着色器代码里。运行时读值必须先 `set_runtime_shader_parameter` 再读回；
+  挂载证明用 `material is ShaderMaterial` + `material.shader != null`。
+- **Expression 不支持 is 运算符**（同禁三元）：类型断言用
+  `material.get_class() == 'ShaderMaterial'` 这类字符串比较。
+- **无效着色器先拒后写**：create_script 的 .gdshader 分支在落盘前做文本校验
+  （shader_type/括号/结构），无效内容不写盘——坏文件不进项目，也避开导入器噪音。
+
+## Expression 原生类名禁令（旗舰实机检验实测）
+
+- **Expression 不能解析原生类名**：`FileAccess.file_exists(...)`、`ClassDB.class_exists(...)`
+  静态调用必然执行失败（裸引擎与项目内双证；连 `(1 if true else 2)` 三元之外的又一坑）。
+  断言只能用状态字段——存档的证明是 FRESH 重启后还原，不是 file_exists。
+- 存量集成测试里 `FileAccess.file_exists` 断言一律改为状态断言（voxel r4a 的历史"通过"
+  存疑，可能是折叠层字符串强转伪影，已同批修正）。
+
+## A 项评审首跑实测（旗舰 Gem Rush，2026-09-25）
+
+机器测项（M）6/6 契约 COMPLETE、公平前摇 17 帧、天梯 r3/延迟 2 帧×2 幂等——
+但 A 项（代理看截图评审）在**同一游戏**上给出了 FAIL。这正是分层存在的意义：
+
+- **截图证据曾互相覆盖（工具缺陷，已修）**：review moments 与契约运行共用默认截图
+  目录，`step_NN.jpg` 按 step index 命名——跨 moment、跨幂等重跑互相覆盖。实测两个
+  moment 产出**字节级相同**的截图（md5 一致），移动 moment 的证据被静态 moment 吞掉。
+  修复：每个 moment 隔离到 `screenshot_dir/review_moments/<sanitized id>/`（探针侧
+  make_dir_recursive 已保证目录自建）。
+- **评审帧判定（修复前取证的唯一帧）**：深灰单色虚空 + 白色玩家方块 +
+  "PAUSED — Esc resumes" 文字常显；地面/宝石/尖刺在帧内不可读。新玩家无法推断
+  目标与危险 → first_30_seconds FAIL，visual_coherence WEAK。
+- **空断言暂停契约（游戏侧教训）**：menu 用 `PROCESS_MODE_WHEN_PAUSED` 只在暂停时
+  处理输入 → **无法发起**第一次暂停；label 初始可见从不隐藏。契约只断言终态
+  `paused == false` → **空泛通过**。收紧方向：样本必须出现过 `paused == true`，
+  暂停切换放在 PAUSABLE 节点、label 在 `_ready` 显式隐藏。
+- **给配方默认值的回流**（make_first_game 系下次迭代）：背景与地面必须有可读的
+  色彩/明度分层；开始画面要陈述目标；评审 moment 的步骤应包含有分歧的输入，
+  否则截图只能证明"启动过"。
+
+### 闭环复跑（同日，A-FAIL → A-PASS）
+
+按上述回流修正后重跑全流程（ALL CHECKS PASSED）：物理节点补可见子节点
+（地面棕/Gem 青/尖刺红）、Menu 改 `PROCESS_MODE_ALWAYS` + PauseLabel 初始
+隐藏、目标 HUD 常显（含操作键位）、暂停契约拆 r4a（断言 paused==True）+r4b。
+验证闭环：
+
+- **契约 COMPLETE 且暂停非空验证**——r4a 证明暂停真实发生（旧 WHEN_PAUSED
+  设计下该项必失败，空泛通过被终结）。
+- **截图隔离在真机成立**——两个 moment 落在不同 `review_moments/<id>/` 目录，
+  移动 moment 与静态 moment 的 md5 不同（fdabb883 vs 05d922d8），移动画面可见。
+- **A 项视觉复判 PASS**——first_30_seconds：目标文本启动即读、无误导性
+  PAUSED 字样、地面/背景分层可读；visual_coherence：玩家移动中、HUD 不遮挡。
+  评审截图从 a_items evidence 的 save_path 直接定位（不再手工猜目录）。
+
+## 2D 能力矩阵实测（2026-09-25，五格零覆盖冷压）
+
+`test/integration/test_2d_capability_matrix.py`：视差 / 2D 光照 / 路径巡逻 /
+移动平台 / 镜头震动——全部"原子工具构建 → FRESH 运行 → 帧定时时间线 →
+引擎真值断言 + 测试侧轨迹数学"验证通过。逼出的实测铁律：
+
+- **create_node / attach_to_node 的 parent 路径是根相对全路径**：根的直接
+  子节点可以只写名字，孙节点必须写 `Parent/Child`（旗舰只造过直接子节点，
+  矩阵首跑即踩中；attach 失败只给 `attach_warning` 不算 error——调用方要查）。
+- **ParallaxLayer.scroll_offset 在 Expression 里不可执行**（整读都失败）；
+  视差真值 = `layer.position`，随镜头按 `-delta × motion_scale` 变化。实测
+  0.6/0.2 两层速率比 3.00 精确命中。已沉入 expression-rules 第 8 条。
+- **ColorRect 不接收 2D 光照**（rect 原语）：开灯/关灯渲染字节相同；换成
+  Sprite2D（GradientTexture2D 纹理）后开关字节不同——被照亮的表面必须是
+  带纹理的 CanvasItem。径向渐变要显式 `fill_from=(0.5,0.5)` 否则从角落起。
+- **CanvasModulate.color 批量数组设置读回黑色**（000000ff），ColorRect.color
+  同法正常——CanvasModulate 的颜色走脚本侧设置更稳。
+- **移动平台搭载**：AnimatableBody2D + `sync_to_physics=true` + 在
+  `_physics_process` 里改 position，乘客（无输入）实测被带着走 240px、
+  y 稳定 0.0px。
+- **确定性震动**可被时间线完全断言：峰值 |offset.x|=13.8px、结束后归 0。
+
+### 补格（同日，Skeleton2D + BackBufferCopy，矩阵 7/7）
+
+- **2D 骨骼链**：Skeleton2D + Bone2D 层级 + 末端 ColorRect 视觉子节点——
+  父骨 rotation 按帧递增，实测子骨尖端 y 摆幅 101.8px、视觉子节点跟随
+  97.5px（运动链语义可被时间线采样断言）。
+- **hint_screen_texture 自动插屏拷贝**：4.x 中 `uniform sampler2D x :
+  hint_screen_texture` 会自动触发屏幕拷贝——**BackBufferCopy 节点并非
+  必需**，其 copy_mode 开关也不影响该 uniform 的行为（开/关变体两帧
+  字节相同）。有效对照是特效节点可见 vs 隐藏（md5 7af7eea9 vs 11fa7db8）。
+- **帧锁定时间线要求帧驱动运动**：被断言的运动不能依赖墙钟
+  （get_ticks_msec）——时间线回放按帧快进时墙钟几乎不走，平台运动被
+  "冻结"（搭载位移测成 0.0px 的 flake）。帧计数驱动 + 落地时序内平台
+  仍在落点覆盖（0.02 rad/帧）后稳定复现 238.9px 摆幅。
+
 ## 出问题时的取证顺序
 
 0. 工具返回 "Tool is disabled" 时先 `enable_tools`（supplementary 工具默认关闭，

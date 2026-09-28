@@ -2,7 +2,7 @@
 
 [← Tools reference](README.md)
 
-**26 tools** — 9 core, 17 advanced.
+**28 tools** — 9 core, 19 advanced.
 
 Create, inspect, reorganize and audit nodes in the edited scene. Core tools cover the common node-editing loop; advanced tools add signals, groups, subresources, bulk edits and persistence audits.
 
@@ -60,6 +60,8 @@ Create, inspect, reorganize and audit nodes in the edited scene. Core tools cove
 | `set_control_offset_transform` | advanced | Set the Godot 4.7 offset transform of a Control node (offset_transform_position/rotation/scale/pivot plus enabled and visual_only) without affecting layout. Returns status unsupported below Godot 4.7. |
 | `set_collision_one_way` | advanced | Enable or disable one-way collision on a 2D collision node (CollisionShape2D or CollisionPolygon2D) with optional margin and direction. CollisionShape2D one-way collision requires Godot 4.7. |
 | `set_node_subresource` | advanced | Create an inline sub-resource of a built-in Resource type, set its properties, and assign it to a node property in the edited scene (wrapped in editor UndoRedo). Use this to set up things like CollisionShape2D.shape = RectangleShape2D{size:[64,32]}, Sprite2D.material = CanvasItemMaterial, or Line2D.gradient = Gradient. Unlike add_resource (which creates child nodes) this writes the sub-resource's own properties. |
+| `set_material_parameter` | advanced | EDIT-TIME material parameter set (runtime variant: set_runtime_shader_parameter): sets a shader uniform or plain property on a CanvasItem's material in the edited scene; pass shader_path to create the ShaderMaterial when the node has none. Values coerce ([x,y]/{x,y}/[r,g,b,a]). Idempotent. |
+| `create_audio_player` | advanced | AudioStreamPlayer(2D) + stream + bus in one call (spatial=true for positioned). stream_path loads an IMPORTED audio resource (generate_asset cannot synthesize audio — the honest scope); BGM on 'Music', pooled SFX on 'SFX'. Idempotent by node name. |
 
 ## Batch scene recovery
 

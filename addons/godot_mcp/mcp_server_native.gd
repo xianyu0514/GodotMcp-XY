@@ -790,6 +790,7 @@ func _register_all_resources() -> void:
 	
 	# 注册编辑器资源
 	_register_editor_resources()
+	_register_session_resources()
 	
 	_log_info("All MCP resources registered successfully")
 
@@ -870,6 +871,87 @@ func _register_project_resources() -> void:
 		Callable(self, "_resource_project_settings"),
 		"Project setting values and configuration"
 	)
+
+func _register_session_resources() -> void:
+	# 会话层资源：注意力里程碑的"一次调用重建上下文"以可订阅资源面暴露。
+	_native_server.register_resource(
+		"godot://project/brief",
+		"Game project session brief",
+		"application/json",
+		Callable(self, "_resource_project_brief"),
+		"One-read session context: identity, content volume, task-plan state, verification gaps named one by one, recent changes, next sentences. The get_game_project_brief tool's output as a subscribable resource."
+	)
+	_native_server.register_resource(
+		"godot://engine/expression-rules",
+		"Runtime Expression mini-language rules",
+		"text/plain",
+		Callable(self, "_resource_expression_rules"),
+		"The engine truths for expressions sent to the runtime probe (assertions, readbacks): what the Expression class does NOT support and how to write legal ones. Read BEFORE writing assertions."
+	)
+	_native_server.register_resource(
+		"godot://capabilities",
+		"Capability map: what can be made, measured, proven",
+		"text/plain",
+		Callable(self, "_resource_capabilities"),
+		"The declarative capability card (same content as the make_any_game prompt): what you CAN make (no discovery ceiling), what you CAN measure (per-frame timelines), what counts as PROVEN (contracts, verify_change_effect, the perfect ladder), and the truths that hold. No procedures — you decide everything."
+	)
+	_native_server.register_resource(
+		"godot://recipes",
+		"Making-recipe catalog",
+		"application/json",
+		Callable(self, "_resource_recipes"),
+		"All shipped game-making recipes with descriptions and required arguments."
+	)
+
+static func _resource_project_brief(params: Dictionary) -> Dictionary:
+	var brief: Dictionary = {}
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_tool_instances") is Dictionary:
+			var instances: Dictionary = plugin.get("_tool_instances")
+			if instances.has("ProjectToolsNative") and instances["ProjectToolsNative"] is RefCounted:
+				brief = instances["ProjectToolsNative"]._tool_get_game_project_brief({})
+	var text: String = JSON.stringify(brief if not brief.is_empty() else {"status": "unavailable", "detail": "brief module not ready"}, "  ")
+	return {"contents": [{"uri": "godot://project/brief", "mimeType": "application/json", "text": text}]}
+
+static func _resource_expression_rules(params: Dictionary) -> Dictionary:
+	var rules := """Runtime Expression rules (learned the hard way, read before writing assertions):
+
+1. NO ternary syntax: 'x if cond else y' is a PARSE ERROR in the Expression class (even '(1 if true else 2)').
+2. NO 'self' identifier: to reference the evaluation base use bare property/method names.
+3. NO 'is' operator: type checks use get_class() string comparison, e.g. material.get_class() == 'ShaderMaterial'.
+4. The evaluation base is the CURRENT SCENE: get_node('Child') resolves relative to it; for the scene root itself use bare properties.
+5. get_shader_parameter returns NULL for uniforms never explicitly set — set via set_runtime_shader_parameter first, then read.
+6. Native class names DO NOT resolve: FileAccess.file_exists(...) / ClassDB.class_exists(...) always fail to execute — assert STATE FIELDS instead (a saved file is proven by restoring it in a FRESH boot, not by FileAccess.file_exists).
+7. Node reads after queue_free see nothing — assert a COUNTER or state that outlives the node (the failure message self-heals with this hint).
+8. ParallaxLayer.scroll_offset fails to execute — read layer.position instead (it tracks -camera_delta * motion_scale; differential layer rates prove the parallax).
+"""
+	return {"contents": [{"uri": "godot://engine/expression-rules", "mimeType": "text/plain", "text": rules}]}
+
+static func _resource_capabilities(params: Dictionary) -> Dictionary:
+	# 与 make_any_game 能力卡同源同文（声明式：能力/测量/证据/真理，无步骤）。
+	var card := """CAPABILITY MAP (declarative — what exists, what is true, what counts as proven; you decide everything).
+
+WHAT YOU CAN MAKE (no discovery ceiling): 244 atomic tools cover scenes, nodes, scripts, shaders, particles, cameras, audio, UI, tilemaps, navigation, scene variants, cross-file batching and exports — exact tool names are always routable. Any genre: mechanics are yours to design; genre knobs are data, never permission. Reference knowledge exists as 26 making recipes — consult them for earned truths or ignore them; both are fully legal. A durable evidence-gated goal DAG exists for long work (plan_game_workflow / run_game_workflow).
+
+WHAT YOU CAN MEASURE (per-frame, one round trip): frame-timed timelines replay input scripts deterministically and sample expressions every frame — input latency is the first-changed-frame of a trajectory; fairness is telegraph frames; displacement, feedback coverage and density, performance percentiles (desktop/mobile), runtime errors and visual baselines are all measurable.
+
+WHAT COUNTS AS PROVEN: strict requirement contracts — zero-assertion runs are smoke, any unverified requirement makes the outcome incomplete, every item boots a FRESH run. verify_change_effect proves a change reached the running game and names the exact fix when an embedded copy, unsaved buffer or host-scene instance override masks it. The quality ladder defines perfect (R1 playable / R2 solid / R3 polished / R4 perfect — every item green or explicitly waived): game_quality_report measures it, make_game_perfect climbs it.
+
+TRUTHS THAT HOLD: see godot://engine/expression-rules (Expression bans ternary/self/'is'; current-scene base; null uniforms; queue_free window) plus: connect_signal connects the editor instance only (script-side _ready persists); save under user:// (res:// is read-only after export); text-level scene-file edits refresh the cache — close and reopen to re-instantiate.
+
+The only hard rule lives at claims, never at thoughts: never claim completion without evidence.
+"""
+	return {"contents": [{"uri": "godot://capabilities", "mimeType": "text/plain", "text": card}]}
+
+static func _resource_recipes(params: Dictionary) -> Dictionary:
+	var recipes: Array = []
+	if Engine.has_meta("GodotMCPPlugin"):
+		var plugin: Variant = Engine.get_meta("GodotMCPPlugin")
+		if plugin and plugin.get("_prompt_workflows") is RefCounted:
+			recipes = plugin.get("_prompt_workflows").get_prompts()
+	var text: String = JSON.stringify({"recipes": recipes}, "  ")
+	return {"contents": [{"uri": "godot://recipes", "mimeType": "application/json", "text": text}]}
 
 func _register_editor_resources() -> void:
 	# godot://editor/state

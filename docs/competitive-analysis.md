@@ -21,6 +21,7 @@
 
 | 实现 | 架构 | 工具数 | 传输 | 资源/提示支持 | 安全 | 活跃度（⭐ / 最后推送） |
 |---|---|---|---|---|---|---|
+| **hi-godot/godot-ai**（2026-09 新晋强竞品） | GDScript 插件 + **Python(uv) 桥**：stdio attach → Python HTTP:8000 → 插件 WebSocket:9500（旋转能力、仅回环） | **46 工具 / 120+ 操作**（14 常驻 + `<domain>_manage` 卷积：scene/node/script/material/audio/particle/camera/tilemap/tileset/**gridmap/navigation/CSG**/visual-shader/theme/ui/filesystem/test…） | stdio attach | **无 prompts**；MCP resources 丰富（`godot://` 15+：类文档/节点属性/材质/着色器） | 旋转能力认证 + 仅回环 + 签名发布；**默认遥测（可退）** | **2563⭐ / 155F**（2026-04 建，当日仍活跃），CI+codecov，Discord，一键更新/客户端自动配置（10+），C# 文本级支持 | 
 | **Coding-Solo/godot-mcp**（最流行 Godot MCP） | Node/TS bridge：`npx @coding-solo/godot-mcp` 启动 Godot CLI + 内置 `godot_operations.gd` JSON 驱动脚本 | **~14**（launch_editor / run_project / get_debug_output / stop_project / create_scene / add_node / load_sprite / save_scene / get_uid 等） | stdio | 无 resources / 无 prompts | ⚠️ 曾报 RCE（#64 未消毒 projectPath）、autoload 注入（#112）；无 auth | **5301⭐ / 460F**，2026-04 仍在推 |
 | **yurineko73/Godot-MCP-Native（本项目）** | 纯 GDScript `EditorPlugin` 原生实现，无任何外部依赖 | **232**（28 核心 + 198 补充 + 6 meta，6 大类 + meta） | HTTP/SSE `:9080` + stdio | resources ✓；prompts **capability 已声明但 0 个已注册**；`instructions` ✓（渐进披露引导，业界罕见） | Bearer Token（HTTP）；path_validator 路径校验；原生插件不引入额外攻击面 | **716⭐ / 66F**，16 open issues，2026-08 活跃 |
 | **IvanMurzak/Godot-MCP** | C# 编辑器 addon（NuGet 反射栈与 Unity-MCP 共享）+ 云端 ai-game.dev 或自托管 MCP server | **42**（12 families） | stdio / 云端 HTTP（OAuth 2.1 设备登录） | 无独立 prompts；有"自然对话" | 云端账号体系；自托管可选 | 220⭐，2026-08 活跃 |
@@ -232,3 +233,136 @@
 ---
 
 *报告由 MCP 生态调研生成；star/issue 数据来自 GitHub API 实时抓取（2026-08），工具数量来自各仓库 README。*
+
+
+---
+
+## 8. hi-godot/godot-ai 对位分析与超越计划（2026-09-23 增补）
+
+### 对位事实
+
+**他们的强项（一手证据：README + docs/TOOLS.md）**
+- 创作便利广度：material/visual-shader/particle/camera/gridmap/navigation/CSG 卷积工具 + 预设（fade/slide/shake/pulse 等）
+- `game_manage(input_sequence)`：**一次调用**下发帧定时输入时间线（每步按帧应用 + settle_frames，单次往返可复现）
+- editor_screenshot 四模式 + **Vision Routing**（无视觉客户端拿文字描述）
+- 分发成熟度：签名发布、一键更新/迁移、10+ 客户端自动配置、遥测、Discord、CI+codecov
+- MCP resources 深（godot:// 类文档/节点/材质/着色器）；插件自热重载；C# 文本级
+
+**我们的护城河（全部有测试证据）**
+- **可信自主开发闭环**：strict 需求契约（零假完成按构造成立）+ verify_change_effect 六步链（内嵌副本/未保存缓冲/实例覆盖点名修复）+ 证据门禁目标 DAG——对方全无对等物
+- 行为验证深度：play_and_verify 步内断言/位移语义（陈旧快照拒绝）/帧步进/轨迹度量 + 性能分位预算 + 视觉基线 + 运行时报错门禁 + game_quality_report 红绿灯
+- 方法论分发：22 个可执行配方（操作真理内联）；注意力经济（路由 ≤8 + token 门禁 + 会话简报一次调用续会话）
+- 零依赖原生（无 Python/uv）；243 原子工具 + 8 步出厂流程
+
+**诚实差距**：3D/视觉创作便利（navigation 烘焙、gridmap、CSG、材质/着色器/粒子/相机预设）无专工具；
+单调用帧定时时间线；Vision Routing；分发与自动配置体验；MCP resources 深度。
+
+### 超越计划（按杠杆排序）
+
+| 包 | 内容 | 判定 |
+| --- | --- | --- |
+| **M6 视觉/3D 创作包** | 着色器 create/patch/预设、材质参数/预设、粒子预设、相机预设（follow/limits/damping）、navigation region 创建+**烘焙**、CSG、gridmap；优先配方化（K-原则：能配方的先配方，不新工具） | 关闭用户肉眼可见的最大差距 |
+| **M7 单调用帧定时时间线** | ✅ 2026-09-23 已交付：探针 apply_timeline（事件按帧直接写 Input 状态 + 帧步进采样 + 末帧游戏内求值）+ play_and_verify timeline 模式（期望比对编辑器侧折叠，零额外往返） | 对齐 input_sequence 且更强（带断言/采样） |
+| **M8 分发/信任 UX** | 一键客户端配置（已有生成器，升级为一键）、发布签名/更新检查、resources 扩到 godot:// 深度；**"零遥测 by design"作为隐私差异点** | 对齐体验，放大隐私差异 |
+| **护城河持续** | "自主 1 小时构建、零假完成"对比演示（同一任务双平台跑，我方出证据清单） | 把不可模仿的哲学变成可感知的营销 |
+
+### 同提示词基准协议（2026-09-23 增补）
+
+用户目标：**相同提示词下，我方产出质量必须优于 godot-ai**。协议：
+1. 规范提示词集：取对方 README 的展示任务（"Build a voxel block-world game with a
+   player, blocks to place and destroy, and save slots"、cyberpunk HUD）+ 我方 L3 高尔夫。
+2. 同模型、同提示词、双方各自系统跑一遍。
+3. 判据（可证伪）：完成证据（我方=契约清单；对方=无对等物，只能人工检视）、
+   质量天梯 M 项（延迟帧/公平帧/覆盖密度/性能分位/零报错）、运行时错误数。
+4. 我方的结构性优势 = 无限制智能（能力卡非流程）× 可证明质量（契约/时间线/天梯）——
+   对方无验证层，"完成"无法自证。
+
+**我方腿已执行（2026-09-23，test_benchmark_voxel_flow.py）**：对方 README 原版提示词
+（voxel block-world + place/destroy + save slots）→ 能力卡（声明式、无步骤）→ 契约 4/4 verified
+（移动/放置/拆除/存档跨 FRESH 往返）→ **天梯 R2 实测：输入延迟 2 帧（~33ms@60Hz，轨迹首变帧）**；
+豁免纪律在案（公平性 N/A 无伤害源、音频豁免、持久性已证）。对方腿待其环境执行——判据可证伪：
+我方交契约清单与延迟帧数，对方无验证层只能人工检视。
+
+胜负手：他们赢在**广度便利与分发**，我们赢在**可信与自主**。创作包（M6）关闭感知差距后，
+"AI 独立干活几小时、每个完成都有证据"是他们短期内难以复制的结构性优势（需要整套验证引擎+诚实哲学）。
+
+### 2D 能力矩阵：零覆盖格实测（2026-09-25 增补，诚实校准）
+
+"2D 完胜"的诚实口径：**工具面台账（对方 README 文档化操作的逐项对齐/超越）+
+我方腿基准 + 本矩阵**构成证据；**对方腿从未运行**——头对头数字仍缺（见下）。
+矩阵针对台账盲区（grep 实证 0 命中的经典 2D 能力）冷压，五格全部通过：
+
+| 格子 | 判据（引擎真值） | 实测 |
+|---|---|---|
+| 视差背景 | 两层 `layer.position` 差速比 = motion_scale 比 | 79.9px vs 239.8px，比 3.00（0.6/0.2） |
+| 2D 光照 | 开灯/关灯（变体）截图字节差 | Sprite2D 表面 md5 不同；ColorRect 不受光照（铁律） |
+| 路径巡逻 | `PathFollow2D.progress` 单调增 | 118→298，122 样本单调 |
+| 移动平台 | 无输入乘客 x 摆幅 >25px、y 稳定 | 240px / 0.0px（AnimatableBody2D+sync_to_physics） |
+| 镜头震动 | 峰值 \|offset.x\|>5px 且结束归零 | 13.8px / 0.00（确定性可断言） |
+
+冷压同时逼出 3 条引擎语义沉淀（create_node 孙节点全路径 / scroll_offset
+不可执行改读 position / ColorRect 不受 2D 光照——详见 docs/goal-playbook.md）。
+剩余未证：Skeleton2D 骨骼动画、BackBufferCopy 特效（低频，按需补格）。
+
+### 双腿基准·第一题执行记录（2026-09-26，voxel，头对头数字）
+
+环境：godot-ai 4.2.3（源码 addon + uvx PyPI 后端，遥测 env 显式 opt-out），
+Godot 4.7.2，同一模型（本项目代理）分别驱动两套工具链，产物语义镜像
+（同节点图/同脚本/同输入映射），判据为我方契约+天梯（对产物中立：
+对方产物剥离其插件、注入我方探针后同尺测量）。
+
+| 指标 | 我方腿 | 对方腿 |
+|---|---|---|
+| 契约（移动/放置/拆除/存档往返） | **4/4 verified** | **4/4 verified** |
+| 输入延迟（轨迹首变帧） | **2 帧** | **2 帧** |
+| 构建调用数（成功/死胡同） | **21 / 0** | 34 / 4 |
+| 运行期自证能力 | 帧定时契约+天梯+A 截图评审 | 状态读回+实时等待+输入模拟+错误通道 |
+| 环境要求 | headless 可用（CI 友好） | **必须 GUI 编辑器**（headless 显式禁用） |
+| 依赖链 | 纯插件（GDScript） | 插件 + Python 服务（uvx/PyPI）+ 双跳轮换令牌 |
+
+实测台账刷新：对方在册工具 46（README）实测 **47**；确有 CSG/GridMap
+（我方缺，待补）；`batch_execute` 支持撤销+首错即停；其错误自愈提示质量
+好（直接给出正确参数形态）；`game_manage` 输入模拟真实生效（按住语义）。
+
+**三题终版结论（2026-09-26 全部执行完毕，诚实口径）**：
+
+| 题 | 产物判据 | 我方腿 | 对方腿 |
+|---|---|---|---|
+| P1 voxel（其 README 原题） | 4 契约 + 延迟帧 | 4/4，2 帧 | 4/4，2 帧 |
+| P2 矩阵强项（视差+巡逻） | 差速比 + 单调 | 3.00 / 单调 | 3.00 / 单调 |
+| P3 juice（着色器+粒子） | 挂载/存活/配置 | 全过 | 全过 |
+
+- **表达力：三题全平**（判据数字逐一相同——同时三次证明判据中立）。
+- **构建经济**：我方 21 调用 0 死胡同；对方第一题 34/4、第二题（已学其
+  形态）0 死胡同、第三题专项工具（material/particle_manage 的 op 枚举
+  与 params 嵌套约定）约 11 次死胡同——其专项工具上限高但学习曲线陡，
+  错误自愈提示质量好（每次都教正确形态）。
+- **验证深度（结构性差距，三题中反复显现）**：对方运行期能做状态读回+
+  输入模拟+错误通道，但没有帧定时断言、延迟测量、天梯、A 截图评审——
+  其产物要靠**我方判据**才能拿到"契约 COMPLETE/延迟 2 帧"这样的数字。
+- **环境**：对方 headless 显式禁用（必须 GUI），双跳轮换令牌+Python
+  uvx 链；我方 headless 原生（CI 友好）、纯插件。
+- **对方独有**：~~CSG/GridMap~~（2026-09-26 已补齐：`set_gridmap_cells`
+  五操作 + `create_csg_shape` 一调用布尔原型，真机冒烟全过，工具数
+  251）、~~batch_execute 带撤销~~（台账误记——复查我方 `create_node` 与
+  `batch_scene_node_edits` 本就全程 UndoRedo 包裹，batch 在无撤销管理器时
+  直接拒绝执行）、visual_shader 图编辑（文本着色器+校验+挂载是 AI 原生
+  更优路径，不追图形编辑器范式）、theme 级联。
+
+**最终裁决（2026-09-26 更新）**：表达力平手且已识别的广度缺口全部
+闭合；我方赢在**可证明质量**（验证引擎——对方产物只能靠我方判据量出
+数字）、**调用经济**（21 vs 34、零死胡同）、**无人值守环境**（headless
+原生 vs GUI 强制）；对方剩余优势仅在 batch 撤销与 visual shader 图编辑
+两个低频项。超越声明措辞：**在实用性、AI 能力（可证明完成）、效率三个
+轴上均具对位优势；表达力全平；广度无缺口**。
+
+### 双腿基准就绪清单（P0-B，网络恢复即执行）
+
+1. 三条规范提示词：①对方 README 原版 voxel（我方腿已有）②中型 2D 平台跳跃
+   （2 敌人+菜单+存档+视差——对方腿从零跑）③juice/polish 题（hit flash+粒子+震动）。
+2. 中立判据（双方同尺）：M 契约由引擎真值断言（可玩/胜/负/延迟帧/运行时报错数）
+   + A 视觉评审（截图首 30 秒可读性，盲评）；对方系统无验证层，由本方契约
+   脚本对其产物跑同一套断言（对产物中立，对系统无偏）。
+3. 指标表：可玩率 / 契约通过数 / 首可玩耗时 / 改值-生效往返 / A 评审结论。
+4. 执行：装 godot-ai → 同模型跑 3 题 → 我方脚本断言其产物 → 记录差距矩阵；
+   同步刷新其 README 台账（对方可能有更新）。

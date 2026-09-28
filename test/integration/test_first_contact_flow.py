@@ -4,7 +4,7 @@ Launches a headless Godot editor with the MCP server on this project, then
 walks the real first-contact sequence over HTTP JSON-RPC and asserts the
 answers an AI needs before it can do any work:
 
-  initialize           -> protocol answer + accurate instructions (238-tool truth)
+  initialize           -> protocol answer + accurate instructions (manifest-derived tool truth)
   tools/list           -> small core+meta surface (lazy loading by design)
   get_project_info     -> correct project identity (the G0 target check)
   get_editor_state     -> editor state readable
@@ -112,7 +112,10 @@ def main() -> int:
         check("initialize answers", "result" in init)
         instructions = str(init.get("result", {}).get("instructions", ""))
         check("instructions present", len(instructions) > 0)
-        check("instructions cite 238-tool truth", "238-tool catalog" in instructions, instructions[:120])
+        manifest_path = Path(__file__).resolve().parents[2] / "addons/godot_mcp/native_mcp/tools_manifest.gd"
+        tool_total = manifest_path.read_text(encoding="utf-8").count('{"category"')
+        check(f"instructions cite {tool_total}-tool truth",
+              f"{tool_total}-tool catalog" in instructions, instructions[:120])
 
         # 1b) Hermetic baseline: sequential tests on one runner share user://,
         #     so previously-enabled supplementary tools leak in. Reset to the
@@ -207,7 +210,7 @@ def main() -> int:
         # 10) prompts: catalog + the unified change recipe.
         prompts = rpc_call("prompts/list").get("result", {}).get("prompts", [])
         prompt_names = {p["name"] for p in prompts}
-        check("12 recipes registered", len(prompts) == 12, f"{len(prompts)}: {sorted(prompt_names)}")
+        check("26 recipes registered", len(prompts) == 26, f"{len(prompts)}: {sorted(prompt_names)}")
         check("make_game_change listed", "make_game_change" in prompt_names)
         recipe = rpc_call("prompts/get", {
             "name": "make_game_change",

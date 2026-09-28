@@ -323,6 +323,19 @@ func test_plugin_shipped_making_recipes_registered():
 		names.append(String(p.get("name", "")))
 	assert_true("make_game_character" in names, "character recipe ships with the plugin")
 	assert_true("make_melee_enemy" in names, "melee-enemy recipe ships with the plugin")
+	assert_true("make_game_menu" in names, "menu recipe ships with the plugin")
+	assert_true("make_any_game" in names, "universal any-game entry ships with the plugin")
+	assert_true("make_game_perfect" in names, "perfect-ladder recipe ships with the plugin")
+	assert_true("make_game_map" in names, "map recipe ships with the plugin")
+	assert_true("make_game_pickup" in names, "pickup recipe ships with the plugin")
+	assert_true("make_game_save" in names, "save recipe ships with the plugin")
+	assert_true("make_game_juice" in names, "juice recipe ships with the plugin")
+	assert_true("make_game_audio" in names, "audio recipe ships with the plugin")
+	assert_true("make_game_boss" in names, "boss recipe ships with the plugin")
+	assert_true("make_game_ranged_enemy" in names, "ranged-enemy recipe ships with the plugin")
+	assert_true("make_first_game" in names, "first-game entry recipe ships with the plugin")
+	assert_true("make_game_camera" in names, "camera recipe ships with the plugin")
+	assert_true("make_game_particles" in names, "particles recipe ships with the plugin")
 
 func test_character_recipe_carries_operational_truths():
 	var workflows: RefCounted = _new_workflows()
@@ -341,4 +354,194 @@ func test_melee_recipe_carries_operational_truths():
 	assert_true(text.contains("attacks_landed"), "single-hit evidence field")
 	assert_true(text.contains("stats resources"), "grunt-vs-boss via stats, not code branches")
 	assert_true(text.to_lower().contains("fresh"), "per-item isolation lesson")
-	assert_true(text.contains("0.22s"), "death-window timing lesson")
+	assert_true(text.contains("assert the counter instead"), "death-window lesson now points at the sunk self-healing hint")
+
+
+func test_juice_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_juice").call({"goal": "heavier hits"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("FEEL IS DATA"), "feel is a knob dict, not code paths")
+	assert_true(text.contains("hitstop must ALWAYS restore") or text.to_lower().contains("always restore"),
+		"leaked-hitstop freeze lesson baked in")
+	assert_true(text.contains("time_scale"), "restore asserted on Engine.time_scale")
+	assert_true(text.contains("RECOVER") or text.contains("recovers"), "flash must recover, both directions audited")
+	assert_true(text.contains("verify_change_effect"))
+	assert_true(text.contains("requirements"))
+
+func test_audio_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_audio").call({"goal": "bgm and sfx"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("cannot synthesize audio"), "honest scope: files come from the user")
+	assert_true(text.contains("POOL"), "SFX pool — one player for everything cuts the BGM")
+	assert_true(text.contains("bgm_survives_sfx"), "the pooling proof is a contract requirement")
+	assert_true(text.contains("PLAYER/BUS STATE") or text.to_lower().contains("player/bus state"),
+		"assert state, you cannot hear")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_boss_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_boss").call({"goal": "two-phase boss"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("DATA ON TOP OF THE MELEE BRAIN") or text.to_lower().contains("data on top of the melee brain"),
+		"boss is data, not a code branch")
+	assert_true(text.contains("knockback_resistance"), "resistance is stats data")
+	assert_true(text.contains("threshold_hp_ratio"), "phases as threshold rows")
+	assert_true(text.contains("HOST rule"), "arena instances the boss — verify against the arena")
+	assert_true(text.contains("victory_fires"), "death wired to victory in the contract")
+	assert_true(text.contains("deal your own damage"), "per-item self-containment lesson")
+
+func test_ranged_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_ranged_enemy").call({"goal": "archer"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("WINDUP telegraph") or text.contains("windup telegraph"),
+		"undodgeable shots are defects")
+	assert_true(text.contains("free itself on hit AND on lifetime") or text.to_lower().contains("on hit and on lifetime"),
+		"leak-free projectiles")
+	assert_true(text.contains("no_fire_out_of_range") and text.contains("projectiles_free_after_ttl"),
+		"leak and range gates in the contract")
+	assert_true(text.contains("returns to baseline") or text.contains("baseline"), "active count asserted back to baseline")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_perfect_recipe_carries_the_ladder():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_perfect").call({"goal": "the golf game"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("ladder, not a switch"), "perfect is a ladder, not a switch")
+	assert_true(text.contains("input_latency") and text.contains("first frame index"),
+		"latency measured from the per-frame trajectory")
+	assert_true(text.contains("12 frames") and text.to_lower().contains("undodgeable"),
+		"fairness telegraph floor + undodgeable-is-a-defect")
+	assert_true(text.contains("feedback coverage") and text.contains("density"),
+		"R3 coverage + R4 density named")
+	assert_true(text.to_lower().contains("evidence"), "A items require evidence, never vibes")
+	assert_true(text.contains("explicitly waived"), "waiver discipline")
+	assert_true(text.contains("FIRST-30-SECONDS"), "newcomer onboarding test")
+
+func test_shader_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_shader").call({"goal": "hit flash"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("REFUSED BEFORE writing"), "invalid shaders never touch the project")
+	assert_true(text.contains("ShaderMaterial") and text.contains("VISUAL child"),
+		"attach mounts material on the visual child, not the body")
+	assert_true(text.contains("flash_amount") and text.contains("create_script"),
+		"proven template + write path named")
+	assert_true(text.contains("set_runtime_shader_parameter") and text.contains("NULL"),
+		"the null-default uniform truth baked in")
+	assert_true(text.to_lower().contains("fresh"), "FRESH timeline contract")
+
+func test_camera_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_camera").call({"goal": "soft follow"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.to_lower().contains("presets as data"), "camera is property data, not scripts")
+	assert_true(text.contains("position_smoothing") and text.contains("limit_"),
+		"smoothing + world limits named as the knobs")
+	assert_true(text.contains("timeline"), "contract uses the one-round-trip timeline")
+	assert_true(text.to_lower().contains("fresh"), "per-item isolation")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_particles_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_particles").call({"goal": "hit sparks"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.to_lower().contains("particles are data"), "vfx is material data")
+	assert_true(text.contains("one_shot") and text.contains("explosiveness"),
+		"burst preset semantics named")
+	assert_true(text.contains("re-arm") or text.contains("re-armed"),
+		"the one_shot re-arm trap baked in")
+	assert_true(text.contains("set_node_subresource"), "inline sub-resource path named")
+	assert_true(text.contains("timeline") and text.contains("verify_change_effect"))
+
+func test_first_game_recipe_is_a_declarative_knowledge_card():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_first_game").call({"goal": "platformer"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("knowledge card") and text.contains("you decide everything"),
+		"declarative, agency declared")
+	assert_false(text.contains("Step 1"), "no imperative steps")
+	assert_true(text.contains("never required"), "overwriting existing work never required")
+	assert_true(text.contains("dependency everything else leans on"),
+		"input map as load-bearing dependency (not an ordering command)")
+	assert_true(text.contains("Genre is data, not forks"), "genre is knob-sets")
+	assert_true(text.contains("WIN and LOSE both reachable"), "first-playable definition")
+	assert_true(text.contains("win_reachable") and text.contains("lose_reachable"),
+		"both ends in the contract shape")
+	assert_true(text.to_lower().contains("fresh") and text.contains("smoke"),
+		"FRESH isolation + smoke rejection in the proof shape")
+	assert_true(text.contains("get_game_project_brief") and text.contains("manage_task_plan"),
+		"durability + one-call hand-off")
+
+func test_map_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_map").call({"goal": "a small level"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("configure_tileset_layers") and text.contains("set_tile_collision_polygon"),
+		"physics/collision BEFORE painting")
+	assert_true(text.contains("ASSIGN the TileSet") or text.to_lower().contains("assign the tileset"),
+		"tileset-assignment lesson (cells won't render without it)")
+	assert_true(text.contains("displacement_max"), "relative displacement assert in the contract example")
+	assert_true(text.contains("HOST rule"), "level instances scenes — verify against the LEVEL, hosts named")
+	assert_true(text.contains("verify_change_effect"))
+	assert_true(text.contains("requirements"), "ends in a requirement contract")
+
+func test_pickup_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_pickup").call({"goal": "coins"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("body_entered SIGNAL") or text.contains("body_entered"),
+		"collect via signal, never polls")
+	assert_true(text.to_lower().contains("self-healing hint"),
+		"freed-node reads point at the sunk hint")
+	assert_true(text.contains("no_double_collect"), "double-collect protection in the contract")
+	assert_true(text.to_lower().contains("fresh"), "per-item FRESH isolation")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_save_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_save").call({"goal": "autosave"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("user://"), "user:// path rule baked in")
+	assert_true(text.contains("audit_project_health") and text.contains("read-only in exported builds"),
+		"the res:// trap now names its detector (audit_project_health)")
+	assert_true(text.contains("version field"), "schema versioning baked in")
+	assert_true(text.contains("the FILE persisted") or text.contains("FILE persisted"),
+		"the cross-FRESH proof mechanism explained")
+	assert_true(text.contains("fresh_boot_restores"), "restore proven by a FRESH boot")
+	assert_true(text.contains("verify_change_effect"))
+
+func test_any_game_recipe_is_a_capability_card_not_a_procedure():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_any_game").call({"goal": "physics golf"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	# 声明式：能力 + 真理 + 证据门，不教步骤
+	assert_true(text.contains("CAPABILITY CARD, not a procedure"), "declarative, not imperative")
+	assert_true(text.contains("You decide everything"), "the AI decides, the card informs")
+	assert_true(text.to_lower().contains("no discovery ceiling"), "no capability ceiling")
+	assert_true(text.contains("WHAT YOU CAN MAKE") and text.contains("WHAT YOU CAN MEASURE") and text.contains("WHAT COUNTS AS PROVEN"),
+		"three capability sections")
+	assert_true(text.contains("both are fully legal"), "reference recipes are optional knowledge, never mandatory")
+	# 证据门保留（唯一硬规则在声称处）
+	assert_true(text.contains("never claim completion without evidence"), "the claim gate survives")
+	assert_true(text.contains("zero-assertion runs are smoke"), "smoke rejection survives")
+	assert_true(text.contains("verify_change_effect") and text.to_lower().contains("fresh"), "proof tools named")
+	# 真理与天梯
+	assert_true(text.contains("TRUTHS THAT HOLD") and text.contains("expression-rules"),
+		"truths link their source")
+	assert_true(text.contains("R4 perfect") and text.contains("game_quality_report"), "ladder reachable")
+
+func test_menu_recipe_carries_operational_truths():
+	var workflows: RefCounted = _new_workflows()
+	var result: Dictionary = workflows.get_callable("make_game_menu").call({"goal": "main menu"})
+	var text: String = str(result["messages"][0]["content"]["text"])
+	assert_true(text.contains("connect_signal"), "every button wired through signals")
+	assert_true(text.contains("EXTERNAL reference"), "embedded-copy lesson baked in")
+	assert_true(text.contains("PROCESS_MODE_WHEN_PAUSED"), "pause-freeze lesson baked in")
+	assert_true(text.contains("MOUSE_FILTER_IGNORE"), "overlay-click-eating lesson baked in")
+	assert_true(text.contains("get_global_rect()"), "clicks target runtime rects, never guessed pixels")
+	assert_true(text.to_lower().contains("click-through"), "interaction proof is click-through, not screenshots")
+	assert_true(text.contains("verify_change_effect"), "post-change effectiveness proof named")
+	assert_true(text.contains("requirements"), "ends in a requirement contract")

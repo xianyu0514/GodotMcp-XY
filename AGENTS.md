@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **238 个工具**（28 核心 + 204 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。运行期地图探针（mcp_runtime_probe.gd）自 M5 起双兼容 TileMap 与 TileMapLayer（区域读取/批量写入/立即内部更新）。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **251 个工具**（28 核心 + 217 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。运行期地图探针（mcp_runtime_probe.gd）自 M5 起双兼容 TileMap 与 TileMapLayer（区域读取/批量写入/立即内部更新）。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.1.0
@@ -26,7 +26,7 @@
 
 ### GUT 单元测试
 ```powershell
-& "F:\Godot\Godot_v4.6.1-stable_win64.exe" --headless --path "." -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
+& "C:\kaifa\Godot_v4.6.3-stable_win64.exe" --headless --path "." -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
 ```
 配置：`.gutconfig.json` — dirs: `res://test/unit/`, `log_level: 2`, `should_exit_on_finish: false`。
 
@@ -35,7 +35,7 @@
 cd test/integration
 python test_runtime_probe_flow.py
 ```
-Python 测试会启动 Godot 4.6.2（`C:\SourceCode\Godot_v4.6.2-stable_mono_win64\...`），通过 HTTP MCP（端口 9080）进行通信。
+Python 测试通过 HTTP MCP（端口 9080）与 Godot 通信；Godot 可执行文件优先读 `GODOT_EXE` 环境变量（默认值可能过期，按实际环境覆盖，例如 `GODOT_EXE=C:/kaifa/Godot_v4.6.3-stable_win64_console.exe`）。
 
 ## 架构
 
@@ -53,10 +53,10 @@ addons/godot_mcp/
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── mcp_tool_domains.gd     # 面向用户任务的工具域分类（2D/3D/UI 等，与 category/group 正交）
 │   ├── mcp_tool_preset_manager.gd # 工具预设（分组一键启用/切换）管理
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：238 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：251 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
-│   ├── prompt_workflows.gd     # 10 个可执行工作流 MCP prompts（plan_game_feature/make_game_change/debug_runtime_error 等）
+│   ├── prompt_workflows.gd     # 26 个可执行工作流 MCP prompts（make_first_game/make_game_camera/make_game_particles/make_game_shader/make_game_perfect/make_any_game/make_game_character/make_melee_enemy/make_game_menu/make_game_map/make_game_pickup/make_game_save/make_game_juice/make_game_audio/make_game_boss/make_game_ranged_enemy 等）
 │   ├── mcp_debugger_bridge.gd  # Godot 调试器 ↔ MCP 桥梁（断点、栈帧、变量）
 │   ├── mcp_tunnel_manager.gd   # Cloudflare Quick Tunnel 生命周期与公网 URL 上报
 │   ├── mcp_tunnel_supervisor.gd # 独立低开销的隧道守护（跨编辑器重启持久化）
@@ -72,7 +72,7 @@ addons/godot_mcp/
 ├── tools/                      # 工具实现（每个分类一个文件）
 │   ├── node_tools_native.gd    # 26 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计、内联子资源设置/读取
 │   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、批量编译校验、校验着色器、符号索引、搜索
-│   ├── scene_tools_native.gd   # 12 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
+│   ├── scene_tools_native.gd   # 14 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
 │   ├── editor_tools_native.gd  # 26 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟（产物校验 + 可选启动并断言退出码）
 │   ├── debug_tools_native.gd   # 6 个工具（主类，保留共享辅助）— 日志（get_editor_logs/clear_output）、脚本执行（execute_script/execute_editor_script）、性能指标；跨域共享静态辅助（_get_debugger_bridge/运行时探针请求机制）
 │   ├── debug_bridge_tools.gd   # 28 个工具 — 调试器桥接（断点/线程/栈帧/变量/作用域/求值）、执行控制（单步/继续/等待、runtime probe 安装/移除、debugger 状态等待）
@@ -115,7 +115,7 @@ addons/godot_mcp/
     └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 238 = 28 core + 204 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
+> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 251 = 28 core + 217 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
 
 ## 规范
 
@@ -158,6 +158,9 @@ addons/godot_mcp/
 6. **验证** — 运行完整 GUT 测试套件，要求 0 失败
 
 **注意：** supplementary 工具注册后默认禁用（`enabled = (category == "core" or category == "meta")`），`tools/list` 不会返回它。用户需在 MCP 面板中手动启用，或在测试时用 `core.set_tool_enabled("tool_name", true)` 开启。`meta` 类工具（`list_tool_catalog`、`search_tools`、`get_tool_details`、`enable_tools`）始终启用，且不计入 30 核心上限；预设切换也会保留它们，供 AI 按需发现并启用其他工具。
+
+### AI 能力规范（强制）
+配方与工具的设计/评审遵循 `docs/ai-capability-spec.md`：约束只挂"完成声明"不挂"思考路径"；知识四分法（通用常识不喂 / 项目事实不写死 / 环境意外优先工具化 / 设计价值观可内联）；违反条款须在提交信息中显式声明理由。K-2 门禁（`test_prompt_knowledge_gates.gd`）已强制。
 
 ### 修改已有工具后的文档更新流程
 

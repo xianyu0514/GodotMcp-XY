@@ -52,6 +52,24 @@ func test_behavior_check_executes_and_records_native_evidence() -> void:
 		"native execution must be distinguishable from external claims")
 	assert_eq(String(evidence.get("scene_path", "")), "res://scenes/arena.tscn")
 
+func test_behavior_check_passes_timeline_through() -> void:
+	# M7：契约项可携带 timeline（单次往返帧定时时间线）——执行器必须透传给
+	# play_and_verify，否则该能力对契约不可用。
+	var seen: Dictionary = {}
+	_tools._behavior_run_override = func(detail: Dictionary) -> Dictionary:
+		seen["timeline"] = detail.get("timeline", null)
+		return {"passed": true, "evidence": {"evidence_level": "native_run", "assertions_total": 1, "assertions_passed": 1}}
+	var result: Dictionary = await _tools._tool_run_verification_queue({
+		"command": "create", "goal": "camera contract",
+		"items": [{"kind": "behavior_check", "label": "follow",
+			"detail": {"scene_path": "res://scenes/level_01.tscn",
+				"steps": [{"wait_ms": 100}],
+				"timeline": {"events": [{"frame": 0, "action": "move_right", "pressed": true}],
+					"assertions": [{"label": "cam_x", "expected": 300, "operator": "gte"}]}}}]})
+	assert_false(result.has("error"), str(result))
+	assert_true(seen.get("timeline", null) is Dictionary, "timeline reached the executor verbatim")
+	assert_true((seen.get("timeline", {}) as Dictionary).has("events"), "events intact")
+
 func test_behavior_check_failure_fails_the_queue() -> void:
 	_tools._behavior_run_override = func(_detail: Dictionary) -> Dictionary:
 		return {"passed": false, "evidence": {
@@ -243,3 +261,29 @@ func test_all_verified_contracts_complete() -> void:
 	assert_eq(String(result.get("checklist", {}).get("overall", "")), "complete",
 		"all requirements verified => complete")
 	assert_eq(String(result.get("outcome", "")), "completed")
+
+func test_behavior_verify_params_forwards_screenshot_dir() -> void:
+	# 旗舰 A 评审实测坑：共用默认截图目录时 step_NN.jpg 按 step index 命名，
+	# 跨 moment/幂等重跑互相覆盖——detail.screenshot_dir 必须透传到 play_and_verify。
+	var params: Dictionary = ToolsScript._behavior_verify_params({
+		"steps": [{"wait_ms": 100}],
+		"screenshot_dir": "user://mcp_play_and_verify/review_moments/first_30_seconds",
+		"screenshot_format": "png"})
+	assert_eq(String(params.get("screenshot_dir", "")),
+		"user://mcp_play_and_verify/review_moments/first_30_seconds")
+	assert_eq(String(params.get("screenshot_format", "")), "png")
+	assert_eq((params.get("steps", []) as Array).size(), 1)
+
+func test_behavior_verify_params_defaults_and_guards() -> void:
+	var params: Dictionary = ToolsScript._behavior_verify_params({})
+	assert_false(params.has("screenshot_dir"), "empty detail must not inject screenshot_dir")
+	assert_false(params.has("screenshot_format"))
+	assert_false(params.has("timeline"))
+	assert_false(bool(params.get("deterministic", true)), "deterministic defaults to false")
+	var with_optional: Dictionary = ToolsScript._behavior_verify_params({
+		"timeline": {"events": []}, "timeout_ms": 5000, "screenshot_dir": "   "})
+	assert_true(with_optional.has("timeline"), "dict timeline forwards")
+	assert_eq(int(with_optional.get("timeout_ms", 0)), 5000, "timeout forwards as int")
+	assert_false(with_optional.has("screenshot_dir"), "whitespace-only dir must not forward")
+	var bad_timeline: Dictionary = ToolsScript._behavior_verify_params({"timeline": "not-a-dict"})
+	assert_false(bad_timeline.has("timeline"), "non-dict timeline is dropped (not forwarded)")

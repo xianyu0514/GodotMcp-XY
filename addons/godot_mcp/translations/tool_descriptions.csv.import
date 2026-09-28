@@ -6,10 +6,10 @@ uid="uid://ukb6fjf2nxws"
 
 [deps]
 
-files=["res://addons/godot_mcp/translations/tool_descriptions.source.translation", "res://addons/godot_mcp/translations/tool_descriptions.en.translation", "res://addons/godot_mcp/translations/tool_descriptions.zh.translation"]
+files=["res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.source.translation", "res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.en.translation", "res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.zh.translation"]
 
 source_file="res://addons/godot_mcp/translations/tool_descriptions.csv"
-dest_files=["res://addons/godot_mcp/translations/tool_descriptions.source.translation", "res://addons/godot_mcp/translations/tool_descriptions.en.translation", "res://addons/godot_mcp/translations/tool_descriptions.zh.translation"]
+dest_files=["res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.source.translation", "res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.en.translation", "res://tmp_showcase_game/addons/godot_mcp/translations/tool_descriptions.zh.translation"]
 
 [params]
 

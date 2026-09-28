@@ -45,7 +45,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_run_verification_queue(server_core: RefCounted) -> void:
 	var tool_name: String = "run_verification_queue"
-	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check items each boot a FRESH run of the scene (full isolation - do not assume state from a previous item carries over; an item that needs a dead enemy must kill it itself); the queue drives the session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
+	var description: String = "Manage persistent sliced verification queues (create/advance/inspect/record/abandon). Each advance runs at most `budget` pending items (the rest retained), evidence is fingerprinted against watch_paths (drift re-opens passed items), completed requires all items passed. script_check = built-in GDScript compile check; behavior_check items each boot a FRESH run of the scene (full isolation - do not assume state from a previous item carries over; an item that needs a dead enemy must kill it itself); detail may carry a 'timeline' ({events, sample, assertions}) replayed frame-accurately in ONE probe round trip with in-game final assertions; the queue drives the session (probe -> run_project -> input steps/assertions via play_and_verify -> stop) and records native_run evidence (scene, per-assertion actual/expected, runtime errors, screenshots, session id); external verdicts come back via command=record and are marked external_claim. strict=true queues reject externally recorded verdicts — native evidence only. Restart-safe."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -161,8 +161,10 @@ func _command_create(params: Dictionary) -> Dictionary:
 		if kind == "behavior_check":
 			var detail: Variant = (item_value as Dictionary).get("detail", {})
 			var steps: Variant = (detail as Dictionary).get("steps", []) if detail is Dictionary else []
-			if not (steps is Array) or (steps as Array).is_empty():
-				return {"error": "behavior_check detail requires a non-empty steps array (same shape play_and_verify accepts; optional scene_path, assertions, deterministic, timeout_ms)"}
+			var timeline: Variant = (detail as Dictionary).get("timeline", {}) if detail is Dictionary else {}
+			var has_timeline: bool = timeline is Dictionary and not (timeline as Dictionary).is_empty() 				and (timeline as Dictionary).get("events", []) is Array 				and not ((timeline as Dictionary).get("events", []) as Array).is_empty()
+			if (not (steps is Array) or (steps as Array).is_empty()) and not has_timeline:
+				return {"error": "behavior_check detail requires a non-empty steps array OR a timeline {events, assertions} (one probe round trip); optional scene_path, assertions, deterministic, timeout_ms"}
 			# 严格完成门禁（包②）：零断言的 behavior_check 只是冒烟结果，
 			# 不能充当严格队列的功能完成证据——建队即拒绝并点名缺断言的项。
 			if bool(params.get("strict", false)):
@@ -173,8 +175,10 @@ func _command_create(params: Dictionary) -> Dictionary:
 				var finals: Variant = (detail as Dictionary).get("assertions", []) if detail is Dictionary else []
 				if finals is Array:
 					assertion_count += (finals as Array).size()
+				if has_timeline and (timeline as Dictionary).get("assertions", []) is Array:
+					assertion_count += ((timeline as Dictionary).get("assertions", []) as Array).size()
 				if assertion_count == 0:
-					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts or a final assertions list" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
+					return {"error": "strict queue: behavior_check '%s' carries no assertions — a smoke run cannot satisfy strict completion; add step asserts, a final assertions list, or timeline assertions" % str((item_value as Dictionary).get("label", item_value.get("id", "?")))}
 
 	var store: Dictionary = StoreScript.load_store(_resolved_store_path())
 	if store.has("error"):
@@ -339,9 +343,13 @@ func _execute_item(item: Dictionary) -> Dictionary:
 ## 步数、逐断言实际/期望、运行错误、截图路径、会话标识）。
 func _check_behavior(detail: Dictionary) -> Dictionary:
 	var steps: Variant = detail.get("steps", [])
-	if not (steps is Array) or (steps as Array).is_empty():
+	var steps_valid: bool = steps is Array and not (steps as Array).is_empty()
+	var timeline: Variant = detail.get("timeline", {})
+	var timeline_valid: bool = timeline is Dictionary and not (timeline as Dictionary).is_empty() 		and (timeline as Dictionary).get("events", []) is Array 		and not ((timeline as Dictionary).get("events", []) as Array).is_empty()
+	if not steps_valid and not timeline_valid:
 		return {"passed": false, "evidence": {
-			"evidence_level": "native_run", "issue": "behavior_check detail needs a non-empty steps array"}}
+			"evidence_level": "native_run",
+			"issue": "behavior_check detail needs a non-empty steps array OR a timeline {events, assertions}"}}
 	if _behavior_run_override.is_valid():
 		return await _behavior_run_override.call(detail)
 	return await _behavior_run_impl(detail)
@@ -458,13 +466,7 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 		return {"passed": false, "evidence": evidence}
 	evidence["session"] = ready.get("session", {})
 
-	var verify_params: Dictionary = {
-		"steps": detail.get("steps", []),
-		"assertions": detail.get("assertions", []),
-		"deterministic": bool(detail.get("deterministic", false)),
-	}
-	if detail.has("timeout_ms"):
-		verify_params["timeout_ms"] = int(detail["timeout_ms"])
+	var verify_params: Dictionary = _behavior_verify_params(detail)
 	var report: Dictionary = await verify_tools._tool_play_and_verify(verify_params)
 	await editor_tools._tool_stop_project({"allow_window": true})
 
@@ -478,7 +480,35 @@ func _behavior_run_impl(detail: Dictionary) -> Dictionary:
 	evidence["runtime_errors"] = report.get("runtime_errors", [])
 	evidence["screenshots"] = report.get("screenshots", [])
 	evidence["runtime_info"] = report.get("runtime_info", {})
+	# 轨迹透传（有界）：延迟类天梯测量需要在证据里读每帧采样（首变帧）。
+	if report.has("trajectory") and report.get("trajectory", []) is Array:
+		var full_traj: Array = report.get("trajectory", [])
+		evidence["trajectory"] = full_traj if full_traj.size() <= 240 else full_traj.slice(full_traj.size() - 240, full_traj.size())
 	return {"passed": bool(report.get("passed", false)), "evidence": evidence}
+
+## behavior 项 detail → play_and_verify 参数的纯映射（抽出为 static 以便单测）。
+## timeline 透传（M7）：契约项可用单次往返的帧定时时间线——每个需求
+## 的验证从 N 次网络往返降到 1 次，且免疫网络抖动。
+## screenshot_dir/format 透传（旗舰 A 评审实测坑）：play_and_verify 的截图按
+## step index 命名（step_NN.jpg），多个 behavior/review moment 共用默认目录时
+## 跨 moment、跨幂等重跑会互相覆盖——调用方用 detail.screenshot_dir 隔离目录。
+static func _behavior_verify_params(detail: Dictionary) -> Dictionary:
+	var params: Dictionary = {
+		"steps": detail.get("steps", []),
+		"assertions": detail.get("assertions", []),
+		"deterministic": bool(detail.get("deterministic", false)),
+	}
+	if detail.has("timeline") and detail.get("timeline", {}) is Dictionary:
+		params["timeline"] = detail.get("timeline", {})
+	if detail.has("timeout_ms"):
+		params["timeout_ms"] = int(detail["timeout_ms"])
+	var shot_dir: String = String(detail.get("screenshot_dir", "")).strip_edges()
+	if not shot_dir.is_empty():
+		params["screenshot_dir"] = shot_dir
+	var shot_format: String = String(detail.get("screenshot_format", "")).strip_edges()
+	if not shot_format.is_empty():
+		params["screenshot_format"] = shot_format
+	return params
 
 func _await_behavior_session(bridge_tools: RefCounted, runtime_tools: RefCounted) -> Dictionary:
 	var deadline_ms: int = Time.get_ticks_msec() + 20000

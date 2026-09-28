@@ -62,7 +62,12 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_instantiate_scene(server_core)
 	_register_save_branch_as_scene(server_core)
 	_register_set_tilemap_layer_cells(server_core)
+	_register_set_gridmap_cells(server_core)
+	_register_create_csg_shape(server_core)
 	_register_get_tilemap_layer_cells(server_core)
+	_register_batch_update_scene_files(server_core)
+	_register_create_scene_variant(server_core)
+	_register_create_navigation_region(server_core)
 
 # ============================================================================
 # create_scene - 创建新场�?
@@ -977,7 +982,8 @@ func _tool_instantiate_scene(params: Dictionary) -> Dictionary:
 	if not parent_path.is_empty():
 		parent = _resolve_node_path(parent_path)
 		if not parent:
-			return {"error": "Parent node not found: " + parent_path}
+			return {"error": "Parent node not found: " + parent_path
+				+ NodeToolsNative._suggest_parent_path(scene_root, parent_path)}
 
 	# Load and instance the packed scene.
 	var packed_scene: PackedScene = ResourceLoader.load(scene_path) as PackedScene
@@ -1333,12 +1339,17 @@ func _tool_set_tilemap_layer_cells(params: Dictionary) -> Dictionary:
 
 	editor_interface.mark_scene_as_unsaved()
 
-	return {
+	# E-3 下沉（知识清单#4）：无 TileSet 的图层刷了格子不渲染——静默陷阱
+	# 变成响应内警告（格子合法地可以先刷后赋，故不报错）。
+	var result_payload: Dictionary = {
 		"status": "success",
 		"node_path": node_path,
 		"cells_set": cells_set,
 		"cells_erased": cells_erased
 	}
+	if layer.tile_set == null:
+		result_payload["warning"] = "layer has no TileSet — these cells will NOT render; create_tileset then set the layer's tile_set property"
+	return result_payload
 
 # ============================================================================
 # get_tilemap_layer_cells - Read cells from a TileMapLayer (Godot 4.x)
@@ -1452,3 +1463,904 @@ static func _parse_vector2i(value: Variant) -> Variant:
 	if value is Array and value.size() >= 2:
 		return Vector2i(int(value[0]), int(value[1]))
 	return null
+
+# ============================================================================
+# GridMap / CSG（3D 广度补齐，2026-09-26 竞品基准对位）：GridMap 是 3D 的
+# TileMap（网格单元 + MeshLibrary 条目），CSG 是 3D 原型搭建（布尔形状）。
+# 对位 godot-ai 的 gridmap_manage / csg_manage——补齐基准台账上仅存的
+# "对方独有"广度项；自此每个已识别维度都有对位工具。
+# ============================================================================
+
+func _register_set_gridmap_cells(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"set_gridmap_cells",
+		"Edit-time GridMap cell authoring (3D grid of MeshLibrary items) in the edited scene. op=set writes cells [{coords:[x,y,z], item:int}] (item -1 clears); op=fill paints a box region {from:[x,y,z], to:[x,y,z], item}; op=clear removes every cell; op=read returns items in a region (omit region for all used cells); op=set_mesh_library assigns res:// MeshLibrary so items render. Wrapped in editor UndoRedo.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first."},
+				"node_path": {"type": "string", "description": "Path to the GridMap node in the edited scene (root-relative)."},
+				"op": {"type": "string", "enum": ["set", "fill", "clear", "read", "set_mesh_library"]},
+				"cells": {"type": "array", "items": {"type": "object"},
+					"description": "op=set: [{coords:[x,y,z], item:int}]"},
+				"from": {"type": "array", "description": "op=fill/read: [x,y,z] inclusive corner"},
+				"to": {"type": "array", "description": "op=fill/read: [x,y,z] inclusive corner"},
+				"item": {"type": "integer", "description": "op=fill: MeshLibrary item index"},
+				"mesh_library": {"type": "string", "description": "op=set_mesh_library: res:// path to a MeshLibrary resource"}
+			},
+			"required": ["node_path", "op"]
+		},
+		Callable(self, "_tool_set_gridmap_cells"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"cells_set": {"type": "integer"},
+				"cells_cleared": {"type": "integer"},
+				"cells": {"type": "array", "items": {"type": "object"}},
+				"warning": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_set_gridmap_cells(params: Dictionary) -> Dictionary:
+	var node_path: String = str(params.get("node_path", "")).strip_edges()
+	if node_path.is_empty():
+		return {"error": "Missing required parameter: node_path"}
+	var op: String = str(params.get("op", "")).strip_edges().to_lower()
+	if op.is_empty():
+		return {"error": "Missing required parameter: op (set | fill | clear | read | set_mesh_library)"}
+	# 参数校验先于编辑器依赖（坏输入在无编辑器环境也要干净失败、可单测）。
+	match op:
+		"set":
+			if not (params.get("cells", []) is Array) or (params.get("cells", []) as Array).is_empty():
+				return {"error": "op=set requires a non-empty cells array [{coords:[x,y,z], item:int}]"}
+			for entry_value in (params.get("cells", []) as Array):
+				if not (entry_value is Dictionary) or not (entry_value as Dictionary).has("coords"):
+					return {"error": "Each cell must be an object with coords:[x,y,z] and item:int"}
+				if _parse_vector3i((entry_value as Dictionary)["coords"]) == null:
+					return {"error": "Cell 'coords' must be [x, y, z]"}
+		"fill":
+			if not params.has("from") or not params.has("to") or not params.has("item"):
+				return {"error": "op=fill requires from:[x,y,z], to:[x,y,z] and item:int"}
+			var from_pre: Variant = _parse_vector3i(params["from"])
+			var to_pre: Variant = _parse_vector3i(params["to"])
+			if from_pre == null or to_pre == null:
+				return {"error": "'from'/'to' must be [x, y, z]"}
+			var volume_pre: int = (absi((to_pre as Vector3i).x - (from_pre as Vector3i).x) + 1) \
+				* (absi((to_pre as Vector3i).y - (from_pre as Vector3i).y) + 1) \
+				* (absi((to_pre as Vector3i).z - (from_pre as Vector3i).z) + 1)
+			if volume_pre > 20000:
+				return {"error": "fill region too large (%d cells > 20000) — split into smaller fills" % volume_pre}
+		"set_mesh_library":
+			if str(params.get("mesh_library", "")).strip_edges().is_empty():
+				return {"error": "op=set_mesh_library requires mesh_library (res:// path)"}
+		"clear", "read":
+			pass
+		_:
+			return {"error": "Unknown op '" + op + "' — use set | fill | clear | read | set_mesh_library"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
+	var node: Node = _resolve_node_path(node_path)
+	if not node:
+		return {"error": "Node not found: " + node_path
+			+ NodeToolsNative._suggest_parent_path(_get_user_scene_root(), node_path)}
+	if not (node is GridMap):
+		return {"error": "Node is not a GridMap: " + node_path + " (got " + node.get_class() + ")"}
+	var grid: GridMap = node
+
+	match op:
+		"set_mesh_library":
+			var lib_path: String = str(params.get("mesh_library", "")).strip_edges()
+			if lib_path.is_empty():
+				return {"error": "op=set_mesh_library requires mesh_library (res:// path)"}
+			if not ResourceLoader.exists(lib_path):
+				return {"error": "MeshLibrary not found: " + lib_path}
+			var lib: Resource = load(lib_path)
+			if not (lib is MeshLibrary):
+				return {"error": "Resource is not a MeshLibrary: " + lib_path}
+			grid.mesh_library = lib
+			editor_interface.mark_scene_as_unsaved()
+			return {"status": "success", "node_path": node_path, "mesh_library": lib_path}
+		"read":
+			var cells_out: Array = []
+			if params.has("from") and params.has("to"):
+				var from_v: Variant = _parse_vector3i(params["from"])
+				var to_v: Variant = _parse_vector3i(params["to"])
+				if from_v == null or to_v == null:
+					return {"error": "'from'/'to' must be [x, y, z]"}
+				var from_c: Vector3i = from_v
+				var to_c: Vector3i = to_v
+				for x in range(mini(from_c.x, to_c.x), maxi(from_c.x, to_c.x) + 1):
+					for y in range(mini(from_c.y, to_c.y), maxi(from_c.y, to_c.y) + 1):
+						for z in range(mini(from_c.z, to_c.z), maxi(from_c.z, to_c.z) + 1):
+							var item: int = grid.get_cell_item(Vector3i(x, y, z))
+							if item != -1:
+								cells_out.append({"coords": [x, y, z], "item": item})
+			else:
+				for cell in grid.get_used_cells():
+					cells_out.append({"coords": [cell.x, cell.y, cell.z],
+						"item": grid.get_cell_item(Vector3i(cell.x, cell.y, cell.z))})
+			return {"status": "success", "node_path": node_path, "cells": cells_out}
+		"clear":
+			var used: Array = grid.get_used_cells()
+			var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo:
+				undo_redo.create_action("Clear GridMap Cells")
+			for cell in used:
+				if undo_redo:
+					undo_redo.add_do_method(grid, "set_cell_item", Vector3i(cell.x, cell.y, cell.z), -1)
+					undo_redo.add_undo_method(grid, "set_cell_item", Vector3i(cell.x, cell.y, cell.z),
+						grid.get_cell_item(Vector3i(cell.x, cell.y, cell.z)))
+				else:
+					grid.set_cell_item(Vector3i(cell.x, cell.y, cell.z), -1)
+			if undo_redo:
+				undo_redo.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			return {"status": "success", "node_path": node_path, "cells_cleared": used.size()}
+		"set":
+			if not (params.get("cells", []) is Array) or (params.get("cells", []) as Array).is_empty():
+				return {"error": "op=set requires a non-empty cells array [{coords:[x,y,z], item:int}]"}
+			var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo:
+				undo_redo.create_action("Set GridMap Cells")
+			var cells_set: int = 0
+			for entry in params.get("cells", []) as Array:
+				if not (entry is Dictionary) or not (entry as Dictionary).has("coords"):
+					return {"error": "Each cell must be an object with coords:[x,y,z] and item:int"}
+				var cell_entry: Dictionary = entry
+				var coords_v: Variant = _parse_vector3i(cell_entry["coords"])
+				if coords_v == null:
+					return {"error": "Cell 'coords' must be [x, y, z]"}
+				var coords: Vector3i = coords_v
+				var item_id: int = int(cell_entry.get("item", -1))
+				if undo_redo:
+					undo_redo.add_do_method(grid, "set_cell_item", Vector3i(coords.x, coords.y, coords.z), item_id)
+					undo_redo.add_undo_method(grid, "set_cell_item", Vector3i(coords.x, coords.y, coords.z),
+						grid.get_cell_item(Vector3i(coords.x, coords.y, coords.z)))
+				else:
+					grid.set_cell_item(Vector3i(coords.x, coords.y, coords.z), item_id)
+				cells_set += 1
+			if undo_redo:
+				undo_redo.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			var payload: Dictionary = {"status": "success", "node_path": node_path, "cells_set": cells_set}
+			if grid.mesh_library == null:
+				payload["warning"] = "GridMap has no mesh_library — cells will NOT render; assign one with op=set_mesh_library"
+			return payload
+		"fill":
+			if not params.has("from") or not params.has("to") or not params.has("item"):
+				return {"error": "op=fill requires from:[x,y,z], to:[x,y,z] and item:int"}
+			var from_v2: Variant = _parse_vector3i(params["from"])
+			var to_v2: Variant = _parse_vector3i(params["to"])
+			if from_v2 == null or to_v2 == null:
+				return {"error": "'from'/'to' must be [x, y, z]"}
+			var from_c2: Vector3i = from_v2
+			var to_c2: Vector3i = to_v2
+			var fill_item: int = int(params["item"])
+			var volume: int = (absi(to_c2.x - from_c2.x) + 1) * (absi(to_c2.y - from_c2.y) + 1) * (absi(to_c2.z - from_c2.z) + 1)
+			if volume > 20000:
+				return {"error": "fill region too large (%d cells > 20000) — split into smaller fills" % volume}
+			var undo_redo2: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+			if undo_redo2:
+				undo_redo2.create_action("Fill GridMap Region")
+			var filled: int = 0
+			for x in range(mini(from_c2.x, to_c2.x), maxi(from_c2.x, to_c2.x) + 1):
+				for y in range(mini(from_c2.y, to_c2.y), maxi(from_c2.y, to_c2.y) + 1):
+					for z in range(mini(from_c2.z, to_c2.z), maxi(from_c2.z, to_c2.z) + 1):
+						if undo_redo2:
+							undo_redo2.add_do_method(grid, "set_cell_item", Vector3i(x, y, z), fill_item)
+							undo_redo2.add_undo_method(grid, "set_cell_item", Vector3i(x, y, z),
+								grid.get_cell_item(Vector3i(x, y, z)))
+						else:
+							grid.set_cell_item(Vector3i(x, y, z), fill_item)
+						filled += 1
+			if undo_redo2:
+				undo_redo2.commit_action()
+			editor_interface.mark_scene_as_unsaved()
+			var fill_payload: Dictionary = {"status": "success", "node_path": node_path, "cells_set": filled}
+			if grid.mesh_library == null:
+				fill_payload["warning"] = "GridMap has no mesh_library — cells will NOT render; assign one with op=set_mesh_library"
+			return fill_payload
+		_:
+			return {"error": "Unknown op '" + op + "' — use set | fill | clear | read | set_mesh_library"}
+
+static func _parse_vector3i(value: Variant) -> Variant:
+	if value is Vector3i:
+		return value
+	if value is Dictionary:
+		var d: Dictionary = value
+		if d.has("x") and d.has("y") and d.has("z"):
+			return Vector3i(int(d["x"]), int(d["y"]), int(d["z"]))
+		return null
+	if value is Array and (value as Array).size() == 3:
+		var a: Array = value
+		return Vector3i(int(a[0]), int(a[1]), int(a[2]))
+	return null
+
+func _register_create_csg_shape(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_csg_shape",
+		"One-call 3D prototyping shape: creates a CSG node (box | sphere | cylinder | torus | polygon | mesh | combiner) with shape dimensions, boolean operation (union | intersection | subtraction), optional material and collision — the node-type/subresource/property dance in a single call. Wrapped in editor UndoRedo.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "Optional: ensure this scene is the active edited scene first."},
+				"parent_path": {"type": "string", "description": "Parent path in the edited scene ('' = root)."},
+				"name": {"type": "string", "description": "Node name (default 'CSGShape')."},
+				"shape": {"type": "string", "enum": ["box", "sphere", "cylinder", "torus", "polygon", "mesh", "combiner"], "default": "box"},
+				"size": {"type": "array", "description": "box: [w,h,d] (default [1,1,1])"},
+				"radius": {"type": "number", "description": "sphere/cylinder radius (default 0.5)"},
+				"height": {"type": "number", "description": "cylinder height (default 1)"},
+				"inner_radius": {"type": "number", "description": "torus inner radius (default 0.2)"},
+				"outer_radius": {"type": "number", "description": "torus outer radius (default 0.5)"},
+				"polygon": {"type": "array", "description": "polygon: array of [x,y] points"},
+				"operation": {"type": "string", "enum": ["union", "intersection", "subtraction"], "default": "union"},
+				"position": {"type": "array", "description": "[x,y,z] world/parent position"},
+				"material": {"type": "string", "description": "Optional res:// path to a Material"},
+				"use_collision": {"type": "boolean", "default": false},
+				"on_name_conflict": {"type": "string", "enum": ["error", "rename", "skip"], "default": "error"}
+			}
+		},
+		Callable(self, "_tool_create_csg_shape"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"node_path": {"type": "string"},
+				"node_type": {"type": "string"},
+				"operation": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_csg_shape(params: Dictionary) -> Dictionary:
+	var shape: String = str(params.get("shape", "box")).strip_edges().to_lower()
+	var type_map: Dictionary = {
+		"box": "CSGBox3D", "sphere": "CSGSphere3D", "cylinder": "CSGCylinder3D",
+		"torus": "CSGTorus3D", "polygon": "CSGPolygon3D", "mesh": "CSGMesh3D",
+		"combiner": "CSGCombiner3D"}
+	if not type_map.has(shape):
+		return {"error": "Unknown shape '" + shape + "' — use box | sphere | cylinder | torus | polygon | mesh | combiner"}
+	var node_type: String = type_map[shape]
+	if shape == "polygon":
+		var poly_pre: Variant = params.get("polygon", [])
+		var poly_points: int = 0
+		if poly_pre is Array:
+			for poly_pt in (poly_pre as Array):
+				if poly_pt is Array and (poly_pt as Array).size() >= 2:
+					poly_points += 1
+		if poly_points < 3:
+			return {"error": "shape=polygon requires polygon: at least 3 [x,y] points (got %d)" % poly_points}
+	if shape == "mesh" and str(params.get("mesh", "")).strip_edges().is_empty():
+		return {"error": "shape=mesh requires mesh: res:// path to an ArrayMesh"}
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if not editor_interface:
+		return {"error": "Editor interface not available"}
+	if not _get_user_scene_root():
+		return {"error": "No scene is currently open"}
+	var context_guard: Dictionary = await SCENE_CONTEXT.ensure_scene_active(
+		editor_interface, String(params.get("scene_path", "")))
+	if not bool(context_guard.get("ok", false)):
+		return {"error": String(context_guard.get("error", "scene context guard failed"))}
+
+	var parent_path: String = str(params.get("parent_path", "")).strip_edges()
+	var parent: Node = _resolve_node_path(parent_path if parent_path != "" else "/root")
+	if not parent:
+		return {"error": "Parent node not found: " + parent_path
+			+ NodeToolsNative._suggest_parent_path(_get_user_scene_root(), parent_path)}
+
+	# 默认名按形状派生（CSGBox/CSGSphere/...）：实测坑——统一 "CSGShape" 默认名
+	# 在第二个形状就撞名；形状派生名让连续创建免撞。
+	var node_name: String = str(params.get("name", "")).strip_edges()
+	if node_name.is_empty():
+		node_name = "CSG" + shape.capitalize()
+	var on_name_conflict: String = str(params.get("on_name_conflict", "error")).to_lower()
+	if parent.has_node(node_name):
+		match on_name_conflict:
+			"skip":
+				var existing: Node = parent.get_node(node_name)
+				return {"status": "skipped", "node_path": String(existing.get_path()),
+					"node_type": existing.get_class(), "detail": "node already exists"}
+			"rename":
+				var counter: int = 2
+				while parent.has_node(node_name + str(counter)):
+					counter += 1
+				node_name = node_name + str(counter)
+			_:
+				return {"error": "A node named '" + node_name + "' already exists under " + (parent_path if parent_path != "" else "the scene root") + ". Use on_name_conflict='rename' or 'skip'."}
+
+	var csg: CSGShape3D = ClassDB.instantiate(node_type) as CSGShape3D
+	if csg == null:
+		return {"error": "Failed to instantiate " + node_type}
+	csg.name = node_name
+
+	# 形状尺寸（各 CSG 子类的专用属性）。
+	match shape:
+		"box":
+			if params.has("size") and (params.get("size", []) is Array) and (params.get("size", []) as Array).size() == 3:
+				var s: Array = params["size"]
+				(csg as CSGBox3D).size = Vector3(float(s[0]), float(s[1]), float(s[2]))
+		"sphere":
+			if params.has("radius"):
+				(csg as CSGSphere3D).radius = float(params["radius"])
+		"cylinder":
+			if params.has("radius"):
+				(csg as CSGCylinder3D).radius = float(params["radius"])
+			if params.has("height"):
+				(csg as CSGCylinder3D).height = float(params["height"])
+		"torus":
+			if params.has("inner_radius"):
+				(csg as CSGTorus3D).inner_radius = float(params["inner_radius"])
+			if params.has("outer_radius"):
+				(csg as CSGTorus3D).outer_radius = float(params["outer_radius"])
+		"polygon":
+			var points: PackedVector2Array = PackedVector2Array()
+			for point_value in (params.get("polygon", []) as Array):
+				if point_value is Array and (point_value as Array).size() >= 2:
+					points.append(Vector2(float((point_value as Array)[0]), float((point_value as Array)[1])))
+			if points.size() < 3:
+				csg.free()
+				return {"error": "polygon needs at least 3 [x,y] points"}
+			(csg as CSGPolygon3D).polygon = points
+		"mesh":
+			var mesh_path: String = str(params.get("mesh", "")).strip_edges()
+			if not ResourceLoader.exists(mesh_path):
+				csg.free()
+				return {"error": "mesh not found: " + mesh_path}
+			(csg as CSGMesh3D).mesh = load(mesh_path)
+
+	var operation: String = str(params.get("operation", "union")).to_lower()
+	var op_map: Dictionary = {"union": 0, "intersection": 1, "subtraction": 2}
+	if not op_map.has(operation):
+		csg.free()
+		return {"error": "Unknown operation '" + operation + "' — use union | intersection | subtraction"}
+	csg.operation = int(op_map[operation])
+	csg.use_collision = bool(params.get("use_collision", false))
+	if params.has("position") and (params.get("position", []) is Array) and (params.get("position", []) as Array).size() == 3:
+		var pos: Array = params["position"]
+		csg.position = Vector3(float(pos[0]), float(pos[1]), float(pos[2]))
+	var material_path: String = str(params.get("material", "")).strip_edges()
+	if not material_path.is_empty():
+		if not ResourceLoader.exists(material_path):
+			csg.free()
+			return {"error": "material not found: " + material_path}
+		csg.material = load(material_path)
+
+	var undo_redo: EditorUndoRedoManager = editor_interface.get_editor_undo_redo()
+	if undo_redo:
+		undo_redo.create_action("Create CSG " + shape.capitalize())
+		undo_redo.add_do_method(parent, "add_child", csg)
+		undo_redo.add_do_property(csg, "owner", _get_user_scene_root())
+		undo_redo.add_do_reference(csg)
+		undo_redo.add_undo_method(parent, "remove_child", csg)
+		undo_redo.commit_action()
+	else:
+		parent.add_child(csg)
+		csg.owner = _get_user_scene_root()
+
+	editor_interface.mark_scene_as_unsaved()
+	return {"status": "success", "node_path": String(csg.get_path()),
+		"node_type": node_type, "operation": operation}
+
+# ============================================================================
+# batch_update_scene_files（P1 场景变体与批量修改）：跨多个 .tscn 文件的
+# 语义化批量属性修改 —— 修改几十种敌人/道具时保留各自的特殊配置。
+#
+# 保留特殊配置的两道闸：
+#   1. expect_current（旧默认值守卫）：只有当前序列化值 == expect_current 的
+#      节点才改写；Boss 那份已经改成 300 的配置原样保留并如实上报。
+#   2. preserve 显式清单：逐 scene|node|property 指定"这份不许动"。
+# 纯文本级编辑（不打开编辑器、其余字节原样保留），逐文件报告
+# changed / preserved / unchanged / missing + 汇总；dry_run 默认开。
+# ============================================================================
+
+func _register_batch_update_scene_files(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"batch_update_scene_files",
+		"Semantic batch property edit across many .tscn FILES at once (text-level, no editor round-trip — everything but the edited lines stays byte-identical). Each edit targets {node, property, value} with an optional expect_current guard: only nodes whose CURRENT serialized value equals expect_current are rewritten, so tuning all grunts while the boss keeps its special 300 is one call, not per-file surgery; nodes whose value already drifted are reported as preserved (special config kept, never clobbered). An explicit preserve list ({scene, node, property}) is a second, absolute keep. Values serialize via var_to_str (floats/int/string/bool/Vector2/Color); the existing serialized type is followed when the new value converts losslessly (200.0 over int 200 stays '200'). Properties not serialized in a node section are reported as missing (with the exact node path), never silently appended. dry_run defaults to true — the first call is the preview, re-run with dry_run=false to write. Per-scene report: changed / preserved / unchanged / missing with from- and to-values.",
+		{
+			"type": "object",
+			"properties": {
+				"scenes": {
+					"type": "array", "items": {"type": "string"},
+					"description": "Target .tscn files, e.g. ['res://scenes/grunt.tscn', 'res://scenes/boss.tscn']."
+				},
+				"edits": {
+					"type": "array", "items": {"type": "object"},
+					"description": "[{node: 'Enemy/Brain' (scene-relative, root included), property: 'detect_range', value: <new>, expect_current: <optional old-default guard>}]"
+				},
+				"preserve": {
+					"type": "array", "items": {"type": "object"},
+					"description": "Absolute keep list: [{scene, node, property}] — matched nodes are never rewritten, reported as preserved."
+				},
+				"dry_run": {
+					"type": "boolean", "default": true,
+					"description": "Preview only (default). Set false to write the files."
+				}
+			},
+			"required": ["scenes", "edits"]
+		},
+		Callable(self, "_tool_batch_update_scene_files"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"dry_run": {"type": "boolean"},
+			"written": {"type": "boolean"},
+			"scenes": {"type": "array"},
+			"totals": {"type": "object"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_batch_update_scene_files(params: Dictionary) -> Dictionary:
+	var scenes_raw: Variant = params.get("scenes", [])
+	if not (scenes_raw is Array) or (scenes_raw as Array).is_empty():
+		return {"error": "scenes must be a non-empty array of .tscn paths"}
+	var edits_raw: Variant = params.get("edits", [])
+	if not (edits_raw is Array) or (edits_raw as Array).is_empty():
+		return {"error": "edits must be a non-empty array of {node, property, value[, expect_current]}"}
+	var edits: Array = []
+	for edit_value in edits_raw:
+		if not (edit_value is Dictionary):
+			return {"error": "each edit must be an object"}
+		var edit: Dictionary = edit_value
+		var node: String = String(edit.get("node", "")).strip_edges()
+		var property: String = String(edit.get("property", "")).strip_edges()
+		if node.is_empty():
+			return {"error": "each edit requires a non-empty 'node' (scene-relative, root included)"}
+		if property.is_empty() or not property.is_valid_identifier():
+			return {"error": "edit for node '%s' requires a valid 'property' identifier (got '%s')" % [node, property]}
+		if not edit.has("value") or edit.get("value", null) == null:
+			return {"error": "edit for '%s.%s' requires a non-null 'value'" % [node, property]}
+		edits.append(edit)
+	var preserve_keys: Dictionary = {}
+	var preserve_raw: Variant = params.get("preserve", [])
+	if preserve_raw is Array:
+		for keep_value in preserve_raw:
+			if keep_value is Dictionary:
+				var keep: Dictionary = keep_value
+				preserve_keys["%s|%s|%s" % [
+					String(keep.get("scene", "")).strip_edges(),
+					String(keep.get("node", "")).strip_edges(),
+					String(keep.get("property", "")).strip_edges()]] = true
+	var dry_run: bool = bool(params.get("dry_run", true))
+
+	var reports: Array = []
+	var totals: Dictionary = {"scenes_touched": 0, "changed": 0, "preserved": 0, "unchanged": 0, "missing": 0}
+	var written: bool = false
+	for scene_value in scenes_raw:
+		var scene_path: String = String(scene_value).strip_edges()
+		var report: Dictionary = {"scene": scene_path, "changed": [], "preserved": [], "unchanged": [], "missing": []}
+		var access: FileAccess = FileAccess.open(scene_path, FileAccess.READ) if FileAccess.file_exists(scene_path) else null
+		if access == null:
+			report["error"] = "scene file not found or unreadable"
+			reports.append(report)
+			continue
+		var text: String = access.get_as_text()
+		access.close()
+		var lines: PackedStringArray = text.split("\n")
+		var sections: Array = []
+		var root_name: String = ""
+		var current: Dictionary = {}
+		for i in lines.size():
+			var line: String = lines[i].strip_edges()
+			if line.begins_with("[node"):
+				if not current.is_empty():
+					current["end"] = i
+					sections.append(current)
+				var header_attrs: Dictionary = _batch_parse_attrs(line)
+				current = {"attrs": header_attrs, "start": i + 1, "end": lines.size()}
+				if not header_attrs.has("parent") and root_name.is_empty():
+					root_name = String(header_attrs.get("name", ""))
+			elif line.begins_with("[") and not current.is_empty():
+				current["end"] = i
+				sections.append(current)
+				current = {}
+		if not current.is_empty():
+			current["end"] = lines.size()
+			sections.append(current)
+
+		var file_dirty: bool = false
+		for edit_value in edits:
+			var edit: Dictionary = edit_value
+			var node: String = String(edit.get("node", "")).strip_edges()
+			var property: String = String(edit.get("property", "")).strip_edges()
+			var new_value: Variant = edit.get("value", null)
+			var target_key: String = "%s|%s|%s" % [scene_path, node, property]
+			# 定位节点段：完整路径优先，退化为段名匹配（与实体解析同一语义）。
+			var section: Dictionary = {}
+			for section_value in sections:
+				var attrs: Dictionary = (section_value as Dictionary).get("attrs", {})
+				var name: String = String(attrs.get("name", ""))
+				var full_path: String = name
+				if attrs.has("parent"):
+					var parent: String = String(attrs["parent"])
+					full_path = root_name + "/" + name if parent == "." else root_name + "/" + parent + "/" + name
+				if full_path == node or (section.is_empty() and name == node):
+					section = section_value
+					if full_path == node:
+						break
+			if section.is_empty():
+				report["missing"].append({"node": node, "property": property,
+					"reason": "node not present in the scene file"})
+				continue
+			# 段体内找属性行（tab 缩进的 "<property> ="）。
+			var property_line_index: int = -1
+			var current_text: String = ""
+			var property_prefix: String = property + " ="
+			for i in range(int(section.get("start", 0)), int(section.get("end", 0))):
+				var body_line: String = lines[i].strip_edges()
+				if body_line.begins_with(property_prefix):
+					property_line_index = i
+					current_text = body_line.substr(property_prefix.length()).strip_edges()
+					break
+			if property_line_index < 0:
+				report["missing"].append({"node": node, "property": property,
+					"reason": "property not serialized in the node section (value comes from the script default or an instance override) — set it once via batch_scene_node_edits and save, then batch-edit it here"})
+				continue
+			if preserve_keys.has(target_key):
+				report["preserved"].append({"node": node, "property": property,
+					"current": current_text, "reason": "explicit preserve list"})
+				continue
+			var current_value: Variant = str_to_var(current_text)
+			if _batch_values_equal(current_value, new_value):
+				report["unchanged"].append({"node": node, "property": property, "current": current_text})
+				continue
+			if edit.has("expect_current") and not _batch_values_equal(current_value, edit.get("expect_current", null)):
+				report["preserved"].append({"node": node, "property": property,
+					"current": current_text, "reason": "current value differs from expect_current — special config kept"})
+				continue
+			# 跟随既有序列化类型（无损时）：int 行写回 int，避免 200 变 200.0。
+			var serialized: Variant = new_value
+			if typeof(current_value) == TYPE_INT and new_value is float and is_equal_approx(float(new_value), roundf(float(new_value))):
+				serialized = int(roundf(float(new_value)))
+			var new_text: String = var_to_str(serialized)
+			# 保留原行缩进（.tscn 用 tab，逐字跟随而不是硬编码）。
+			var raw_line: String = lines[property_line_index]
+			var leading: String = raw_line.substr(0, raw_line.length() - raw_line.lstrip("\t").length())
+			lines[property_line_index] = leading + property + " = " + new_text
+			file_dirty = true
+			report["changed"].append({"node": node, "property": property,
+				"from": current_text, "to": new_text})
+		if file_dirty and not dry_run:
+			var writer: FileAccess = FileAccess.open(scene_path, FileAccess.WRITE)
+			if writer == null:
+				report["error"] = "could not open for writing"
+			else:
+				writer.store_string("\n".join(lines))
+				writer.close()
+				written = true
+				totals["scenes_touched"] = int(totals["scenes_touched"]) + 1
+				# 文本级改写绕过编辑器：资源缓存里还是旧场景，重开场景会实例化
+				# 旧值（实测坑）。写盘即刷新缓存——答案同行，调用方无需知道缓存语义。
+				# headless（无编辑器）跳过：夹具场景常引用不存在的资源，强行加载
+				# 只产生引擎解析噪音（GUT 计为 Unexpected Errors）。
+				if _get_editor_interface() != null:
+					ResourceLoader.load(scene_path, "", ResourceLoader.CACHE_MODE_REPLACE)
+		reports.append(report)
+		totals["changed"] = int(totals["changed"]) + (report["changed"] as Array).size()
+		totals["preserved"] = int(totals["preserved"]) + (report["preserved"] as Array).size()
+		totals["unchanged"] = int(totals["unchanged"]) + (report["unchanged"] as Array).size()
+		totals["missing"] = int(totals["missing"]) + (report["missing"] as Array).size()
+	return {
+		"status": "success",
+		"dry_run": dry_run,
+		"written": written,
+		"scenes": reports,
+		"totals": totals,
+	}
+
+## 数值宽容相等：浮点近似、布尔精确、其余字符串比较（str_to_var 解析当前值）。
+static func _batch_values_equal(a: Variant, b: Variant) -> bool:
+	if a == null or b == null:
+		return false
+	if typeof(a) == TYPE_BOOL or typeof(b) == TYPE_BOOL:
+		return bool(a) == bool(b) and typeof(a) == typeof(b)
+	if (a is int or a is float) and (b is int or b is float):
+		return is_equal_approx(float(a), float(b))
+	return str(a) == str(b)
+
+## 解析资源头部属性键值对（与 debug_verify_tools 同一语义的本地实现）。
+static func _batch_parse_attrs(header: String) -> Dictionary:
+	var attrs: Dictionary = {}
+	var regex: RegEx = RegEx.new()
+	regex.compile("([A-Za-z_]+)=\"([^\"]*)\"")
+	for m in regex.search_all(header):
+		attrs[String(m.get_string(1))] = m.get_string(2)
+	return attrs
+
+# ============================================================================
+# create_scene_variant（M3 变体与规模）：基于场景继承创建变体 —— boss.tscn
+# 继承 enemy.tscn 并带属性覆盖；基场景改动自动流到变体，变体只保留差异。
+# 纯文本生成（继承关系的 .tscn 结构稳定），on_exists 默认 skip 幂等。
+# ============================================================================
+
+func _register_create_scene_variant(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_scene_variant",
+		"Create a scene VARIANT by inheritance: boss.tscn <- enemy.tscn with property overrides. The variant keeps only its differences (stats knobs, exported values) — every base-scene change flows into all variants automatically, and batch_update_scene_files can retune them later while expect_current keeps each variant's specials. Overrides are {node, property, value} with node relative to the root ('' or '.' = the root itself, 'Brain' = child, 'Mid/Leaf' = deeper). Idempotent: an existing scene_path is skipped by default (on_exists='skip'|'error'). Text-level generation, no editor round-trip; open_after_create opens it through the scene-ready barrier.",
+		{
+			"type": "object",
+			"properties": {
+				"scene_path": {"type": "string", "description": "The variant scene to create, e.g. 'res://scenes/boss.tscn'."},
+				"base_scene": {"type": "string", "description": "Existing scene to inherit from."},
+				"overrides": {"type": "array", "items": {"type": "object"},
+					"description": "[{node: '.' | 'Brain' | 'Mid/Leaf', property: 'detect_range', value: 300.0}]"},
+				"on_exists": {"type": "string", "enum": ["skip", "error"], "default": "skip"},
+				"open_after_create": {"type": "boolean", "default": false}
+			},
+			"required": ["scene_path", "base_scene"]
+		},
+		Callable(self, "_tool_create_scene_variant"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"scene_path": {"type": "string"},
+			"base_scene": {"type": "string"},
+			"root_name": {"type": "string"},
+			"overrides_applied": {"type": "integer"},
+			"warning": {"type": "string"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_scene_variant(params: Dictionary) -> Dictionary:
+	var scene_path: String = String(params.get("scene_path", "")).strip_edges()
+	var base_scene: String = String(params.get("base_scene", "")).strip_edges()
+	if scene_path.is_empty():
+		return {"error": "scene_path is required (e.g. 'res://scenes/boss.tscn')"}
+	if base_scene.is_empty():
+		return {"error": "base_scene is required (the scene to inherit from)"}
+	if scene_path == base_scene:
+		return {"error": "scene_path and base_scene must differ"}
+	if not FileAccess.file_exists(base_scene):
+		return {"error": "base_scene not found: %s" % base_scene}
+	if FileAccess.file_exists(scene_path):
+		if String(params.get("on_exists", "skip")) == "error":
+			return {"error": "scene already exists: %s" % scene_path}
+		return {"status": "exists", "scene_path": scene_path, "base_scene": base_scene,
+			"note": "variant already present (on_exists=skip) — untouched"}
+
+	var overrides: Array = []
+	var overrides_raw: Variant = params.get("overrides", [])
+	if overrides_raw is Array:
+		for override_value in overrides_raw:
+			if not (override_value is Dictionary):
+				return {"error": "each override must be an object {node, property, value}"}
+			var override: Dictionary = override_value
+			var property: String = String(override.get("property", "")).strip_edges()
+			if property.is_empty() or not property.is_valid_identifier():
+				return {"error": "override requires a valid 'property' identifier (got '%s')" % property}
+			if not override.has("value") or override.get("value", null) == null:
+				return {"error": "override for '%s' requires a non-null 'value'" % property}
+			overrides.append(override)
+
+	# 基场景：根名 + 自身 uid（4.4+ 存在 gd_scene 头里，透传给 ext_resource）。
+	var base_text: String = _variant_read_text(base_scene)
+	var root_name: String = _variant_base_root_name(base_text)
+	if root_name.is_empty():
+		return {"error": "could not parse the base scene's root node name"}
+	var base_uid: String = _variant_base_uid(base_text)
+
+	# 组装继承场景：根 = instance=ExtResource；根覆盖写根段体；子覆盖
+	# parent 相对根（"."=根的直接子级），与仓库解析器同一语义。
+	var lines: PackedStringArray = []
+	lines.append("[gd_scene load_steps=2 format=3]")
+	lines.append("")
+	var uid_attr: String = "" if base_uid.is_empty() else "uid=\"%s\" " % base_uid
+	lines.append("[ext_resource type=\"PackedScene\" %spath=\"%s\" id=\"1_base\"]" % [uid_attr, base_scene])
+	lines.append("")
+	lines.append("[node name=\"%s\" instance=ExtResource(\"1_base\")]" % root_name)
+	var applied: int = 0
+	# 子覆盖行用 Array（引用类型）——PackedStringArray 是值类型，as 转换后 append
+	# 改的是副本，字典里的存量不变（本会话实测坑）。
+	var child_sections: Dictionary = {}  # 相对路径 -> 属性行 Array
+	for override_value in overrides:
+		var override: Dictionary = override_value
+		var property: String = String(override.get("property", "")).strip_edges()
+		var node: String = String(override.get("node", ".")).strip_edges()
+		if node.is_empty():
+			node = "."
+		var line: String = "\t%s = %s" % [property, var_to_str(override.get("value", null))]
+		if node == ".":
+			lines.append(line)
+		else:
+			var normalized: String = node.trim_prefix("./").trim_prefix("/")
+			if not child_sections.has(normalized):
+				child_sections[normalized] = []
+			(child_sections[normalized] as Array).append(line)
+		applied += 1
+	# 子覆盖段：路径 A/B => name=B, parent=A（A 为空即 "."）。
+	for path_value in child_sections.keys():
+		var path: String = String(path_value)
+		var segments: PackedStringArray = path.split("/")
+		var section_name: String = String(segments[segments.size() - 1])
+		var parent_attr: String = "." if segments.size() == 1 else "/".join(segments.slice(0, segments.size() - 1))
+		lines.append("")
+		lines.append("[node name=\"%s\" parent=\"%s\"]" % [section_name, parent_attr])
+		for body_line in child_sections[path_value]:
+			lines.append(body_line)
+
+	var writer: FileAccess = FileAccess.open(scene_path, FileAccess.WRITE)
+	if writer == null:
+		return {"error": "could not write %s" % scene_path}
+	writer.store_string("\n".join(lines) + "\n")
+	writer.close()
+
+	var result: Dictionary = {
+		"status": "success",
+		"scene_path": scene_path,
+		"base_scene": base_scene,
+		"root_name": root_name,
+		"overrides_applied": applied,
+	}
+	if applied == 0:
+		result["warning"] = "no overrides given — the variant is a pure alias of the base for now"
+	if bool(params.get("open_after_create", false)):
+		var editor_interface: EditorInterface = _get_editor_interface()
+		if editor_interface:
+			await SCENE_CONTEXT.open_scene_and_wait(editor_interface, scene_path)
+	return result
+
+static func _variant_read_text(path: String) -> String:
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	var content: String = file.get_as_text()
+	file.close()
+	return content
+
+## 基场景根名：第一个无 parent 属性的 [node ...] 段的名字。
+static func _variant_base_root_name(base_text: String) -> String:
+	for line_value in base_text.split("\n"):
+		var line: String = line_value.strip_edges()
+		if line.begins_with("[node"):
+			var attrs: Dictionary = _batch_parse_attrs(line)
+			if not attrs.has("parent"):
+				return String(attrs.get("name", ""))
+	return ""
+
+## 基场景自身 uid：gd_scene 头部的 uid 属性（4.4+）。
+static func _variant_base_uid(base_text: String) -> String:
+	for line_value in base_text.split("\n"):
+		var line: String = line_value.strip_edges()
+		if line.begins_with("[gd_scene"):
+			var attrs: Dictionary = _batch_parse_attrs(line)
+			return String(attrs.get("uid", ""))
+		if line.begins_with("["):
+			break
+	return ""
+
+# ============================================================================
+# create_navigation_region（M6 尾·3D/寻路补强）：在当前编辑场景创建
+# NavigationRegion2D + 轮廓驱动的烘焙导航网格（4.6 静默路径：轮廓即源几何，
+# 跳过 parse 直接 bake_from_source_geometry_data）。答案同行：顶点/多边形数
+# 直接进响应；agent_radius 为数据旋钮。
+# ============================================================================
+
+func _register_create_navigation_region(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"create_navigation_region",
+		"Create a NavigationRegion2D in the currently edited scene with an OUTLINE-DRIVEN baked navigation polygon. Give outlines as arrays of [x, y] points (world space, same space as the nodes); agent_radius grows the shrink margin so baked paths keep distance from walls. Baking uses the quiet 4.6 path (outlines ARE the source geometry; no scene parse, no engine noise) and the response reports vertex/polygon counts inline. Navigation-obstacle parity: bake again after walls change. For runtime proof, assert get_node('<region>').navigation_polygon.get_vertices().size() >= 4.",
+		{
+			"type": "object",
+			"properties": {
+				"parent_path": {"type": "string", "default": "", "description": "Parent for the region node; default is the edited scene root."},
+				"node_name": {"type": "string", "default": "NavRegion"},
+				"outlines": {"type": "array", "items": {"type": "array"},
+					"description": "One or more outlines, each an array of [x, y] points (clockwise or counter-clockwise, >= 3 points)."},
+				"agent_radius": {"type": "number", "default": 1.0, "description": "Bake shrink margin — keep paths away from outline edges."},
+				"bake": {"type": "boolean", "default": true, "description": "Bake immediately (recommended; the quiet outline path)."}
+			},
+			"required": ["outlines"]
+		},
+		Callable(self, "_tool_create_navigation_region"),
+		{"type": "object", "properties": {
+			"status": {"type": "string"},
+			"node_path": {"type": "string"},
+			"vertices_count": {"type": "integer"},
+			"polygons_count": {"type": "integer"},
+			"baked": {"type": "boolean"}}},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Scene-Advanced"
+	)
+
+func _tool_create_navigation_region(params: Dictionary) -> Dictionary:
+	var outlines_raw: Variant = params.get("outlines", [])
+	if not (outlines_raw is Array) or (outlines_raw as Array).is_empty():
+		return {"error": "outlines must be a non-empty array of point arrays ([[x, y], ...] per outline)"}
+	var baked_poly: Dictionary = _bake_navigation_outlines(outlines_raw, float(params.get("agent_radius", 1.0)),
+		bool(params.get("bake", true)))
+	if baked_poly.has("error"):
+		return baked_poly
+
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"error": "Editor interface not available (open the scene in the editor first)"}
+	var scene_root: Node = SCENE_CONTEXT.get_edited_user_scene_root(editor_interface)
+	if scene_root == null:
+		return {"error": "No edited scene — open_scene first"}
+	var parent_path: String = String(params.get("parent_path", "")).strip_edges()
+	var parent: Node = scene_root if parent_path.is_empty() else scene_root.get_node_or_null(NodePath(parent_path))
+	if parent == null:
+		return {"error": "parent_path not found in the edited scene: %s" % parent_path}
+	var node_name: String = String(params.get("node_name", "NavRegion")).strip_edges()
+	if node_name.is_empty():
+		node_name = "NavRegion"
+	var existing: Node = parent.get_node_or_null(NodePath(node_name))
+	var region: NavigationRegion2D = null
+	if existing is NavigationRegion2D:
+		region = existing  # 幂等：同名区域复用并重烘
+	else:
+		region = NavigationRegion2D.new()
+		region.name = node_name
+		parent.add_child(region)
+		region.owner = scene_root
+	region.navigation_polygon = baked_poly["navigation_polygon"]
+	editor_interface.mark_scene_as_unsaved()
+	# 场景相对路径（编辑器 get_path 是 @EditorNode@ 内部树，运行时不可用）。
+	var relative_path: String = ""
+	var walker: Node = region
+	while walker != null and walker != scene_root:
+		relative_path = String(walker.name) + "/" + relative_path
+		walker = walker.get_parent()
+	relative_path = relative_path.trim_suffix("/")
+	if relative_path.is_empty():
+		relative_path = String(region.name)
+	return {
+		"status": "success",
+		"node_path": relative_path,
+		"vertices_count": int(baked_poly["vertices_count"]),
+		"polygons_count": int(baked_poly["polygons_count"]),
+		"baked": bool(baked_poly["baked"]),
+	}
+
+## 纯内核（headless 可单测）：轮廓数组 -> 烘焙后的 NavigationPolygon + 计数。
+## 4.6 实测：NavigationPolygon 无 bake_navigation_polygon 方法；静默路径是
+## 跳过 parse、以轮廓为源几何直接 bake_from_source_geometry_data（带 root 的
+## parse 会打 "No parsing root node" 引擎噪音且不需要）。
+static func _bake_navigation_outlines(outlines_raw: Array, agent_radius: float, do_bake: bool) -> Dictionary:
+	if outlines_raw.is_empty():
+		return {"error": "outlines must contain at least one outline"}
+	var poly := NavigationPolygon.new()
+	var outline_count: int = 0
+	for outline_value in outlines_raw:
+		if not (outline_value is Array) or (outline_value as Array).size() < 3:
+			return {"error": "each outline needs at least 3 points (got %s)" % (str(outline_value)).substr(0, 60)}
+		var points: PackedVector2Array = PackedVector2Array()
+		for point_value in outline_value:
+			if point_value is Dictionary:
+				points.append(Vector2(float(point_value.get("x", 0.0)), float(point_value.get("y", 0.0))))
+			elif point_value is Array and (point_value as Array).size() >= 2:
+				points.append(Vector2(float((point_value as Array)[0]), float((point_value as Array)[1])))
+			elif point_value is Vector2:
+				points.append(point_value)
+			else:
+				return {"error": "outline points must be [x, y] arrays, {x, y} objects or Vector2s"}
+		poly.add_outline(points)
+		outline_count += 1
+	poly.agent_radius = maxf(agent_radius, 0.0)
+	var baked: bool = false
+	if do_bake:
+		var source := NavigationMeshSourceGeometryData2D.new()
+		NavigationServer2D.bake_from_source_geometry_data(poly, source)
+		baked = true
+	return {
+		"navigation_polygon": poly,
+		"vertices_count": poly.get_vertices().size(),
+		"polygons_count": poly.get_polygon_count(),
+		"baked": baked,
+		"outlines_used": outline_count}
