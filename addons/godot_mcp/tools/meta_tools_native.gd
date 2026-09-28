@@ -348,13 +348,13 @@ func _tool_get_tool_details(params: Dictionary) -> Dictionary:
 func _register_enable_tools(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"enable_tools",
-		"Route and activate the minimum tools for workflow_query in one call. Multi-client guard: when more than one client is connected, replace_supplementary auto-downgrades to additive so one AI's routing cannot silently disable another AI's tools (conflict_guard explains; force_replace=true overrides). Or change explicit tools, groups or a preset. Core/meta stay on; the response is compact.",
+		"Route and activate the minimum tools for workflow_query in one call. Multi-client guard: with >1 clients connected, replace auto-downgrades to additive so one AI's routing cannot disable another's tools (conflict_guard explains; force_replace=true overrides). Or change tools, groups or a preset. Core/meta stay on.",
 		{
 			"type": "object",
 			"properties": {
 				"workflow_query": {"type": "string", "description": "English/Chinese goal. Locally routes to at most 8 inspect/execute/verify tools; exclusive with tools/groups/preset."},
-				"replace_supplementary": {"type": "boolean", "default": true, "description": "workflow_query only. Replace old supplementary task tools; false adds. Auto-downgraded to additive when multiple clients are connected (see conflict_guard)."},
-				"force_replace": {"type": "boolean", "default": false, "description": "workflow_query only. Override the multi-client guard and replace supplementary tools even while other clients are connected."},
+				"replace_supplementary": {"type": "boolean", "default": true, "description": "workflow_query only. Replace old supplementary task tools; false adds. Auto-additive while multiple clients are connected (conflict_guard)."},
+				"force_replace": {"type": "boolean", "default": false, "description": "workflow_query only. Replace supplementary tools even with other clients connected (overrides the guard)."},
 				"tools": {"type": "array", "items": {"type": "string"}, "description": "Individual tool names to enable/disable."},
 				"groups": {"type": "array", "items": {"type": "string"}, "description": "Groups to enable/disable."},
 				"preset": {"type": "string", "description": "Focused preset ID; 'all' costs most context. Overrides manual selection."},
