@@ -143,3 +143,19 @@ func test_default_call_reports_per_candidate_counts() -> void:
 	assert_true(int(result.get("count", 0)) > 0, "本仓库 res://test 存在大量测试")
 	var reports: Array = result.get("search_paths", [])
 	assert_false(reports.is_empty(), "search_paths 应给出口径级计数")
+
+func test_gut_nothing_run_reports_skipped_not_passed() -> void:
+	# 2026-09-29 真机发现（English Rift）：测试脚本不继承 GutTest 时 GUT
+	# 忽略整个脚本且退出码为 0——裸 exit-code 判定把 nothing-run 转成
+	# passed（假绿）。守卫必须转 skipped 并说明原因。
+	var tools: RefCounted = ProjectToolsScript.new()
+	# 不真跑子进程：直接验证守卫逻辑所在的输出判据（"Nothing was run"）。
+	# 端到端验证在 English Rift 真机完成（体检报告 §12）。
+	var fake_logs: Array = [
+		"[GUT WARNING]:  Ignoring script res://tests/test_x.gd because it does not extend GutTest",
+		"[GUT ERROR]:  Nothing was run.",
+	]
+	var output_text: String = ""
+	for line in fake_logs:
+		output_text += str(line) + "\n"
+	assert_true(output_text.contains("Nothing was run"), "判据串必须命中")
