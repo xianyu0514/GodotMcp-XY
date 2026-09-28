@@ -105,7 +105,9 @@ func _register_get_editor_logs(server_core: RefCounted) -> void:
 			},
 			"count": {"type": "integer"},
 			"total_available": {"type": "integer"},
-			"source": {"type": "string"}
+			"source": {"type": "string"},
+			"retrieved_at": {"type": "string", "description": "Local time when this batch was pulled."},
+			"timestamp_scope": {"type": "string"}
 		}
 	}
 
@@ -127,12 +129,20 @@ func _tool_get_editor_logs(params: Dictionary) -> Dictionary:
 	var offset: int = params.get("offset", 0)
 	var order: String = params.get("order", "desc")
 
+	var result: Dictionary
 	if source == "runtime":
-		return _get_runtime_logs(types, count, offset, order)
+		result = _get_runtime_logs(types, count, offset, order)
 	elif source == "editor_panel":
-		return _get_editor_panel_logs(types, count, offset, order)
+		result = _get_editor_panel_logs(types, count, offset, order)
+	else:
+		result = _get_mcp_logs(types, count, offset, order)
 
-	return _get_mcp_logs(types, count, offset, order)
+	# P2-7（2026-09-27 体检）：补齐时间基准。编辑器输出面板本身不保留
+	# 行级时间戳，retrieved_at 只标明本批日志的读取时刻。
+	result["retrieved_at"] = Time.get_datetime_string_from_system(false, true)
+	if source == "editor_panel":
+		result["timestamp_scope"] = "retrieved_at marks when this batch was pulled; the editor output panel does not keep per-line timestamps"
+	return result
 
 # ============================================================================
 # Shared static helpers (debugger bridge + runtime probe request machinery).
@@ -173,7 +183,13 @@ static func _request_runtime_probe(command: String, payload: Array, response_mes
 		if refresh_result.has("error"):
 			return refresh_result
 		if refresh_result.get("status", "") == "no_active_sessions":
-			return {"status": "no_active_sessions", "refresh_result": refresh_result}
+			# 自愈指引（2026-09-27 体检 P2-8）：无会话时不能只回静默状态，
+			# 要把"下一步精确调用"直接塞进响应。
+			return {
+				"status": "no_active_sessions",
+				"recommended_action": "No live game session. Call run_project {\"allow_window\": true} to start the game, call install_runtime_probe if the probe is not installed yet, then retry this tool.",
+				"refresh_result": refresh_result
+			}
 		pending_entry = {
 			"baseline_sequence": baseline_sequence,
 			"refresh_result": refresh_result,
@@ -571,14 +587,23 @@ func _tool_execute_script(params: Dictionary) -> Dictionary:
 
 func _register_get_performance_metrics(server_core: RefCounted) -> void:
 	var tool_name: String = "get_performance_metrics"
-	var description: String = "Get performance metrics including FPS, memory usage, and object counts."
-	
+	var description: String = "Get performance metrics with an explicit process scope. source='auto' (default) prefers the running game process via the runtime probe (scope='runtime'); without a live session it falls back to editor-process metrics (scope='editor') plus a hint. Always check 'scope' before interpreting numbers: the editor scope measures the whole editor process and is far larger than the game process."
+
 	# inputSchema
 	var input_schema: Dictionary = {
 		"type": "object",
-		"properties": {}
+		"properties": {
+			"source": {
+				"type": "string",
+				"enum": ["auto", "editor", "runtime"],
+				"default": "auto",
+				"description": "'auto' prefers game-process metrics when a probe session is live; 'editor' forces editor-process Performance monitors; 'runtime' requires a live game session and returns guidance otherwise."
+			},
+			"session_id": {"type": "integer", "description": "Optional runtime session id for source='runtime'/'auto'."},
+			"timeout_ms": {"type": "integer", "default": 4000, "description": "Probe wait budget for source='runtime'/'auto'."}
+		}
 	}
-	
+
 	# outputSchema
 	var output_schema: Dictionary = {
 		"type": "object",
@@ -586,10 +611,17 @@ func _register_get_performance_metrics(server_core: RefCounted) -> void:
 			"fps": {"type": "number"},
 			"object_count": {"type": "integer"},
 			"resource_count": {"type": "integer"},
-			"memory_usage_mb": {"type": "number"}
+			"memory_usage_mb": {"type": "number"},
+			"scope": {"type": "string", "enum": ["editor", "runtime"], "description": "Which process the numbers describe."},
+			"hint": {"type": "string", "description": "Present on scope='editor' results: how to get game-process numbers."},
+			"node_count": {"type": "integer"},
+			"current_scene": {"type": "string"},
+			"frame_time_sec": {"type": "number"},
+			"recommended_action": {"type": "string"},
+			"probe_status": {"type": "string"}
 		}
 	}
-	
+
 	# annotations - readOnlyHint = true
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -597,27 +629,54 @@ func _register_get_performance_metrics(server_core: RefCounted) -> void:
 		"idempotentHint": true,
 		"openWorldHint": false
 	}
-	
+
 	# 注册工具
 	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_get_performance_metrics"),
 						  output_schema, annotations, "supplementary", "Debug-Advanced")
 
 func _tool_get_performance_metrics(params: Dictionary) -> Dictionary:
-	# 使用Performance单例获取性能指标
-	var fps: float = Performance.get_monitor(Performance.TIME_FPS)
-	var object_count: int = Performance.get_monitor(Performance.OBJECT_COUNT)
-	var resource_count: int = Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT)
-	var memory_usage: int = Performance.get_monitor(Performance.MEMORY_STATIC)  # 静态内存
+	var source: String = str(params.get("source", "auto")).strip_edges().to_lower()
+	if source not in ["auto", "editor", "runtime"]:
+		return {"error": "Invalid source '%s'. Use 'auto' (default), 'editor' or 'runtime'." % source}
 
-	# 转换为MB
-	var memory_mb: float = memory_usage / 1024.0 / 1024.0
+	if source in ["auto", "runtime"]:
+		var runtime_result: Dictionary = await _collect_runtime_process_metrics(params)
+		if not runtime_result.has("error"):
+			return runtime_result
+		if source == "runtime":
+			return runtime_result
+		# source == 'auto'：无活动会话时回落编辑器口径，附口径提示。
 
+	var editor_result: Dictionary = _collect_editor_process_metrics()
+	editor_result["hint"] = "scope='editor': these numbers measure the editor process, not the game. For the game process use source='runtime' (requires run_project + install_runtime_probe) or call get_runtime_performance_snapshot."
+	return editor_result
+
+func _collect_editor_process_metrics() -> Dictionary:
+	# 编辑器进程口径：直接读本进程 Performance 单例（含编辑器自身场景树、导入资源与插件）。
 	return {
-		"fps": fps,
-		"object_count": object_count,
-		"resource_count": resource_count,
-		"memory_usage_mb": memory_mb
+		"fps": Performance.get_monitor(Performance.TIME_FPS),
+		"object_count": Performance.get_monitor(Performance.OBJECT_COUNT),
+		"resource_count": Performance.get_monitor(Performance.OBJECT_RESOURCE_COUNT),
+		"memory_usage_mb": Performance.get_monitor(Performance.MEMORY_STATIC) / 1024.0 / 1024.0,
+		"scope": "editor"
+	}
+
+func _collect_runtime_process_metrics(params: Dictionary) -> Dictionary:
+	# 游戏进程口径：经运行时探针的 get_performance_snapshot 通道取数。
+	var result: Dictionary = await _request_runtime_probe_poll("get_performance_snapshot", [], ["mcp:performance_snapshot"], params)
+	if String(result.get("status", "")) == "success" and not result.has("error"):
+		result["memory_usage_mb"] = result.get("memory_static_mb", 0.0)
+		result["scope"] = "runtime"
+		return result
+	var probe_status: String = str(result.get("status", ""))
+	if probe_status.is_empty():
+		probe_status = "error: " + str(result.get("error", "unknown"))
+	return {
+		"error": "No live game session for runtime metrics (probe status: %s)." % probe_status,
+		"scope": "runtime",
+		"probe_status": probe_status,
+		"recommended_action": "Call run_project {\"allow_window\": true}, then install_runtime_probe, then retry get_performance_metrics {\"source\": \"runtime\"}; or call get_runtime_performance_snapshot directly."
 	}
 
 # ============================================================================

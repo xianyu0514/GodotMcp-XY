@@ -68,7 +68,7 @@ func register_tools(server_core: RefCounted) -> void:
 
 func _register_list_project_scripts(server_core: RefCounted) -> void:
 	var tool_name: String = "list_project_scripts"
-	var description: String = "List GDScript (.gd) and C# (.cs) script files in the project. Supports limit/offset pagination; count is the page size and total_count is the full total. Returns paths relative to res://."
+	var description: String = "List GDScript (.gd) and C# (.cs) script files in the project. Tooling directories (addons/test/docs) are excluded by default so plugin scripts cannot drown out project scripts; pass include_tooling=true or point search_path into a tooling directory to list them. Supports limit/offset pagination; count is the page size and total_count is the full total. Returns paths relative to res://."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -78,6 +78,10 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 				"type": "string",
 				"description": "Optional subpath to search (e.g. 'res://scripts/'). Default is 'res://'.",
 				"default": "res://"
+			},
+			"include_tooling": {
+				"type": "boolean",
+				"description": "Include tooling directories (addons/test/docs). Default false; implied when search_path itself points into a tooling directory."
 			},
 			"limit": {
 				"type": "integer",
@@ -100,7 +104,8 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 			},
 			"count": {"type": "integer", "description": "Number of script paths in this page."},
 			"total_count": {"type": "integer", "description": "Total number of script paths before limit/offset pagination."},
-			"truncated": {"type": "boolean", "description": "True when more script paths remain after this page."}
+			"truncated": {"type": "boolean", "description": "True when more script paths remain after this page."},
+			"include_tooling": {"type": "boolean", "description": "Whether tooling directories were included in this listing."}
 		}
 	}
 	
@@ -121,34 +126,44 @@ func _register_list_project_scripts(server_core: RefCounted) -> void:
 func _tool_list_project_scripts(params: Dictionary) -> Dictionary:
 	# 参数提取
 	var search_path: String = params.get("search_path", "res://")
-	
+
 	# 使用PathValidator验证路径安全性
 	var validation: Dictionary = PathValidator.validate_directory_path(search_path)
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
-	
+
 	# 使用清理后的路径
 	search_path = validation["sanitized"]
-	
-	# 使用DirAccess递归查找所有.gd文件
-	var scripts: Array = []
-	_collect_scripts(search_path, scripts)
-	
+
+	# 文件发现走统一收集器：跳过 .godot/.import 生成域。工具目录（addons/test/docs）
+	# 默认排除——此前裸 DirAccess 会让插件自身脚本淹没项目脚本（2026-09-27 体检
+	# P1-5：res:// 下前 30 条里 27 条是 addons/godot_mcp）。显式 include_tooling
+	# 或 search_path 本身指向工具目录时仍可列出，与 search_in_files 同语义。
+	var include_tooling: bool = params.get("include_tooling",
+		GeneratedCacheFilterScript.domain_of(search_path) == GeneratedCacheFilterScript.Domain.TOOLING)
+	var normalized_extensions: Array[String] = [".gd", ".cs"]
+	var collected: Array[String] = []
+	ProjectToolsNative._collect_resources(search_path, normalized_extensions, collected, false, include_tooling)
+
 	# 排序
+	var scripts: Array = []
+	for path_value in collected:
+		scripts.append(path_value)
 	scripts.sort()
-	
+
 	var limit: int = int(params.get("limit", 1000))
 	if limit <= 0:
 		limit = 1000
 	var offset: int = int(params.get("offset", 0))
 	var page: Dictionary = PayloadUtils.paginate_list(scripts, limit, offset)
 	var scripts_page: Array = page["items"]
-	
+
 	return {
 		"scripts": scripts_page,
 		"count": scripts_page.size(),
 		"total_count": page["total_count"],
-		"truncated": page["truncated"]
+		"truncated": page["truncated"],
+		"include_tooling": include_tooling
 	}
 
 # ============================================================================
@@ -750,35 +765,6 @@ static func _file_sha256(path: String) -> String:
 	return content.sha256_text()
 
 # 辅助函数：递归收集脚本文件
-func _collect_scripts(directory_path: String, result: Array) -> void:
-	var dir: DirAccess = DirAccess.open(directory_path)
-	
-	if not dir:
-		return
-	
-	# 列出所有文件和目录
-	dir.list_dir_begin()
-	var file_name: String = dir.get_next()
-	
-	while not file_name.is_empty():
-		# 跳过特殊目录
-		if file_name != "." and file_name != "..":
-			var full_path: String = directory_path
-			if not full_path.ends_with("/"):
-				full_path += "/"
-			full_path += file_name
-			
-			if dir.current_is_dir():
-				# 递归处理子目录
-				_collect_scripts(full_path, result)
-			elif file_name.ends_with(".gd") or file_name.ends_with(".cs"):
-				# 添加脚本文件（GDScript 或 C#）
-				result.append(full_path)
-		
-		file_name = dir.get_next()
-	
-	dir.list_dir_end()
-
 func _collect_script_files(directory_path: String, extensions: Array, result: Array) -> void:
 	var dir: DirAccess = DirAccess.open(directory_path)
 	if not dir:

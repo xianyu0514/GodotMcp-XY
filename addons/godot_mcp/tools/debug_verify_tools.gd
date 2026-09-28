@@ -711,7 +711,7 @@ func _register_assert_performance_budget(server_core: RefCounted) -> void:
 				"sample_interval_ms": {"type": "integer", "description": "Delay between samples in ms. Default 100.", "default": 100},
 				"percentile": {"type": "number", "description": "Tail percentile (default 95).", "default": 95},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["budget"]
 		},

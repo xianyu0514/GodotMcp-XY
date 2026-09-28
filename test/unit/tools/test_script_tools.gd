@@ -525,3 +525,61 @@ func test_search_in_files_skips_generated_and_tooling_by_default():
 		"include_tooling=true searches addon sources")
 	assert_gt(int(tooling.get("total_matches", 0)), 0,
 		"plugin sources contain class_name declarations")
+
+# ---------------------------------------------------------------------------
+# P1-5 回归（2026-09-27 体检）：list_project_scripts 默认走统一收集器并排除
+# 工具目录（addons/test/tests/docs），避免插件自身脚本淹没项目脚本。
+# ---------------------------------------------------------------------------
+
+var _listing_fixture_dir: String = ""
+
+func after_each() -> void:
+	if not _listing_fixture_dir.is_empty():
+		var absolute: String = ProjectSettings.globalize_path(_listing_fixture_dir)
+		if DirAccess.dir_exists_absolute(absolute):
+			DirAccess.remove_absolute(absolute.path_join("dummy_project_script.gd"))
+			DirAccess.remove_absolute(absolute)
+		_listing_fixture_dir = ""
+
+func _make_listing_fixture() -> String:
+	_listing_fixture_dir = "res://scripts_listing_fixture_%d" % Time.get_ticks_usec()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(_listing_fixture_dir))
+	var file: FileAccess = FileAccess.open(_listing_fixture_dir.path_join("dummy_project_script.gd"), FileAccess.WRITE)
+	file.store_string("extends RefCounted\n")
+	file.close()
+	return _listing_fixture_dir
+
+func test_list_project_scripts_default_excludes_tooling():
+	var fixture: String = _make_listing_fixture()
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_list_project_scripts({"search_path": "res://", "limit": 5000})
+	after_each()
+	assert_false(result.has("error"), str(result))
+	assert_false(bool(result.get("include_tooling", true)), "默认应排除工具目录")
+	var scripts: Array = result.get("scripts", [])
+	assert_true(scripts.has(fixture.path_join("dummy_project_script.gd")), "非工具目录的项目脚本应可见")
+	var leaked: bool = false
+	for path_value in scripts:
+		if String(path_value).begins_with("res://addons/godot_mcp/"):
+			leaked = true
+			break
+	assert_false(leaked, "默认结果不应包含插件自身脚本")
+
+func test_list_project_scripts_include_tooling_opt_in():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_list_project_scripts({"include_tooling": true, "limit": 8000})
+	assert_false(result.has("error"), str(result))
+	assert_true(bool(result.get("include_tooling", false)))
+	var found: bool = false
+	for path_value in result.get("scripts", []):
+		if String(path_value).begins_with("res://addons/godot_mcp/"):
+			found = true
+			break
+	assert_true(found, "include_tooling=true 应能列出插件自身脚本")
+
+func test_list_project_scripts_tooling_path_implies_inclusion():
+	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var result: Dictionary = tool._tool_list_project_scripts({"search_path": "res://addons/godot_mcp/utils"})
+	assert_false(result.has("error"), str(result))
+	assert_true(bool(result.get("include_tooling", false)), "search_path 指向工具目录时应隐式包含")
+	assert_true(int(result.get("count", 0)) >= 1, "工具目录自身脚本应能列出")

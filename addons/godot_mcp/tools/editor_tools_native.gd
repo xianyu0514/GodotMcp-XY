@@ -313,7 +313,7 @@ func _plugin_server_running() -> bool:
 
 func _register_run_project(server_core: RefCounted) -> void:
 	var tool_name: String = "run_project"
-	var description: String = "Run or reuse the current project or a specific scene. Reports live, launching, no_probe, break or stopped from debugger and runtime-probe evidence; readiness timeout returns pending."
+	var description: String = "Run or reuse the current project or a specific scene. Reports live, launching, no_probe, break or stopped from debugger and runtime-probe evidence; readiness timeout returns pending. Note: with Vibe Coding mode enabled (default), this is blocked unless allow_window=true — the block error explains how to disable the mode in the Godot MCP dock panel."
 	
 	# inputSchema
 	var input_schema: Dictionary = {
@@ -551,7 +551,7 @@ func _game_status_schema() -> Dictionary:
 
 func _register_stop_project(server_core: RefCounted) -> void:
 	var tool_name: String = "stop_project"
-	var description: String = "Stop the running project without blocking editor frames. Repeated stops succeed; report success only after the editor confirms shutdown, otherwise return a timeout error."
+	var description: String = "Stop the running project without blocking editor frames. Repeated stops succeed; report success only after the editor confirms shutdown, otherwise return a timeout error. Note: with Vibe Coding mode enabled (default), this is blocked unless allow_window=true."
 	
 	# inputSchema
 	var input_schema: Dictionary = {

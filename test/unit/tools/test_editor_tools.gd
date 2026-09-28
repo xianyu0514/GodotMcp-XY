@@ -634,3 +634,10 @@ func test_resume_state_round_trip() -> void:
 	assert_false(fetch._load_state(), "Size mismatch invalidates the resume state")
 	fetch.free()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://zz_resume_test.tpz.download.json"))
+
+# --- P1-3 回归（2026-09-27 体检）：Vibe 拦截报错必须自愈，给出两条精确出路 ---
+func test_vibe_block_error_gives_precise_disable_location() -> void:
+	var result: Dictionary = _editor_tools._tool_run_project({})
+	var message: String = str(result.get("error", ""))
+	assert_true(message.contains("allow_window=true"), "报错应说明单次放行参数")
+	assert_true(message.contains("dock panel"), "报错应指出面板里的永久关闭位置: " + message)

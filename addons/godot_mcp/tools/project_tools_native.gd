@@ -789,11 +789,11 @@ func _tool_get_class_api_metadata(params: Dictionary) -> Dictionary:
 func _register_list_project_tests(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"list_project_tests",
-		"Discover runnable project tests under the Godot project's test directories. Reports Python integration tests and GUT unit tests, including whether each test is currently runnable.",
+		"Discover runnable project tests under the Godot project's test directories. When search_path is omitted, auto-detects res://test, res://tests and res://.mcp_runtime_tests and merges findings (per-directory counts are returned in search_paths). Reports Python integration tests and GUT unit tests, including whether each test is currently runnable.",
 		{
 			"type": "object",
 			"properties": {
-				"search_path": {"type": "string", "description": "Optional res:// path to limit discovery."},
+				"search_path": {"type": "string", "description": "Optional res:// path under res://test/, res://tests/ or a temporary directory to limit discovery. Omit for auto-detection."},
 				"framework": {"type": "string", "description": "Optional framework filter: python or gut."}
 			}
 		},
@@ -801,8 +801,13 @@ func _register_list_project_tests(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
+				"status": {"type": "string"},
 				"count": {"type": "integer"},
 				"search_path": {"type": "string"},
+				"search_paths": {"type": "array", "description": "Per-candidate discovery reports: search_path, exists, count."},
+				"candidates_checked": {"type": "array"},
+				"reason": {"type": "string"},
+				"hint": {"type": "string"},
 				"tests": {"type": "array"}
 			}
 		},
@@ -811,51 +816,89 @@ func _register_list_project_tests(server_core: RefCounted) -> void:
 	)
 
 func _tool_list_project_tests(params: Dictionary) -> Dictionary:
-	var search_path: String = str(params.get("search_path", "res://test")).strip_edges()
-	if search_path.is_empty():
-		search_path = "res://test"
+	var requested_path: String = str(params.get("search_path", "")).strip_edges()
+	# 空路径 = 默认模式：多候选自动探测（res://test / res://tests / res://.mcp_runtime_tests），
+	# 显式路径 = 调用方意图优先，不回退。
+	var explicit_path: bool = not requested_path.is_empty()
 	var framework_filter: String = str(params.get("framework", "")).strip_edges().to_lower()
 
-	var validation: Dictionary = _validate_test_path(search_path, true)
+	var default_path: String = "res://test" if requested_path.is_empty() else requested_path
+	var validation: Dictionary = _validate_test_path(default_path, true)
 	if validation.has("error"):
 		return validation
-	search_path = String(validation["sanitized"])
+	var primary_path: String = String(validation["sanitized"])
 
-	var absolute_root: String = ProjectSettings.globalize_path(search_path)
-	var dir: DirAccess = DirAccess.open(absolute_root)
-	if dir == null:
-		return {
-			"status": "unconfigured",
-			"count": 0,
-			"search_path": search_path,
-			"reason": "test_directory_missing",
-			"recoverable": true,
-			"recommended_action": "ensure_project_directory",
-			"tests": []
-		}
+	var candidates: Array[String] = [primary_path]
+	if not explicit_path:
+		for candidate in ["res://test", "res://tests", "res://.mcp_runtime_tests"]:
+			if candidate not in candidates:
+				candidates.append(candidate)
 
+	# 逐候选发现并合并（按 test_path 去重），目录级报告随结果返回。
 	var gut_available: bool = FileAccess.file_exists("res://addons/gut/gut_cmdln.gd")
 	var tests: Array = []
-	_collect_project_tests_recursive(search_path, absolute_root, framework_filter, gut_available, tests)
+	var candidate_reports: Array = []
+	var seen_paths: Dictionary = {}
+	for candidate in candidates:
+		var candidate_absolute: String = ProjectSettings.globalize_path(candidate)
+		if not DirAccess.dir_exists_absolute(candidate_absolute):
+			candidate_reports.append({"search_path": candidate, "exists": false, "count": 0})
+			continue
+		var candidate_tests: Array = []
+		_collect_project_tests_recursive(candidate, candidate_absolute, framework_filter, gut_available, candidate_tests)
+		candidate_reports.append({"search_path": candidate, "exists": true, "count": candidate_tests.size()})
+		for entry in candidate_tests:
+			var test_key: String = str(entry.get("test_path", ""))
+			if test_key in seen_paths:
+				continue
+			seen_paths[test_key] = true
+			tests.append(entry)
+
 	tests.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return String(a.get("test_path", "")) < String(b.get("test_path", ""))
 	)
 
 	if tests.is_empty():
+		var any_exists: bool = false
+		for report in candidate_reports:
+			if bool((report as Dictionary).get("exists", false)):
+				any_exists = true
+				break
+		if not any_exists:
+			return {
+				"status": "unconfigured",
+				"count": 0,
+				"search_path": primary_path,
+				"candidates_checked": candidate_reports,
+				"reason": "test_directory_missing",
+				"recoverable": true,
+				"recommended_action": "ensure_project_directory",
+				"hint": "None of the checked test directories exist. Pass search_path explicitly only if your tests live elsewhere under res://test/, res://tests/ or a .tmp_ directory.",
+				"tests": []
+			}
 		return {
 			"status": "empty",
 			"count": 0,
-			"search_path": search_path,
+			"search_path": primary_path,
+			"candidates_checked": candidate_reports,
 			"reason": "no_tests_discovered",
 			"recoverable": true,
 			"recommended_action": "create_project_smoke_test",
 			"tests": []
 		}
 
+	# search_path 保持单值契约（首个发现到测试的目录），search_paths 给出全部参与合并的目录。
+	var resolved_path: String = primary_path
+	for report in candidate_reports:
+		if int((report as Dictionary).get("count", 0)) > 0:
+			resolved_path = str((report as Dictionary).get("search_path", primary_path))
+			break
+
 	return {
 		"status": "ready",
 		"count": tests.size(),
-		"search_path": search_path,
+		"search_path": resolved_path,
+		"search_paths": candidate_reports,
 		"tests": tests
 	}
 
@@ -1195,7 +1238,7 @@ func _register_run_project_tests(server_core: RefCounted) -> void:
 		{
 			"type": "object",
 			"properties": {
-				"search_path": {"type": "string", "description": "Optional res:// path to limit discovery. Default is res://test."},
+				"search_path": {"type": "string", "description": "Optional res:// path to limit discovery. Omit to auto-detect res://test, res://tests or res://.mcp_runtime_tests."},
 				"framework": {"type": "string", "description": "Optional framework filter: python or gut."},
 				"only_runnable": {"type": "boolean", "description": "Whether to skip discovered tests that are not currently runnable. Default is true."}
 			}
@@ -1220,9 +1263,9 @@ func _register_run_project_tests(server_core: RefCounted) -> void:
 	)
 
 func _tool_run_project_tests(params: Dictionary) -> Dictionary:
-	var search_path: String = str(params.get("search_path", "res://test")).strip_edges()
-	if search_path.is_empty():
-		search_path = "res://test"
+	# 空路径透传给 _tool_list_project_tests 做多候选自动探测，别在这里默认 res://test
+	# 挡掉复数目录项目的回退（2026-09-27 体检 P0-1）。
+	var search_path: String = str(params.get("search_path", "")).strip_edges()
 	var framework: String = str(params.get("framework", "")).strip_edges().to_lower()
 	var only_runnable: bool = bool(params.get("only_runnable", true))
 
@@ -1378,8 +1421,20 @@ func _validate_test_path(path: String, expect_directory: bool) -> Dictionary:
 		return {"error": "Test path cannot be empty"}
 	if not path.begins_with("res://"):
 		return {"error": "Test path must start with res://"}
-	if not (path == "res://test" or path.begins_with("res://test/") or path.begins_with("res://.tmp_") or path.contains("/.tmp_")):
-		return {"error": "Test path must stay under res://test/ or a temporary test directory"}
+	var under_whitelisted_root: bool = (
+		path == "res://test" or path.begins_with("res://test/")
+		or path == "res://tests" or path.begins_with("res://tests/")
+		or path.begins_with("res://.tmp_") or path.contains("/.tmp_"))
+	if not under_whitelisted_root:
+		# 自愈提示：列出项目里实际存在的测试目录，避免"必须叫 res://test"的单数硬编码误报。
+		var existing: Array[String] = []
+		for candidate in ["res://test", "res://tests", "res://.mcp_runtime_tests"]:
+			if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(candidate)):
+				existing.append(candidate)
+		var hint: String = ""
+		if not existing.is_empty():
+			hint = " Existing test directories in this project: " + ", ".join(existing) + "."
+		return {"error": "Test path must stay under res://test/, res://tests/ or a temporary test directory." + hint}
 	var validation: Dictionary = PathValidator.validate_directory_path(path) if expect_directory else PathValidator.validate_path(path)
 	if not validation.get("valid", false):
 		return {"error": "Invalid path: " + str(validation.get("error", "unknown"))}

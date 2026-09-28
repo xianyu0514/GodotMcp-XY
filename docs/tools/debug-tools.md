@@ -27,7 +27,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `get_performance_metrics` | advanced | Get performance metrics from the editor or running game. |
+| `get_performance_metrics` | advanced | Get performance metrics with explicit process scope (`scope`): `source='auto'` (default) prefers the running game via the runtime probe, falls back to the editor process with a hint; `source='runtime'` requires a live game session and returns guidance otherwise. Never compare numbers across scopes. |
 | `get_cache_diagnostics` | advanced | Read shared tool-result cache telemetry: hit/reuse rates, capacity/byte pressure, single-flight merges, invalidation and spill counters. |
 | `get_debugger_sessions` | advanced | List Godot editor debugger sessions and their active/break state. |
 | `set_debugger_breakpoint` | advanced | Enable or disable a breakpoint in active Godot debugger sessions. |

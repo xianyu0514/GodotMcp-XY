@@ -28,7 +28,7 @@ Open, save, inspect and compose scenes. Advanced tools cover tab management, sce
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `get_scene_structure` | advanced | Get the complete structure of the current scene as a tree. Returns node types, names, and hierarchy. |
+| `get_scene_structure` | advanced | Get scene structure as a tree. Reads the currently open scene, or any scene file read-only via `scene_path` (no editor switch needed). `hidden_descendants` quantifies max_depth truncation. |
 | `list_project_scenes` | advanced | List all scene files (.tscn) in the project. Returns paths relative to res://. |
 | `list_open_scenes` | advanced | List scene tabs currently open in the Godot editor. |
 | `close_scene_tab` | advanced | Close the active scene tab, or activate a specified scene tab and close it. |
