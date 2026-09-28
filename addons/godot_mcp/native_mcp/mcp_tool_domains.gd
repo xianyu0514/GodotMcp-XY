@@ -48,13 +48,13 @@ const DOMAIN_EXTRAS: Dictionary = {
 		"get_runtime_scene_tree", "inspect_runtime_node", "play_and_verify",
 		"assert_runtime_condition", "await_runtime_condition", "assert_no_runtime_errors",
 		"assert_performance_budget", "get_performance_metrics", "get_runtime_performance_snapshot",
-		"run_project_test", "run_project_tests", "list_project_tests",
+		"run_project_test", "run_project_tests", "list_project_tests", "query_engine_compat",
 		"prepare_project_test_environment", "ensure_project_directory", "create_project_smoke_test"
 	],
 	"shipping": [
 		"list_export_presets", "validate_export_preset", "run_export", "smoke_test_export",
 		"configure_android_export", "inspect_export_templates", "manage_export_templates",
-		"pack_pck", "bump_version", "audit_project_health", "scan_migration_compatibility",
+		"pack_pck", "bump_version", "audit_project_health", "scan_migration_compatibility", "check_plugin_update",
 		"apply_migration_fixes", "find_deprecated_api_usage", "detect_broken_scripts",
 		"scan_missing_resource_dependencies", "scan_cyclic_resource_dependencies",
 		"list_unused_resources", "fix_resource_uid"

@@ -40,7 +40,7 @@ Tool-state changes invalidate only the three discovery cache entries. Cached sce
 
 ## Tool list
 
-### Meta (6)
+### Meta (7)
 
 | Tool | Tier | Description |
 | --- | --- | --- |

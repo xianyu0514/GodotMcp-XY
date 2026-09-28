@@ -453,7 +453,7 @@ func test_tool_definitions_within_token_budget() -> void:
 	print("[TokenBudget] 全量 %d 工具：总估算 %d token（预算 %d）；per-tool 最大 %d (%s)、平均 %.1f" % [tool_names.size(), full_total, FULL_SET_TOKEN_BUDGET, max_est, max_name, avg_est])
 	print("[TokenBudget] 默认启用集（core+meta）%d 工具：总估算 %d token（预算 %d）" % [default_count, default_total, DEFAULT_SET_TOKEN_BUDGET])
 	print("[TokenBudget] 估算最大的 10 个工具：" + str(_top_n_tools(per_tool, 10)))
-	assert_eq(default_count, 34, "默认启用集应为 28 core + 6 meta = 34，实际 %d（分类器口径变化需同步本断言）" % default_count)
+	assert_eq(default_count, 35, "默认启用集应为 28 core + 7 meta = 35，实际 %d（分类器口径变化需同步本断言）" % default_count)
 	assert_eq(over_budget.size(), 0, "超单工具预算（%d token）的工具 %d 个（登记 KNOWN_OVER_BUDGET_TOOLS 或精简描述）：%s" % [TOOL_TOKEN_BUDGET, over_budget.size(), str(over_budget)])
 	assert_true(default_total <= DEFAULT_SET_TOKEN_BUDGET, "默认启用集总估算 %d 超预算 %d" % [default_total, DEFAULT_SET_TOKEN_BUDGET])
 	assert_true(full_total <= FULL_SET_TOKEN_BUDGET, "全量总估算 %d 超预算 %d" % [full_total, FULL_SET_TOKEN_BUDGET])

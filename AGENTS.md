@@ -1,7 +1,7 @@
 # AGENTS.md — Godot MCP 项目指南
 
 ## 项目简介
-一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **251 个工具**（28 核心 + 217 补充 + 6 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。运行期地图探针（mcp_runtime_probe.gd）自 M5 起双兼容 TileMap 与 TileMapLayer（区域读取/批量写入/立即内部更新）。
+一个 **Godot 4.7 EditorPlugin**（位于 `addons/godot_mcp/`），在 Godot 内部原生实现了 MCP（Model Context Protocol）服务器，无需 Node.js 依赖。提供 **254 个工具**（28 核心 + 219 补充 + 7 元工具），分为 6 大类（外加始终在线的 Meta 元工具组），供 AI 助手读取和修改项目。运行期地图探针（mcp_runtime_probe.gd）自 M5 起双兼容 TileMap 与 TileMapLayer（区域读取/批量写入/立即内部更新）。
 
 - **插件入口**：`addons/godot_mcp/mcp_server_native.gd`（继承 `EditorPlugin`）
 - **作者**：xianyu0514 | **版本**：1.1.0
@@ -53,7 +53,7 @@ addons/godot_mcp/
 │   ├── mcp_tool_classifier.gd  # 工具分类查询：从 tools_manifest.gd 生成分类映射（CORE_MAX_COUNT=30）
 │   ├── mcp_tool_domains.gd     # 面向用户任务的工具域分类（2D/3D/UI 等，与 category/group 正交）
 │   ├── mcp_tool_preset_manager.gd # 工具预设（分组一键启用/切换）管理
-│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：251 个工具 name → {category, group}
+│   ├── tools_manifest.gd       # 单一数据表（唯一真相）：254 个工具 name → {category, group}
 │   ├── workflow_router.gd      # 不可变双语能力/Schema 成本索引 + 64 项路线 LRU：225 个原子工具全覆盖，输出成本感知的有界检查/执行/验证路线
 │   ├── game_workflow_engine.gd # 完整游戏目标 DAG 持久化执行引擎（plan/run_game_workflow 的状态机与证据门禁）
 │   ├── prompt_workflows.gd     # 26 个可执行工作流 MCP prompts（make_first_game/make_game_camera/make_game_particles/make_game_shader/make_game_perfect/make_any_game/make_game_character/make_melee_enemy/make_game_menu/make_game_map/make_game_pickup/make_game_save/make_game_juice/make_game_audio/make_game_boss/make_game_ranged_enemy 等）
@@ -73,12 +73,12 @@ addons/godot_mcp/
 │   ├── node_tools_native.gd    # 26 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计、内联子资源设置/读取
 │   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、批量编译校验、校验着色器、符号索引、搜索
 │   ├── scene_tools_native.gd   # 14 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
-│   ├── editor_tools_native.gd  # 26 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟（产物校验 + 可选启动并断言退出码）
+│   ├── editor_tools_native.gd  # 27 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟、check_plugin_update 更新检查（产物校验 + 可选启动并断言退出码）
 │   ├── debug_tools_native.gd   # 6 个工具（主类，保留共享辅助）— 日志（get_editor_logs/clear_output）、脚本执行（execute_script/execute_editor_script）、性能指标；跨域共享静态辅助（_get_debugger_bridge/运行时探针请求机制）
 │   ├── debug_bridge_tools.gd   # 28 个工具 — 调试器桥接（断点/线程/栈帧/变量/作用域/求值）、执行控制（单步/继续/等待、runtime probe 安装/移除、debugger 状态等待）
 │   ├── debug_runtime_tools.gd  # 38 个工具 — 运行时探针（场景树/节点 CRUD/表达式/输入模拟/动画/音频/着色器/瓦片地图/截图/条件断言）
 │   ├── debug_verify_tools.gd   # 3 个工具 — play_and_verify 编排、assert_performance_budget 性能预算门禁、assert_no_runtime_errors 运行时报错硬门禁
-│   ├── project_tools_native.gd  # 19 个工具（主类，保留共享辅助）— 项目信息/设置、项目设置写入、输入映射、自动加载（读取/增删）、全局类、类元数据、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
+│   ├── project_tools_native.gd  # 20 个工具（主类，保留共享辅助）— 项目信息/设置、项目设置写入、输入映射、自动加载、全局类、类元数据、query_engine_compat（引擎真值查询）、测试运行器、C# 支持、项目目录结构；跨域共享静态辅助（_collect_resources/_find_project_global_class_entry/_parse_color/_coerce_setting_value 等）
 │   ├── project_resources_tools.gd # 21 个工具 — 资源创建/读取/更新/批量、依赖扫描（缺失/循环）、迁移检查/修复、弃用 API 扫描、GDExtension 检测、UID 查询/修复、反向依赖、未使用资源、脚本诊断、健康审计
 │   ├── project_assets_tools.gd  # 9 个工具 — 渐变/可绘制纹理、PCK 打包、渲染输出、generate_asset（占位程序化 + 外部 API 适配 + SSRF 护栏）、slice_sprite_sheet、inspect_gltf_asset、generate_3d_asset（文生3D 异步提交→轮询→下载→校验）
 │   ├── project_tileset_tools.gd # 5 个工具 — TileSet 创建/检查、图层配置（物理/导航/自定义数据/地形）、逐图块碰撞多边形、地形与 peering bits
@@ -94,7 +94,7 @@ addons/godot_mcp/
 │   ├── change_set_tools.gd    # 1 个工具 — apply_change_set（M5 第二交付：变更单工具层——缓冲区守卫 + 写后同步 + follow-up 验证指引）
 │   ├── verification_queue_store.gd # 支持文件（非工具）— 持久化分片验证队列（预算分片/重启续跑/指纹失效/完成契约）
 │   ├── verification_queue_tools.gd # 1 个工具 — run_verification_queue（M5 第三交付：分片验证编排枢纽——script_check 内置执行 + external 回填 + 漂移重验）
-│   ├── meta_tools_native.gd    # 4 个工具（始终在线，category=meta）— list_tool_catalog（查工具目录）、search_tools（关键词检索）、get_tool_details（单工具完整 schema）、enable_tools（按需启用工具/分组/预设），实现 tools/list 懒加载
+│   ├── meta_tools_native.gd    # 5 个工具（始终在线，category=meta）— list_tool_catalog、search_tools、get_tool_details、enable_tools（按需启用/多客户端守卫）、custom_manage（第三方 custom_* 工具发现），实现 tools/list 懒加载
 │   ├── export_preset_tools.gd  # 5 个工具 — inspect/create/update/remove/duplicate_export_preset（export_presets.cfg 的原子 CRUD）
 │   └── game_workflow_tools.gd  # 2 个工具（category=meta，始终在线）— plan_game_workflow（12 生产 profile 组装持久目标 DAG）、run_game_workflow（自适应检查点切片推进，证据门禁判 completed）
 ├── ui/
@@ -115,7 +115,7 @@ addons/godot_mcp/
     └── vibe_coding_policy.gd   # Vibe Coding 模式守卫（allow_ui_focus / allow_window）
 ```
 
-> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 251 = 28 core + 217 supplementary + 6 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
+> 工具总数以 `tools_manifest.gd` 为唯一真相（当前 254 = 28 core + 219 supplementary + 7 meta）；上表每文件计数为该文件注册的工具处理器数量，横跨文件的分组计数（README 表格）以 manifest 为准。
 
 ## 规范
 

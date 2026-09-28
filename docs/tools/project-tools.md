@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (65 advanced)
+### Project-Advanced (72 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
