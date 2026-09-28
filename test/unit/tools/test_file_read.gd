@@ -121,3 +121,10 @@ func test_scripts_still_readable_for_parity():
 	var path: String = _write_text("helper.gd", "extends RefCounted\n")
 	var result: Dictionary = _tools._tool_read_project_file({"file_path": path})
 	assert_false(result.has("error"), str(result))
+
+func test_project_godot_readable():
+	# 2026-09-29 真机验收实锤：godot 扩展名不在白名单时 project.godot 读不了。
+	var result: Dictionary = _tools._tool_read_project_file({"file_path": "res://project.godot"})
+	assert_false(result.has("error"), str(result))
+	assert_true(str(result["content"]).contains("config_version"), "读到的应是项目配置内容")
+	assert_true(int(result["total_line_count"]) > 0)
