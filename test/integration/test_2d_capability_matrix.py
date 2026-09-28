@@ -151,8 +151,19 @@ def rpc(method, params=None, timeout=300.0):
     payload = {"jsonrpc": "2.0", "id": _req[0], "method": method, "params": params or {}}
     request = urllib.request.Request(URL, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode())
+    # 503 = 派发看门狗：编辑器首扫/主线程忙时排队请求被回 503
+    #（PR #172 实证：新增插件文件拉长首扫窗口，首个调用撞进窗口）。
+    # 与 goal_accumulation / representative 腿的 hiccup 重试同型。
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503 and attempt < 4:
+                time.sleep(10 + attempt * 10)
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def tool(name, args=None, timeout=300.0):
