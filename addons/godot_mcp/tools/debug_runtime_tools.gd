@@ -110,7 +110,7 @@ func _register_get_runtime_info(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"get_runtime_info",
 		"Query the running game instance through the MCP runtime probe and return runtime metrics.",
-		{"type": "object", "properties": {"session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 1500}}},
+		{"type": "object", "properties": {"session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 4000}}},
 		Callable(self, "_tool_get_runtime_info"),
 		{"type": "object", "properties": {"fps": {"type": "number"}, "physics_frames": {"type": "integer"}, "process_frames": {"type": "integer"}, "debugger_active": {"type": "boolean"}, "current_scene": {"type": "string"}, "node_count": {"type": "integer"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
@@ -239,7 +239,7 @@ func _register_get_runtime_performance_snapshot(server_core: RefCounted) -> void
 	server_core.register_tool(
 		"get_runtime_performance_snapshot",
 		"Capture a runtime performance snapshot from the running game, including frame timing, object counts, and memory usage.",
-		{"type": "object", "properties": {"session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 1500}}},
+		{"type": "object", "properties": {"session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 4000}}},
 		Callable(self, "_tool_get_runtime_performance_snapshot"),
 		{"type": "object", "properties": {"fps": {"type": "number"}, "frame_time_sec": {"type": "number"}, "physics_frame_time_sec": {"type": "number"}, "object_count": {"type": "integer"}, "resource_count": {"type": "integer"}, "rendered_objects_in_frame": {"type": "integer"}, "memory_static_bytes": {"type": "integer"}, "memory_static_mb": {"type": "number"}, "current_scene": {"type": "string"}, "node_count": {"type": "integer"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
@@ -319,7 +319,7 @@ func _register_get_runtime_scene_tree(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"get_runtime_scene_tree",
 		"Read the live runtime scene tree from the running game instance.",
-		{"type": "object", "properties": {"max_depth": {"type": "integer", "default": 6}, "session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 1500}}},
+		{"type": "object", "properties": {"max_depth": {"type": "integer", "default": 6}, "session_id": {"type": "integer"}, "timeout_ms": {"type": "integer", "default": 4000}}},
 		Callable(self, "_tool_get_runtime_scene_tree"),
 		{"type": "object", "properties": {"name": {"type": "string"}, "type": {"type": "string"}, "path": {"type": "string"}, "child_count": {"type": "integer"}, "children": {"type": "array"}}},
 		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
@@ -351,7 +351,7 @@ func _register_inspect_runtime_node(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -378,7 +378,7 @@ func _register_create_runtime_node(server_core: RefCounted) -> void:
 				"node_type": {"type": "string", "description": "Godot node class name to instantiate, e.g. Node2D or Sprite2D."},
 				"node_name": {"type": "string", "description": "Name for the new runtime node."},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["parent_path", "node_type", "node_name"]
 		},
@@ -409,7 +409,7 @@ func _register_delete_runtime_node(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string", "description": "Runtime node path to delete, e.g. /root/MainScene/Enemy"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -443,7 +443,7 @@ func _register_update_runtime_node_property(server_core: RefCounted) -> void:
 					"description": "When true, return an error instead of a warning if the write-back read does not match the requested value."
 				},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "property_name", "property_value"]
 		},
@@ -500,7 +500,7 @@ func _register_call_runtime_node_method(server_core: RefCounted) -> void:
 					"description": "Method arguments. Send Godot built-ins self-describing, e.g. {\"__godot_type\": \"Vector2i\", \"x\": 30, \"y\": 10}; plain JSON values are passed through as-is."
 				},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "method_name"]
 		},
@@ -527,7 +527,7 @@ func _register_evaluate_runtime_expression(server_core: RefCounted) -> void:
 				"expression": {"type": "string"},
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["expression"]
 		},
@@ -559,7 +559,7 @@ func _register_simulate_runtime_input_event(server_core: RefCounted) -> void:
 					"description": "Structured input event payload. Supported types: action, key, mouse_button, mouse_motion."
 				},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["event"]
 		},
@@ -597,7 +597,7 @@ func _register_simulate_runtime_input_action(server_core: RefCounted) -> void:
 				"pressed": {"type": "boolean", "default": true},
 				"strength": {"type": "number", "default": 1.0},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["action_name"]
 		},
@@ -667,7 +667,7 @@ func _register_list_runtime_input_actions(server_core: RefCounted) -> void:
 			"properties": {
 				"action_name": {"type": "string", "description": "Optional exact action name filter."},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			}
 		},
 		Callable(self, "_tool_list_runtime_input_actions"),
@@ -692,7 +692,7 @@ func _register_upsert_runtime_input_action(server_core: RefCounted) -> void:
 				"erase_existing": {"type": "boolean", "default": false},
 				"events": {"type": "array", "items": {"type": "object"}, "description": "Optional structured input event payloads to add to the action."},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["action_name"]
 		},
@@ -720,7 +720,7 @@ func _register_remove_runtime_input_action(server_core: RefCounted) -> void:
 			"properties": {
 				"action_name": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["action_name"]
 		},
@@ -745,7 +745,7 @@ func _register_list_runtime_animations(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -774,7 +774,7 @@ func _register_play_runtime_animation(server_core: RefCounted) -> void:
 				"custom_speed": {"type": "number", "default": 1.0},
 				"from_end": {"type": "boolean", "default": false},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "animation_name"]
 		},
@@ -801,7 +801,7 @@ func _register_stop_runtime_animation(server_core: RefCounted) -> void:
 				"node_path": {"type": "string"},
 				"keep_state": {"type": "boolean", "default": false},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -826,7 +826,7 @@ func _register_get_runtime_animation_state(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -851,7 +851,7 @@ func _register_get_runtime_animation_tree_state(server_core: RefCounted) -> void
 			"properties": {
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -877,7 +877,7 @@ func _register_set_runtime_animation_tree_active(server_core: RefCounted) -> voi
 				"node_path": {"type": "string"},
 				"active": {"type": "boolean"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "active"]
 		},
@@ -905,7 +905,7 @@ func _register_travel_runtime_animation_tree(server_core: RefCounted) -> void:
 				"node_path": {"type": "string"},
 				"state_name": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "state_name"]
 		},
@@ -933,7 +933,7 @@ func _register_get_runtime_material_state(server_core: RefCounted) -> void:
 				"material_target": {"type": "string", "enum": ["auto", "material", "material_override", "surface_override"], "default": "auto"},
 				"surface_index": {"type": "integer", "default": 0},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -961,7 +961,7 @@ func _register_get_runtime_theme_item(server_core: RefCounted) -> void:
 				"item_name": {"type": "string"},
 				"theme_type": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "item_type", "item_name"]
 		},
@@ -992,7 +992,7 @@ func _register_set_runtime_theme_override(server_core: RefCounted) -> void:
 				"value": {},
 				"theme_type": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "item_type", "item_name", "value"]
 		},
@@ -1022,7 +1022,7 @@ func _register_clear_runtime_theme_override(server_core: RefCounted) -> void:
 				"item_name": {"type": "string"},
 				"theme_type": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "item_type", "item_name"]
 		},
@@ -1051,7 +1051,7 @@ func _register_get_runtime_shader_parameters(server_core: RefCounted) -> void:
 				"material_target": {"type": "string", "enum": ["auto", "material", "material_override", "surface_override"], "default": "auto"},
 				"surface_index": {"type": "integer", "default": 0},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -1080,7 +1080,7 @@ func _register_set_runtime_shader_parameter(server_core: RefCounted) -> void:
 				"material_target": {"type": "string", "enum": ["auto", "material", "material_override", "surface_override"], "default": "auto"},
 				"surface_index": {"type": "integer", "default": 0},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "parameter_name", "value"]
 		},
@@ -1106,7 +1106,7 @@ func _register_list_runtime_tilemap_layers(server_core: RefCounted) -> void:
 			"properties": {
 				"node_path": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path"]
 		},
@@ -1134,7 +1134,7 @@ func _register_get_runtime_tilemap_cell(server_core: RefCounted) -> void:
 				"coords": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]},
 				"use_proxies": {"type": "boolean", "default": false},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "layer", "coords"]
 		},
@@ -1167,7 +1167,7 @@ func _register_set_runtime_tilemap_cell(server_core: RefCounted) -> void:
 				"alternative_tile": {"type": "integer", "default": 0},
 				"erase": {"type": "boolean", "default": false},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "layer", "coords"]
 		},
@@ -1205,7 +1205,7 @@ func _register_get_runtime_tilemap_region(server_core: RefCounted) -> void:
 				"max_cells": {"type": "integer", "default": 512},
 				"offset": {"type": "integer", "default": 0},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "layer", "rect"]
 		},
@@ -1234,7 +1234,7 @@ func _register_set_runtime_tilemap_cells(server_core: RefCounted) -> void:
 				"layer": {"type": "integer", "default": 0},
 				"cells": {"type": "array", "items": {"type": "object"}, "description": "[{coords: {x, y}, updates: {erase: bool, source_id: int, atlas_coords: {x, y}, alternative_tile: int}}]"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["node_path", "layer", "cells"]
 		},
@@ -1261,7 +1261,7 @@ func _register_list_runtime_audio_buses(server_core: RefCounted) -> void:
 			"type": "object",
 			"properties": {
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			}
 		},
 		Callable(self, "_tool_list_runtime_audio_buses"),
@@ -1282,7 +1282,7 @@ func _register_get_runtime_audio_bus(server_core: RefCounted) -> void:
 			"properties": {
 				"bus_name": {"type": "string"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["bus_name"]
 		},
@@ -1309,7 +1309,7 @@ func _register_update_runtime_audio_bus(server_core: RefCounted) -> void:
 				"volume_db": {"type": "number"},
 				"mute": {"type": "boolean"},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			},
 			"required": ["bus_name"]
 		},
@@ -1341,7 +1341,7 @@ func _register_get_runtime_screenshot(server_core: RefCounted) -> void:
 				"format": {"type": "string", "enum": ["png", "jpg"], "default": "jpg"},
 				"viewport_path": {"type": "string", "description": "Optional runtime node path to a Viewport or SubViewport to capture instead of the active root viewport."},
 				"session_id": {"type": "integer"},
-				"timeout_ms": {"type": "integer", "default": 1500}
+				"timeout_ms": {"type": "integer", "default": 4000}
 			}
 		},
 		Callable(self, "_tool_get_runtime_screenshot"),

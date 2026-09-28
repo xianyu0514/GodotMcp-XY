@@ -725,3 +725,41 @@ func test_script_execution_verdict_detects_runtime_abort() -> void:
 	var scalar: Dictionary = DebugToolsNative._script_execution_verdict("raw value", [])
 	assert_false(bool(scalar["aborted"]))
 	assert_eq((scalar["output"] as Array)[0], "raw value", "non-array returns are stringified")
+
+# ---------------------------------------------------------------------------
+# P2 批次回归（2026-09-27 体检）：无会话响应要带下一步指引；日志要带读取时刻。
+# ---------------------------------------------------------------------------
+
+class FakeNoSessionBridge:
+	extends RefCounted
+
+	var message_sequence: int = 0
+
+	func get_message_sequence() -> int:
+		return message_sequence
+
+	func send_debugger_message(_message: String, _data: Array, _session_id: int = -1) -> Dictionary:
+		return {"status": "no_active_sessions", "sessions_updated": 0}
+
+	func get_captured_messages(_count: int = 100, _offset: int = 0, _order: String = "desc") -> Dictionary:
+		return {"messages": [], "count": 0, "total_available": 0}
+
+	func get_latest_message_payload(_message: String, _match_fields: Dictionary = {}) -> Variant:
+		return null
+
+func test_probe_wrapper_enriches_no_session_with_action() -> void:
+	Engine.set_meta("GodotMCPPlugin", FakeRuntimePlugin.new(FakeNoSessionBridge.new()))
+	var result: Dictionary = await DebugToolsScript._request_runtime_probe_poll(
+		"get_runtime_info", [], ["mcp:runtime_info"], {"timeout_ms": 300})
+	assert_eq(String(result.get("status", "")), "no_active_sessions")
+	assert_true(str(result.get("recommended_action", "")).contains("run_project"),
+		"无会话响应必须直接给出下一步调用")
+	assert_true(str(result.get("recommended_action", "")).contains("install_runtime_probe"))
+
+func test_editor_logs_carry_retrieved_at() -> void:
+	if Engine.has_meta("GodotMCPPlugin"):
+		Engine.remove_meta("GodotMCPPlugin")
+	var tools: RefCounted = DebugToolsScript.new()
+	var result: Dictionary = tools._tool_get_editor_logs({"count": 5})
+	assert_true(result.has("retrieved_at"), "日志响应必须带读取时刻")
+	assert_false(String(result["retrieved_at"]).is_empty())

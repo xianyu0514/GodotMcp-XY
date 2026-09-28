@@ -105,7 +105,9 @@ func _register_get_editor_logs(server_core: RefCounted) -> void:
 			},
 			"count": {"type": "integer"},
 			"total_available": {"type": "integer"},
-			"source": {"type": "string"}
+			"source": {"type": "string"},
+			"retrieved_at": {"type": "string", "description": "Local time when this batch was pulled."},
+			"timestamp_scope": {"type": "string"}
 		}
 	}
 
@@ -127,12 +129,20 @@ func _tool_get_editor_logs(params: Dictionary) -> Dictionary:
 	var offset: int = params.get("offset", 0)
 	var order: String = params.get("order", "desc")
 
+	var result: Dictionary
 	if source == "runtime":
-		return _get_runtime_logs(types, count, offset, order)
+		result = _get_runtime_logs(types, count, offset, order)
 	elif source == "editor_panel":
-		return _get_editor_panel_logs(types, count, offset, order)
+		result = _get_editor_panel_logs(types, count, offset, order)
+	else:
+		result = _get_mcp_logs(types, count, offset, order)
 
-	return _get_mcp_logs(types, count, offset, order)
+	# P2-7（2026-09-27 体检）：补齐时间基准。编辑器输出面板本身不保留
+	# 行级时间戳，retrieved_at 只标明本批日志的读取时刻。
+	result["retrieved_at"] = Time.get_datetime_string_from_system(false, true)
+	if source == "editor_panel":
+		result["timestamp_scope"] = "retrieved_at marks when this batch was pulled; the editor output panel does not keep per-line timestamps"
+	return result
 
 # ============================================================================
 # Shared static helpers (debugger bridge + runtime probe request machinery).
@@ -173,7 +183,13 @@ static func _request_runtime_probe(command: String, payload: Array, response_mes
 		if refresh_result.has("error"):
 			return refresh_result
 		if refresh_result.get("status", "") == "no_active_sessions":
-			return {"status": "no_active_sessions", "refresh_result": refresh_result}
+			# 自愈指引（2026-09-27 体检 P2-8）：无会话时不能只回静默状态，
+			# 要把"下一步精确调用"直接塞进响应。
+			return {
+				"status": "no_active_sessions",
+				"recommended_action": "No live game session. Call run_project {\"allow_window\": true} to start the game, call install_runtime_probe if the probe is not installed yet, then retry this tool.",
+				"refresh_result": refresh_result
+			}
 		pending_entry = {
 			"baseline_sequence": baseline_sequence,
 			"refresh_result": refresh_result,
@@ -584,7 +600,7 @@ func _register_get_performance_metrics(server_core: RefCounted) -> void:
 				"description": "'auto' prefers game-process metrics when a probe session is live; 'editor' forces editor-process Performance monitors; 'runtime' requires a live game session and returns guidance otherwise."
 			},
 			"session_id": {"type": "integer", "description": "Optional runtime session id for source='runtime'/'auto'."},
-			"timeout_ms": {"type": "integer", "default": 1500, "description": "Probe wait budget for source='runtime'/'auto'."}
+			"timeout_ms": {"type": "integer", "default": 4000, "description": "Probe wait budget for source='runtime'/'auto'."}
 		}
 	}
 
