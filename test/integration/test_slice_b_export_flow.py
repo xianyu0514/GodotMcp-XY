@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -45,7 +46,16 @@ def rpc(name, args, timeout=300.0):
         {"jsonrpc": "2.0", "method": "tools/call",
          "params": {"name": name, "arguments": args}, "id": _rid}).encode(),
         headers={"Content-Type": "application/json"})
-    r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+    r = None
+    for _attempt in range(5):
+        try:
+            r = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+            break
+        except urllib.error.HTTPError as _exc:
+            if _exc.code == 503 and _attempt < 4:
+                time.sleep(10 + _attempt * 10)
+                continue
+            raise
     res = r.get("result", {})
     if res.get("isError"):
         raise AssertionError(f"{name}: {res['content'][0]['text'][:240]}")

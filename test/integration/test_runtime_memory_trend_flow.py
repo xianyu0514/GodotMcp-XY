@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -37,8 +38,16 @@ def rpc_call(method: str, params: dict | None = None, request_id: int = 1) -> di
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    for _attempt in range(5):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as _exc:
+            if _exc.code == 503 and _attempt < 4:
+                time.sleep(10 + _attempt * 10)
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def tool_call(name: str, arguments: dict | None = None, request_id: int = 100) -> dict:

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -76,8 +77,16 @@ def rpc(method, params=None, timeout=300.0):
     payload = {"jsonrpc": "2.0", "id": _req[0], "method": method, "params": params or {}}
     request = urllib.request.Request(URL, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode())
+    for _attempt in range(5):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as _exc:
+            if _exc.code == 503 and _attempt < 4:
+                time.sleep(10 + _attempt * 10)
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def tool(name, args=None, timeout=300.0):

@@ -21,8 +21,16 @@ def rpc(method, params=None, timeout=300):
     payload = {"jsonrpc": "2.0", "id": _req[0], "method": method, "params": params or {}}
     req = urllib.request.Request(URL, data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    for _attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as _exc:
+            if _exc.code == 503 and _attempt < 4:
+                time.sleep(10 + _attempt * 10)
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 # --- 注意力指标（M2 WP3）：游戏注意力 = 内容创作 + 验证；管道 = 发现/编排/重读 ---
 CONTENT_PREFIXES = ("create_", "set_", "upsert_", "batch_", "apply_", "generate_",
