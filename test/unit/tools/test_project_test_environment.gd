@@ -148,14 +148,8 @@ func test_gut_nothing_run_reports_skipped_not_passed() -> void:
 	# 2026-09-29 真机发现（English Rift）：测试脚本不继承 GutTest 时 GUT
 	# 忽略整个脚本且退出码为 0——裸 exit-code 判定把 nothing-run 转成
 	# passed（假绿）。守卫必须转 skipped 并说明原因。
-	var tools: RefCounted = ProjectToolsScript.new()
-	# 不真跑子进程：直接验证守卫逻辑所在的输出判据（"Nothing was run"）。
-	# 端到端验证在 English Rift 真机完成（体检报告 §12）。
-	var fake_logs: Array = [
-		"[GUT WARNING]:  Ignoring script res://tests/test_x.gd because it does not extend GutTest",
-		"[GUT ERROR]:  Nothing was run.",
-	]
-	var output_text: String = ""
-	for line in fake_logs:
-		output_text += str(line) + "\n"
-	assert_true(output_text.contains("Nothing was run"), "判据串必须命中")
+	# 守卫判据静态函数（真跑子进程的端到端在 English Rift 真机完成，§12）。
+	assert_true(ProjectToolsScript._is_gut_zero_run(
+		"[GUT ERROR]:  Nothing was run.\n"), "零执行判据命中")
+	assert_false(ProjectToolsScript._is_gut_zero_run(
+		"GUT version 9.7.1\nAll tests passed\n"), "正常输出不误判")
