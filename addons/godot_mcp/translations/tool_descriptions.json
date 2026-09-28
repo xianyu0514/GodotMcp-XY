@@ -45,7 +45,7 @@
   "save_scene": "Save the current scene to disk. If no path is provided, saves to the current scene's path.",
   "open_scene": "Open a scene file from the project. Closes the current scene if one is open.",
   "get_current_scene": "Get information about the currently open scene, including name, path, and root node type.",
-  "get_scene_structure": "Get the complete structure of the current scene as a tree. Returns node types, names, and hierarchy.",
+  "get_scene_structure": "Get the structure of a scene as a tree (node types, names, hierarchy). By default reads the scene currently open in the editor; pass scene_path to inspect any scene file read-only without opening or modifying it. Truncated subtrees report their size via hidden_descendants (per truncated node and scene-wide).",
   "list_project_scenes": "List all scene files (.tscn) in the project. Returns paths relative to res://.",
   "list_open_scenes": "List scene tabs currently open in the Godot editor.",
   "close_scene_tab": "Close the active scene tab, or activate a specified scene tab and close it.",
