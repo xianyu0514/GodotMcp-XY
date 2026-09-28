@@ -26,7 +26,7 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 
 > **Script sandbox guard:** when `security_level` is `1` (STRICT, the default), `execute_editor_script` is scanned by a capability denylist before it runs. Scripts that reference OS process execution (`OS.execute`, `OS.create_process`, …), out-of-project filesystem paths, networking (`HTTPRequest`, `TCPServer`, …) or other dangerous APIs are rejected with `{"blocked": true, "reason": "script_sandbox", "category": …}` instead of being executed. Set `security_level = 0` (PERMISSIVE) to disable the guard. This is an anti-footgun guard, not an adversarial sandbox. The same guard applies to `execute_script` (including its single-line expression path), `evaluate_debug_expression` and `evaluate_runtime_expression`.
 
-### Editor-Advanced (24 advanced)
+### Editor-Advanced (25 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |

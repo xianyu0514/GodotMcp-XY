@@ -48,6 +48,22 @@ def _classify(name: str) -> str:
         return "content"
     return "discovery"  # enable_tools / get_* / list_* / read_* / gather_* / prompts
 
+# --- 注意力指标（M2 WP3）：游戏注意力 = 内容创作 + 验证；管道 = 发现/编排/重读 ---
+CONTENT_PREFIXES = ("create_", "set_", "upsert_", "batch_", "apply_", "generate_",
+                    "add_", "write_", "rename_", "attach_", "save_", "delete_",
+                    "remove_", "insert_", "bump_")
+VERIFY_TOOLS = {"run_verification_queue", "verify_change_effect", "play_and_verify",
+                "assert_no_runtime_errors", "assert_performance_budget"}
+CALLS = {"content": 0, "verify": 0, "discovery": 0}
+T0 = {"v": None}
+
+def _classify(name: str) -> str:
+    if name in VERIFY_TOOLS:
+        return "verify"
+    if name.startswith(CONTENT_PREFIXES):
+        return "content"
+    return "discovery"  # enable_tools / get_* / list_* / read_* / gather_* / prompts
+
 def tool(name, args=None, timeout=300):
     if T0["v"] is None:
         T0["v"] = time.time()
