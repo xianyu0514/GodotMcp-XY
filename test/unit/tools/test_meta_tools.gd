@@ -503,3 +503,20 @@ func test_explicit_additive_mode_has_no_guard_noise():
 	assert_eq(result.get("status", ""), "success")
 	assert_false(result.has("conflict_guard"),
 		"显式增量本来就不替换，不应误报告守卫")
+
+# --- P2-10：全量启用的 tools/list 载荷警告 ---
+
+func test_payload_warning_on_huge_enable():
+	for i in range(120):
+		_core.seed("supp_tool_%d" % i, false, "supplementary", "Misc", "Filler tool %d for the payload test." % i)
+	var result: Dictionary = _tool._tool_enable_tools({"preset": "all"})
+	assert_eq(result.get("status", ""), "success")
+	assert_true(result.has("payload_warning"), "全量启用必须附载荷警告")
+	var warning: String = str(result["payload_warning"])
+	assert_true(warning.contains("tools/list"), "警告应说明影响面（tools/list）")
+	assert_true(warning.contains("preset"), "警告应给出收窄指引")
+
+func test_no_payload_warning_on_small_enable():
+	var result: Dictionary = _tool._tool_enable_tools({"tools": ["get_runtime_info"]})
+	assert_eq(result.get("status", ""), "success")
+	assert_false(result.has("payload_warning"), "小面启用不应有警告噪音")

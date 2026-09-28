@@ -187,6 +187,7 @@ const TOOLS: Dictionary = {
 	"list_project_scripts": {"category": "core", "group": "Script"},
 	"list_project_tests": {"category": "supplementary", "group": "Project-Advanced"},
 	"query_engine_compat": {"category": "supplementary", "group": "Project-Advanced"},
+	"read_project_file": {"category": "supplementary", "group": "Project-Advanced"},
 	"list_runtime_animations": {"category": "supplementary", "group": "Debug-Advanced"},
 	"list_runtime_audio_buses": {"category": "supplementary", "group": "Debug-Advanced"},
 	"list_runtime_input_actions": {"category": "supplementary", "group": "Debug-Advanced"},
