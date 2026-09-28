@@ -308,6 +308,8 @@ func _enter_tree() -> void:
 	
 	# 注册所有工具
 	_register_all_tools()
+	# 第三方 custom 工具挂载（在全部内置工具之后，命名空间 custom_* 不冲突）。
+	MCPCustomToolsRegistry.apply_to(_native_server)
 	
 	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
 	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot

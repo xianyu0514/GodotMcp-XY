@@ -40,6 +40,39 @@ Complete every step in one PR:
 
 Advanced tools should normally be `supplementary` so they are registered but disabled until explicitly enabled. Keep the core surface capped at 30 unless maintainers intentionally rebalance the default tool set.
 
+## Registering custom tools (third-party addons)
+
+Other editor addons can register their own MCP tools into the godot_mcp surface without forking it. The 251+ built-in tools stay a closed set; custom tools extend it per project.
+
+**Register (from any script):**
+
+```gdscript
+var result: Dictionary = MCPCustomToolsRegistry.register_tool(
+    "custom_terrain_sculpt",
+    "Sculpt the heightmap terrain at a position.",
+    {"type": "object", "properties": {
+        "position": {"type": "string", "description": "Scene path of the terrain node."},
+        "strength": {"type": "number"}},
+     "required": ["position"]},
+    Callable(self, "_on_sculpt"))
+```
+
+**Weak-dependency mode** (when your addon must also run without godot_mcp installed):
+
+```gdscript
+if Engine.has_meta("GodotMCPCustomTools"):
+    Engine.get_meta("GodotMCPCustomTools").register_tool(...)
+```
+
+**Contract:**
+
+- Tool names MUST start with `custom_` (namespace; rejects anything else).
+- Category is fixed to `supplementary`, group `Custom`: custom tools are disabled by default and flow through the existing catalog / `search_tools` / `enable_tools` machinery. Third parties cannot register as core/meta.
+- The registry installs a dispatcher wrapper, so if your addon is reloaded or freed, calls to your tool return a self-healing error instead of crashing the server. Re-register in `_ready` (same name = replace, idempotent).
+- `unregister_tool(name)` on `_exit_tree` if your addon disables cleanly.
+- `custom_manage` (always-on meta tool) lists and inspects registered custom tools for AI callers.
+- Trust boundary: registering a tool means editor-side GDScript execution on call — the same trust as installing any Godot addon. This is a namespace contract, not a sandbox.
+
 ## Modifying existing tools
 
 When changing an existing tool, check:

@@ -95,6 +95,7 @@ const TOOLS: Dictionary = {
 	"draw_on_texture": {"category": "supplementary", "group": "Project-Advanced"},
 	"duplicate_node": {"category": "core", "group": "Node-Write"},
 	"enable_tools": {"category": "meta", "group": "Meta"},
+	"custom_manage": {"category": "meta", "group": "Meta"},
 	"update_export_preset": {"category": "supplementary", "group": "Project-Advanced"},
 	"ensure_project_directory": {"category": "supplementary", "group": "Project-Advanced"},
 	"evaluate_debug_expression": {"category": "supplementary", "group": "Debug-Advanced"},
