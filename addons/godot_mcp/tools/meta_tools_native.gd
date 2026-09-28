@@ -12,6 +12,7 @@ const PRESET_MANAGER_PATH: String = "res://addons/godot_mcp/native_mcp/mcp_tool_
 const WorkflowRouterScript = preload("res://addons/godot_mcp/native_mcp/workflow_router.gd")
 const TranslationManagerScript = preload("res://addons/godot_mcp/native_mcp/translation_manager.gd")
 const PROMPT_WORKFLOWS_SCRIPT = preload("res://addons/godot_mcp/native_mcp/prompt_workflows.gd")
+const MCPCustomToolsRegistryScript = preload("res://addons/godot_mcp/tools/custom_tools_registry.gd")
 const SEARCH_LIMIT_DEFAULT: int = 12
 const SEARCH_LIMIT_MAX: int = 50
 
@@ -31,6 +32,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_search_tools(server_core)
 	_register_get_tool_details(server_core)
 	_register_enable_tools(server_core)
+	_register_custom_manage(server_core)
 
 func _get_preset_manager() -> RefCounted:
 	if _preset_manager == null:
@@ -542,3 +544,53 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	if include_enabled_tools:
 		response["enabled_tools"] = enabled_tools
 	return response
+
+# ============================================================================
+# custom_manage - 第三方 custom 工具发现与检查
+# ============================================================================
+
+func _register_custom_manage(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"custom_manage",
+		"Discover and inspect third-party custom tools registered into the MCP surface by other editor addons (namespace custom_*). op=list returns name, description and handler health; op=inspect returns one full schema. Custom tools appear in the catalog and are callable like any built-in tool once enabled via enable_tools. Third-party addons register through MCPCustomToolsRegistry.register_tool (see docs/contributing.md).",
+		{
+			"type": "object",
+			"properties": {
+				"op": {"type": "string", "enum": ["list", "inspect"], "default": "list", "description": "list: all registered custom tools; inspect: one tool's full schema."},
+				"name": {"type": "string", "description": "inspect only: the custom tool name."}
+			}
+		},
+		Callable(self, "_tool_custom_manage"),
+		{
+			"type": "object",
+			"properties": {
+				"op": {"type": "string"},
+				"count": {"type": "integer"},
+				"tools": {"type": "array"},
+				"tool": {"type": "object"},
+				"hint": {"type": "string", "description": "Present on empty list: how third-party addons register."}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"meta", "Meta"
+	)
+
+func _tool_custom_manage(params: Dictionary) -> Dictionary:
+	var op: String = str(params.get("op", "list")).strip_edges().to_lower()
+	if op == "inspect":
+		var tool_name: String = str(params.get("name", "")).strip_edges()
+		if tool_name.is_empty():
+			return {"error": "inspect requires the 'name' parameter."}
+		for entry in MCPCustomToolsRegistryScript.list_registered():
+			if String(entry.get("name", "")) == tool_name:
+				var detail: Dictionary = entry.duplicate(true)
+				detail["op"] = "inspect"
+				detail["tool"] = entry
+				return detail
+		return {"error": "Custom tool '%s' is not registered. Call custom_manage with op=list to see the current custom toolset." % tool_name}
+	var tools: Array = MCPCustomToolsRegistryScript.list_registered()
+	var result: Dictionary = {"op": "list", "count": tools.size(), "tools": tools}
+	if tools.is_empty():
+		result["hint"] = "No third-party custom tools registered. Editor addons can register tools (custom_* namespace) via MCPCustomToolsRegistry.register_tool(name, description, input_schema, callable) or Engine.get_meta('GodotMCPCustomTools') — see docs/contributing.md 'Registering custom tools'."
+	return result
+

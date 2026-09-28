@@ -2,9 +2,9 @@
 
 [← Tools reference](README.md)
 
-**6 tools** — always-on meta tools.
+**7 tools** — always-on meta tools.
 
-Always-on discovery and orchestration tools. They keep the default tool list small while preserving all 226 atomic capabilities and complete multi-phase goals.
+Always-on discovery and orchestration tools. They keep the default tool list small while preserving all atomic capabilities and complete multi-phase goals.
 
 ## Recommended workflow
 
@@ -40,7 +40,7 @@ Tool-state changes invalidate only the three discovery cache entries. Cached sce
 
 ## Tool list
 
-### Meta (6)
+### Meta (7)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -48,5 +48,6 @@ Tool-state changes invalidate only the three discovery cache entries. Cached sce
 | `search_tools` | meta | `mode=tools` ranks exact candidates; `mode=workflow` builds a compact, cost-aware inspect/execute/verify route. Both paths are deterministic and local. Workflow results contain names plus three aggregate token-cost metrics, default to 8 tools, hard-cap at 10 and cover all 226 non-meta atomic tools through the immutable bilingual index. Unfiltered routes reuse a 64-entry LRU; filters remain isolated. |
 | `get_tool_details` | meta | Return the full registration record for one MCP tool — complete description, inputSchema, outputSchema, annotations, category, group and enabled state — so a client can fetch the exact schema before calling a tool without loading every tool. Use list_tool_catalog or search_tools to discover tool names first. Returns found=false with a hint when the name is not registered. |
 | `enable_tools` | meta | Fast path: `workflow_query` locally routes and activates the minimum bounded, cost-aware task set in this one call. Core/meta stay visible and old supplementary tools are replaced by default; set `replace_supplementary=false` to extend the current task. Multi-client guard: with >1 clients connected the replace auto-downgrades to additive (`conflict_guard` explains; `force_replace=true` overrides) so concurrent AIs cannot disable each other's tools. Manual tools, groups and 12 presets remain supported. Returns compact changes/counts and aggregate token-cost metrics; no-op calls do not refresh the client. |
+| `custom_manage` | meta | Discover and inspect third-party custom tools (custom_* namespace, registered by other addons). op=list / op=inspect; custom tools join the catalog and are callable once enabled. |
 | `plan_game_workflow` | meta | Compile, inspect, replan or cancel a durable goal contract across 12 composable production profiles. Unknown goals request clarification and missing required capabilities block instead of being omitted. |
 | `run_game_workflow` | meta | With `command`, create or resume the matching durable goal, rejecting a different checkpointed command. Advance an adaptive blueprint-authorized slice, recover crash-consistent checkpoints and restartable operations, and return completed only after every done step has a verified receipt. |
