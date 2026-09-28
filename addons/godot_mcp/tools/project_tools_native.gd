@@ -9,6 +9,7 @@ const MAX_CONCURRENT_TEST_JOBS: int = 4
 const PathNormalizerScript = preload("res://addons/godot_mcp/utils/path_normalizer.gd")
 const GeneratedCacheFilterScript = preload("res://addons/godot_mcp/utils/generated_cache_filter.gd")
 const ScriptCompileMemoScript = preload("res://addons/godot_mcp/utils/script_compile_memo.gd")
+const MCPEngineCompatKnowledgeScript = preload("res://addons/godot_mcp/native_mcp/engine_compat_knowledge.gd")
 
 var _editor_interface: EditorInterface = null
 # 统一异步 job 框架（AsyncJobManager，基于 WorkerThreadPool）：单测与批次测试
@@ -48,6 +49,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_list_project_autoloads(server_core)
 	_register_list_project_global_classes(server_core)
 	_register_get_class_api_metadata(server_core)
+	_register_query_engine_compat(server_core)
 	_register_list_project_tests(server_core)
 	_register_prepare_project_test_environment(server_core)
 	_register_ensure_project_directory(server_core)
@@ -2693,3 +2695,50 @@ func _tool_get_game_project_brief(params: Dictionary) -> Dictionary:
 		"next_sentences": next_sentences,
 		"generated_at": Time.get_datetime_string_from_system(true, true),
 	}
+
+# ============================================================================
+# query_engine_compat - 引擎 API 兼容知识查询
+# ============================================================================
+
+func _register_query_engine_compat(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"query_engine_compat",
+		"Look up measured engine truths before writing code: API drift (4.6 vs 4.7), parser limits, CLI behavior and editor semantics that break first attempts. Each entry carries the exact workaround and its evidence source. Query by API name, symptom or keyword (English or Chinese); check this BEFORE first use of any engine API you are unsure about.",
+		{
+			"type": "object",
+			"properties": {
+				"query": {"type": "string", "description": "API name, symptom or keyword. Empty returns the full catalog overview."},
+				"engine_version": {"type": "string", "description": "Optional version filter (e.g. '4.7'). Entries recorded for other versions only are omitted. Default: no filter."},
+				"limit": {"type": "integer", "default": 8, "description": "Maximum matches returned."}
+			}
+		},
+		Callable(self, "_tool_query_engine_compat"),
+		{
+			"type": "object",
+			"properties": {
+				"matches": {"type": "array", "description": "Matching entries: id, api, kind, versions, title, truth, workaround, source, match_score."},
+				"count": {"type": "integer"},
+				"total_entries": {"type": "integer"},
+				"overview": {"type": "object", "description": "Present on empty query: kinds counts + all api names."},
+				"hint": {"type": "string", "description": "Present when nothing matched: the api catalog for a retry."}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_query_engine_compat(params: Dictionary) -> Dictionary:
+	var query_text: String = str(params.get("query", ""))
+	var engine_version: String = str(params.get("engine_version", ""))
+	var limit: int = int(params.get("limit", 8))
+	if limit <= 0:
+		limit = 8
+	var result: Dictionary = MCPEngineCompatKnowledgeScript.query(query_text, engine_version, limit)
+	if query_text.strip_edges().is_empty():
+		result["overview"] = MCPEngineCompatKnowledgeScript.overview()
+		return result
+	if int(result.get("count", 0)) == 0:
+		var overview: Dictionary = MCPEngineCompatKnowledgeScript.overview()
+		result["hint"] = "No engine-compat entry matched '" + query_text + "'. Known api names: " + ", ".join(overview.get("apis", [])) + ". Retry with one of these, or a symptom keyword (e.g. 'pause', 'shader default', 'tilemap')."
+	return result
+

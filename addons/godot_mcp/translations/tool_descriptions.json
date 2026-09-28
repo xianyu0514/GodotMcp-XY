@@ -249,5 +249,6 @@
   "create_audio_player": "AudioStreamPlayer(2D) with stream and bus in one call; spatial toggle; idempotent by node name.",
   "get_client_config": "Get a ready-to-paste MCP client connection config for this running server (Cursor/Cline/Claude Desktop). Formats http/stdio/remote_http/remote_stdio_bridge; port, executable and project path default to the live editor values.",
   "set_gridmap_cells": "Edit-time GridMap (3D grid, MeshLibrary) cell authoring: op=set cells / fill box region / clear / read region / set_mesh_library. Wrapped in editor UndoRedo; warns when cells cannot render.",
-  "create_csg_shape": "One-call 3D prototyping CSG node: box/sphere/cylinder/torus/polygon/mesh/combiner with dimensions, boolean operation (union/intersection/subtraction), material, collision and name-conflict policy."
+  "create_csg_shape": "One-call 3D prototyping CSG node: box/sphere/cylinder/torus/polygon/mesh/combiner with dimensions, boolean operation (union/intersection/subtraction), material, collision and name-conflict policy.",
+  "query_engine_compat": "Look up measured engine truths before writing code: API drift (4.6 vs 4.7), parser limits, CLI behavior and editor semantics that break first attempts. Each entry carries the exact workaround and its evidence source. Query by API name, symptom or keyword (English or Chinese); check this BEFORE first use of any engine API you are unsure about."
 }
