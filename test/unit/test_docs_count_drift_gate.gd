@@ -18,8 +18,8 @@ const COUNT_FILES: Array[String] = [
 ]
 
 func test_manifest_counts_are_the_truth() -> void:
-	assert_eq(ManifestScript.TOOLS.size(), 254, "manifest total (update this gate with every tool)")
-	assert_eq(ManifestScript.count_by_category("supplementary"), 219, "supplementary count follows the manifest")
+	assert_eq(ManifestScript.TOOLS.size(), 255, "manifest total (update this gate with every tool)")
+	assert_eq(ManifestScript.count_by_category("supplementary"), 220, "supplementary count follows the manifest")
 
 func test_total_count_appears_in_every_count_file() -> void:
 	var total: int = ManifestScript.TOOLS.size()
