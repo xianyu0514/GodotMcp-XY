@@ -579,6 +579,14 @@ func is_running() -> bool:
 func get_transport() -> McpTransportBase:
 	return _transport
 
+# 当前活跃客户端连接数（stdio 恒为 1；HTTP 为并发连接数）。
+# 供 enable_tools 的多客户端守卫判定：>1 时 workflow_query 的替换语义
+# 自动降级为增量，防止一个 AI 的路由踢掉其他 AI 正在用的工具。
+func get_active_client_count() -> int:
+	if _transport == null or not _transport.has_method("get_active_client_count"):
+		return 1
+	return int(_transport.get_active_client_count())
+
 # ============================================================================
 # 请求处理（根据mcp-builder优化）
 # ============================================================================

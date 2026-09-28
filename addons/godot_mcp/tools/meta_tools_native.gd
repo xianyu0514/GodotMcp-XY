@@ -348,12 +348,13 @@ func _tool_get_tool_details(params: Dictionary) -> Dictionary:
 func _register_enable_tools(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"enable_tools",
-		"Route and activate the minimum tools for workflow_query in one call, replacing old supplementary task tools by default. Or change explicit tools, groups or a preset. Core/meta stay on; the response is compact.",
+		"Route and activate the minimum tools for workflow_query in one call. Multi-client guard: with >1 clients connected, replace auto-downgrades to additive so one AI's routing cannot disable another's tools (conflict_guard explains; force_replace=true overrides). Or change tools, groups or a preset. Core/meta stay on.",
 		{
 			"type": "object",
 			"properties": {
 				"workflow_query": {"type": "string", "description": "English/Chinese goal. Locally routes to at most 8 inspect/execute/verify tools; exclusive with tools/groups/preset."},
-				"replace_supplementary": {"type": "boolean", "default": true, "description": "workflow_query only. Replace old supplementary task tools; false adds."},
+				"replace_supplementary": {"type": "boolean", "default": true, "description": "workflow_query only. Replace old supplementary task tools; false adds. Auto-additive while multiple clients are connected (conflict_guard)."},
+				"force_replace": {"type": "boolean", "default": false, "description": "workflow_query only. Replace supplementary tools even with other clients connected (overrides the guard)."},
 				"tools": {"type": "array", "items": {"type": "string"}, "description": "Individual tool names to enable/disable."},
 				"groups": {"type": "array", "items": {"type": "string"}, "description": "Groups to enable/disable."},
 				"preset": {"type": "string", "description": "Focused preset ID; 'all' costs most context. Overrides manual selection."},
@@ -363,7 +364,7 @@ func _register_enable_tools(server_core: RefCounted) -> void:
 			}
 		},
 		Callable(self, "_tool_enable_tools"),
-		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "workflow_query": {"type": "string"}, "workflow": {"type": "object"}, "replaced_supplementary": {"type": "boolean"}, "suggested_prompt": {"type": "object", "description": "Present when the query matches an executable prompt recipe; fetch it via prompts/get."}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
+		{"type": "object", "properties": {"status": {"type": "string"}, "enabled_count": {"type": "integer"}, "total_registered": {"type": "integer"}, "enabled_tools": {"type": "array"}, "changed_count": {"type": "integer"}, "changed_tools": {"type": "array"}, "catalog_revision": {"type": "integer"}, "applied_preset": {"type": "string"}, "workflow_query": {"type": "string"}, "workflow": {"type": "object"}, "replaced_supplementary": {"type": "boolean"}, "conflict_guard": {"type": "string", "description": "Present when the multi-client guard downgraded a replace to additive."}, "active_clients": {"type": "integer"}, "suggested_prompt": {"type": "object", "description": "Present when the query matches an executable prompt recipe; fetch it via prompts/get."}, "unknown_tools": {"type": "array"}, "unknown_groups": {"type": "array"}}},
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
 		"meta", "Meta"
 	)
@@ -388,6 +389,8 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	var workflow_query: String = String(params.get("workflow_query", "")).strip_edges()
 	var has_workflow_query: bool = params.has("workflow_query")
 	var replaced_supplementary: bool = false
+	var guard_active_clients: int = 1
+	var conflict_guard: String = ""
 	var unknown_tools: Array = []
 	var unknown_groups: Array = []
 	var desired_states: Dictionary = {}
@@ -416,6 +419,19 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 		if routed_tools.is_empty():
 			return {"error": "No registered tools matched workflow_query"}
 		replaced_supplementary = bool(params.get("replace_supplementary", true))
+		# 多客户端防踩脚守卫：工具启用集是全局的。多个 AI 并发连接时，
+		# 一次 replace_supplementary=true 的路由会把其他 AI 正在用的补充工具
+		# 全部禁用——受害者下一个调用就吃 "Tool is disabled"，浪费整轮往返。
+		# >1 活跃客户端时自动降级为增量模式，并在响应里自愈说明；显式
+		# force_replace=true 可恢复旧行为。
+		if replaced_supplementary:
+			var active_clients: int = 1
+			if _server_core.has_method("get_active_client_count"):
+				active_clients = int(_server_core.get_active_client_count())
+			guard_active_clients = active_clients
+			if active_clients > 1 and not bool(params.get("force_replace", false)):
+				replaced_supplementary = false
+				conflict_guard = str(active_clients) + " clients are connected, so this routing ran additively instead of replacing supplementary tools another AI may be using. Pass force_replace=true to replace anyway."
 		if replaced_supplementary:
 			for info in registered:
 				if String(info.get("category", "")) == "supplementary" and bool(info.get("enabled", false)):
@@ -514,6 +530,9 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 		response["workflow_query"] = workflow_query
 		response["workflow"] = workflow
 		response["replaced_supplementary"] = replaced_supplementary
+		if not conflict_guard.is_empty():
+			response["conflict_guard"] = conflict_guard
+			response["active_clients"] = guard_active_clients
 		# 命中可执行配方时提示客户端：prompts/get 可拿到完整执行模板。
 		if _prompt_matcher == null:
 			_prompt_matcher = PROMPT_WORKFLOWS_SCRIPT.new()
