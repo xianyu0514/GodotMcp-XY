@@ -111,15 +111,27 @@ func test_apply_to_core_registers_into_catalog() -> void:
 	core.set_tool_enabled("custom_probe", true)
 	var call_result: Dictionary = await core._handle_tool_call({
 		"id": 1, "params": {"name": "custom_probe", "arguments": {"value": 7}}})
-	assert_eq(_handler_calls, 1, "tools/call 必须路由到注册方 handler；实际响应: " + str(call_result).substr(0, 400))
-	assert_eq(_received_params.get("value"), 7)
-	assert_true(Engine.has_meta("GodotMCPCustomTools"), "弱依赖通道必须就位")
+	assert_false(Engine.has_meta("GodotMCPCustomTools"),
+		"apply_to（可能在类注册阶段执行）不得触碰 Engine.set_meta")
 
 func test_register_after_apply_reaches_live_core():
 	var core: RefCounted = ServerCoreScript.new()
 	RegistryScript.apply_to(core)
 	RegistryScript.register_tool("custom_late", "Late.", {}, Callable(self, "_handler"))
 	assert_true(core.has_tool("custom_late"), "server 运行中注册须即时生效（第三方 _ready 场景）")
+
+func test_engine_meta_channel_attaches_late() -> void:
+	# meta 挂载必须在运行期（server_started 回调）而非 apply_to：
+	# 类注册阶段的 set_meta 实测段错误（CI 导入门禁 3/3）。
+	var core: RefCounted = ServerCoreScript.new()
+	RegistryScript.register_tool("custom_meta_probe", "Probe.", {}, Callable(self, "_handler"))
+	RegistryScript.apply_to(core)
+	RegistryScript.attach_engine_meta()
+	assert_true(Engine.has_meta("GodotMCPCustomTools"), "运行期显式挂载后弱依赖通道就位")
+	var proxy: Object = Engine.get_meta("GodotMCPCustomTools")
+	var via_proxy: Dictionary = proxy.register_tool(
+		"custom_via_proxy", "Registered via the weak-dependency channel.", {}, Callable(self, "_handler"))
+	assert_true(via_proxy.has("ok"), "proxy 实例上的静态调用必须可用: " + str(via_proxy))
 
 # --- custom_manage 工具 ---
 

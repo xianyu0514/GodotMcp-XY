@@ -107,6 +107,7 @@ var _cache_filesystem_snapshot_pending: bool = false
 # 若 project.godot 本来就声明了该 autoload（当前仓库正是如此），退出时不得删除它。
 var _probe_autoload_added_this_session: bool = false
 
+const MCPCustomToolsRegistryScript = preload("res://addons/godot_mcp/tools/custom_tools_registry.gd")
 const CACHE_CHANGE_TRACKER_SCRIPT = preload(
 	"res://addons/godot_mcp/native_mcp/cache_change_tracker.gd")
 
@@ -309,7 +310,7 @@ func _enter_tree() -> void:
 	# 注册所有工具
 	_register_all_tools()
 	# 第三方 custom 工具挂载（在全部内置工具之后，命名空间 custom_* 不冲突）。
-	MCPCustomToolsRegistry.apply_to(_native_server)
+	MCPCustomToolsRegistryScript.apply_to(_native_server)
 	
 	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
 	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot
@@ -1376,6 +1377,9 @@ func _create_main_screen_panel() -> void:
 
 func _on_server_started() -> void:
 	_log_info("MCP Server started")
+	# 弱依赖通道在此挂载（运行期）：类注册阶段 set_meta 会段错误（见
+	# custom_tools_registry.apply_to 注释）。
+	MCPCustomToolsRegistryScript.attach_engine_meta()
 	if _main_panel and _main_panel.has_method("refresh"):
 		if Thread.is_main_thread():
 			_main_panel.refresh()

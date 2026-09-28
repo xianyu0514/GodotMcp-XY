@@ -90,9 +90,11 @@ static func apply_to(server_core: RefCounted) -> void:
 		_applied_cores.append(weakref(server_core))
 	for tool_name in _registered:
 		_apply_one(server_core, tool_name)
-	# 引擎 meta 弱依赖通道：第三方不 preload 路径也能找到注册表
-	#（实例上调用 static 方法在 GDScript 中合法）。
-	Engine.set_meta("GodotMCPCustomTools", _registry_proxy())
+	# 引擎 meta 弱依赖通道不在此时挂载：apply_to 可能在引擎的
+	# update_scripts_classes（全局类注册）阶段被执行（import 时插件
+	# auto_start 路径），该阶段调 Engine.set_meta 实测触发引擎段错误
+	# （exit 139，CI 导入门禁 3/3 复现）。改由 server_started 回调
+	#（attach_engine_meta）在运行期挂载。
 
 
 ## 目录查询（custom_manage 的数据源）。
@@ -160,10 +162,17 @@ static func _apply_one(server_core: RefCounted, tool_name: String) -> void:
 	)
 
 
-## Engine meta 需要一个实例；静态上下文里用本类的"哨兵实例"承载静态调用入口
-## （第三方拿到的是本类，静态方法照常可调）。
+## Engine meta 需要一个实例；静态上下文直接 `.new()` 会在引擎的
+## update_scripts_classes（全局类注册）阶段自建实例，实测触发引擎段错误
+## （exit 139，CI 导入门禁 3/3 复现）——必须惰性创建，运行期首次使用才实例化。
 static func _registry_proxy() -> RefCounted:
-	return _proxy_instance if _proxy_instance != null else _proxy_instance
+	if _proxy_instance == null:
+		_proxy_instance = MCPCustomToolsRegistry.new()
+	return _proxy_instance
 
 
-static var _proxy_instance: RefCounted = MCPCustomToolsRegistry.new()
+## 弱依赖通道挂载（运行期调用——server_started 回调），见 apply_to 内注释。
+static func attach_engine_meta() -> void:
+	Engine.set_meta("GodotMCPCustomTools", _registry_proxy())
+
+static var _proxy_instance: RefCounted = null

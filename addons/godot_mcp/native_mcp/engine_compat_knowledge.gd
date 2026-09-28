@@ -249,6 +249,17 @@ const ENTRIES: Array[Dictionary] = [
 		"source": "make_game_juice recipe — per-effect audit contracts",
 	},
 	{
+		"id": "engine-set-meta-during-class-registration",
+		"api": "Engine.set_meta() during update_scripts_classes",
+		"aliases": ["set_meta 崩溃", "import segfault", "类注册阶段", "段错误", "exit 139"],
+		"kind": "editor",
+		"versions": [],
+		"title": "Engine.set_meta() from code that runs during the global-class registration phase segfaults the editor",
+		"truth": "If a plugin path that executes during --import (auto-started editor plugins run _enter_tree in that window) calls Engine.set_meta, the engine crashes with exit 139 inside update_scripts_classes — reproduced 3/3 on the import gate, independent of the stored value.",
+		"workaround": "Defer Engine.set_meta to runtime (e.g. a server_started callback); never touch Engine metadata from class-registration-adjacent code paths.",
+		"source": "custom tools API landing — 2026-09-28 CI import-gate forensics (PR #172)",
+	},
+	{
 		"id": "skeleton2d-chain-motion",
 		"api": "Skeleton2D / Bone2D",
 		"aliases": ["骨骼链", "bone chain", "skeleton", "摆幅"],
