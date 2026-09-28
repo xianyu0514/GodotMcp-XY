@@ -2748,11 +2748,14 @@ func _tool_query_engine_compat(params: Dictionary) -> Dictionary:
 # ============================================================================
 
 ## 文本文件扩展名白名单：覆盖配置排障高频格式（.cfg/.json/.tscn/.tres/.md 等）。
+## .godot 覆盖 project.godot（2026-09-29 真机验收实锤的微缺口）；res://.godot/ 缓存目录
+## 仍被路径域过滤拦截，不受此白名单影响。
 ## 二进制资源（.png/.ogg/...）与可执行文件一律拒读——这是只读排障通道，不是文件浏览器。
 const READABLE_TEXT_EXTENSIONS: Array[String] = [
 	".json", ".cfg", ".tres", ".tscn", ".escn", ".gd", ".cs", ".gdshader",
 	".md", ".txt", ".csv", ".tsv", ".import", ".gitignore", ".editorconfig",
 	".yml", ".yaml", ".xml", ".html", ".css", ".js", ".py", ".toml", ".ini",
+	".godot",
 ]
 
 ## 单次读取的原始字节上限（params.max_bytes 可下调，硬顶 4MB）。

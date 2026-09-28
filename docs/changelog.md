@@ -1,3 +1,52 @@
+## 1.2.0 (2026-09-29)
+
+The audit-driven hardening release: every finding from a studio's real-project
+health check (P0-1/P0-3/P1-3/P1-5/P1-6/P1-10/P2-7/P2-8) fixed and live-verified,
+plus three platform capabilities and a multi-AI concurrency guard. Catalog
+**251 → 255 tools = 28 core + 220 advanced + 7 meta**.
+
+### Correctness
+
+- `get_performance_metrics` now declares its process scope: `source='auto'`
+  prefers the live game via the runtime probe (scope='runtime'); editor-process
+  fallback carries an explicit hint. The old silent ~45x-inflated editor numbers
+  caused a false node-leak diagnosis downstream.
+- Test discovery accepts plural `res://tests/` (was hardcoded singular and
+  rejected the explicit path); auto-detects three roots and merges findings.
+- `list_project_scripts` excludes tooling dirs by default (`include_tooling`
+  opt-in) — plugin scripts no longer drown out project scripts.
+- `get_scene_structure` gains read-only `scene_path` inspection (no editor
+  scene switch) and `hidden_descendants` truncation quantification.
+- New `read_project_file`: text config debugging channel (JSON/.cfg/.tscn/
+  .tres/project.godot — 25-extension whitelist, size cap, NUL guard, lossless
+  line pagination, content_hash). Binary assets stay rejected.
+- Engine crash fix: `Engine.set_meta` during the global-class registration
+  phase segfaults the editor (exit 139) — deferred to runtime; the truth is
+  also entry #23 of the knowledge base below.
+
+### Platform capabilities
+
+- `query_engine_compat`: 23 measured engine truths (API drift 4.6/4.7, parser
+  limits, CLI behavior, editor semantics) with exact workarounds and traceable
+  sources; deterministic bilingual retrieval.
+- custom tools API: third-party addons register `custom_*` tools
+  (`MCPCustomToolsRegistry.register_tool`), namespace-locked, reload-safe,
+  with an always-on `custom_manage` discovery tool.
+- `check_plugin_update`: compares plugin.cfg against GitHub releases
+  (proxy-aware curl first), returns version delta, notes and install steps.
+  Deliberately no auto-swap (unsigned auto-update would be fake security).
+
+### Concurrency & UX
+
+- Multi-client guard: with >1 clients connected, `enable_tools`
+  workflow_query routing auto-downgrades to additive so concurrent AIs cannot
+  disable each other's tools (`conflict_guard` explains; `force_replace`
+  overrides).
+- Payload warning when >100 tools are enabled (the 220KB tools/list state
+  stops being silent); vibe-coding block errors name the exact disable
+  location; runtime timeout defaults 1500→4000ms; `no_active_sessions`
+  carries next-step guidance; editor logs carry `retrieved_at`.
+
 ## Unreleased
 
 - Script writes return `validation_status`, bounded per-write compiler `diagnostics` and an optional hint independently of save success. C# and editor script templates explicitly remain unchecked; invalid GDScript is saved but not attached to a node. Existing `modify_script` validation summaries and `validate: false` remain supported.
