@@ -50,6 +50,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_list_project_global_classes(server_core)
 	_register_get_class_api_metadata(server_core)
 	_register_query_engine_compat(server_core)
+	_register_read_project_file(server_core)
 	_register_list_project_tests(server_core)
 	_register_prepare_project_test_environment(server_core)
 	_register_ensure_project_directory(server_core)
@@ -2740,5 +2741,131 @@ func _tool_query_engine_compat(params: Dictionary) -> Dictionary:
 	if int(result.get("count", 0)) == 0:
 		var overview: Dictionary = MCPEngineCompatKnowledgeScript.overview()
 		result["hint"] = "No engine-compat entry matched '" + query_text + "'. Known api names: " + ", ".join(overview.get("apis", [])) + ". Retry with one of these, or a symptom keyword (e.g. 'pause', 'shader default', 'tilemap')."
+	return result
+
+# ============================================================================
+# read_project_file - 任意文本项目文件读取（配置排障通道）
+# ============================================================================
+
+## 文本文件扩展名白名单：覆盖配置排障高频格式（.cfg/.json/.tscn/.tres/.md 等）。
+## 二进制资源（.png/.ogg/...）与可执行文件一律拒读——这是只读排障通道，不是文件浏览器。
+const READABLE_TEXT_EXTENSIONS: Array[String] = [
+	".json", ".cfg", ".tres", ".tscn", ".escn", ".gd", ".cs", ".gdshader",
+	".md", ".txt", ".csv", ".tsv", ".import", ".gitignore", ".editorconfig",
+	".yml", ".yaml", ".xml", ".html", ".css", ".js", ".py", ".toml", ".ini",
+]
+
+## 单次读取的原始字节上限（params.max_bytes 可下调，硬顶 4MB）。
+const READ_MAX_BYTES_DEFAULT: int = 262144
+const READ_MAX_BYTES_CEILING: int = 4194304
+
+func _register_read_project_file(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"read_project_file",
+		"Read any text project file outside the script domain: JSON configs, .cfg, .tscn, .tres, .md, .csv and other text formats that read_script rejects. Line-window pagination (offset_lines/max_lines) with total_size_bytes and total_line_count for lossless paging; content_hash enables write-precondition symmetry; binary and oversized files are refused with the exact limit. Read-only debugging channel for config issues.",
+		{
+			"type": "object",
+			"properties": {
+				"file_path": {"type": "string", "description": "res:// path to the text file (e.g. 'res://export_presets.cfg', 'res://data/cards.json')."},
+				"offset_lines": {"type": "integer", "default": 0, "description": "Zero-based first line to return. Default 0."},
+				"max_lines": {"type": "integer", "default": 2000, "description": "Maximum lines per page. Default 2000."},
+				"max_bytes": {"type": "integer", "description": "Override the raw size cap downward (bytes). Files larger than the cap are refused with their size; ceiling 4MB."}
+			},
+			"required": ["file_path"]
+		},
+		Callable(self, "_tool_read_project_file"),
+		{
+			"type": "object",
+			"properties": {
+				"file_path": {"type": "string"},
+				"content": {"type": "string"},
+				"content_hash": {"type": "string"},
+				"total_line_count": {"type": "integer"},
+				"total_size_bytes": {"type": "integer"},
+				"offset_lines": {"type": "integer"},
+				"line_count": {"type": "integer"},
+				"truncated": {"type": "boolean"},
+				"next_offset": {"type": "integer"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_read_project_file(params: Dictionary) -> Dictionary:
+	var file_path: String = str(params.get("file_path", "")).strip_edges()
+	if file_path.is_empty():
+		return {"error": "Missing required parameter: file_path"}
+
+	var validation: Dictionary = PathValidator.validate_file_path(file_path, READABLE_TEXT_EXTENSIONS)
+	if not validation.get("valid", false):
+		var reason: String = str(validation.get("error", "unknown"))
+		if reason.contains("File extension not allowed"):
+			return {"error": "Invalid path: " + reason
+				+ ". Binary assets are out of scope; for scripts use read_script, for other text retry with a res:// path whose extension is in the whitelist."}
+		return {"error": "Invalid path: " + reason}
+	file_path = String(validation["sanitized"])
+
+	if not FileAccess.file_exists(file_path):
+		return {"error": "File not found: " + file_path + ". Use get_project_structure or list_project_resources to enumerate existing files."}
+
+	var max_bytes: int = READ_MAX_BYTES_DEFAULT
+	if params.has("max_bytes"):
+		max_bytes = clampi(int(params["max_bytes"]), 1, READ_MAX_BYTES_CEILING)
+	# 先探大小再读：超限直接拒绝并上报实际大小，避免整读放大内存。
+	var probe: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+	if probe == null:
+		return {"error": "Failed to open file: " + file_path + " (" + error_string(FileAccess.get_open_error()) + ")"}
+	var total_size: int = probe.get_length()
+	if total_size > max_bytes:
+		probe.close()
+		return {
+			"error": "File is %d bytes, over the %d-byte read cap. Raise max_bytes (ceiling %d) or read in line windows after splitting the file." % [total_size, max_bytes, READ_MAX_BYTES_CEILING],
+			"file_path": file_path,
+			"total_size_bytes": total_size
+		}
+	var raw: PackedByteArray = probe.get_buffer(total_size)
+	probe.close()
+
+	# 二进制护栏：文本白名单内的文件仍可能是损坏的二进制（误改后缀等）。
+	if raw.find(0) >= 0:
+		return {"error": "File contains NUL bytes (binary content despite a text extension); refusing to decode: " + file_path}
+
+	var content: String = raw.get_string_from_utf8()
+	var lines: PackedStringArray = content.split("\n")
+	# 编辑器惯例：尾随换行不算多出的一行（"one\n" = 1 行，split 会多出空尾元素）。
+	if lines.size() > 1 and String(lines[lines.size() - 1]).is_empty():
+		lines.remove_at(lines.size() - 1)
+	var total_lines: int = lines.size()
+
+	var offset_lines: int = maxi(int(params.get("offset_lines", 0)), 0)
+	var max_lines: int = maxi(int(params.get("max_lines", 2000)), 1)
+	if offset_lines >= total_lines:
+		return {
+			"file_path": file_path,
+			"content": "",
+			"content_hash": content.sha256_text(),
+			"total_line_count": total_lines,
+			"total_size_bytes": total_size,
+			"offset_lines": offset_lines,
+			"line_count": 0,
+			"truncated": false
+		}
+	var end_line: int = mini(offset_lines + max_lines, total_lines)
+	var page: PackedStringArray = lines.slice(offset_lines, end_line)
+	var truncated: bool = end_line < total_lines
+
+	var result: Dictionary = {
+		"file_path": file_path,
+		"content": "\n".join(page),
+		"content_hash": content.sha256_text(),
+		"total_line_count": total_lines,
+		"total_size_bytes": total_size,
+		"offset_lines": offset_lines,
+		"line_count": page.size(),
+		"truncated": truncated
+	}
+	if truncated:
+		result["next_offset"] = end_line
 	return result
 

@@ -14,6 +14,7 @@ const TranslationManagerScript = preload("res://addons/godot_mcp/native_mcp/tran
 const PROMPT_WORKFLOWS_SCRIPT = preload("res://addons/godot_mcp/native_mcp/prompt_workflows.gd")
 const MCPCustomToolsRegistryScript = preload("res://addons/godot_mcp/tools/custom_tools_registry.gd")
 const SEARCH_LIMIT_DEFAULT: int = 12
+const PAYLOAD_WARNING_THRESHOLD: int = 100
 const SEARCH_LIMIT_MAX: int = 50
 
 var _server_core: RefCounted = null
@@ -517,6 +518,18 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 	if not changed_tools.is_empty() and _server_core.has_method("notify_tool_list_changed"):
 		_server_core.notify_tool_list_changed()
 
+	# P2-10（2026-09-29 体检）：全量启用会把 tools/list 膨胀到 200KB+，
+	# 放大客户端索引/超时失败面（设计意图是默认 35 个的小面）。超过阈值
+	# 时在响应里如实报告载荷规模并给出预设/收窄指引——不改行为，只揭代价。
+	var payload_warning: String = ""
+	if enabled_count > PAYLOAD_WARNING_THRESHOLD:
+		var payload_tokens: int = 0
+		for info_value in _sorted_registered_tools():
+			var info: Dictionary = info_value
+			if bool(info.get("enabled", false)):
+				payload_tokens += int(info.get("schema_tokens", 0))
+		payload_warning = "%d tools are now enabled; tools/list will deliver roughly %d KB of schema on the next handshake. Large surfaces inflate client indexes and timeout risk — consider a focused preset or enable_tools with narrower scope." % [enabled_count, payload_tokens * 4 / 1024]
+
 	var response: Dictionary = {
 		"status": "success",
 		"enabled_count": enabled_count,
@@ -528,6 +541,8 @@ func _tool_enable_tools(params: Dictionary) -> Dictionary:
 		"unknown_tools": unknown_tools,
 		"unknown_groups": unknown_groups
 	}
+	if not payload_warning.is_empty():
+		response["payload_warning"] = payload_warning
 	if has_workflow_query:
 		response["workflow_query"] = workflow_query
 		response["workflow"] = workflow
