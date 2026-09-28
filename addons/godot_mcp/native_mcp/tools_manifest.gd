@@ -53,6 +53,7 @@ const TOOLS: Dictionary = {
 	"clear_runtime_theme_override": {"category": "supplementary", "group": "Debug-Advanced"},
 	"close_scene_tab": {"category": "supplementary", "group": "Scene-Advanced"},
 	"close_script_tab": {"category": "supplementary", "group": "Editor-Advanced"},
+	"check_plugin_update": {"category": "supplementary", "group": "Editor-Advanced"},
 	"compare_render_screenshots": {"category": "supplementary", "group": "Project-Advanced"},
 	"configure_android_export": {"category": "supplementary", "group": "Editor-Advanced"},
 	"configure_render_output": {"category": "supplementary", "group": "Project-Advanced"},

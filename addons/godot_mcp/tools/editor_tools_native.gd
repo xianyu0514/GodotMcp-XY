@@ -135,6 +135,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_undo(server_core)
 	_register_redo(server_core)
 	_register_get_undo_history(server_core)
+	_register_check_plugin_update(server_core)
 
 # ============================================================================
 # get_editor_state - 获取编辑器状态
@@ -4116,3 +4117,165 @@ func _tool_get_undo_history(params: Dictionary) -> Dictionary:
 	if undo_redo == null:
 		return {"error": "Editor UndoRedo not available"}
 	return _describe_undo_history(undo_redo, limit)
+
+# ============================================================================
+# check_plugin_update - 插件更新检查（诚实版：检查+指引，不自动交换）
+# ============================================================================
+
+## 当前插件版本（plugin.cfg 的唯一真相）。
+static func _plugin_version() -> String:
+	var config: ConfigFile = ConfigFile.new()
+	if config.load("res://addons/godot_mcp/plugin.cfg") == OK:
+		return String(config.get_value("plugin", "version", ""))
+	return ""
+
+## 语义化版本比较：a>b 返回 1、a<b 返回 -1、相等返回 0。
+## 容忍 v 前缀与预发布后缀（取前三段数值比较，后缀差异按"不同即不等"处理：
+## 1.2.0 < 1.2.1、1.2.0-rc1 != 1.2.0 但视为 < 1.2.0 之外的顺序不细化）。
+static func semver_compare(a: String, b: String) -> int:
+	var pa: PackedStringArray = a.strip_edges().to_lower().trim_prefix("v").split("-")[0].split(".")
+	var pb: PackedStringArray = b.strip_edges().to_lower().trim_prefix("v").split("-")[0].split(".")
+	for i in range(3):
+		var va: int = int(pa[i]) if i < pa.size() and pa[i].is_valid_int() else 0
+		var vb: int = int(pb[i]) if i < pb.size() and pb[i].is_valid_int() else 0
+		if va != vb:
+			return 1 if va > vb else -1
+	var suffix_a: bool = a.strip_edges().to_lower().trim_prefix("v").split("-", true, 1).size() > 1
+	var suffix_b: bool = b.strip_edges().to_lower().trim_prefix("v").split("-", true, 1).size() > 1
+	if suffix_a != suffix_b:
+		return 1 if not suffix_a else -1
+	return 0
+
+## 解析 GitHub releases/latest 的 JSON 载荷。返回核心字段或 {"error": ...}。
+static func parse_release_payload(json_text: String) -> Dictionary:
+	# JSON.new().parse 静默返回错误码；JSON.parse_string 对非法文本会打引擎
+	# 错误（GUT Unexpected Errors 判失败）——这里必须用静默版。
+	var json: JSON = JSON.new()
+	if json.parse(json_text) != OK:
+		return {"error": "Could not parse the release payload as JSON."}
+	var parsed: Variant = json.data
+	if not (parsed is Dictionary):
+		return {"error": "Release payload is not a JSON object."}
+	var payload: Dictionary = parsed
+	if payload.has("message") and not payload.has("tag_name"):
+		return {"error": "GitHub API message: " + str(payload["message"])}
+	if not payload.has("tag_name"):
+		return {"error": "Release payload has no tag_name."}
+	var download_url: String = ""
+	for asset_value in payload.get("assets", []):
+		if asset_value is Dictionary:
+			var url: String = String((asset_value as Dictionary).get("browser_download_url", ""))
+			if url.ends_with(".zip"):
+				download_url = url
+				break
+	var notes: String = String(payload.get("body", ""))
+	return {
+		"tag_name": String(payload["tag_name"]),
+		"name": String(payload.get("name", "")),
+		"published_at": String(payload.get("published_at", "")),
+		"release_url": String(payload.get("html_url", "")),
+		"download_url": download_url,
+		"notes_excerpt": notes.substr(0, 1200),
+	}
+
+## curl 优先（尊重环境代理——GitHub 在部分网络只能经代理可达；Godot 的
+## HTTPRequest 不支持代理，这是导出模板下载器同款实测结论），引擎
+## HTTPRequest 直连兜底；双失败返回自愈错误。
+func _fetch_latest_release_json(api_url: String, timeout_sec: float) -> String:
+	var output: Array = []
+	var exit_code: int = OS.execute("curl", ["-s", "-m", str(int(timeout_sec)), "-H",
+		"Accept: application/vnd.github+json", api_url], output, true)
+	if exit_code == OK and not output.is_empty():
+		var text: String = str(output[0]).strip_edges()
+		if not text.is_empty() and JSON.parse_string(text) is Dictionary:
+			return text
+	var http: HTTPRequest = HTTPRequest.new()
+	http.timeout = timeout_sec
+	Engine.get_main_loop().root.add_child(http)
+	http.request(api_url, ["Accept: application/vnd.github+json"])
+	var response: Array = await http.request_completed
+	http.queue_free()
+	if response.size() >= 4 and int(response[0]) == HTTPRequest.RESULT_SUCCESS:
+		var body: PackedByteArray = response[3]
+		return body.get_string_from_utf8()
+	return ""
+
+## 测试注入点：非空时绕过网络（单测不依赖外网）。
+var _debug_release_json: String = ""
+
+func _register_check_plugin_update(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"check_plugin_update",
+		"Check whether a newer godot_mcp release exists on GitHub. Compares the installed plugin.cfg version against the latest release (curl first — proxy-aware; engine HTTPRequest as fallback), returns version delta, release notes excerpt, download URL and exact install steps. Deliberately does NOT auto-swap files: unsigned auto-replacement would be fake security, so the tool hands you a verified manual path instead.",
+		{
+			"type": "object",
+			"properties": {
+				"timeout_sec": {"type": "number", "default": 15, "description": "Network timeout per attempt in seconds (0-60)."}
+			}
+		},
+		Callable(self, "_tool_check_plugin_update"),
+		{
+			"type": "object",
+			"properties": {
+				"current_version": {"type": "string"},
+				"latest_version": {"type": "string"},
+				"update_available": {"type": "boolean"},
+				"release_url": {"type": "string"},
+				"download_url": {"type": "string"},
+				"published_at": {"type": "string"},
+				"notes_excerpt": {"type": "string"},
+				"install_steps": {"type": "array"},
+				"honest_note": {"type": "string"},
+				"error": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Editor-Advanced"
+	)
+
+const GITHUB_LATEST_RELEASE_API: String = "https://api.github.com/repos/xianyu0514/GodotMcp-XY/releases/latest"
+
+func _tool_check_plugin_update(params: Dictionary) -> Dictionary:
+	var timeout_sec: float = clampf(float(params.get("timeout_sec", 15.0)), 3.0, 60.0)
+	var current_version: String = _plugin_version()
+	if current_version.is_empty():
+		return {"error": "Could not read the installed plugin version from addons/godot_mcp/plugin.cfg."}
+
+	var json_text: String = _debug_release_json
+	if json_text.is_empty():
+		json_text = await _fetch_latest_release_json(GITHUB_LATEST_RELEASE_API, timeout_sec)
+	if json_text.is_empty():
+		return {
+			"error": "Could not reach GitHub (curl and engine HTTP both failed — offline or proxy-blocked).",
+			"current_version": current_version,
+			"release_url": "https://github.com/xianyu0514/GodotMcp-XY/releases",
+			"recommended_action": "Open the releases page manually, or retry later with a longer timeout_sec."
+		}
+	var release: Dictionary = parse_release_payload(json_text)
+	if release.has("error"):
+		return {
+			"error": String(release["error"]),
+			"current_version": current_version,
+			"release_url": "https://github.com/xianyu0514/GodotMcp-XY/releases",
+			"recommended_action": "Check the releases page manually (rate limits and proxies can block the API); retry later if this looks transient."
+		}
+
+	var latest_version: String = String(release["tag_name"])
+	var update_available: bool = semver_compare(latest_version, current_version) > 0
+	return {
+		"current_version": current_version,
+		"latest_version": latest_version,
+		"update_available": update_available,
+		"release_url": release.get("release_url", ""),
+		"download_url": release.get("download_url", ""),
+		"published_at": release.get("published_at", ""),
+		"notes_excerpt": release.get("notes_excerpt", ""),
+		"install_steps": [
+			"Close the Godot editor (or at least stop the MCP server from the dock panel).",
+			"Back up the project's addons/godot_mcp folder.",
+			"Replace addons/godot_mcp with the contents of the release zip (settings live in user:// and survive the swap).",
+			"Reopen the editor — the MCP panel reports the new version."
+		],
+		"honest_note": "This tool checks and guides only. It does not swap files automatically: releases are not cryptographically signed yet, and an unsigned auto-updater would be security theater. A signed in-editor updater is tracked as future work."
+	}
+

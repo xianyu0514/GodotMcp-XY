@@ -50,6 +50,7 @@ Drive the Godot editor itself: run/stop the project, inspect editor state, selec
 | `save_all_scripts` | advanced | Save every script currently open in the script editor (Godot 4.7 ScriptEditor.save_all_scripts). |
 | `reload_open_scripts` | advanced | Reload the editor's open script buffers from disk so the editor does not overwrite externally rewritten files (Godot 4.7). |
 | `close_script_tab` | advanced | Close a script tab in the editor's script editor, optionally targeting a specific script path (Godot 4.7). |
+| `check_plugin_update` | advanced | Check GitHub for a newer godot_mcp release: version delta, notes, download URL and install steps (curl first for proxy-awareness). Checks and guides — no auto-swap (unsigned auto-update would be fake security). |
 | `get_import_status` | advanced | Report whether the EditorFileSystem is currently scanning or importing assets (importing field requires Godot 4.7). |
 | `undo` | advanced | Undo the most recent editor action(s) via the editor's UndoRedo stack (node create/delete, property change, tile paint, …). Pass `count` to undo several actions at once; the loop stops when the undo stack is empty. Returns status `noop` with message `Nothing to undo` when the stack is empty. |
 | `redo` | advanced | Redo the most recently undone editor action(s). Pass `count` to redo several actions at once; the loop stops when the redo stack is empty. Returns status `noop` with message `Nothing to redo` when the stack is empty. |
