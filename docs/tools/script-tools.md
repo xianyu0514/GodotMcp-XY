@@ -19,7 +19,7 @@ Read, create, modify, validate and search project scripts. The category supports
 
 | Tool | Tier | Description |
 | --- | --- | --- |
-| `list_project_scripts` | core | List GDScript (.gd) and C# (.cs) script files in the project. Supports `limit`/`offset` pagination; `count` is the page size and `total_count` is the full total. Returns paths relative to res://. |
+| `list_project_scripts` | advanced | List GDScript and C# script files. Tooling directories (addons/test/docs) are excluded by default (`include_tooling=true` or a tooling `search_path` opts in). Supports limit/offset pagination. |
 | `read_script` | core | Read complete GDScript/C# source and its SHA-256 `content_hash`. |
 | `create_script` | core | Create a GDScript or C# file; return immediate GDScript diagnostics separately from file-write success. |
 | `modify_script` | core | Replace a script, valid line or unique `old_text` block; optionally guard against stale content, reject unsaved target buffers when supported, and return saved-source diagnostics. |

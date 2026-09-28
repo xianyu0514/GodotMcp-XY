@@ -141,3 +141,19 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
 - `test_game_goal_flow.py` — 目标级闭环（scratch 项目 → plan → run → completed）
 - `test_batch_scene_node_edits_flow.py` — 单调用脚本化节点组装 + 真值断言
 - 1784 项单元测试覆盖路由、门禁语义、缓存一致性与工具校验
+
+## 实测口径与引擎限制（2026-09-27 体检沉淀）
+
+- **进程口径先于数字**：编辑器进程的 Performance 单例包含编辑器自身的场景树、
+  导入资源与插件，对象数/内存比游戏进程高约 45 倍（实测同一时刻编辑器 101,780
+  对象/755MB vs 游戏 2,235 对象/163MB）。评估游戏性能一律用 `scope='runtime'`
+  的数据（`get_performance_metrics` 的 auto 默认或 `get_runtime_performance_snapshot`）；
+  看到 `scope='editor'` 的数字不要拿来做游戏侧判断，更不要据此报"节点泄漏"。
+- **`Expression` 求值不支持多行语句与闭包**：运行时自插桩计时（把
+  `Time.get_ticks_usec()` 包住目标代码）没法靠表达式求值实现。可行路子：
+  源码内埋点 + `modify_script` 写回，或 OS 层采样（200ms 间隔 RSS 轮询已验证
+  可复现 whisper 主线程阻塞的毫秒级阶跃）。
+- **测试根目录无单数假设**：项目把测试放 `res://tests/`（复数）很常见，
+  `list_project_tests` 现已自动探测 `res://test`/`res://tests`/
+  `res://.mcp_runtime_tests` 三个根并合并发现——遇到"无测试"结论先看响应里的
+  `search_paths` 口径，不要直接信。

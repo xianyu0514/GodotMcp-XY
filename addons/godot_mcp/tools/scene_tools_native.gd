@@ -503,8 +503,8 @@ func _tool_get_current_scene(params: Dictionary) -> Dictionary:
 
 func _register_get_scene_structure(server_core: RefCounted) -> void:
 	var tool_name: String = "get_scene_structure"
-	var description: String = "Get the complete structure of the current scene as a tree. Returns node types, names, and hierarchy."
-	
+	var description: String = "Get the structure of a scene as a tree (node types, names, hierarchy). By default reads the scene currently open in the editor; pass scene_path to inspect any scene file read-only without opening or modifying it (the file is instantiated briefly to walk the tree, so @tool scripts' _init/setters execute; _ready does not). Truncated subtrees report their size via hidden_descendants."
+
 	# inputSchema
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -512,20 +512,27 @@ func _register_get_scene_structure(server_core: RefCounted) -> void:
 			"max_depth": {
 				"type": "integer",
 				"description": "Maximum depth to traverse. -1 means no limit."
+			},
+			"scene_path": {
+				"type": "string",
+				"description": "Optional res:// path to a .tscn/.scn file. Inspects that scene read-only instead of the editor's currently open scene."
 			}
 		}
 	}
-	
+
 	# outputSchema
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
 			"scene_name": {"type": "string"},
 			"root_node": {"type": "object"},
-			"total_nodes": {"type": "integer"}
+			"total_nodes": {"type": "integer"},
+			"scene_path": {"type": "string", "description": "Present when read from a scene file via scene_path."},
+			"hidden_descendants": {"type": "integer", "description": "Total nodes hidden by max_depth truncation across the tree."},
+			"error": {"type": "string"}
 		}
 	}
-	
+
 	# annotations - readOnlyHint = true
 	var annotations: Dictionary = {
 		"readOnlyHint": true,
@@ -533,25 +540,43 @@ func _register_get_scene_structure(server_core: RefCounted) -> void:
 		"idempotentHint": true,
 		"openWorldHint": false
 	}
-	
+
 	# 注册工具
-	server_core.register_tool(tool_name, description, input_schema, 
+	server_core.register_tool(tool_name, description, input_schema,
 						  Callable(self, "_tool_get_scene_structure"),
 						  output_schema, annotations,
 						  "supplementary", "Scene-Advanced")
 
 func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 	var max_depth: int = params.get("max_depth", -1)
-	
-	var editor_interface: EditorInterface = _get_editor_interface()
-	if not editor_interface:
-		return {"error": "Editor interface not available"}
-	
-	# 获取场景根节�?
-	var scene_root: Node = _get_user_scene_root()
-	if not scene_root:
-		return {"error": "No scene is currently open"}
-	
+	var scene_path: String = str(params.get("scene_path", "")).strip_edges()
+
+	var scene_root: Node = null
+	var from_file: bool = false
+	if not scene_path.is_empty():
+		# 只读巡检：加载指定场景文件构建结构，不切换编辑器当前场景
+		# （2026-09-27 体检 P1-6：此前只能读"当前编辑器场景"，巡检其余场景必须侵入式 open_scene）。
+		if not scene_path.begins_with("res://"):
+			return {"error": "scene_path must start with res://"}
+		if not ResourceLoader.exists(scene_path):
+			return {"error": "Scene not found: %s. Use list_project_scenes to enumerate available scenes." % scene_path}
+		var packed: PackedScene = ResourceLoader.load(scene_path, "PackedScene") as PackedScene
+		if packed == null:
+			return {"error": "Could not load as PackedScene: " + scene_path}
+		scene_root = packed.instantiate()
+		if scene_root == null:
+			return {"error": "Could not instantiate scene (check @tool scripts for errors): " + scene_path}
+		from_file = true
+	else:
+		var editor_interface: EditorInterface = _get_editor_interface()
+		if not editor_interface:
+			return {"error": "Editor interface not available"}
+
+		# 获取场景根节点
+		scene_root = _get_user_scene_root()
+		if not scene_root:
+			return {"error": "No scene is currently open. Pass scene_path to inspect a scene file without opening it."}
+
 	# 构建场景结构（一次遍历同时得到树与可见节点数，避免默认情况下二次 _count_nodes 遍历）
 	var built: Dictionary = _build_node_tree_with_count(scene_root, 0, max_depth, scene_root)
 	# max_depth 截断时 built["count"] 只统计可见部分的节点，而 total_nodes
@@ -562,20 +587,31 @@ func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 		"root_node": built["tree"],
 		"total_nodes": total_nodes
 	}
-	
+	if from_file:
+		scene_structure["scene_path"] = scene_path
+		# 释放临时实例，编辑器场景不受影响。
+		scene_root.free()
+	else:
+		scene_structure["source"] = "edited_scene"
+	if max_depth >= 0:
+		# 截断诚实化：显式上报被 max_depth 隐藏的节点规模（0 表示无截断）。
+		scene_structure["hidden_descendants"] = maxi(total_nodes - int(built["count"]), 0)
+
 	return scene_structure
 
 # 辅助函数：递归构建节点�?
 static func _make_friendly_path(node: Node, scene_root: Node) -> String:
 	if not scene_root:
-		return str(node.get_path())
+		# 场景文件巡检的实例不在树中，get_path() 会报 !is_inside_tree() 并返回空。
+		return str(node.get_path()) if node.is_inside_tree() else String(node.name)
 	if node == scene_root:
 		return "/root/" + scene_root.name
-	var node_path: String = str(node.get_path())
-	var root_path: String = str(scene_root.get_path())
-	if node_path.begins_with(root_path + "/"):
-		return "/root/" + scene_root.name + node_path.substr(root_path.length())
-	return node_path
+	# get_path_to 只依赖父子链，不要求节点在场景树内——对编辑器场景与
+	# 场景文件实例（read-only 巡检）都能给出稳定相对路径。
+	var relative: NodePath = scene_root.get_path_to(node)
+	if not relative.is_empty():
+		return "/root/" + scene_root.name + "/" + String(relative)
+	return str(node.get_path())
 
 static func _build_node_tree(node: Node, current_depth: int, max_depth: int, scene_root: Node = null) -> Dictionary:
 	return _build_node_tree_with_count(node, current_depth, max_depth, scene_root)["tree"]
@@ -594,6 +630,8 @@ static func _build_node_tree_with_count(node: Node, current_depth: int, max_dept
 	# 检查是否达到最大深�?
 	if max_depth >= 0 and current_depth >= max_depth:
 		node_info["children_truncated"] = true
+		# 截断诚实化：量化该节点下被隐藏的后代数量（不含节点自身）。
+		node_info["hidden_descendants"] = _count_nodes(node) - 1
 		return {"tree": node_info, "count": count}
 	
 	# 递归处理子节�?
