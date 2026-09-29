@@ -46,6 +46,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_detect_broken_scripts(server_core)
 	_register_audit_project_health(server_core)
 	_register_find_resource_usages(server_core)
+	_register_move_project_resource(server_core)
+	_register_remove_project_resource(server_core)
 	_register_list_unused_resources(server_core)
 	_register_scan_migration_compatibility(server_core)
 	_register_apply_migration_fixes(server_core)
@@ -2994,3 +2996,358 @@ func _describe_gdextension(extension_path: String) -> Dictionary:
 		"all_libraries_present": libraries.size() > 0 and missing == 0,
 		"dependencies": dependencies
 	}
+
+# ============================================================================
+# move_project_resource / remove_project_resource - 资源重组（带引用处理）
+# ============================================================================
+
+## 引用扫描覆盖的文本扩展名（引用可能藏在场景/资源/脚本/配置里）。
+const REORG_TEXT_EXTENSIONS: Array[String] = [
+	".tscn", ".tres", ".gd", ".cs", ".godot", ".cfg", ".json", ".md", ".txt",
+	".csv", ".import", ".gdshader", ".yml", ".yaml", ".xml", ".toml",
+]
+
+## 路径出现次数统计（边界守卫：匹配后紧跟路径续接字符的不算——
+## res://a/old.png 不是 res://a/old.png.import 的引用）。
+static func _count_path_occurrences(text: String, res_path: String) -> int:
+	var count: int = 0
+	var search_from: int = 0
+	while true:
+		var idx: int = text.find(res_path, search_from)
+		if idx < 0:
+			break
+		var end_idx: int = idx + res_path.length()
+		if end_idx >= text.length() or not _is_path_continuation(text[end_idx]):
+			count += 1
+		search_from = idx + 1
+	return count
+
+static func _is_path_continuation(ch: String) -> bool:
+	return (ch >= "a" and ch <= "z") or (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "_" or ch == "." or ch == "/" or ch == "-"
+
+## 引用重写（同一边界守卫）。返回 {text, count}。
+static func _rewrite_path_occurrences(text: String, old_path: String, new_path: String) -> Dictionary:
+	var count: int = _count_path_occurrences(text, old_path)
+	if count == 0:
+		return {"text": text, "count": 0}
+	var rebuilt: String = ""
+	var cursor: int = 0
+	while true:
+		var idx: int = text.find(old_path, cursor)
+		if idx < 0:
+			rebuilt += text.substr(cursor)
+			break
+		var end_idx: int = idx + old_path.length()
+		var boundary_ok: bool = end_idx >= text.length() or not _is_path_continuation(text[end_idx])
+		rebuilt += text.substr(cursor, idx - cursor)
+		if boundary_ok:
+			rebuilt += new_path
+			cursor = end_idx
+		else:
+			rebuilt += old_path
+			cursor = end_idx
+	return {"text": rebuilt, "count": count}
+
+## 全项目文本文件收集（排除 .godot 生成域与插件自身——它们不引用游戏资产）。
+func _collect_reorg_scan_files() -> Array[String]:
+	var files: Array[String] = []
+	ProjectToolsNative._collect_resources("res://", REORG_TEXT_EXTENSIONS, files, false, true)
+	var filtered: Array[String] = []
+	for file_path in files:
+		if file_path.begins_with("res://addons/godot_mcp/"):
+			continue
+		if file_path.begins_with("res://.godot/"):
+			continue
+		filtered.append(file_path)
+	return filtered
+
+## 引用闭包：[{path, replacements}]，按 replacements 降序。
+func _find_path_referencers(res_path: String) -> Array:
+	var referencers: Array = []
+	for file_path in _collect_reorg_scan_files():
+		var file: FileAccess = FileAccess.open(file_path, FileAccess.READ)
+		if not file:
+			continue
+		var text: String = file.get_as_text()
+		file.close()
+		var count: int = _count_path_occurrences(text, res_path)
+		if count > 0:
+			referencers.append({"path": file_path, "replacements": count})
+	referencers.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["replacements"]) > int(b["replacements"])
+	)
+	return referencers
+
+## 编辑器缓冲守卫：未保存场景/脚本出现在将要改动的文件里时拒绝操作。
+func _collect_unsaved_paths() -> Array[String]:
+	var unsaved: Array[String] = []
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return unsaved
+	if editor_interface.has_method("get_unsaved_scenes"):
+		for scene_path in editor_interface.call("get_unsaved_scenes"):
+			unsaved.append(str(scene_path))
+	var script_editor: ScriptEditor = editor_interface.get_script_editor()
+	if script_editor and script_editor.has_method("get_unsaved_files"):
+		for script_path in script_editor.call("get_unsaved_files"):
+			unsaved.append(str(script_path))
+	return unsaved
+
+func _current_edited_scene_path() -> String:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return ""
+	var root: Node = editor_interface.get_edited_scene_root()
+	if root == null:
+		return ""
+	return str(root.scene_file_path)
+
+func _trigger_filesystem_scan() -> Dictionary:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"scan_triggered": false, "reason": "editor interface not available (headless)"}
+	var fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if fs == null:
+		return {"scan_triggered": false, "reason": "EditorFileSystem not available"}
+	if fs.is_scanning():
+		return {"scan_triggered": false, "reason": "already scanning"}
+	fs.scan()
+	return {"scan_triggered": true}
+
+func _validate_reorg_path(path: String, must_exist: bool) -> Dictionary:
+	if path.is_empty() or not path.begins_with("res://"):
+		return {"error": "Path must be a non-empty res:// path"}
+	if path.begins_with("res://.godot/") or path.begins_with("res://.godot"):
+		return {"error": "res://.godot/ is the engine cache and cannot be reorganized"}
+	if path.begins_with("res://addons/godot_mcp/"):
+		return {"error": "Refusing to reorganize the running MCP plugin's own files (addons/godot_mcp/)"}
+	var globalized: String = ProjectSettings.globalize_path(path)
+	if must_exist:
+		if FileAccess.file_exists(globalized):
+			return {"ok": true, "absolute": globalized}
+		if DirAccess.dir_exists_absolute(globalized):
+			return {"error": "Path is a directory: " + path + " (this tool moves/removes single files; directories are out of scope)"}
+		return {"error": "File not found: " + path}
+	return {"ok": true, "absolute": globalized}
+
+func _sidecar_paths(res_path: String) -> Array[String]:
+	return [res_path + ".import", res_path + ".uid"]
+
+func _register_move_project_resource(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"move_project_resource",
+		"Move or rename a project resource WITH reference rewriting: finds every text file referencing the old res:// path (scenes, resources, scripts, configs — with a boundary guard so res://a/b.png never corrupts res://a/b.png.import), rewrites them, moves the file together with its .import/.uid sidecars so UID-based references stay valid, and triggers a filesystem scan. Refuses the running plugin's own files, the engine cache, directories, the currently edited scene, and any involved file with unsaved editor buffers.",
+		{
+			"type": "object",
+			"properties": {
+				"from_path": {"type": "string", "description": "Current res:// path of the file."},
+				"to_path": {"type": "string", "description": "New res:// path. Extension must match (this moves/renames, it does not convert). Missing destination directories are created."}
+			},
+			"required": ["from_path", "to_path"]
+		},
+		Callable(self, "_tool_move_project_resource"),
+		{
+			"type": "object",
+			"properties": {
+				"moved": {"type": "boolean"},
+				"from_path": {"type": "string"},
+				"to_path": {"type": "string"},
+				"sidecars_moved": {"type": "array"},
+				"rewritten": {"type": "array", "description": "Files whose references were rewritten: [{path, replacements}]."},
+				"total_replacements": {"type": "integer"},
+				"scan": {"type": "object"},
+				"hint": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_move_project_resource(params: Dictionary) -> Dictionary:
+	var from_path: String = str(params.get("from_path", "")).strip_edges()
+	var to_path: String = str(params.get("to_path", "")).strip_edges()
+	if from_path.is_empty() or to_path.is_empty():
+		return {"error": "Missing required parameters: from_path, to_path"}
+	if from_path == to_path:
+		return {"error": "from_path and to_path are identical"}
+
+	var from_check: Dictionary = _validate_reorg_path(from_path, true)
+	if from_check.has("error"):
+		return from_check
+	var to_check: Dictionary = _validate_reorg_path(to_path, false)
+	if to_check.has("error"):
+		return to_check
+	if from_path.get_extension().to_lower() != to_path.get_extension().to_lower():
+		return {"error": "Extension mismatch (%s -> %s): this tool moves/renames, it does not convert formats." % [from_path.get_extension(), to_path.get_extension()]}
+
+	var edited_scene: String = _current_edited_scene_path()
+	if not edited_scene.is_empty() and edited_scene == from_path:
+		return {"error": "The file to move is the currently edited scene. Close it (or edit another scene) first — moving it under the open editor would desync the editor's buffer."}
+
+	var referencers: Array = _find_path_referencers(from_path)
+	var unsaved: Array[String] = _collect_unsaved_paths()
+	var blocked_by_buffers: Array[String] = []
+	if unsaved.has(from_path):
+		blocked_by_buffers.append(from_path)
+	for referencer_value in referencers:
+		var ref_path: String = String((referencer_value as Dictionary)["path"])
+		if unsaved.has(ref_path):
+			blocked_by_buffers.append(ref_path)
+	if not blocked_by_buffers.is_empty():
+		return {"error": "Unsaved editor buffers touch files this move would rewrite: " + ", ".join(blocked_by_buffers) + ". Save them (save_all_scripts / save_scene) or close them, then retry."}
+
+	var to_absolute: String = String(to_check["absolute"])
+	var to_dir: String = to_absolute.get_base_dir()
+	if not DirAccess.dir_exists_absolute(to_dir):
+		var mkdir_error: Error = DirAccess.make_dir_recursive_absolute(to_dir)
+		if mkdir_error != OK:
+			return {"error": "Could not create destination directory %s (error %d)" % [to_dir, mkdir_error]}
+
+	var sidecars_moved: Array[String] = []
+	var moved_import_sidecars: Array[String] = []
+	for sidecar in _sidecar_paths(from_path):
+		if FileAccess.file_exists(ProjectSettings.globalize_path(sidecar)):
+			var sidecar_error: Error = DirAccess.rename_absolute(ProjectSettings.globalize_path(sidecar), ProjectSettings.globalize_path(sidecar.replace(from_path, to_path)))
+			if sidecar_error != OK:
+				return {"error": "Failed to move sidecar %s (error %d) — source file is untouched; resolve the sidecar and retry." % [sidecar, sidecar_error]}
+			sidecars_moved.append(sidecar)
+			if sidecar.ends_with(".import"):
+				moved_import_sidecars.append(sidecar)
+
+	var move_error: Error = DirAccess.rename_absolute(String(from_check["absolute"]), to_absolute)
+	if move_error != OK:
+		return {"error": "Move failed (error %d): %s -> %s" % [move_error, from_path, to_path]}
+
+	var rewritten: Array = []
+	var total_replacements: int = 0
+	# 被移动的 .import 副车的 source_file 指旧路径——但 .import 文件被收集器
+	# 按生成域过滤（GENERATED_FILE_SUFFIXES），不会出现在引用扫描里，必须在这里
+	# 显式重写。其他文件的 .import 只指向自己的源文件，不需要扫。
+	for moved_import in moved_import_sidecars:
+		var new_import_path: String = moved_import.replace(from_path, to_path)
+		var import_file: FileAccess = FileAccess.open(new_import_path, FileAccess.READ)
+		if import_file:
+			var import_text: String = import_file.get_as_text()
+			import_file.close()
+			var import_rewrite: Dictionary = _rewrite_path_occurrences(import_text, from_path, to_path)
+			var import_count: int = int(import_rewrite["count"])
+			if import_count > 0:
+				var import_writer: FileAccess = FileAccess.open(new_import_path, FileAccess.WRITE)
+				if import_writer:
+					import_writer.store_string(String(import_rewrite["text"]))
+					import_writer.close()
+					rewritten.append({"path": new_import_path, "replacements": import_count})
+					total_replacements += import_count
+	for referencer_value in referencers:
+		var ref_path: String = String((referencer_value as Dictionary)["path"])
+		# 被移动的 .import 副车（source_file 指旧路径）现在活在新路径下。
+		var effective_path: String = ref_path.replace(from_path, to_path) if ref_path.begins_with(from_path) else ref_path
+		var file: FileAccess = FileAccess.open(effective_path, FileAccess.READ)
+		if not file:
+			continue
+		var text: String = file.get_as_text()
+		file.close()
+		var rewrite: Dictionary = _rewrite_path_occurrences(text, from_path, to_path)
+		var replacements: int = int(rewrite["count"])
+		if replacements == 0:
+			continue
+		var writer: FileAccess = FileAccess.open(effective_path, FileAccess.WRITE)
+		if writer == null:
+			return {"error": "Moved, but failed to rewrite references in " + effective_path + " — run find_resource_usages on the new path and repair manually."}
+		writer.store_string(String(rewrite["text"]))
+		writer.close()
+		rewritten.append({"path": effective_path, "replacements": replacements})
+		total_replacements += replacements
+
+	var scan: Dictionary = _trigger_filesystem_scan()
+	return {
+		"moved": true,
+		"from_path": from_path,
+		"to_path": to_path,
+		"sidecars_moved": sidecars_moved,
+		"rewritten": rewritten,
+		"total_replacements": total_replacements,
+		"scan": scan,
+		"hint": "Verify with find_resource_usages on to_path (should return the same files that referenced from_path)."
+	}
+
+func _register_remove_project_resource(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"remove_project_resource",
+		"Remove a project resource safely: first computes the path-reference closure; with references present it refuses unless force=true (and even then reports every dangled reference honestly). The file plus its .import/.uid sidecars go to the OS trash (recoverable) rather than being hard-deleted. Refuses the engine cache, the running plugin's own files, directories, the main scene and the currently edited scene, and files with unsaved editor buffers.",
+		{
+			"type": "object",
+			"properties": {
+				"path": {"type": "string", "description": "res:// path of the file to remove."},
+				"force": {"type": "boolean", "default": false, "description": "Remove even when references exist (the references are listed and will dangle — that is reported, not hidden)."}
+			},
+			"required": ["path"]
+		},
+		Callable(self, "_tool_remove_project_resource"),
+		{
+			"type": "object",
+			"properties": {
+				"removed": {"type": "boolean"},
+				"path": {"type": "string"},
+				"removal_method": {"type": "string"},
+				"referencers": {"type": "array"},
+				"sidecars_removed": {"type": "array"},
+				"scan": {"type": "object"},
+				"hint": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_remove_project_resource(params: Dictionary) -> Dictionary:
+	var path: String = str(params.get("path", "")).strip_edges()
+	var check: Dictionary = _validate_reorg_path(path, true)
+	if check.has("error"):
+		return check
+
+	if str(ProjectSettings.get_setting("application/run/main_scene", "")) == path:
+		return {"error": "The file is the project's main scene. Change application/run/main_scene first (set_project_setting), then remove it."}
+	var edited_scene: String = _current_edited_scene_path()
+	if not edited_scene.is_empty() and edited_scene == path:
+		return {"error": "The file is the currently edited scene. Close it first — removing it under the open editor would desync the editor's buffer."}
+
+	var referencers: Array = _find_path_referencers(path)
+	var force: bool = bool(params.get("force", false))
+	if not referencers.is_empty() and not force:
+		return {
+			"error": "File is referenced by %d file(s); refusing to remove. Pass force=true to remove anyway (the references will dangle and are listed in the response), or rewrite the references first." % referencers.size(),
+			"referencers": referencers.slice(0, 20)
+		}
+
+	var unsaved: Array[String] = _collect_unsaved_paths()
+	if unsaved.has(path):
+		return {"error": "The file has unsaved editor buffer changes. Save or close it, then retry."}
+
+	var removed_sidecars: Array[String] = []
+	for sidecar in _sidecar_paths(path):
+		var sidecar_absolute: String = ProjectSettings.globalize_path(sidecar)
+		if FileAccess.file_exists(sidecar_absolute):
+			if OS.move_to_trash(sidecar_absolute) != OK:
+				DirAccess.remove_absolute(sidecar_absolute)
+			removed_sidecars.append(sidecar)
+
+	var absolute: String = String(check["absolute"])
+	var removal_method: String = "trash"
+	if OS.move_to_trash(absolute) != OK:
+		DirAccess.remove_absolute(absolute)
+		removal_method = "hard_delete (trash unavailable)"
+
+	var scan: Dictionary = _trigger_filesystem_scan()
+	var result: Dictionary = {
+		"removed": true,
+		"path": path,
+		"removal_method": removal_method,
+		"sidecars_removed": removed_sidecars,
+		"scan": scan
+	}
+	if not referencers.is_empty():
+		result["referencers"] = referencers.slice(0, 20)
+		result["hint"] = "Removed with force while %d file(s) still reference this path — those references now dangle. Run find_resource_usages alternatives or fix them via apply_change_set." % referencers.size()
+	return result
+

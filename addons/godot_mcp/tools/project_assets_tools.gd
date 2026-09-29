@@ -49,6 +49,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_slice_sprite_sheet(server_core)
 	_register_inspect_gltf_asset(server_core)
 	_register_generate_3d_asset(server_core)
+	_register_configure_resource_import(server_core)
 
 # ============================================================================
 # create_gradient_texture - build a GradientTexture2D (incl. Godot 4.7 conic)
@@ -2348,5 +2349,117 @@ func _finalize_generate_3d_asset(result: Dictionary, params: Dictionary) -> Dict
 		else:
 			result["inspection"] = inspection
 
+	return result
+
+# ============================================================================
+# configure_resource_import - 导入参数配置（纹理过滤/音频循环等）
+# ============================================================================
+
+## 按 importer 类型划分的可配置参数白名单（诚实边界：只开放这些实测稳定
+## 的键；.import 里其余键由引擎导入器管理，乱改会破坏导入）。
+const IMPORT_PARAM_WHITELIST: Dictionary = {
+	"texture": ["compress/mode", "compress/high_quality", "mipmaps/generate", "mipmaps/limit", "detect_3d/compress_to", "process/premult_alpha", "process/fix_alpha_border"],
+	"wav": ["edit/loop_mode", "edit/loop_begin", "edit/loop_end", "compress/mode", "force/8_bit", "force/mono", "force/max_rate"],
+	"oggvorbisstr": ["loop", "loop_offset", "bpm", "beat_count", "bar_beats"],
+	"mp3str": ["loop", "loop_offset", "bpm", "beat_count", "bar_beats"],
+	"svg": ["svg_scale", "scale_editor", "convert_colors/..."],
+}
+
+## 纯核心：把参数补丁写进 .import 文件（ConfigFile 语义）。可脱离编辑器测试。
+## 返回 {ok, importer, applied} 或 {error}。
+static func _patch_import_file(import_path: String, param_changes: Dictionary) -> Dictionary:
+	var config: ConfigFile = ConfigFile.new()
+	var load_error: Error = config.load(import_path)
+	if load_error != OK:
+		return {"error": "Could not parse the .import file as INI: " + import_path + " (" + error_string(load_error) + ")"}
+	var importer: String = String(config.get_value("remap", "importer", ""))
+	if importer.is_empty():
+		return {"error": "The .import file has no [remap] importer — not a Godot import sidecar: " + import_path}
+	var allowed: Array = IMPORT_PARAM_WHITELIST.get(importer, [])
+	if allowed.is_empty():
+		return {"error": "Importer '%s' has no configurable whitelist yet. Configurable importers: %s." % [importer, ", ".join(IMPORT_PARAM_WHITELIST.keys())]}
+	var applied: Dictionary = {}
+	for key_value in param_changes:
+		var key: String = str(key_value)
+		if not (key in allowed):
+			return {"error": "Param '%s' is not configurable for importer '%s'. Allowed keys: %s." % [key, importer, ", ".join(allowed)]}
+		var value: Variant = param_changes[key_value]
+		config.set_value("params", key, value)
+		applied[key] = value
+	if param_changes.is_empty():
+		return {"error": "params must not be empty"}
+	var save_error: Error = config.save(import_path)
+	if save_error != OK:
+		return {"error": "Failed to write the patched .import file (error %d)" % save_error}
+	return {"ok": true, "importer": importer, "applied": applied}
+
+func _register_configure_resource_import(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"configure_resource_import",
+		"Configure a resource's import settings by patching its .import sidecar and reimporting: texture compress/mipmaps, WAV loop mode, OGG/MP3 loop flags (per-importer whitelist — unknown keys are refused with the allowed list). preset='pixel_art' additionally sets the project-wide nearest filtering (rendering/textures/canvas_textures/default_texture_filter=0), the classic pixel-art correctness fix. Responds with the applied diff and the reimport status.",
+		{
+			"type": "object",
+			"properties": {
+				"resource_path": {"type": "string", "description": "res:// path of the SOURCE asset (e.g. 'res://art/sprite.png'). The .import sidecar must exist."},
+				"params": {"type": "object", "description": "Importer params to set, e.g. {\"mipmaps/generate\": false}. Keys are validated against the importer whitelist."},
+				"preset": {"type": "string", "enum": ["pixel_art"], "description": "Optional convenience preset. 'pixel_art' sets project-wide nearest filtering (a project setting, persisted)."}
+			},
+			"required": ["resource_path"]
+		},
+		Callable(self, "_tool_configure_resource_import"),
+		{
+			"type": "object",
+			"properties": {
+				"configured": {"type": "boolean"},
+				"resource_path": {"type": "string"},
+				"importer": {"type": "string"},
+				"applied": {"type": "object"},
+				"preset_applied": {"type": "string"},
+				"reimport": {"type": "object"},
+				"project_setting_changed": {"type": "object"},
+				"hint": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false},
+		"supplementary", "Project-Advanced"
+	)
+
+func _tool_configure_resource_import(params: Dictionary) -> Dictionary:
+	var resource_path: String = str(params.get("resource_path", "")).strip_edges()
+	if resource_path.is_empty() or not resource_path.begins_with("res://"):
+		return {"error": "resource_path must be a non-empty res:// path"}
+	var import_path: String = resource_path + ".import"
+	if not FileAccess.file_exists(import_path):
+		return {"error": "No import sidecar at " + import_path + " — the asset has not been imported yet. Make sure the editor scanned it (add the asset, wait for the scan), then retry."}
+
+	var param_changes: Dictionary = params.get("params", {}) if params.get("params", {}) is Dictionary else {}
+	var preset: String = str(params.get("preset", "")).strip_edges()
+	if param_changes.is_empty() and preset.is_empty():
+		return {"error": "Nothing to do: pass params and/or preset"}
+
+	var patched: Dictionary = _patch_import_file(import_path, param_changes)
+	if patched.has("error"):
+		return patched
+
+	var result: Dictionary = {
+		"configured": true,
+		"resource_path": resource_path,
+		"importer": patched["importer"],
+		"applied": patched["applied"]
+	}
+
+	if preset == "pixel_art":
+		var setting: String = "rendering/textures/canvas_textures/default_texture_filter"
+		var previous: int = int(ProjectSettings.get_setting(setting, 1))
+		ProjectSettings.set_setting(setting, 0)
+		ProjectSettings.save()
+		result["preset_applied"] = "pixel_art"
+		result["project_setting_changed"] = {"setting": setting, "from": previous, "to": 0, "meaning": "0 = Nearest — project-wide canvas texture filtering is now pixel-art correct"}
+	elif not preset.is_empty():
+		return {"error": "Unknown preset '%s'. Available: pixel_art." % preset}
+
+	var reimport: Dictionary = _reimport_asset(resource_path)
+	result["reimport"] = reimport
+	result["hint"] = "Verify with get_import_metadata on resource_path."
 	return result
 

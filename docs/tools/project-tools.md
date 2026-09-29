@@ -23,7 +23,7 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `get_project_settings` | core | Get project settings. Optionally filter by a prefix. |
 | `list_project_resources` | core | List project resources with lossless `limit`/`offset` pages. Follow `next_offset` while `has_more`; pages reuse one revision-safe scan snapshot. |
 
-### Project-Advanced (73 advanced)
+### Project-Advanced (76 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -53,6 +53,9 @@ Inspect and maintain project-level state: settings, resources, input map, tests,
 | `gather_task_context` | advanced | Assemble a bounded, sourced task context for a natural-language modification goal (EN/ZH, e.g. 'add a dash to the player'): entry scripts (name/symbol keyword matches with content hashes), scenes referencing them, related InputMap actions, resources preloaded by those scripts, and tests referencing them. Deterministic keyword filtering with an explainable zh→en term map; every bucket is budgeted with truncated flags and exact follow-up reads. Read-only. |
 | `query_engine_compat` | advanced | Look up measured engine truths (API drift 4.6/4.7, parser limits, CLI behavior, editor semantics) with exact workarounds and evidence sources. Query by API name, symptom or keyword; check before first use of an unfamiliar engine API. |
 | `read_project_file` | advanced | Read any text project file read_script rejects (JSON, .cfg, .tscn, .tres, .md, .csv): line-window pagination, size cap, binary guard, content_hash. Read-only config debugging. |
+| `move_project_resource` | advanced | Move/rename a resource with reference rewriting (scenes/resources/scripts/configs), .import/.uid sidecars travel along, filesystem scan triggered. Buffer- and self-protection guards. |
+| `remove_project_resource` | advanced | Remove a resource safely: refuses while referenced (unless force=true, dangles listed), OS-trash instead of hard delete, sidecars cleaned. |
+| `configure_resource_import` | advanced | Patch .import params (texture compress/mipmaps, WAV/OGG/MP3 loop) with per-importer whitelist and reimport; `pixel_art` preset sets project-wide nearest filtering. |
 | `assert_visual_baseline` | advanced | Visual regression gate: compare a candidate screenshot against a stored baseline (golden) image and return pass/fail against tolerances (max_diff_pixels / max_diff_ratio / rmse_threshold). Missing baseline (or update_baseline=true) saves the candidate as the new baseline and returns `passed=false` with status `baseline_created`/`baseline_updated` — capturing a golden image is never a comparison pass; rerun to compare against it. Optionally writes a diff heatmap PNG. Dimension mismatches fail. |
 | `inspect_tileset_resource` | advanced | Inspect a TileSet resource and summarize its sources, atlas tiles, and scene tiles. |
 | `reimport_resources` | advanced | Reimport project resources. |
