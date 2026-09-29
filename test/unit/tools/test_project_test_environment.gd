@@ -143,3 +143,13 @@ func test_default_call_reports_per_candidate_counts() -> void:
 	assert_true(int(result.get("count", 0)) > 0, "本仓库 res://test 存在大量测试")
 	var reports: Array = result.get("search_paths", [])
 	assert_false(reports.is_empty(), "search_paths 应给出口径级计数")
+
+func test_gut_nothing_run_reports_skipped_not_passed() -> void:
+	# 2026-09-29 真机发现（English Rift）：测试脚本不继承 GutTest 时 GUT
+	# 忽略整个脚本且退出码为 0——裸 exit-code 判定把 nothing-run 转成
+	# passed（假绿）。守卫必须转 skipped 并说明原因。
+	# 守卫判据静态函数（真跑子进程的端到端在 English Rift 真机完成，§12）。
+	assert_true(ProjectToolsScript._is_gut_zero_run(
+		"[GUT ERROR]:  Nothing was run.\n"), "零执行判据命中")
+	assert_false(ProjectToolsScript._is_gut_zero_run(
+		"GUT version 9.7.1\nAll tests passed\n"), "正常输出不误判")

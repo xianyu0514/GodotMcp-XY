@@ -1394,8 +1394,13 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 			continue
 		var test_result: Dictionary = _execute_project_test_blocking(String(test_entry.get("test_path", "")))
 		results.append(test_result)
-		if test_result.get("status", "") == "passed":
+		# 三态计数（2026-09-29 假绿防护配套）：skipped（无 runner 或零执行
+		# 防护）不能压进 failed——那会让"什么都没跑"看起来像真失败，同样失真。
+		var result_status: String = str(test_result.get("status", ""))
+		if result_status == "passed":
 			passed_count += 1
+		elif result_status == "skipped":
+			skipped_count += 1
 		else:
 			failed_count += 1
 		index += 1
@@ -1674,6 +1679,10 @@ func _run_native_project_test(test_path: String) -> Dictionary:
 		"output": output
 	}
 
+## GUT 零执行判据：脚本被忽略（不继承 GutTest 等）时 GUT 打印该串且退出码为 0。
+static func _is_gut_zero_run(output_text: String) -> bool:
+	return output_text.contains("Nothing was run")
+
 func _run_gut_project_test(test_path: String) -> Dictionary:
 	var gut_cmdln_path: String = "res://addons/gut/gut_cmdln.gd"
 	if not FileAccess.file_exists(gut_cmdln_path):
@@ -1693,8 +1702,28 @@ func _run_gut_project_test(test_path: String) -> Dictionary:
 	var exit_code: int = OS.execute(executable_path, args, logs, true)
 	var duration_ms: int = Time.get_ticks_msec() - started_at_ms
 	var output: Array = []
+	var output_text: String = ""
 	for line in logs:
-		output.append(_sanitize_cli_output(str(line)))
+		var sanitized: String = _sanitize_cli_output(str(line))
+		output.append(sanitized)
+		output_text += sanitized + "
+"
+	# 假绿防护（2026-09-29 English Rift 真机实测）：GUT 对"零测试执行"
+	# 退出码为 0（脚本不继承 GutTest 时整脚本被忽略），裸 exit-code 判定
+	# 会把 nothing-run 转成 passed。诚实宪章：零执行 = skipped，不冒充通过。
+	if exit_code == OK and _is_gut_zero_run(output_text):
+		return {
+			"status": "skipped",
+			"framework": "gut",
+			"kind": "unit",
+			"test_path": test_path,
+			"exit_code": exit_code,
+			"duration_ms": duration_ms,
+			"command": [executable_path] + args,
+			"output": output,
+			"skipped_reason": "GUT ran zero tests for this script (it does not extend GutTest and was ignored). Fix the script's base class or point the runner at real GUT tests; 'passed' would be a false green.",
+			"honest_note": "exit_code was 0 but zero tests executed — reported as skipped, never as passed."
+		}
 	return {
 		"status": "passed" if exit_code == OK else "failed",
 		"framework": "gut",
