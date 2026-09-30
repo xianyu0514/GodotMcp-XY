@@ -47,6 +47,17 @@ plus three platform capabilities and a multi-AI concurrency guard. Catalog
   location; runtime timeout defaults 1500→4000ms; `no_active_sessions`
   carries next-step guidance; editor logs carry `retrieved_at`.
 
+## 1.2.1 (2026-09-30)
+
+The signed update chain ships: automated release packaging (zip + SHA256SUMS +
+RSA-4096 signature via the new Release workflow), `download_plugin_update`
+(staged download with SHA-256 and embedded-public-key signature verification —
+mismatches are deleted, not flagged), `apply_plugin_update` (backup to
+user://plugin_backups, native ZIPReader swap, scan + restart guidance; refuses
+unverified packages). Also: every engine reference in CI and integration
+defaults unified on 4.7.2, and `save_scene` resyncs the editor's unsaved-state
+on 4.7.2 (the l3 flow's verify_change_effect buffer guard was honestly right).
+
 ## Unreleased
 
 - Script writes return `validation_status`, bounded per-write compiler `diagnostics` and an optional hint independently of save success. C# and editor script templates explicitly remain unchecked; invalid GDScript is saved but not attached to a node. Existing `modify_script` validation summaries and `validate: false` remain supported.
