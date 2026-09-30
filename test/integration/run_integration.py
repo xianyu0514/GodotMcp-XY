@@ -64,7 +64,7 @@ def kill_repo_godots() -> None:
     # 绝不碰用户自己打开的编辑器。
     if os.environ.get("MCP_RUNNER_KILL_ALL_GODOT"):
         result = subprocess.run(
-            ["taskkill", "/IM", "Godot_v4.6.3-stable_win64.exe", "/T", "/F"],
+            ["taskkill", "/IM", "Godot_v4.7.2-stable_win64.exe", "/T", "/F"],
             capture_output=True, text=True, timeout=30,
         )
         terminated = result.stdout.count("SUCCESS")

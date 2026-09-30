@@ -1,0 +1,51 @@
+name: Release
+
+# 打 v* tag 时：打包插件 zip → 生成 SHA256SUMS → 用仓库私钥（GitHub Secrets）
+# 签名 → 建 GitHub Release 附三件资产（zip / SHA256SUMS.txt / SHA256SUMS.sig）。
+# 插件内嵌公钥（editor_tools_native.gd 的 RELEASE_SIGNING_PUBLIC_KEY_PEM）在
+# download_plugin_update 里验签——未签名/被篡改的更新物无法通过验证。
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Package plugin (addons/godot_mcp, import sidecars stripped)
+        run: |
+          mkdir -p dist/godot_mcp
+          cp -r addons/godot_mcp/. dist/godot_mcp/
+          find dist -name "*.import" -delete
+          cd dist
+          zip -r ../godot_mcp.zip godot_mcp
+          cd ..
+          sha256sum godot_mcp.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Sign SHA256SUMS (RSA-4096, PKCS#1 v1.5 over SHA-256)
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          echo "$RELEASE_SIGNING_PRIVATE_KEY" > private.pem
+          chmod 600 private.pem
+          openssl dgst -sha256 -sign private.pem -out SHA256SUMS.sig SHA256SUMS.txt
+          openssl dgst -sha256 -verify <(openssl rsa -in private.pem -pubout 2>/dev/null) -signature SHA256SUMS.sig SHA256SUMS.txt
+          rm private.pem
+
+      - name: Create GitHub release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" godot_mcp.zip SHA256SUMS.txt SHA256SUMS.sig \
+            --title "Godot MCP Native $TAG" \
+            --notes "Automated release. Assets: plugin zip + SHA256SUMS.txt + RSA-4096 signature. Install: replace addons/godot_mcp with the zip contents (or use download_plugin_update + apply_plugin_update from v1.2.1+)."

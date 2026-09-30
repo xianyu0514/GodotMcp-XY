@@ -136,6 +136,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_redo(server_core)
 	_register_get_undo_history(server_core)
 	_register_check_plugin_update(server_core)
+	_register_download_plugin_update(server_core)
+	_register_apply_plugin_update(server_core)
 
 # ============================================================================
 # get_editor_state - 获取编辑器状态
@@ -4162,12 +4164,14 @@ static func parse_release_payload(json_text: String) -> Dictionary:
 	if not payload.has("tag_name"):
 		return {"error": "Release payload has no tag_name."}
 	var download_url: String = ""
+	var all_assets: Array = []
 	for asset_value in payload.get("assets", []):
 		if asset_value is Dictionary:
-			var url: String = String((asset_value as Dictionary).get("browser_download_url", ""))
+			var asset: Dictionary = asset_value
+			var url: String = String(asset.get("browser_download_url", ""))
+			all_assets.append({"name": String(asset.get("name", "")), "url": url, "size": int(asset.get("size", 0))})
 			if url.ends_with(".zip"):
 				download_url = url
-				break
 	var notes: String = String(payload.get("body", ""))
 	return {
 		"tag_name": String(payload["tag_name"]),
@@ -4175,6 +4179,7 @@ static func parse_release_payload(json_text: String) -> Dictionary:
 		"published_at": String(payload.get("published_at", "")),
 		"release_url": String(payload.get("html_url", "")),
 		"download_url": download_url,
+		"_assets": all_assets,
 		"notes_excerpt": notes.substr(0, 1200),
 	}
 
@@ -4233,6 +4238,25 @@ func _register_check_plugin_update(server_core: RefCounted) -> void:
 		"supplementary", "Editor-Advanced"
 	)
 
+# RSA-4096 公钥（配对私钥仅存于 GitHub Secrets RELEASE_SIGNING_PRIVATE_KEY；发布工作流用它签名 SHA256SUMS）。
+# 指纹核对：openssl rsa -in private.pem -pubout | sha256sum 应与仓库 README 发布说明一致。
+const RELEASE_SIGNING_PUBLIC_KEY_PEM: String = """
+-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAwvNaIfAvqVz78whfEvbF
+AGLrfrHZ7hJfrSgg8F9rmQ66Tn3Q61jHbleC9Sf0M2tmhyMI+JJLDMmqiD1qxDjH
+ZlLdWLbJgA8pfYAxPYXkawe+QjTX98ZQyA7V/VMA7tz52LWk8NbqEkdvS9pMJzcn
+q7fOgdhq/SX2NE1gjF2NRD13VCRWdn+qBu5ACwr9BV3BSATx19ioub6L7Q4JQYA+
+60Pv5gI4JCt5YRA/vImUshcgxxBAOom4CBTLAPdDGaUJZq8/lapc2c6JYNhTmXYq
+H3yDYUemg3W/mGiKcOp9UqpivOOv21bLxVJ1RpCm8iYCjEgiqAhO1SmkqkuJgzbG
+fwbztMHbZpAj0VNyAiPfUG8SZw67hI7bqczPkgfTMGjJUxzfTu0ETAs7hSv2KCoI
+mJ254Xt0X5KmIttb0ek9vhWoL6kscIDMDyQZNF70hUTX7tr0mQypUQq173zG7Kjp
+9WNroA9fdpG9ekSxV+OnSwFLO9f17fBzG8KXRWBJrqlW/LiI46JpXt33Cs4hWdo1
+RvGT58FtVbY/210B/npanAQ+V+IJDeaMkken5w1LTwit21eMULgYhTHxcAPwK0Ur
+rfJrzqcGSinM1T5SH/09fY7CX2FKTp3S5QFY1aB/4mt7o0VJEqEiwThU9OrJbByr
+f2U+K/bkKhBIfy+sTpBNAT0CAwEAAQ==
+-----END PUBLIC KEY-----
+"""
+
 const GITHUB_LATEST_RELEASE_API: String = "https://api.github.com/repos/xianyu0514/GodotMcp-XY/releases/latest"
 
 func _tool_check_plugin_update(params: Dictionary) -> Dictionary:
@@ -4278,4 +4302,278 @@ func _tool_check_plugin_update(params: Dictionary) -> Dictionary:
 		],
 		"honest_note": "This tool checks and guides only. It does not swap files automatically: releases are not cryptographically signed yet, and an unsigned auto-updater would be security theater. A signed in-editor updater is tracked as future work."
 	}
+
+# ============================================================================
+# download_plugin_update / apply_plugin_update - 更新链（校验下载 + 换装）
+# ============================================================================
+
+## 解析 SHA256SUMS.txt（格式：<hex>  <filename> 每行一条）。
+static func parse_sha256sums(sum_text: String) -> Dictionary:
+	var out: Dictionary = {}
+	for line in sum_text.split("\n"):
+		var trimmed: String = line.strip_edges()
+		if trimmed.is_empty():
+			continue
+		var parts: PackedStringArray = trimmed.split("  ", false)
+		if parts.size() != 2:
+			continue
+		out[String(parts[1]).strip_edges()] = String(parts[0]).strip_edges().to_lower()
+	return out
+
+## RSA-4096/PKCS#1 v1.5 验签（与发布工作流的 `openssl dgst -sha256 -sign` 对应）。
+static func verify_release_signature(public_key_pem: String, data_bytes: PackedByteArray, signature_bytes: PackedByteArray) -> Dictionary:
+	var crypto: Crypto = Crypto.new()
+	var key: CryptoKey = CryptoKey.new()
+	# load_from_string 是实例方法（返回 Error 而非 Key），public_only=true 只载公钥。
+	if key.load_from_string(public_key_pem, true) != OK:
+		return {"verified": false, "reason": "embedded public key could not be parsed"}
+	var hash_context: HashingContext = HashingContext.new()
+	hash_context.start(HashingContext.HASH_SHA256)
+	hash_context.update(data_bytes)
+	var digest: PackedByteArray = hash_context.finish()
+	var verified: bool = crypto.verify(HashingContext.HASH_SHA256, digest, signature_bytes, key)
+	return {"verified": verified, "digest": digest.hex_encode()}
+
+func _download_to_file(url: String, dest_absolute: String, timeout_sec: float) -> Dictionary:
+	# curl 优先（代理可达性同 check_plugin_update 的实测结论），文件直写不经 stdout。
+	var exit_code: int = OS.execute("curl", ["-sL", "-m", str(int(timeout_sec)), "-o", dest_absolute, url], [], false)
+	if exit_code == OK and FileAccess.file_exists(dest_absolute) and FileAccess.get_file_as_bytes(dest_absolute).size() > 0:
+		return {"ok": true, "method": "curl"}
+	var http: HTTPRequest = HTTPRequest.new()
+	http.timeout = timeout_sec
+	http.download_file = dest_absolute
+	Engine.get_main_loop().root.add_child(http)
+	http.request(url)
+	var response: Array = await http.request_completed
+	http.queue_free()
+	if response.size() >= 4 and int(response[0]) == HTTPRequest.RESULT_SUCCESS and FileAccess.file_exists(dest_absolute):
+		return {"ok": true, "method": "http_request"}
+	DirAccess.remove_absolute(dest_absolute)
+	return {"error": "Download failed via curl and engine HTTPRequest: " + url}
+
+func _register_download_plugin_update(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"download_plugin_update",
+		"Download the latest godot_mcp release into a user:// staging area WITH verification: SHA-256 against SHA256SUMS.txt and an RSA-4096 signature check against the key embedded in this plugin (unsigned/tampered updates are refused, not flagged). Nothing in the project is touched — staging only. Follow with apply_plugin_update (also requires the verified signature) or the manual swap steps.",
+		{
+			"type": "object",
+			"properties": {
+				"timeout_sec": {"type": "number", "default": 60, "description": "Per-download timeout in seconds (5-600)."}
+			}
+		},
+		Callable(self, "_tool_download_plugin_update"),
+		{
+			"type": "object",
+			"properties": {
+				"downloaded": {"type": "boolean"},
+				"staged_zip": {"type": "string"},
+				"size_bytes": {"type": "integer"},
+				"sha256_expected": {"type": "string"},
+				"sha256_actual": {"type": "string"},
+				"sha256_verified": {"type": "boolean"},
+				"signature_verified": {"type": "boolean"},
+				"signature_status": {"type": "string"},
+				"latest_version": {"type": "string"},
+				"hint": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Editor-Advanced"
+	)
+
+const RELEASE_STAGING_DIR: String = "user://plugin_updates"
+
+func _tool_download_plugin_update(params: Dictionary) -> Dictionary:
+	var timeout_sec: float = clampf(float(params.get("timeout_sec", 60.0)), 5.0, 600.0)
+	var json_text: String = await _fetch_latest_release_json(GITHUB_LATEST_RELEASE_API, timeout_sec)
+	if json_text.is_empty():
+		return {"error": "Could not reach GitHub to resolve the latest release (offline or proxy-blocked)."}
+	var release: Dictionary = parse_release_payload(json_text)
+	if release.has("error"):
+		return {"error": String(release["error"])}
+	var assets: Array = release.get("_assets", [])
+	var zip_url: String = String(release.get("download_url", ""))
+	var sums_url: String = ""
+	var sig_url: String = ""
+	for asset_value in assets:
+		var asset: Dictionary = asset_value
+		var name: String = String(asset.get("name", ""))
+		var url: String = String(asset.get("browser_download_url", ""))
+		if name == "SHA256SUMS.txt":
+			sums_url = url
+		elif name == "SHA256SUMS.sig":
+			sig_url = url
+	if zip_url.is_empty():
+		return {"error": "The latest release has no godot_mcp.zip asset."}
+
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(RELEASE_STAGING_DIR))
+	var staged_zip: String = RELEASE_STAGING_DIR + "/godot_mcp_" + String(release["tag_name"]).trim_prefix("v") + ".zip"
+	var download: Dictionary = await _download_to_file(zip_url, ProjectSettings.globalize_path(staged_zip), timeout_sec)
+	if download.has("error"):
+		return {"error": String(download["error"]), "release_url": release.get("release_url", "")}
+
+	var actual_sha: String = FileAccess.get_sha256(ProjectSettings.globalize_path(staged_zip))
+	var result: Dictionary = {
+		"downloaded": true,
+		"staged_zip": staged_zip,
+		"size_bytes": FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(staged_zip)).size(),
+		"latest_version": String(release["tag_name"]),
+		"sha256_actual": actual_sha
+	}
+
+	if sums_url.is_empty():
+		result["sha256_verified"] = false
+		result["signature_status"] = "no checksum manifest on this release — verify manually or skip this release"
+		result["hint"] = "Releases produced by the Release workflow carry SHA256SUMS.txt + SHA256SUMS.sig. Without them the download cannot be verified."
+		return result
+	var sums_download: Dictionary = await _download_to_file(sums_url, ProjectSettings.globalize_path(RELEASE_STAGING_DIR + "/SHA256SUMS.txt"), timeout_sec)
+	if sums_download.has("error"):
+		return {"error": "Zip downloaded but the checksum manifest failed: " + String(sums_download["error"])}
+	var sums: Dictionary = parse_sha256sums(FileAccess.get_file_as_string(ProjectSettings.globalize_path(RELEASE_STAGING_DIR + "/SHA256SUMS.txt")))
+	var expected_sha: String = String(sums.get("godot_mcp.zip", ""))
+	result["sha256_expected"] = expected_sha
+	result["sha256_verified"] = (not expected_sha.is_empty()) and expected_sha == actual_sha
+	if not bool(result["sha256_verified"]):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(staged_zip))
+		result.erase("staged_zip")
+		return {"error": "SHA-256 mismatch — the download does not match the release manifest and was deleted from staging.", "sha256_expected": expected_sha, "sha256_actual": actual_sha}
+
+	var signature_status: String = "no signature on this release"
+	if not sig_url.is_empty():
+		var sig_download: Dictionary = await _download_to_file(sig_url, ProjectSettings.globalize_path(RELEASE_STAGING_DIR + "/SHA256SUMS.sig"), timeout_sec)
+		if sig_download.has("error"):
+			signature_status = "signature download failed: " + String(sig_download["error"])
+		else:
+			var data_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(RELEASE_STAGING_DIR + "/SHA256SUMS.txt"))
+			var sig_bytes: PackedByteArray = FileAccess.get_file_as_bytes(ProjectSettings.globalize_path(RELEASE_STAGING_DIR + "/SHA256SUMS.sig"))
+			var verify: Dictionary = verify_release_signature(RELEASE_SIGNING_PUBLIC_KEY_PEM, data_bytes, sig_bytes)
+			signature_status = "verified (RSA-4096)" if bool(verify["verified"]) else "SIGNATURE MISMATCH — do not apply this update"
+			if not bool(verify["verified"]):
+				DirAccess.remove_absolute(ProjectSettings.globalize_path(staged_zip))
+				result.erase("staged_zip")
+				return {"error": "RSA signature verification failed — the release manifest does not match the key embedded in this plugin. Do not apply this update.", "sha256_verified": true, "signature_status": signature_status}
+	result["signature_status"] = signature_status
+	result["hint"] = "Staged and verified. Call apply_plugin_update to back up the current addon, swap in the staged zip, and get the restart step."
+	return result
+
+func _register_apply_plugin_update(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"apply_plugin_update",
+		"Swap the staged, signature-verified update into addons/godot_mcp: backs up the current addon to user://plugin_backups/<timestamp>/ first, extracts the staged zip over the addon (ZIPReader), triggers a filesystem scan, and reports the restart step. Refuses to run without a verified staged download (sha256_verified AND signature verified) — an unsigned swap stays out of reach by design. The editor must be restarted afterward for new tool registration.",
+		{
+			"type": "object",
+			"properties": {
+				"staged_zip": {"type": "string", "description": "The user:// staging path returned by download_plugin_update."}
+			},
+			"required": ["staged_zip"]
+		},
+		Callable(self, "_tool_apply_plugin_update"),
+		{
+			"type": "object",
+			"properties": {
+				"applied": {"type": "boolean"},
+				"backup_path": {"type": "string"},
+				"files_written": {"type": "integer"},
+				"scan": {"type": "object"},
+				"restart_note": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": false},
+		"supplementary", "Editor-Advanced"
+	)
+
+func _tool_apply_plugin_update(params: Dictionary) -> Dictionary:
+	var staged_zip: String = str(params.get("staged_zip", "")).strip_edges()
+	if staged_zip.is_empty() or not staged_zip.begins_with("user://"):
+		return {"error": "staged_zip must be the user:// path returned by download_plugin_update"}
+	if not FileAccess.file_exists(staged_zip):
+		return {"error": "Staged zip not found: " + staged_zip + " — run download_plugin_update first."}
+	if not staged_zip.contains("plugin_updates/"):
+		return {"error": "Refusing: staged_zip is outside the " + RELEASE_STAGING_DIR + " staging area."}
+
+	# 换装前守卫：项目 addons 必须存在且当前插件版本可读（防误对非插件项目操作）。
+	var target_dir: String = "res://addons/godot_mcp"
+	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(target_dir)):
+		return {"error": "No existing addon at " + target_dir + " — apply is an update tool, use the manual install steps for a fresh install."}
+	var current_version: String = _plugin_version()
+	if current_version.is_empty():
+		return {"error": "Could not read the installed plugin version — refusing to overwrite an unrecognizable target."}
+
+	# 备份当前 addon 到 user://（整目录复制）。
+	var stamp: String = str(Time.get_datetime_string_from_system(false, true).replace(":", "").replace("-", "").replace(" ", "_"))
+	var backup_dir: String = "user://plugin_backups/" + stamp
+	var backup_absolute: String = ProjectSettings.globalize_path(backup_dir)
+	DirAccess.make_dir_recursive_absolute(backup_absolute + "/godot_mcp")
+	var copy_error: Error = _copy_dir_recursive(ProjectSettings.globalize_path(target_dir), backup_absolute + "/godot_mcp")
+	if copy_error != OK:
+		return {"error": "Backup failed (error %d) — nothing was changed. Free space or set the backup aside manually." % copy_error}
+
+	# 解包换装（ZIPReader 原生解压；zip 内根目录为 godot_mcp/）。
+	var reader: ZIPReader = ZIPReader.new()
+	var open_error: Error = reader.open(staged_zip)
+	if open_error != OK:
+		return {"error": "Could not open the staged zip (error %d)." % open_error}
+	var files_written: int = 0
+	var entries: PackedStringArray = reader.get_files()
+	for entry in entries:
+		if entry.is_empty() or entry.ends_with("/"):
+			continue
+		var relative: String = entry.trim_prefix("godot_mcp/")
+		if relative.is_empty():
+			continue
+		var dest_absolute: String = ProjectSettings.globalize_path(target_dir).path_join(relative)
+		var dest_dir: String = dest_absolute.get_base_dir()
+		DirAccess.make_dir_recursive_absolute(dest_dir)
+		var writer: FileAccess = FileAccess.open(dest_absolute, FileAccess.WRITE)
+		if writer == null:
+			reader.close()
+			return {"error": "Failed to write %s (error %d) — the addon may be half-swapped; restore from %s and retry." % [relative, FileAccess.get_open_error(), backup_dir]}
+		writer.store_buffer(reader.read_file(entry))
+		writer.close()
+		files_written += 1
+	reader.close()
+
+	var scan: Dictionary = _trigger_filesystem_scan_scan()
+	return {
+		"applied": true,
+		"backup_path": backup_dir,
+		"files_written": files_written,
+		"scan": scan,
+		"restart_note": "Update swapped to disk. Restart the editor once: behavior changes hot-reload, but NEW tools register at server start. Old version %s is backed up at %s." % [current_version, backup_dir]
+	}
+
+func _trigger_filesystem_scan_scan() -> Dictionary:
+	var editor_interface: EditorInterface = _get_editor_interface()
+	if editor_interface == null:
+		return {"scan_triggered": false, "reason": "editor interface not available"}
+	var fs: EditorFileSystem = editor_interface.get_resource_filesystem()
+	if fs == null:
+		return {"scan_triggered": false, "reason": "EditorFileSystem not available"}
+	if fs.is_scanning():
+		return {"scan_triggered": false, "reason": "already scanning"}
+	fs.scan()
+	return {"scan_triggered": true}
+
+func _copy_dir_recursive(from_absolute: String, to_absolute: String) -> Error:
+	DirAccess.make_dir_recursive_absolute(to_absolute)
+	var dir: DirAccess = DirAccess.open(from_absolute)
+	if dir == null:
+		return FAILED
+	dir.list_dir_begin()
+	var entry: String = dir.get_next()
+	var first_error: Error = OK
+	while not entry.is_empty():
+		var from_full: String = from_absolute.path_join(entry)
+		var to_full: String = to_absolute.path_join(entry)
+		if dir.current_is_dir():
+			var sub: Error = _copy_dir_recursive(from_full, to_full)
+			if sub != OK and first_error == OK:
+				first_error = sub
+		else:
+			var copy_error: Error = DirAccess.copy_absolute(from_full, to_full)
+			if copy_error != OK and first_error == OK:
+				first_error = copy_error
+		entry = dir.get_next()
+	dir.list_dir_end()
+	return first_error
 

@@ -311,6 +311,27 @@ func _tool_save_scene(params: Dictionary) -> Dictionary:
 		"saved_path": file_path,
 		"operation": "save_as" if is_save_as else "save"
 	}
+	# 4.7.2 编辑器语义：ResourceSaver.save 写盘但不清当前场景的 modified 标记，
+	# get_unsaved_scenes() 会继续列出它——verify_change_effect 的未保存缓冲守卫
+	# 因此（如实）报脏。磁盘此刻 == 缓冲（刚打包写回），用 reload_scene_from_path
+	# 同步编辑器状态即可清标记；仅在确实仍被列为未保存时执行（4.6.3 不触发）。
+	if editor_interface:
+		var unsaved_check: Dictionary = {"unavailable": true}
+		if Engine.has_meta("GodotMCPPlugin"):
+			var plugin_variant: Variant = Engine.get_meta("GodotMCPPlugin")
+			if plugin_variant and plugin_variant.get("_tool_instances") is Dictionary:
+				var instances: Dictionary = plugin_variant.get("_tool_instances")
+				if instances.has("EditorToolsNative") and instances["EditorToolsNative"] is RefCounted:
+					unsaved_check = (instances["EditorToolsNative"] as RefCounted)._tool_get_unsaved_changes({})
+		var listed_unsaved: bool = false
+		var unsaved_scenes: Array = unsaved_check.get("unsaved_scenes", []) if unsaved_check.get("unsaved_scenes", []) is Array else []
+		for candidate in unsaved_scenes:
+			if String(candidate) == file_path:
+				listed_unsaved = true
+				break
+		if listed_unsaved and editor_interface.has_method("reload_scene_from_path") and not is_save_as:
+			editor_interface.call("reload_scene_from_path", file_path)
+			journaled["editor_state_resynced"] = true
 	if journal_result.has("operation"):
 		journaled["change_journal"] = {
 			"operation_id": journal_result["operation"].get("operation_id", ""),
