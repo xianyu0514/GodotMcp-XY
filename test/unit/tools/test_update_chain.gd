@@ -152,3 +152,17 @@ func test_verify_rejects_wrong_key():
 	var verify: Dictionary = EditorToolsScript.verify_release_signature(TEST_KEY_B_PUBLIC_PEM, data, signature)
 	assert_true(bool(verify["verified"]), "钥-签配对的控制组")
 	assert_true(verify.has("verified") or verify.has("reason"), "响应形状固定")
+
+func test_match_release_assets_picks_three_targets():
+	var assets: Array = [
+		{"name": "godot_mcp.zip", "url": "https://example/godot_mcp.zip", "size": 1},
+		{"name": "SHA256SUMS.sig", "url": "https://example/SHA256SUMS.sig", "size": 2},
+		{"name": "SHA256SUMS.txt", "url": "https://example/SHA256SUMS.txt", "size": 3},
+	]
+	var matched: Dictionary = EditorToolsScript._match_release_assets(assets)
+	assert_eq(String(matched["zip"]), "https://example/godot_mcp.zip")
+	assert_eq(String(matched["sums"]), "https://example/SHA256SUMS.txt")
+	assert_eq(String(matched["sig"]), "https://example/SHA256SUMS.sig")
+	# 键名陷阱回归：url 键缺失时必须保持空串（不可误读其他键）
+	var empty: Dictionary = EditorToolsScript._match_release_assets([{"name": "SHA256SUMS.txt"}])
+	assert_eq(String(empty["sums"]), "")
