@@ -4383,6 +4383,23 @@ func _register_download_plugin_update(server_core: RefCounted) -> void:
 
 const RELEASE_STAGING_DIR: String = "user://plugin_updates"
 
+## 从 parse_release_payload 的 _assets 里挑出 zip/清单/签名三个下载地址。
+## 键名陷阱（2026-09-30 真机抓出）：_assets 的键是 "url"（非 API 原始的
+## "browser_download_url"），读错键会静默拿到空串——匹配"成功"但 url 为空。
+static func _match_release_assets(assets: Array) -> Dictionary:
+	var matched: Dictionary = {"zip": "", "sums": "", "sig": ""}
+	for asset_value in assets:
+		var asset: Dictionary = asset_value
+		var asset_name: String = String(asset.get("name", ""))
+		var url: String = String(asset.get("url", ""))
+		if asset_name == "SHA256SUMS.txt":
+			matched["sums"] = url
+		elif asset_name == "SHA256SUMS.sig":
+			matched["sig"] = url
+		elif asset_name.ends_with(".zip"):
+			matched["zip"] = url
+	return matched
+
 func _tool_download_plugin_update(params: Dictionary) -> Dictionary:
 	var timeout_sec: float = clampf(float(params.get("timeout_sec", 60.0)), 5.0, 600.0)
 	var json_text: String = await _fetch_latest_release_json(GITHUB_LATEST_RELEASE_API, timeout_sec)
@@ -4392,17 +4409,10 @@ func _tool_download_plugin_update(params: Dictionary) -> Dictionary:
 	if release.has("error"):
 		return {"error": String(release["error"])}
 	var assets: Array = release.get("_assets", [])
-	var zip_url: String = String(release.get("download_url", ""))
-	var sums_url: String = ""
-	var sig_url: String = ""
-	for asset_value in assets:
-		var asset: Dictionary = asset_value
-		var name: String = String(asset.get("name", ""))
-		var url: String = String(asset.get("browser_download_url", ""))
-		if name == "SHA256SUMS.txt":
-			sums_url = url
-		elif name == "SHA256SUMS.sig":
-			sig_url = url
+	var matched: Dictionary = _match_release_assets(assets)
+	var zip_url: String = String(matched["zip"])
+	var sums_url: String = String(matched["sums"])
+	var sig_url: String = String(matched["sig"])
 	if zip_url.is_empty():
 		return {"error": "The latest release has no godot_mcp.zip asset."}
 
