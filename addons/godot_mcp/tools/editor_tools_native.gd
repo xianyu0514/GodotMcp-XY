@@ -136,6 +136,8 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_redo(server_core)
 	_register_get_undo_history(server_core)
 	_register_check_plugin_update(server_core)
+	_register_download_plugin_update(server_core)
+	_register_apply_plugin_update(server_core)
 
 # ============================================================================
 # get_editor_state - 获取编辑器状态
