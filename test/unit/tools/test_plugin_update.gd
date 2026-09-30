@@ -21,7 +21,7 @@ func test_semver_compare_orders_versions():
 	assert_eq(EditorToolsScript.semver_compare("1.1.0", "1.3.0"), -1)
 	assert_eq(EditorToolsScript.semver_compare("1.1.0", "1.1.0"), 0)
 	assert_eq(EditorToolsScript.semver_compare("v1.3.0", "1.1.0"), 1, "v 前缀容忍")
-	assert_eq(EditorToolsScript.semver_compare("1.2", "1.2.0"), 0, "缺段按 0")
+	assert_eq(EditorToolsScript.semver_compare("1.2", "1.2.1"), 0, "缺段按 0")
 	assert_eq(EditorToolsScript.semver_compare("1.10.0", "1.9.0"), 1, "数值比较非字典序")
 
 # --- release 解析（纯函数）---
@@ -47,7 +47,7 @@ func test_tool_reports_update_available_via_injection():
 	_tools._debug_release_json = SAMPLE_RELEASE
 	var result: Dictionary = await _tools._tool_check_plugin_update({})
 	assert_false(result.has("error"), str(result))
-	assert_eq(String(result["current_version"]), "1.2.0", "当前版本读自 plugin.cfg")
+	assert_eq(String(result["current_version"]), "1.2.1", "当前版本读自 plugin.cfg")
 	assert_eq(String(result["latest_version"]), "v1.3.0")
 	assert_true(bool(result["update_available"]))
 	assert_true((result["install_steps"] as Array).size() >= 3, "必须给安装步骤")
@@ -67,6 +67,6 @@ func test_tool_network_failure_is_actionable():
 		assert_true(str(result["error"]).contains("GitHub"))
 		assert_true(str(result.get("recommended_action", "")).contains("releases"),
 			"失败路径必须给手动 releases 页指引")
-		assert_eq(String(result.get("current_version", "")), "1.2.0")
+		assert_eq(String(result.get("current_version", "")), "1.2.1")
 	else:
 		assert_true(result.has("update_available"), "网络可达时走正常比较路径")
