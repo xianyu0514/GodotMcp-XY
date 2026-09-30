@@ -95,7 +95,7 @@ func test_undo_redo_history_tools_are_supplementary_editor_advanced():
 
 func test_editor_advanced_group_count():
 	var tools: Array = _classifier.get_group_tools("Editor-Advanced")
-	assert_eq(tools.size(), 24, "Editor-Advanced should have 24 tools")
+	assert_eq(tools.size(), 26, "Editor-Advanced should have 26 tools")
 
 func test_play_and_verify_is_supplementary_debug_advanced():
 	assert_true(_classifier.is_supplementary_tool("play_and_verify"), "play_and_verify should be supplementary")
