@@ -26,7 +26,7 @@
 
 ### GUT 单元测试
 ```powershell
-& "C:\kaifa\Godot_v4.6.3-stable_win64.exe" --headless --path "." -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
+& "D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe" --headless --path "." -s addons/gut/gut_cmdln.gd -gdir=res://test/unit/ -ginclude_subdirs -gexit
 ```
 配置：`.gutconfig.json` — dirs: `res://test/unit/`, `log_level: 2`, `should_exit_on_finish: false`。
 
@@ -35,7 +35,7 @@
 cd test/integration
 python test_runtime_probe_flow.py
 ```
-Python 测试通过 HTTP MCP（端口 9080）与 Godot 通信；Godot 可执行文件优先读 `GODOT_EXE` 环境变量（默认值可能过期，按实际环境覆盖，例如 `GODOT_EXE=C:/kaifa/Godot_v4.6.3-stable_win64_console.exe`）。
+Python 测试通过 HTTP MCP（端口 9080）与 Godot 通信；Godot 可执行文件优先读 `GODOT_EXE` 环境变量（默认值可能过期，按实际环境覆盖，例如 `GODOT_EXE=D:/youxi/kaifa/Godot_v4.7.2-stable_win64_console.exe`）。
 
 ## 架构
 
@@ -144,7 +144,7 @@ addons/godot_mcp/
   - **影响范围测试**：识别并测试可能受影响的关联模块（签名变更、导出变量、信号等）
   - 禁止提交没有测试更新的 commit
 - **单元测试**（`test/unit/`）：GUT 框架，工具测试文件位于 `test/unit/tools/`
-- **集成测试**（`test/integration/`）：Python 脚本，通过 HTTP MCP 调用 Godot 4.6.2
+- **集成测试**（`test/integration/`）：Python 脚本，通过 HTTP MCP 调用 Godot 4.7.2
 
 ### 新增工具流程
 

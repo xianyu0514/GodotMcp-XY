@@ -25,7 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 USER_PROJ = REPO / ".tmp_2dmatrix"
-GODOT_EXE = Path(os.environ.get("GODOT_EXE", "C:/kaifa/Godot_v4.6.3-stable_win64_console.exe"))
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", "C:/kaifa/Godot_v4.7.2-stable_win64_console.exe"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "9196"))
 URL = f"http://127.0.0.1:{MCP_PORT}/mcp"
 

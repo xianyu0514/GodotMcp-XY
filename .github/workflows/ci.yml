@@ -36,7 +36,7 @@ on:
 # counts as a failure, so CI stays a trustworthy gate.
 
 env:
-  GODOT_VERSION: "4.7"
+  GODOT_VERSION: "4.7.2"
   GUT_VERSION: "9.7.1"
 
 jobs:
@@ -160,12 +160,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Godot 4.6.3 (Windows build)
+      - name: Download Godot 4.7.2 (Windows build)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p godot
-          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_win64.exe.zip
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip
           unzip -o godot.zip -d godot
           rm godot.zip
 
@@ -176,24 +176,24 @@ jobs:
       - name: Warm the import cache (cold checkout imports on first boot)
         shell: bash
         env:
-          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
         run: |
           set -euo pipefail
           "$GODOT_EXE" --headless --path . --import 2>&1 | tee warm_import.log
-          # 4.6.3 专属的解析错误只在这条腿上可见（单测作业跑 4.7）：
+          # 该版本专属的解析错误只在这条腿上可见（单测作业同为 4.7.2）：
           # --import 对脚本解析失败仍退出 0，必须靠日志判定。
           if grep -nE "SCRIPT ERROR|Parse Error|Failed to (load|parse) script" warm_import.log > warm_errors.txt; then
             while IFS= read -r line; do
               echo "::error::${line:0:400}"
             done < warm_errors.txt | head -20
-            echo "::error::4.6.3 warm import reported script errors (see annotations)."
+            echo "::error::4.7.2 warm import reported script errors (see annotations)."
             exit 1
           fi
 
       - name: Run fast integration suite via the runner
         shell: bash
         env:
-          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
           # 临时 runner 上只有本套件的 Godot 进程：允许 runner 按映像名
           # 整体清扫孤儿进程（本地默认走精确匹配仓库路径的清扫）。
           MCP_RUNNER_KILL_ALL_GODOT: "1"
@@ -218,19 +218,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download Godot 4.6.3 (Windows build)
+      - name: Download Godot 4.7.2 (Windows build)
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p godot
-          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_win64.exe.zip
+          curl -fL --retry 3 -o godot.zip             https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip
           unzip -o godot.zip -d godot
           rm godot.zip
 
       - name: Warm the import cache (cold checkout imports on first boot)
         shell: bash
         env:
-          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
         run: |
           set -euo pipefail
           "$GODOT_EXE" --headless --path . --import
@@ -238,7 +238,7 @@ jobs:
       - name: Run durable-workflow E2E suite
         shell: bash
         env:
-          GODOT_EXE: godot/Godot_v4.6.3-stable_win64.exe
+          GODOT_EXE: godot/Godot_v4.7.2-stable_win64.exe
           MCP_RUNNER_KILL_ALL_GODOT: "1"
         run: python test/integration/run_integration.py --filter goal --slow --timeout 900
 
@@ -252,9 +252,9 @@ jobs:
   # 代表游戏：10 目标累积构建 + 独立 oracle 验收（诚实完成门禁）。
   # 本机长会话下 6-8/10 轮换方差（墙钟残余 + 机器退化）——CI 干净 runner
   # 是这套真实完成率数字的可信来源。失败时上传 scratch 计划/账本取证。
-  # 引擎对齐 4.7.2（项目目标版本 + 本机验证版本；此前 pin 4.6.3 与本机
+  # 引擎对齐 4.7.2（项目目标版本 + 本机验证版本；此前 pin 4.7.2 与本机
   # 9/10 vs CI 8/10 的差异是首要嫌疑——Input.action_press 等行为跨版本
-  # 不保证一致，集成腿继续 4.6.3 是刻意的跨版本覆盖，不代表本腿应对齐旧版）。
+  # 不保证一致，集成腿继续 4.7.2 是刻意的跨版本覆盖，不代表本腿应对齐旧版）。
   showcase-game:
     name: Showcase three-level game E2E (manual)
     runs-on: windows-latest

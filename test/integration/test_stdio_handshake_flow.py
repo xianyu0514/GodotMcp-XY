@@ -49,8 +49,8 @@ _EXE_CANDIDATES = [
     os.environ.get("GODOT_EXE", ""),
     r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe",
     r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64.exe",
-    r"C:\kaifa\Godot_v4.6.3-stable_win64_console.exe",
-    r"C:\kaifa\Godot_v4.6.3-stable_win64.exe",
+    r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe",
+    r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64.exe",
 ]
 GODOT_EXE = next((Path(p) for p in _EXE_CANDIDATES if p and Path(p).exists()), None)
 

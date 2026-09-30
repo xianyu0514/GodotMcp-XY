@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"C:\SourceCode\Godot_v4.6.2-stable_mono_win64\Godot_v4.6.2-stable_mono_win64_console.exe"))
+GODOT_EXE = Path(os.environ.get("GODOT_EXE", r"D:\youxi\kaifa\Godot_v4.7.2-stable_win64_console.exe"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "9087"))
 MCP_URL = f"http://127.0.0.1:{MCP_PORT}/mcp"
 SCRATCH = REPO_ROOT / "tmp_goal_flow_project"
