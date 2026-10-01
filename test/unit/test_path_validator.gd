@@ -128,3 +128,23 @@ func test_clear_allowed_extensions():
 	_validator.add_allowed_extension(".gd")
 	_validator.clear_allowed_extensions()
 	assert_eq(_validator._allowed_extensions.size(), 0, "Should be empty after clear")
+
+# --- P2-16 回归（2026-09-30 体检）：绝对路径曾被兜底前缀洗成 res://C:/...
+# 而通过校验 → 空成功伪装。现显式拒绝。 ---
+func test_rejects_drive_letter_absolute_path():
+	var result: Dictionary = PathValidator.validate_directory_path("C:/Users")
+	assert_false(result["valid"], "盘符绝对路径必须拒绝")
+	assert_true(str(result["error"]).contains("Absolute paths are not allowed"))
+
+func test_rejects_unc_and_double_slash_paths():
+	assert_false(PathValidator.validate_path("//server/share")["valid"], "UNC 路径必须拒绝")
+	assert_false(PathValidator.validate_path("server" + String.chr(92) + String.chr(92) + "share")["valid"], "UNC 路径必须拒绝")
+
+func test_res_and_user_paths_still_valid():
+	assert_true(PathValidator.validate_path("res://scenes/main.tscn")["valid"])
+	assert_true(PathValidator.validate_path("user://settings.cfg")["valid"])
+
+func test_traversal_inside_res_still_sanitized():
+	var result: Dictionary = PathValidator.validate_directory_path("res://../outside")
+	assert_true(result["valid"], "res:// 内的 ../ 由既有清洗处理")
+	assert_false(str(result["sanitized"]).contains(".."), "清洗后不得残留 ..")

@@ -55,6 +55,16 @@ static func validate_path(path: String, strict: bool = true) -> Dictionary:
 		result["error"] = "Path is empty"
 		return result
 	
+	# P2-16（2026-09-30 体检 §12.3）：绝对路径（盘符/UNC）此前会被 _sanitize_path
+	# 的兜底前缀洗成 "res://C:/..." 而通过校验，DirAccess 打不开 → 空成功——
+	# "路径非法"伪装成"没有匹配"。在前置清洗前显式拒绝（纯字符串判定，
+	# 刻意不用正则：转义陷阱曾静默失效，2026-09-30 实测）。
+	var lowered: String = path.to_lower()
+	var looks_absolute: bool = (lowered.length() >= 3 and lowered[1] == ":" and (lowered[2] == "/" or lowered[2] == "\\")) or path.begins_with("//") or path.begins_with("\\")
+	if looks_absolute:
+		result["error"] = "Absolute paths are not allowed (got '%s'). Use res:// or user:// paths." % path
+		return result
+	
 	var sanitized: String = _sanitize_path(path)
 	result["sanitized"] = sanitized
 	
