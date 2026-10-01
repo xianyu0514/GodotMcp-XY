@@ -429,10 +429,50 @@ func _await_queue_slot() -> bool:
 ## Process the request queue serially: run exactly one request at a time until empty.
 ## All access happens on the main thread (transport marshals via call_deferred), so no
 ## mutex is needed; _is_processing_request guarantees only one drain coroutine runs.
+## 编辑器失焦节流保活（P1-18，2026-09-30 体检 §13.4）：失焦时低功耗模式把帧
+## 间隔拉到 ~100ms，而请求排水/single-flight/缓存等待全是帧绑定 await——每次
+## 工具调用因此叠加一个 100ms 量化台阶（实测中位 7ms→100ms，×14.3）。有在途
+## 请求时临时开启 update_continuously 强制满速帧迭代，队列排空后恢复原值。
+const EDITOR_UPDATE_CONTINUOUSLY: String = "interface/editor/update_continuously"
+var _keepalive_prev: Dictionary = {}
+
+## settings_override 供测试注入（null = 运行时经 EditorInterface 解析，
+## 仅编辑器上下文生效）。
+func _begin_editor_keepalive(settings_override: Variant = null) -> void:
+	if not _keepalive_prev.is_empty():
+		return
+	var settings: Variant = settings_override
+	if settings == null:
+		if not Engine.is_editor_hint():
+			return
+		settings = EditorInterface.get_editor_settings()
+	if settings == null or not settings.has_method("set_setting"):
+		return
+	var prev: bool = false
+	if settings.call("has_setting", EDITOR_UPDATE_CONTINUOUSLY):
+		prev = bool(settings.call("get_setting", EDITOR_UPDATE_CONTINUOUSLY))
+	if not prev:
+		settings.call("set_setting", EDITOR_UPDATE_CONTINUOUSLY, true)
+		_keepalive_prev["_uc_prev"] = false
+
+func _end_editor_keepalive(settings_override: Variant = null) -> void:
+	if _keepalive_prev.is_empty():
+		return
+	_keepalive_prev.clear()
+	var settings: Variant = settings_override
+	if settings == null:
+		if not Engine.is_editor_hint():
+			return
+		settings = EditorInterface.get_editor_settings()
+	if settings == null or not settings.has_method("set_setting"):
+		return
+	settings.call("set_setting", EDITOR_UPDATE_CONTINUOUSLY, false)
+
 func _drain_request_queue() -> void:
 	if _is_processing_request:
 		return
 	_is_processing_request = true
+	_begin_editor_keepalive()
 	
 	var main_loop: SceneTree = Engine.get_main_loop() as SceneTree
 	while _active and not _request_queue.is_empty():
@@ -453,6 +493,7 @@ func _drain_request_queue() -> void:
 			await main_loop.process_frame
 	
 	_is_processing_request = false
+	_end_editor_keepalive()
 
 ## Number of requests currently waiting in the queue (for tests and monitoring).
 func get_request_queue_depth() -> int:
@@ -872,6 +913,26 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		"progress_token": progress_token
 	}
 	
+	# P1-11（2026-09-30 体检 §12.3）：分发前按 input_schema 校验入参——此前
+	# 类型错误有 4 种失败模式（静默忽略/运行时崩溃/带警告照跑/无），对 LLM
+	# agent 的伤害是"传错"与"传对"在返回值上无法区分。校验失败返回
+	# -32602 语义的结构化错误（参数名 + 期望类型 + 实际类型）。
+	var canonicalized: Dictionary = _canonicalize_param_aliases(tool.input_schema, arguments)
+	arguments = canonicalized["args"]
+	_last_param_aliases_applied = canonicalized["applied"]
+	var validation_errors: Array = _validate_arguments_against_schema(tool_name, tool.input_schema, arguments)
+	if not validation_errors.is_empty():
+		_log_error("Invalid params for tool: " + tool_name + " - " + str(validation_errors))
+		var detail: String = "; ".join(validation_errors)
+		var error_result: Dictionary = {
+			"content": [{
+				"type": "text",
+				"text": "Invalid params for %s: %s. Fix the listed parameters (names/types per the schema) and retry — do NOT retry unchanged." % [tool_name, detail]
+			}],
+			"isError": true
+		}
+		return MCPTypes.create_response(id, error_result)
+
 	# 执行工具
 	var result: Variant = null
 	var error: String = ""
@@ -882,7 +943,7 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 		if result == null or not (result is Dictionary) or (result as Dictionary).is_empty():
 			# GDScript 运行时错误会让处理器中止；带 Dictionary 返回类型的函数
 			# 中止时返回默认构造的空字典（而非 null）——空结果同样绝不伪装成功。
-			error = "Tool handler aborted without a result (runtime error; see the editor log for the stack)"
+			error = "Tool handler for '%s' aborted without a result (runtime error; see the editor log for the stack). Check parameter names/types against the schema — use get_tool_details for the exact schema." % tool_name
 	
 	# Tool execution finished: drop this request's cancellation marker (if the
 	# client cancelled mid-run) and the execution context so the next request
@@ -909,6 +970,10 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	# operations 各浪费一整个编辑器往返）。在结果里附加 _schema_warnings 指出未知
 	# 键与 schema 实际接受的键，让调用方下一次调用即自纠。嵌套对象的自由参数
 	# （additionalProperties）不受影响；schema 未声明 properties 的工具跳过。
+	if not _last_param_aliases_applied.is_empty():
+		if result is Dictionary:
+			(result as Dictionary)["_param_aliases_applied"] = _last_param_aliases_applied.duplicate()
+		_last_param_aliases_applied = {}
 	_append_schema_warnings(result, arguments, tool)
 	
 	var has_error: bool = result is Dictionary and result.has("error")
@@ -940,6 +1005,87 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	_log_info("Tool execution completed: " + tool_name)
 	
 	return response
+
+## P1-12（2026-09-30 体检 §12.3 表）：限量语义在工具表里有 6 种叫法
+## （limit/count/max_results/max_depth/sample_count/max_lines）。全量改名
+## 破坏兼容，改为在分发前做别名折叠：仅当 schema 声明了家族中的一个正名
+## 且调用方传的是同族别名（且正名缺位）时，把值搬到正名下。路径类参数
+## （scene_path/resource_path 等 12 种）语义分化过大，刻意不折叠。
+const PARAM_ALIAS_FAMILIES: Array = [["limit", "count", "max_results"]]
+var _last_param_aliases_applied: Dictionary = {}
+
+static func _canonicalize_param_aliases(schema: Dictionary, arguments: Dictionary) -> Dictionary:
+	var applied: Dictionary = {}
+	if schema.is_empty() or not (schema.get("properties", {}) is Dictionary):
+		return {"args": arguments, "applied": applied}
+	var properties: Dictionary = schema.get("properties", {})
+	for family_value in PARAM_ALIAS_FAMILIES:
+		var family: Array = family_value
+		var canonical_in_schema: String = ""
+		for member_value in family:
+			if properties.has(str(member_value)):
+				canonical_in_schema = str(member_value)
+				break
+		if canonical_in_schema.is_empty():
+			continue
+		for member_value in family:
+			var member: String = str(member_value)
+			if member == canonical_in_schema or not arguments.has(member):
+				continue
+			if arguments.has(canonical_in_schema):
+				continue  # 正名已给：以调用方的正名为准，不覆盖
+			arguments[canonical_in_schema] = arguments[member]
+			applied[member] = canonical_in_schema
+	return {"args": arguments, "applied": applied}
+
+## P1-11：按 input_schema 校验 arguments 的类型与 enum。只 enforce schema
+## 能表达的约束（type/enum/required 语义由调用点处理）；未知键不拦（兼容
+## _meta 等扩展字段由 handler 自行过滤）。
+static func _validate_arguments_against_schema(tool_name: String, schema: Dictionary, arguments: Dictionary) -> Array:
+	var errors: Array = []
+	if schema.is_empty() or not (schema.get("properties", {}) is Dictionary):
+		return errors
+	var properties: Dictionary = schema.get("properties", {})
+	for key_value in arguments:
+		var key: String = str(key_value)
+		if not properties.has(key):
+			continue
+		var spec: Dictionary = properties[key]
+		var value: Variant = arguments[key_value]
+		var expected: String = String(spec.get("type", ""))
+		var actual: String = _json_type_name(value)
+		# 容忍：int 可当 number 用；整值浮点（3000.0）可当 integer 用——
+		# JS 客户端把所有数字发成浮点是常态，一刀切会误杀合法调用。
+		var tolerant: bool = (expected == "number" and actual == "integer") or (
+			expected == "integer" and actual == "number" and value is float
+			and is_equal_approx(float(value), roundf(float(value))))
+		if expected != "" and expected != actual and not tolerant:
+			errors.append("param '%s' expects %s but got %s (%s)" % [key, expected, actual, JSON.stringify(value) if not (value is String) else str(value)])
+			continue
+		if spec.has("enum") and spec.get("enum", []) is Array:
+			var allowed: Array = spec.get("enum", [])
+			var value_str: String = str(value)
+			var allowed_strs: Array = []
+			for option in allowed:
+				allowed_strs.append(str(option))
+			if not (value_str in allowed_strs):
+				errors.append("param '%s' must be one of [%s] but got '%s'" % [key, ", ".join(allowed_strs), value_str])
+	return errors
+
+static func _json_type_name(value: Variant) -> String:
+	if value is bool:
+		return "boolean"
+	if value is int:
+		return "integer"
+	if value is float:
+		return "number"
+	if value is String:
+		return "string"
+	if value is Array:
+		return "array"
+	if value is Dictionary:
+		return "object"
+	return "null"
 
 func _append_schema_warnings(result: Variant, arguments: Dictionary, tool: MCPTypes.MCPTool) -> void:
 	if not (result is Dictionary):
