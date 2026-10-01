@@ -619,6 +619,10 @@ func _tool_get_scene_structure(params: Dictionary) -> Dictionary:
 		scene_root.free()
 	else:
 		scene_structure["source"] = "edited_scene"
+		# P2-15（2026-09-30 体检）：默认读取也要回显路径——磁盘上的
+		# main.tscn 与编辑器里的实时实例可能已经不一致，可追溯性优先。
+		var edited_path: String = str(scene_root.scene_file_path) if scene_root is Node else ""
+		scene_structure["scene_path"] = edited_path
 	if max_depth >= 0:
 		# 截断诚实化：显式上报被 max_depth 隐藏的节点规模（0 表示无截断）。
 		scene_structure["hidden_descendants"] = maxi(total_nodes - int(built["count"]), 0)

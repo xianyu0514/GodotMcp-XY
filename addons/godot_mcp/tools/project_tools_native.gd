@@ -298,13 +298,17 @@ func _tool_get_project_info(params: Dictionary) -> Dictionary:
 	var godot_version: Dictionary = Engine.get_version_info()
 	var version_str: String = "%d.%d.%s" % [godot_version.get("major", 0), godot_version.get("minor", 0), godot_version.get("status", "")]
 	
+	# N4（2026-09-30 体检 §14.4）：回显引擎可执行文件绝对路径——项目自带的
+	# 引擎版本与 MCP 插件运行的版本可能不同，两条通道的结论不可互证时
+	# 先看这里。version_str 来自本进程引擎（OS.get_executable_path 同源）。
 	return {
 		"project_name": project_name,
 		"project_version": project_version,
 		"project_description": project_description,
 		"main_scene": main_scene,
 		"project_path": project_path,
-		"godot_version": version_str
+		"godot_version": version_str,
+		"engine_executable_path": OS.get_executable_path()
 	}
 
 
@@ -839,6 +843,7 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 
 	# 逐候选发现并合并（按 test_path 去重），目录级报告随结果返回。
 	var gut_available: bool = FileAccess.file_exists("res://addons/gut/gut_cmdln.gd")
+	_tests_helpers_skipped = 0
 	var tests: Array = []
 	var candidate_reports: Array = []
 	var seen_paths: Dictionary = {}
@@ -902,6 +907,7 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 		"count": tests.size(),
 		"search_path": resolved_path,
 		"search_paths": candidate_reports,
+		"helpers_skipped": _tests_helpers_skipped,
 		"tests": tests
 	}
 
@@ -1448,6 +1454,13 @@ func _validate_test_path(path: String, expect_directory: bool) -> Dictionary:
 		return {"error": "Invalid path: " + str(validation.get("error", "unknown"))}
 	return {"sanitized": String(validation.get("sanitized", path))}
 
+var _tests_helpers_skipped: int = 0
+
+## N2：测试脚手架识别（runner / probe / spy / 下划线前缀）。
+static func _is_test_helper_file(entry_name: String) -> bool:
+	var lowered: String = entry_name.to_lower()
+	return lowered.begins_with("_") or lowered == "run_tests.gd" 		or lowered.ends_with("_spy.gd") or lowered.ends_with("_probe.gd") 		or lowered.ends_with("_helper.gd")
+
 func _collect_project_tests_recursive(search_path: String, absolute_root: String, framework_filter: String, gut_available: bool, tests: Array) -> void:
 	var dir: DirAccess = DirAccess.open(absolute_root)
 	if dir == null:
@@ -1465,6 +1478,11 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 			_collect_project_tests_recursive(child_res_path, child_abs_path, framework_filter, gut_available, tests)
 			continue
 		var extension: String = entry_name.get_extension().to_lower()
+		# N2（2026-09-30 体检 §14.2）：测试脚手架（runner/probe/spy/下划线前缀）
+		# 不是测试用例——计入 helpers_skipped 供调用方知悉，不进 tests 清单。
+		if _is_test_helper_file(entry_name):
+			_tests_helpers_skipped += 1
+			continue
 		var framework: String = ""
 		var kind: String = ""
 		var runnable: bool = false

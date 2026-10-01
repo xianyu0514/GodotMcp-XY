@@ -42,7 +42,7 @@ const TOKEN_ESTIMATOR_SCRIPT = preload("res://addons/godot_mcp/utils/token_estim
 ## Guidance returned in the MCP `initialize` result. Compatible clients inject this
 ## into the model's system context automatically, so the lazy-loading workflow is
 ## delivered on connect without the user pasting any rules.
-const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus seven always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Do not load the full 260-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
+const SERVER_INSTRUCTIONS: String = "Godot MCP starts with 28 core tools plus seven always-on meta tools so tools/list stays small. For a complete multi-phase game goal, call plan_game_workflow with the English or Chinese objective, supply inputs requested for the current step, then advance with run_game_workflow; the durable DAG may use every required atomic capability and adaptive execution slices only yield, never truncate the goal. Completion requires objective evidence. For a short ad-hoc task or one missing capability, call enable_tools once with workflow_query='<goal>'; local routing activates at most 8 schema-free names (hard limit 10) and replaces stale supplementary tools by default; this is a discovery budget, not a workflow capability ceiling. Set replace_supplementary=false only when deliberately extending the same ad-hoc task. Exact atomic tool names remain routable. Large tool responses above 50000 bytes are externalized to a resource (the response carries truncated:true + notice + a resource_link for the lossless pages) — follow it instead of retrying with smaller limits. Do not load the full 260-tool catalog. Use search_tools to compare candidates, get_tool_details only when a client cannot refresh, and list_tool_catalog summary_only=true only for group counts. Never treat needs_input, waiting, retry_required, blocked, replan_required or recovery_required as completion. Prefer focused presets over 'all', and reuse catalog_revision with known_revision."
 
 ## Maximum number of pending requests buffered in the serial request queue.
 ## When multiple AI clients call concurrently, requests are queued and executed
@@ -2267,6 +2267,7 @@ func _maybe_spill_result(json_text: String, tool: MCPTypes.MCPTool) -> Dictionar
 		"head": json_text.substr(0, SPILL_PREVIEW_HEAD_CHARS),
 		"tail": json_text.substr(maxi(0, json_text.length() - SPILL_PREVIEW_TAIL_CHARS)),
 		"content_type": "application/json",
+		"notice": "TRUNCATED: this response exceeded %d bytes and only the head/tail preview is inline. The complete payload lives behind resource_uri (paged via _meta.nextUri) — read it before drawing conclusions." % MAX_INLINE_RESULT_BYTES,
 		"resume_hint": "Follow the resource_link with resources/read, then follow result._meta.nextUri while hasMore=true. Concatenating page text reconstructs the exact application/json payload. Legacy file: " + path
 	}
 
@@ -2298,6 +2299,17 @@ func _spill_result_to_disk(json_bytes: PackedByteArray, content_sha256: String) 
 	if err != OK:
 		_log_warn("Spill: failed to create output dir " + SPILL_OUTPUT_DIR + " (error " + str(err) + ")")
 		return ""
+	# N6（2026-09-30 体检 §14.6）：spill 落在工程内会被 grep/agent 当真实源文件
+	# 误引用——目录首次创建时自动写 .gitignore（*），既保留 resource_uri 续取
+	# 能力，又消除 git 噪声与检索污染。
+	var gitignore_path: String = SPILL_OUTPUT_DIR + "/.gitignore"
+	if not FileAccess.file_exists(gitignore_path):
+		var ignore_file: FileAccess = FileAccess.open(gitignore_path, FileAccess.WRITE)
+		if ignore_file:
+			ignore_file.store_string("# Auto-written by godot_mcp: spilled large results are retrievable via godot-mcp://result/ URIs; never reference these as project sources.
+*
+")
+			ignore_file.close()
 	var path: String = SPILL_OUTPUT_DIR + "/" + content_sha256 + ".json"
 	if FileAccess.file_exists(path):
 		# Do not trust a same-sized file: project-local output can be edited out of

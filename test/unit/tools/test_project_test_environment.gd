@@ -153,3 +153,25 @@ func test_gut_nothing_run_reports_skipped_not_passed() -> void:
 		"[GUT ERROR]:  Nothing was run.\n"), "零执行判据命中")
 	assert_false(ProjectToolsScript._is_gut_zero_run(
 		"GUT version 9.7.1\nAll tests passed\n"), "正常输出不误判")
+
+func test_helper_scripts_are_excluded_and_counted():
+	# N2 回归（2026-09-30 体检 §14.2）：run_tests/probe/spy 是脚手架不是用例。
+	var root: String = _tmp_dir()
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(root))
+	for helper in ["run_tests.gd", "_qa_probe.gd", "save_spy.gd"]:
+		var file: FileAccess = FileAccess.open(root.path_join(helper), FileAccess.WRITE)
+		file.store_string("extends RefCounted\n")
+		file.close()
+	var file: FileAccess = FileAccess.open(root.path_join("test_real.gd"), FileAccess.WRITE)
+	file.store_string("extends GutTest\n")
+	file.close()
+	var result: Dictionary = _tools._tool_list_project_tests({"search_path": root})
+	assert_eq(result.get("status", ""), "ready", str(result))
+	assert_eq(int(result.get("count", -1)), 1, "仅真实测试入选")
+	var skipped: int = int(result.get("helpers_skipped", -1))
+	assert_true(skipped >= 3, "脚手架应计入 helpers_skipped（实测 %d）" % skipped)
+	var names: Array = []
+	for entry in result.get("tests", []):
+		names.append(String((entry as Dictionary).get("name", "")))
+	assert_true(names.has("test_real.gd"))
+	assert_false(names.has("run_tests.gd"))

@@ -3172,6 +3172,8 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		var compile_err: int = regex.compile(pattern)
 		if compile_err != OK:
 			return {"error": "Invalid regex pattern: " + pattern}
+	# P2-14（2026-09-30 体检 §12.3）：回显实际生效的路径——"路径被归一化"
+	# 与"目录本来如此"必须可区分（res://../../ 与 res:// 返回一致是缺陷）。
 
 	# 文件发现走统一收集器：跳过 .godot/.import 等生成域（此前裸 DirAccess
 	# 会下探引擎缓存与 __pycache__，零匹配也要读完所有文件）。工具目录
@@ -3207,7 +3209,8 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		"results": state["results"],
 		"total_matches": state["total_matches"],
 		"files_searched": state["files_searched"],
-		"files_available": files.size()
+		"files_available": files.size(),
+		"resolved_search_path": search_path
 	}
 
 func _search_recursive(
