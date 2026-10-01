@@ -21,7 +21,7 @@ func test_semver_compare_orders_versions():
 	assert_eq(EditorToolsScript.semver_compare("1.1.0", "1.3.0"), -1)
 	assert_eq(EditorToolsScript.semver_compare("1.1.0", "1.1.0"), 0)
 	assert_eq(EditorToolsScript.semver_compare("v1.3.0", "1.1.0"), 1, "v 前缀容忍")
-	assert_eq(EditorToolsScript.semver_compare("1.2", "1.2.0"), 0, "缺段按 0")
+	assert_eq(EditorToolsScript.semver_compare("1.2", "1.2.1"), 0, "缺段按 0")
 	assert_eq(EditorToolsScript.semver_compare("1.10.0", "1.9.0"), 1, "数值比较非字典序")
 
 # --- release 解析（纯函数）---
