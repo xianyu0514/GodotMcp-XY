@@ -154,6 +154,7 @@ const TOOLS: Dictionary = {
 	"get_runtime_material_state": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_memory_trend": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_performance_snapshot": {"category": "supplementary", "group": "Debug-Advanced"},
+	"get_performance_trend": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_scene_tree": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_screenshot": {"category": "supplementary", "group": "Debug-Advanced"},
 	"get_runtime_shader_parameters": {"category": "supplementary", "group": "Debug-Advanced"},

@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (74 advanced)
+### Debug-Advanced (77 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -73,6 +73,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_continue_and_wait` | advanced | Continue and wait for the debugger to pause or complete. |
 | `await_debugger_state` | advanced | Wait for a specific debugger state. |
 | `get_runtime_performance_snapshot` | advanced | Get a performance snapshot from the running game. |
+| `get_performance_trend` | advanced | Sample FPS, frame time and memory over N frames from the running game; returns min/max/avg/p95 per metric plus raw samples. Diagnostic view (complements assert_performance_budget). |
 | `get_runtime_memory_trend` | advanced | Get memory usage trends from the running game. |
 | `create_runtime_node` | advanced | Create a node in the running game. |
 | `delete_runtime_node` | advanced | Delete a node in the running game. |
