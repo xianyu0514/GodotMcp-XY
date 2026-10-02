@@ -44,6 +44,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_get_runtime_info(server_core)
 	_register_await_scene_ready(server_core)
 	_register_get_runtime_performance_snapshot(server_core)
+	_register_get_performance_trend(server_core)
 	_register_get_runtime_memory_trend(server_core)
 	_register_get_runtime_scene_tree(server_core)
 	_register_inspect_runtime_node(server_core)
@@ -258,6 +259,102 @@ func _tool_get_runtime_performance_snapshot(params: Dictionary) -> Dictionary:
 				stale_snapshot["refresh_result"] = result.get("refresh_result", {})
 				return stale_snapshot
 	return result
+
+## P1-18 后续（2026-09-30）：性能趋势采样——不回答"超没超标"（那是
+## assert_performance_budget 的职责），回答"趋势是什么"：FPS/帧时间/内存
+## 在 N 帧内的 min/max/avg/p95 + 原始样本。编辑器侧聚合，不需要探针改动。
+func _register_get_performance_trend(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_performance_trend",
+		"Sample the running game's FPS, frame time and memory over N frames and return a statistical trend (min/max/avg/p95 per metric plus the raw samples). Complements assert_performance_budget (which answers 'within budget?') with a diagnostic view ('what's the trend?'). Uses the runtime probe — the game must be running.",
+		{
+			"type": "object",
+			"properties": {
+				"sample_count": {"type": "integer", "default": 10, "description": "Number of snapshots to collect. Each snapshot is one probe round-trip (~3ms after the keepalive fix)."},
+				"interval_ms": {"type": "integer", "default": 100, "description": "Wait between samples in milliseconds."},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 4000, "description": "Per-sample probe wait budget."}
+			}
+		},
+		Callable(self, "_tool_get_performance_trend"),
+		{
+			"type": "object",
+			"properties": {
+				"status": {"type": "string"},
+				"sample_count": {"type": "integer"},
+				"interval_ms": {"type": "integer"},
+				"fps": {"type": "object", "description": "{min, max, avg, p95}"},
+				"frame_time_ms": {"type": "object"},
+				"memory_static_mb": {"type": "object"},
+				"object_count": {"type": "object"},
+				"samples": {"type": "array", "description": "Raw snapshots in collection order."},
+				"error": {"type": "string"}
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_get_performance_trend(params: Dictionary) -> Dictionary:
+	var sample_count: int = maxi(int(params.get("sample_count", 10)), 2)
+	var interval_ms: int = maxi(int(params.get("interval_ms", 100)), 0)
+	var probe_params: Dictionary = {
+		"session_id": params.get("session_id", -1),
+		"timeout_ms": params.get("timeout_ms", 4000)
+	}
+	var samples: Array = []
+	for i in range(sample_count):
+		var snapshot: Dictionary = await _tool_get_runtime_performance_snapshot(probe_params)
+		if snapshot.has("error"):
+			return {"error": "Sample %d/%d failed: %s" % [i + 1, sample_count, str(snapshot["error"])]}
+		samples.append(snapshot)
+		if i < sample_count - 1 and interval_ms > 0:
+			var tree: SceneTree = Engine.get_main_loop() as SceneTree
+			if tree:
+				await tree.create_timer(interval_ms / 1000.0).timeout
+	if samples.is_empty():
+		return {"error": "No samples collected"}
+	var fps_values: Array = []
+	var ft_values: Array = []
+	var mem_values: Array = []
+	var obj_values: Array = []
+	for s in samples:
+		var snapshot: Dictionary = s
+		if snapshot.has("fps"):
+			fps_values.append(float(snapshot["fps"]))
+		if snapshot.has("frame_time_sec"):
+			ft_values.append(float(snapshot["frame_time_sec"]) * 1000.0)
+		if snapshot.has("memory_static_mb"):
+			mem_values.append(float(snapshot["memory_static_mb"]))
+		if snapshot.has("object_count"):
+			obj_values.append(float(snapshot["object_count"]))
+	return {
+		"status": "success",
+		"sample_count": samples.size(),
+		"interval_ms": interval_ms,
+		"fps": _trend_stats(fps_values),
+		"frame_time_ms": _trend_stats(ft_values),
+		"memory_static_mb": _trend_stats(mem_values),
+		"object_count": _trend_stats(obj_values),
+		"samples": samples
+	}
+
+## 数值数组的 min/max/avg/p95 统计。
+static func _trend_stats(values: Array) -> Dictionary:
+	if values.is_empty():
+		return {}
+	var sorted_vals: Array = values.duplicate()
+	sorted_vals.sort()
+	var total: float = 0.0
+	for v in sorted_vals:
+		total += float(v)
+	var p95_idx: int = mini(int(ceil(sorted_vals.size() * 0.95)) - 1, sorted_vals.size() - 1)
+	return {
+		"min": sorted_vals[0],
+		"max": sorted_vals[sorted_vals.size() - 1],
+		"avg": snappedf(total / sorted_vals.size(), 0.01),
+		"p95": sorted_vals[p95_idx]
+	}
 
 func _register_get_runtime_memory_trend(server_core: RefCounted) -> void:
 	server_core.register_tool(
