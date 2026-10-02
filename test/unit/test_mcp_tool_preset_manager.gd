@@ -73,7 +73,7 @@ func test_all_enables_everything():
 
 func test_debugging_includes_core_plus_debug_advanced():
 	var states: Dictionary = _manager.resolve_preset_states("debugging", _all_names)
-	assert_eq(_count_enabled(states), 111, "debugging = 28 core + 7 meta + 76 Debug-Advanced")
+	assert_eq(_count_enabled(states), 112, "debugging = 28 core + 7 meta + 77 Debug-Advanced (get_performance_trend joins the group)")
 	assert_true(states["create_node"], "Core tool should remain enabled")
 	assert_true(states["get_runtime_info"], "Debug-Advanced tool should be enabled")
 	assert_false(states["run_export"], "Unrelated Project-Advanced tool should stay disabled")
