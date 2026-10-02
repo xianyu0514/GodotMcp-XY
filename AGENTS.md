@@ -94,6 +94,7 @@ addons/godot_mcp/
 │   ├── change_set_tools.gd    # 1 个工具 — apply_change_set（M5 第二交付：变更单工具层——缓冲区守卫 + 写后同步 + follow-up 验证指引）
 │   ├── verification_queue_store.gd # 支持文件（非工具）— 持久化分片验证队列（预算分片/重启续跑/指纹失效/完成契约）
 │   ├── verification_queue_tools.gd # 1 个工具 — run_verification_queue（M5 第三交付：分片验证编排枢纽——script_check 内置执行 + external 回填 + 漂移重验）
+│   ├── tool_registration_runner.gd # 支持文件（非工具）— 逐模块分帧注册工具模块（启动性能：GDScript 编译 ~1.7s 摊平到帧循环，依赖注入可测）
 │   ├── meta_tools_native.gd    # 5 个工具（始终在线，category=meta）— list_tool_catalog、search_tools、get_tool_details、enable_tools（按需启用/多客户端守卫）、custom_manage（第三方 custom_* 工具发现），实现 tools/list 懒加载
 │   ├── export_preset_tools.gd  # 5 个工具 — inspect/create/update/remove/duplicate_export_preset（export_presets.cfg 的原子 CRUD）
 │   └── game_workflow_tools.gd  # 2 个工具（category=meta，始终在线）— plan_game_workflow（12 生产 profile 组装持久目标 DAG）、run_game_workflow（自适应检查点切片推进，证据门禁判 completed）
