@@ -255,8 +255,8 @@ func _create_ui() -> void:
 	_tab_container.current_tab = 1
 
 	_update_ui_state()
-	# 工具列表仅在有 server core 后构建：_ready 时 core 尚未注入，空刷一次
-	# 只是白白创建再销毁 ~1300 个控件；真实刷新由 set_server_core 统一执行。
+	# core 未注入时列表必为空，重建只产出导航骨架：跳过避免无谓的控件
+	# 创建与销毁；真实构建由 set_server_core 统一执行。
 	if _server_core != null:
 		_refresh_tools_list()
 
@@ -2599,7 +2599,10 @@ func _refresh_translations() -> void:
 		_scope_chips["__supplementary__"].set_label(_tr("ui.scope_extended"))
 	_update_ui_state()
 	_update_connection_info()
-	_refresh_tools_list()
+	# 语言切换（core 已注入）时重建列表以刷新翻译后的工具描述；core 未注入
+	# 时列表必为空，跳过无谓的重建。顺带重译连接信息。
+	if _server_core != null:
+		_refresh_tools_list()
 
 func _update_connection_info() -> void:
 	if not _connection_info_label:
@@ -2764,3 +2767,14 @@ func refresh() -> void:
 	else:
 		call_deferred("_update_ui_state")
 		call_deferred("_refresh_tools_list")
+
+## 运行状态刷新：服务器启停不改变工具目录，只更新状态点/按钮/连接信息，
+## 避免每次启停全量重建 ~1300 个工具项控件。工具目录真正变化（注册完成）
+## 的路径仍走 refresh()。
+func refresh_status() -> void:
+	if Thread.is_main_thread():
+		_update_ui_state()
+		_update_connection_info()
+	else:
+		call_deferred("_update_ui_state")
+		call_deferred("_update_connection_info")

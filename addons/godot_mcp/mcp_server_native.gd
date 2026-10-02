@@ -1441,19 +1441,20 @@ func _on_server_started() -> void:
 	# 弱依赖通道在此挂载（运行期）：类注册阶段 set_meta 会段错误（见
 	# custom_tools_registry.apply_to 注释）。
 	MCPCustomToolsRegistryScript.attach_engine_meta()
-	if _main_panel and _main_panel.has_method("refresh"):
+	# 启停不改变工具目录：精确刷新运行状态即可，不重建工具列表。
+	if _main_panel and _main_panel.has_method("refresh_status"):
 		if Thread.is_main_thread():
-			_main_panel.refresh()
+			_main_panel.refresh_status()
 		else:
-			_main_panel.call_deferred("refresh")
+			_main_panel.call_deferred("refresh_status")
 
 func _on_server_stopped() -> void:
 	_log_info("MCP Server stopped")
-	if _main_panel and _main_panel.has_method("refresh"):
+	if _main_panel and _main_panel.has_method("refresh_status"):
 		if Thread.is_main_thread():
-			_main_panel.refresh()
+			_main_panel.refresh_status()
 		else:
-			_main_panel.call_deferred("refresh")
+			_main_panel.call_deferred("refresh_status")
 
 func _on_message_received(message: Dictionary) -> void:
 	_log_debug("Message received: " + JSON.stringify(message))

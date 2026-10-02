@@ -68,3 +68,23 @@ func test_sync_tool_items_state_without_widgets_fails_closed() -> void:
 	panel._group_widgets = {}
 	assert_false(panel._sync_tool_items_state([["bench_tool", false]]),
 		"No widgets built yet: caller must fall back to a full rebuild")
+
+
+func test_refresh_status_exists_and_is_null_safe() -> void:
+	# 服务器启停走 refresh_status（只刷状态与连接信息，不重建工具目录）；
+	# 在未进树、无控件的面板上调用必须安全返回。
+	var panel: Control = PANEL_SCRIPT.new()
+	autofree(panel)
+	panel._server_core = null
+	panel.refresh_status()
+	assert_true(true, "refresh_status completed without errors on a bare panel")
+
+
+func test_plugin_uses_refresh_status_for_server_lifecycle() -> void:
+	# 插件接线源码契约：启停路径用精确状态刷新，注册完成路径保留全量 refresh。
+	var plugin_source: GDScript = load("res://addons/godot_mcp/mcp_server_native.gd")
+	var source_code: String = plugin_source.source_code
+	assert_true(source_code.contains('_main_panel.refresh_status()'),
+		"Server start/stop should use the precise status refresh")
+	assert_false(source_code.contains("if _main_panel and _main_panel.has_method(\"refresh\"):\n\t\tif Thread.is_main_thread():\n\t\t\t_main_panel.refresh()"),
+		"Server start/stop must not trigger the full tool-list rebuild")
