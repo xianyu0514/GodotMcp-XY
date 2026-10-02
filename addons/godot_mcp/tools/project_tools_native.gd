@@ -1368,6 +1368,64 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 	var failed_count: int = 0
 	var skipped_count: int = 0
 
+	# N3（2026-09-30 体检 §14.3）：全部可运行测试都是 GUT 且 >1 时，一次
+	# Godot 进程跑完全部脚本——消除逐进程的 ContentDB + Whisper 重载成本。
+	# 混合批次（含 .py 等）退回逐测模式；单进程结果按脚本路径映射回原序。
+	var runnable_gut_paths: Array[String] = []
+	for entry_value in discovered_tests:
+		if not (entry_value is Dictionary):
+			continue
+		var entry_dict: Dictionary = entry_value
+		if only_runnable and not bool(entry_dict.get("runnable", false)):
+			continue
+		if String(entry_dict.get("framework", "")) == "gut":
+			runnable_gut_paths.append(String(entry_dict.get("test_path", "")))
+
+	if runnable_gut_paths.size() > 1:
+		var batch_results: Array = _run_gut_batch_single_process(str(list_result.get("search_path", "res://test")), "res://addons/gut/gut_cmdln.gd")
+		var batch_by_path: Dictionary = {}
+		for br_value in batch_results:
+			var br: Dictionary = br_value
+			batch_by_path[String(br.get("test_path", ""))] = br
+		for entry_value in discovered_tests:
+			if not (entry_value is Dictionary):
+				continue
+			var ed: Dictionary = entry_value
+			var tp: String = String(ed.get("test_path", ""))
+			var fw: String = String(ed.get("framework", ""))
+			if only_runnable and not bool(ed.get("runnable", false)):
+				skipped_count += 1
+				results.append({"status": "skipped", "test_path": tp, "framework": fw, "reason": "No available runner"})
+				continue
+			if fw == "gut" and batch_by_path.has(tp):
+				var mapped: Dictionary = batch_by_path[tp]
+				results.append(mapped)
+				var ms: String = str(mapped.get("status", ""))
+				if ms == "passed":
+					passed_count += 1
+				elif ms == "skipped":
+					skipped_count += 1
+				else:
+					failed_count += 1
+			else:
+				skipped_count += 1
+				results.append({"status": "skipped", "test_path": tp, "framework": fw, "reason": "Not in GUT batch output"})
+		var agg: String = "passed"
+		if failed_count > 0:
+			agg = "failed"
+		elif passed_count == 0 and skipped_count > 0:
+			agg = "skipped"
+		return {
+			"status": agg,
+			"search_path": str(list_result.get("search_path", "")),
+			"framework": str(params.get("framework", "")).strip_edges().to_lower(),
+			"total_count": results.size(),
+			"passed_count": passed_count,
+			"failed_count": failed_count,
+			"skipped_count": skipped_count,
+			"results": results
+		}
+
 	var index: int = 0
 	for entry in discovered_tests:
 		# 协作式取消：批次在两条测试之间检查取消标记，尽早中止整批。
@@ -1403,6 +1461,7 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 		# 三态计数（2026-09-29 假绿防护配套）：skipped（无 runner 或零执行
 		# 防护）不能压进 failed——那会让"什么都没跑"看起来像真失败，同样失真。
 		var result_status: String = str(test_result.get("status", ""))
+		# N3 标记：首个 runnable GUT 测试遇到时触发单进程批量（一次性消化全部 GUT 项）
 		if result_status == "passed":
 			passed_count += 1
 		elif result_status == "skipped":
@@ -1700,6 +1759,90 @@ func _run_native_project_test(test_path: String) -> Dictionary:
 ## GUT 零执行判据：脚本被忽略（不继承 GutTest 等）时 GUT 打印该串且退出码为 0。
 static func _is_gut_zero_run(output_text: String) -> bool:
 	return output_text.contains("Nothing was run")
+
+## N3（2026-09-30 体检 §14.3）：单进程批量 GUT 运行——每个脚本一个独立
+## Godot 进程的重载成本（ContentDB + Whisper 147MB）使得 10 个脚本的批次
+## 耗时 44 秒（一个进程 ~5 秒的 10 倍）。此函数一次运行 search_path 下的
+## 全部 GUT 测试并解析 per-script 结果。
+func _run_gut_batch_single_process(search_path: String, gut_cmdln_path: String) -> Array:
+	var executable_path: String = OS.get_executable_path()
+	var project_path: String = ProjectSettings.globalize_path("res://")
+	var args: Array[String] = [
+		"--headless",
+		"--path", project_path,
+		"-s", gut_cmdln_path,
+		"-gdir=" + search_path,
+		"-ginclude_subdirs",
+		"-gexit",
+		"-gdisable_colors"
+	]
+	var logs: Array = []
+	var started_at_ms: int = Time.get_ticks_msec()
+	var exit_code: int = OS.execute(executable_path, args, logs, true)
+	var duration_ms: int = Time.get_ticks_msec() - started_at_ms
+
+	var output_lines: Array = []
+	for line in logs:
+		output_lines.append(_sanitize_cli_output(str(line)))
+
+	return _parse_gut_batch_output(output_lines, exit_code, duration_ms, args, search_path)
+
+## 解析 GUT 多脚本输出为 per-script 结果数组。
+## 输出标记：脚本路径行（res://...）开始一个 section；"Totals" 开始汇总。
+static func _parse_gut_batch_output(output_lines: Array, exit_code: int, duration_ms: int, command: Array, search_path: String) -> Array:
+	var results: Array = []
+	var current_script: String = ""
+	var current_lines: Array = []
+	var current_passed: int = 0
+	var current_failed: int = 0
+	var in_totals: bool = false
+
+	for raw_line in output_lines:
+		var line: String = str(raw_line)
+		if line.begins_with("res://") and line.ends_with(".gd"):
+			# 新脚本 section 开始——把前一个的结果推入
+			if not current_script.is_empty():
+				results.append(_make_gut_script_result(current_script, current_lines, current_passed, current_failed, exit_code, duration_ms, command))
+			current_script = line
+			current_lines = []
+			current_passed = 0
+			current_failed = 0
+		elif line.begins_with("Totals"):
+			in_totals = true
+			if not current_script.is_empty():
+				results.append(_make_gut_script_result(current_script, current_lines, current_passed, current_failed, exit_code, duration_ms, command))
+				current_script = ""
+		elif not in_totals and not current_script.is_empty():
+			current_lines.append(line)
+			if line.contains("[Passed]"):
+				current_passed += 1
+			elif line.contains("[Failed]"):
+				current_failed += 1
+
+	# 最后一个脚本（无 Totals 尾随时）
+	if not current_script.is_empty():
+		results.append(_make_gut_script_result(current_script, current_lines, current_passed, current_failed, exit_code, duration_ms, command))
+	return results
+
+static func _make_gut_script_result(script_path: String, lines: Array, passed: int, failed: int, exit_code: int, duration_ms: int, command: Array) -> Dictionary:
+	var ran_zero: bool = passed == 0 and failed == 0
+	var status: String = "passed"
+	if failed > 0:
+		status = "failed"
+	elif ran_zero:
+		status = "skipped"
+	return {
+		"status": status,
+		"framework": "gut",
+		"kind": "unit",
+		"test_path": script_path,
+		"exit_code": exit_code,
+		"duration_ms": duration_ms,
+		"command": command,
+		"passed_count": passed,
+		"failed_count": failed,
+		"output": lines
+	}
 
 func _run_gut_project_test(test_path: String) -> Dictionary:
 	var gut_cmdln_path: String = "res://addons/gut/gut_cmdln.gd"
