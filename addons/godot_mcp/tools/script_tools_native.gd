@@ -36,6 +36,10 @@ func register_tools(server_core: RefCounted) -> void:
 static func _script_buffer_write_guard(script_editor: Object, script_path: String) -> Dictionary:
 	return ScriptWriteToolsScript._script_buffer_write_guard(script_editor, script_path)
 
+## test_pause_behavior_verification.gd 的既有静态引用经此转发。
+static func _resolve_node_within(edited_scene: Node, path: String) -> Node:
+	return ScriptWriteToolsScript._resolve_node_within(edited_scene, path)
+
 # ---- 发现/符号索引/搜索域转发（script_symbol_tools.gd）----
 
 func _tool_list_project_scripts(params: Dictionary) -> Dictionary:
