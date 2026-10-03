@@ -1280,7 +1280,7 @@ func _tool_run_export(params: Dictionary) -> Dictionary:
 
 func _register_smoke_test_export(server_core: RefCounted) -> void:
 	var tool_name: String = "smoke_test_export"
-	var description: String = "Post-export smoke test: verify an exported product exists and (optionally) launches cleanly. Resolves the artifact from 'artifact_path' or the preset's export_path; when run_export=true it exports first via the same CLI as run_export. Asserts the artifact file exists and, when launch=true, runs it with 'launch_args' (default ['--quit-after','120']) capturing the exit code and comparing it to 'expected_exit_code' (default 0). Returns an objective pass/fail with reasons — the ship-loop gate that proves a build is actually runnable, not just produced."
+	var description: String = "Post-export smoke test: verify an exported product exists and (optionally) launches cleanly. Resolves the artifact from 'artifact_path' or the preset's export_path; when run_export=true it exports first via the same CLI as run_export. Asserts the artifact file exists and, when launch=true, runs it with 'launch_args' (default ['--quit-after','120']) capturing the exit code and comparing it to 'expected_exit_code' (default 0). Returns an objective pass/fail with reasons — the ship-loop gate that proves a build is actually runnable, not just produced. Export plus launch takes minutes; set a long client timeout."
 
 	var input_schema: Dictionary = {
 		"type": "object",

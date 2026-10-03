@@ -72,7 +72,7 @@ func _send_tool_progress(progress_token: Variant, progress: int, total: int = 0,
 func _register_play_and_verify(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"play_and_verify",
-		"Drive the running game through scripted steps and assertions into one pass/fail report. Steps send actions/events with waits/screenshots and may carry an inline 'assert' (expression+expected) evaluated right after the step, proving mid-sequence behavior (paused after Esc, resumed after the second) in order. Final assertions check runtime expressions. deterministic=true frame-steps in-game; 'sample' builds per-label trajectories. Runtime errors fail by default; needs the game plus probe.",
+		"Drive the running game through scripted steps and assertions into one pass/fail report. Steps send actions/events with waits/screenshots and may carry an inline 'assert' (expression+expected) evaluated right after the step, proving mid-sequence behavior (paused after Esc, resumed after the second) in order. Final assertions check runtime expressions. deterministic=true frame-steps in-game; 'sample' builds per-label trajectories. Runtime errors fail by default; needs the game plus probe. A full run routinely exceeds 30s — set a long client timeout; never re-issue on silence.",
 		{
 			"type": "object",
 			"properties": {

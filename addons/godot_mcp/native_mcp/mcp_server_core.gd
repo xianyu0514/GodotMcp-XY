@@ -155,6 +155,35 @@ const PROMPTS_LIST_CACHE_SCOPE: String = "promptList"
 ## of truth for the version reported in the `initialize` handshake.
 const PLUGIN_CONFIG_PATH: String = "res://addons/godot_mcp/plugin.cfg"
 
+## Tools that routinely outlast a default 30s client timeout on real projects
+## (2026-10-03 English Rift ledger E-6: a 53s run was misread as a timeout and
+## re-issued, wasting a whole round trip). Successful responses from these tools
+## carry a `long_running` block so the agent learns — before re-issuing — that a
+## timed-out call may still have completed server-side. Poll-style tools
+## (run_project_tests, generate_3d_asset submit/poll) already return pending on
+## the first call and are deliberately absent here.
+## tool_name -> [expected_seconds, what_it_does]
+const LONG_RUNNING_TOOL_HINTS: Dictionary = {
+	"audit_project_health": [30, "full-project dependency/health scan"],
+	"verify_scripts": [30, "whole-project script compilation"],
+	"detect_broken_scripts": [30, "whole-project script scan"],
+	"scan_missing_resource_dependencies": [30, "whole-project dependency scan"],
+	"scan_cyclic_resource_dependencies": [30, "whole-project dependency scan"],
+	"scan_migration_compatibility": [60, "whole-project migration scan"],
+	"find_deprecated_api_usage": [60, "whole-project API scan"],
+	"rename_script_symbol": [60, "project-wide symbol rewrite"],
+	"query_change_impact": [30, "transitive dependency closure"],
+	"reimport_resources": [120, "editor asset reimport"],
+	"apply_change_set": [30, "multi-file guarded change set"],
+	"batch_update_scene_files": [30, "cross-scene property edit"],
+	"play_and_verify": [120, "game boot + scripted verification"],
+	"smoke_test_export": [300, "export + launch smoke test"],
+	"manage_export_templates": [300, "export template download/install"],
+	"generate_3d_asset": [600, "external 3D generation poll"],
+	"run_game_workflow": [600, "durable workflow DAG step"],
+	"plan_game_workflow": [30, "workflow DAG planning"]
+}
+
 # ============================================================================
 # 状态变量（使用完整类型提示 - 根据godot-dev-guide）
 # ============================================================================
@@ -975,7 +1004,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 			(result as Dictionary)["_param_aliases_applied"] = _last_param_aliases_applied.duplicate()
 		_last_param_aliases_applied = {}
 	_append_schema_warnings(result, arguments, tool)
-	
+	_append_long_running_hint(result, tool_name)
+	_append_error_recovery_hint(result)
+
 	var has_error: bool = result is Dictionary and result.has("error")
 	var response_result: Dictionary = _format_tool_result(result, tool)
 	var serialized_size_bytes: int = _formatted_result_source_size_bytes(response_result)
@@ -1112,6 +1143,53 @@ func _append_schema_warnings(result: Variant, arguments: Dictionary, tool: MCPTy
 		"arguments contained keys not in this tool's schema: " + ", ".join(unknown)
 			+ "; schema properties: " + ", ".join(known)
 	]
+
+## Attach the long-running expectation block (see LONG_RUNNING_TOOL_HINTS) to a
+## successful result from a tool that routinely outlasts default client
+## timeouts. Idempotent: handler-provided values win, cache entries keep theirs.
+func _append_long_running_hint(result: Variant, tool_name: String) -> void:
+	if not (result is Dictionary) or (result as Dictionary).has("error"):
+		return
+	if not LONG_RUNNING_TOOL_HINTS.has(tool_name) or (result as Dictionary).has("long_running"):
+		return
+	var hint: Array = LONG_RUNNING_TOOL_HINTS[tool_name]
+	(result as Dictionary)["long_running"] = {
+		"expected_seconds": int(hint[0]),
+		"note": "This tool routinely exceeds 30s on real projects (%s). If your client timed out, the run may still have completed server-side — poll or retry with the same arguments rather than assuming failure." % String(hint[1])
+	}
+
+## 2026-10-03 English Rift ledger S12（假信号家族）配套：错误必须自带下一步。
+## Full-project tool handlers produce ~1200 bare `{"error": ...}` returns; a
+## dispatch-layer pattern table gives every one of them (and every future tool)
+## a concrete `next_step` matched on the message's leading phrase, instead of
+## hand-editing a thousand call sites. Handlers that already provide their own
+## `next_step` (e.g. not_a_script hints) always win.
+## Matching is on lowercased substrings — patterns are specific enough
+## ("node not found" vs the generic "not found") to avoid false positives.
+const ERROR_RECOVERY_PATTERNS: Array = [
+	["node not found", "Verify the exact node path with get_scene_tree (or list_nodes). Nodes only exist in the currently open scene — run open_scene first if the target scene is not active."],
+	["no scene is currently open", "Open a scene first: open_scene {\"scene_path\": \"res://...\"}; discover candidates with list_project_scenes."],
+	["debugger bridge is not available", "Start the game first with run_project, then install_runtime_probe. Debugger/runtime tools need a live debug session."],
+	["editor interface not available", "This tool requires the editor process (UI-scoped operation) and cannot run in a headless/CLI session — call it from the editor-side server or use a non-editor tool."],
+	["script file not found", "Confirm the exact res:// path with list_project_scripts, or locate it by content with search_in_files {\"pattern\": ..., \"file_extensions\": [\".gd\"]}."],
+	["file not found", "Confirm the exact res:// path with list_project_resources before retrying; paths are project-relative and case-sensitive on some platforms."],
+	["resource not found", "Confirm the exact res:// path with list_project_resources (scenes: list_project_scenes) before retrying."],
+	["failed to open file", "The path failed to open: confirm it exists via list_project_resources and that it is not open with unsaved editor changes."],
+	["failed to load resource", "The res:// path failed to load: confirm it with list_project_resources; imported assets need a valid .import sidecar (see get_import_status)."],
+]
+
+func _append_error_recovery_hint(result: Variant) -> void:
+	if not (result is Dictionary):
+		return
+	var error_result: Dictionary = result
+	if not error_result.has("error") or error_result.has("next_step"):
+		return
+	var message: String = String(error_result["error"]).to_lower()
+	for pattern_value in ERROR_RECOVERY_PATTERNS:
+		var pattern: Array = pattern_value
+		if message.contains(String(pattern[0])):
+			error_result["next_step"] = String(pattern[1])
+			return
 
 ## Wrap a tool's raw result into an MCP tool-call result payload. Shared by live
 ## execution and cache hits so both produce identical responses. Results whose
@@ -1550,6 +1628,7 @@ func invoke_planned_tool(tool_name: String, arguments: Dictionary,
 			"Tool handler aborted without a result (runtime error; see the editor log)")
 		return {"error": "Tool handler aborted without a result (runtime error; see the editor log)"}
 
+	_append_long_running_hint(result, tool_name)
 	var has_error: bool = result is Dictionary and (result as Dictionary).has("error")
 	if is_cacheable_read:
 		if not has_error and result is Dictionary and _cache_revision_index.is_current(revision_snapshot):
