@@ -79,7 +79,7 @@ func test_csharp_collect_scripts_filter():
 
 func test_get_csharp_script_template_node():
 	"""_get_csharp_script_template('node') 应生成有效的 C# Node 类"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("node", "TestClass")
 	assert_true(content.contains("using Godot;"), "C# template should include 'using Godot;'")
 	assert_true(content.contains("public partial class TestClass : Node"), "C# template should declare partial class extending Node")
@@ -88,32 +88,32 @@ func test_get_csharp_script_template_node():
 
 func test_get_csharp_script_template_characterbody2d():
 	"""_get_csharp_script_template('characterbody2d') 应生成 CharacterBody2D 类"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("characterbody2d", "Player")
 	assert_true(content.contains("public partial class Player : CharacterBody2D"), "C# template should declare CharacterBody2D class")
 	assert_true(content.contains("MoveAndSlide();"), "C# CharacterBody2D template should have MoveAndSlide")
 
 func test_get_csharp_script_template_characterbody3d():
 	"""_get_csharp_script_template('characterbody3d') 应生成 CharacterBody3D 类"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("characterbody3d", "Player3D")
 	assert_true(content.contains("public partial class Player3D : CharacterBody3D"), "C# template should declare CharacterBody3D class")
 
 func test_get_csharp_script_template_area2d():
 	"""_get_csharp_script_template('area2d') 应生成 Area2D 类"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("area2d", "DetectionZone")
 	assert_true(content.contains("public partial class DetectionZone : Area2D"), "C# template should declare Area2D class")
 
 func test_get_csharp_script_template_empty():
 	"""_get_csharp_script_template('empty') 应生成默认 Node 类"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("empty", "")
 	assert_true(content.contains("public partial class NewScript : Node"), "Empty C# template should default to Node class")
 
 func test_get_csharp_script_template_sanitizes_name():
 	"""C# 模板类名应清理非法字符"""
-	var tool = load("res://addons/godot_mcp/tools/script_tools_native.gd").new()
+	var tool = load("res://addons/godot_mcp/tools/script_write_tools.gd").new()
 	var content: String = tool._get_csharp_script_template("node", "my-script file")
 	assert_true(content.contains("my_script_file"), "Class name should have special chars replaced with underscore")
 

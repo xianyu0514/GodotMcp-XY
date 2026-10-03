@@ -344,3 +344,27 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   `file_line_endings`/`old_text_line_endings` 诊断。
 - **大文件读取**：`read_script` 支持 `offset_lines`/`max_lines` 行窗口，
   `content_hash` 始终锚定整个文件——分页读取照样能当 modify_script 的乐观锁。
+
+## 浪费往返的两道新防线（2026-10-03 第二批）
+
+- **长任务的"静默 ≠ 失败"**：一批工具（全项目扫描、reimport、导出冒烟、
+  workflow 推进等 18 个，见 server core 的 `LONG_RUNNING_TOOL_HINTS`）在大项目
+  上 routinely 超过客户端默认 30s 超时。实测台账记录过"30s 判超时 → 重复发起
+  → 任务 53s 才完成"的浪费。这批工具的成功响应现在自带 `long_running` 块
+  （预期秒数 + "超时后任务可能已在服务端完成，先轮询/重试同参"）——第一次
+  调用后就学会等，而不是重发。调用方侧对长任务设长超时；`tools/list` 描述里
+  的高频五个也已写明。
+- **错误自带下一步**：全插件 ~1200 个裸 `{"error": ...}` 返回由分发层的短语
+  模式表统一补 `next_step`（"Node not found" → 先 get_scene_tree；"No scene
+  is currently open" → open_scene；"Debugger bridge is not available" →
+  run_project + install_runtime_probe；"Editor interface not available" →
+  说明 headless 限制……）。handler 自带的 `next_step`（如 not_a_script）
+  优先，模式表永不覆盖。
+- **巨型文件拆分的启动收益口径**：script_tools_native.gd（3.6k 行）按域拆成
+  symbol/write/verify 三模块 + shared 纯函数层后，编译分帧粒度从"456ms 单帧"
+  细化为三帧各 ~150ms。**关键约束：preload 是编译期依赖**——子桶之间互相
+  preload 会把编译成本重新合并进一帧（实测踩过：write preload verify 把
+  两帧合成一帧）。拆分必须让依赖单向（shared ← 各桶），真需要跨桶的少数
+  大函数走运行时 load（如 create_script 的 shader 预检 lazy load verify）。
+  兼容壳（ScriptToolsNative 实例转发）只为既有测试与 change_set_tools 的
+  引用保留，不在 TOOL_SCRIPT_PATHS 注册路径上。

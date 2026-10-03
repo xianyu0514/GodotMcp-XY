@@ -113,7 +113,12 @@ const CACHE_CHANGE_TRACKER_SCRIPT = preload(
 
 const TOOL_SCRIPT_PATHS: Dictionary = {
 	"NodeToolsNative": "res://addons/godot_mcp/tools/node_tools_native.gd",
-	"ScriptToolsNative": "res://addons/godot_mcp/tools/script_tools_native.gd",
+	# 2026-10-03 script_tools_native.gd 按域拆分：四个模块独立编译独立分帧
+	# （原单文件 ~456ms 编译占满一帧）；shared 为纯函数辅助无注册行为。
+	"ScriptToolsShared": "res://addons/godot_mcp/tools/script_tools_shared.gd",
+	"ScriptSymbolTools": "res://addons/godot_mcp/tools/script_symbol_tools.gd",
+	"ScriptWriteTools": "res://addons/godot_mcp/tools/script_write_tools.gd",
+	"ScriptVerifyTools": "res://addons/godot_mcp/tools/script_verify_tools.gd",
 	"SceneToolsNative": "res://addons/godot_mcp/tools/scene_tools_native.gd",
 	"EditorToolsNative": "res://addons/godot_mcp/tools/editor_tools_native.gd",
 	"DebugToolsNative": "res://addons/godot_mcp/tools/debug_tools_native.gd",
