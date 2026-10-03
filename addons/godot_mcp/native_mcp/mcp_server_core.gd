@@ -977,8 +977,9 @@ func _handle_tool_call(message: Dictionary) -> Dictionary:
 	_append_schema_warnings(result, arguments, tool)
 	
 	var has_error: bool = result is Dictionary and result.has("error")
-	var response_result: Dictionary = _format_tool_result(result, tool)
-	var serialized_size_bytes: int = _formatted_result_source_size_bytes(response_result)
+	var formatted_with_size: Dictionary = _format_tool_result_with_size(result, tool)
+	var response_result: Dictionary = formatted_with_size["result"]
+	var serialized_size_bytes: int = int(formatted_with_size["size_bytes"])
 
 	# Keep the result cache coherent: store successful cacheable reads together
 	# with their formatted payload and dependency-revision snapshot. Mutations
@@ -1120,11 +1121,19 @@ func _append_schema_warnings(result: Variant, arguments: Dictionary, tool: MCPTy
 ## "spill, don't fail" principle); file-content tools in SPILL_EXEMPT_TOOLS keep
 ## returning inline content.
 func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
+	return _format_tool_result_with_size(result, tool)["result"]
+
+## 与 _format_tool_result 相同，但同趟返回结果 JSON 的 UTF-8 字节数。spill 检查
+## 与缓存记账都需要该字节数；单次编码避免对同一文本做第二次 to_utf8_buffer()
+## （240KB 级结果实测每次额外编码约 0.7ms）。
+func _format_tool_result_with_size(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 	var has_error: bool = result is Dictionary and result.has("error")
 	var json_text: String = JSON.stringify(result)
+	var json_bytes: PackedByteArray = json_text.to_utf8_buffer()
+	var json_size_bytes: int = json_bytes.size()
 	var spilled: Dictionary = {}
 	if not has_error:
-		spilled = _maybe_spill_result(json_text, tool)
+		spilled = _maybe_spill_result_bytes(json_text, json_bytes, tool)
 		if not spilled.is_empty():
 			json_text = JSON.stringify(spilled)
 	var content_blocks: Array[Dictionary] = [{
@@ -1141,14 +1150,14 @@ func _format_tool_result(result: Variant, tool: MCPTypes.MCPTool) -> Dictionary:
 	# would defeat the size limit, so it is omitted for spilled results only.
 	if not has_error and tool.output_schema.size() > 0 and spilled.is_empty():
 		response_result["structuredContent"] = result
-	return response_result
+	return {"result": response_result, "size_bytes": json_size_bytes}
 
 ## Recover the complete raw JSON byte count from the response that was already
 ## formatted for the client. Inline results carry that JSON in the first text
 ## block; spilled results advertise the complete size on their resource_link.
-## Returning -1 lets legacy/unusual shapes fall back to deterministic encoding
-## inside _result_cache_put.
-static func _formatted_result_source_size_bytes(response_result: Dictionary) -> int:
+## Callers on the hot path should prefer _format_tool_result_with_size, which
+## returns the byte count from the single UTF-8 encoding it already performs.
+func _formatted_result_source_size_bytes(response_result: Dictionary) -> int:
 	var content: Variant = response_result.get("content", [])
 	if not (content is Array):
 		return -1
@@ -1553,9 +1562,9 @@ func invoke_planned_tool(tool_name: String, arguments: Dictionary,
 	var has_error: bool = result is Dictionary and (result as Dictionary).has("error")
 	if is_cacheable_read:
 		if not has_error and result is Dictionary and _cache_revision_index.is_current(revision_snapshot):
-			var formatted: Dictionary = _format_tool_result(result, tool)
-			_result_cache_put(cache_key, result, formatted, revision_snapshot,
-				_formatted_result_source_size_bytes(formatted))
+			var formatted_with_size: Dictionary = _format_tool_result_with_size(result, tool)
+			_result_cache_put(cache_key, result, formatted_with_size["result"], revision_snapshot,
+				int(formatted_with_size["size_bytes"]))
 		else:
 			_cache_inflight.erase(cache_key)
 	elif not bool(tool.annotations.get("readOnlyHint", false)) and tool_name not in CACHE_PRESERVING_MUTATION_TOOLS:
@@ -2241,12 +2250,14 @@ func reset_cache_diagnostics() -> void:
 
 ## If `json_text` exceeds MAX_INLINE_RESULT_BYTES (and the tool is not spill
 ## exempt), write it to res://.mcp/out/ and return the truncated preview payload.
+## `json_bytes`/`json_size_bytes` must be the UTF-8 encoding of `json_text` — the
+## caller already serialized it once for size accounting, so this reuses it.
 ## Returns {} when the result stays inline (small, exempt, or disk write failed —
 ## a failed spill falls back to inline, never to an error).
-func _maybe_spill_result(json_text: String, tool: MCPTypes.MCPTool) -> Dictionary:
+func _maybe_spill_result_bytes(json_text: String, json_bytes: PackedByteArray,
+		tool: MCPTypes.MCPTool) -> Dictionary:
 	if json_text.is_empty() or tool.name in SPILL_EXEMPT_TOOLS:
 		return {}
-	var json_bytes: PackedByteArray = json_text.to_utf8_buffer()
 	var size_bytes: int = json_bytes.size()
 	if size_bytes <= MAX_INLINE_RESULT_BYTES:
 		return {}

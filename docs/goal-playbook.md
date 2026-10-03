@@ -318,3 +318,27 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   `list_project_tests` 现已自动探测 `res://test`/`res://tests`/
   `res://.mcp_runtime_tests` 三个根并合并发现——遇到"无测试"结论先看响应里的
   `search_paths` 口径，不要直接信。
+
+## 插件启动性能的实测口径（2026-10-03 启动注册优化沉淀）
+
+- **GDScript 编译是启动注册的绝对大头**：21 个工具模块同步 load 共 ~1.7s，
+  其中 99% 是 `load()` 的 GDScript 编译（ScriptToolsNative 456ms——首次触发其
+  preload 依赖链编译、GameWorkflowTools 233ms），注册逻辑本身仅 ~13ms。
+  同进程内二次 load 是免费的（编译结果缓存在 ResourceLoader），但编辑器每次
+  冷启动都要全量重编——不要拿"热载免费"推断冷启动也快。
+- **分帧注册的正确姿势**：`MCPToolRegistrationRunner` 每模块让出一帧，启动
+  关键路径只付首个模块（~100ms）。依赖注册完成的步骤（custom 工具挂载、
+  资源/prompts、状态恢复、面板列表、自动启动）必须在 `_on_all_tools_registered`
+  续跑；注册完成前 `_start_native_server` 会排队（`_pending_start`），否则
+  客户端会拿到残缺的 tools/list。
+- **EditorPlugin 是虚类**：GUT CLI 进程里 `EditorPlugin.new()` 直接报
+  "Class 'EditorPlugin' can only be instantiated by editor"。插件脚本的行为
+  测试只有两条路——把逻辑抽成 RefCounted 支持文件（依赖注入，如本 runner），
+  或沿用源码级断言（`source_code.contains`）。
+- **GUT 把引擎 ERROR 记为测试失败**：测试里触发"加载不存在的脚本"会因
+  `ERROR: Cannot open file` 挂掉；生产代码对可选路径先 `FileAccess.file_exists`
+  再 load，既少错误日志噪声又保测试可跑。
+- **大结果路径单次编码**：`_format_tool_result_with_size` 同一趟返回格式化
+  结果与 UTF-8 字节数（spill 检查与缓存记账共用一次 to_utf8_buffer 编码）。
+  400 节点结果的 `JSON.stringify` 本身 ~1ms/千节点，是剩余大头——减少序列化
+  次数优先于微优化编码。
