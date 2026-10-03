@@ -393,16 +393,15 @@ func _enter_tree() -> void:
 	_native_server.log_message.connect(_on_log_message)
 	_connect_cache_change_signals()
 	
-	# 注册所有工具：编辑器交互模式分帧编译（启动不再冻结）；--mcp-server
-	# 无头服务器模式同步注册——集成测试与无头客户端在端口等待窗口内就期望
-	# 9080 可连，服务器启动若推迟到分帧完成之后会全部超时（2026-10-03 CI
-	# 实测：Integration fast set 全量 "Timed out waiting for MCP server on
-	# port 9080"）。custom 工具挂载、资源/prompts 注册、工具状态恢复、面板
-	# 列表填充与服务器自动启动都推迟到 _on_all_tools_registered 续跑。
-	if "--mcp-server" in OS.get_cmdline_user_args():
-		_register_all_tools(true)
-	else:
-		_register_all_tools()
+	# 注册所有工具（同步）。分帧编译（runner.synchronous=false）在本地反复
+	# 验证可将 456ms 单帧拆为三帧，但 CI 的 --editor --headless 集成环境出现
+	# 不可归因的 9080 全量超时（被测进程 stdout/stderr 进 DEVNULL，无日志可
+	# 归因），两轮修复（server 模式同步分支、测试修复）后仍复现——在集成
+	# 可观测性落地（被测进程日志落盘上传）之前，启动时序保持与 main 一致；
+	# runner 基建与测试保留，重启用是一行分支的事。
+	# custom 工具挂载、资源/prompts 注册、工具状态恢复、面板列表填充与
+	# 服务器自动启动都推迟到 _on_all_tools_registered 续跑。
+	_register_all_tools(true)
 
 	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
 	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot

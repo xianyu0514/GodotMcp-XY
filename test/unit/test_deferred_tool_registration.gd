@@ -115,7 +115,5 @@ func test_server_mode_wires_synchronous_registration() -> void:
 	# 源码契约：--mcp-server 参数走同步注册，编辑器交互模式保持分帧。
 	var plugin_source: GDScript = PLUGIN_SCRIPT
 	var source_code: String = plugin_source.source_code
-	assert_true(source_code.contains('if "--mcp-server" in OS.get_cmdline_user_args():'),
-		"Server mode must take the synchronous registration branch")
 	assert_true(source_code.contains("_register_all_tools(true)"),
-		"Server mode must pass synchronous=true")
+		"Startup registration must be synchronous until CI observability lands")
