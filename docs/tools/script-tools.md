@@ -20,7 +20,7 @@ Read, create, modify, validate and search project scripts. The category supports
 | Tool | Tier | Description |
 | --- | --- | --- |
 | `list_project_scripts` | advanced | List GDScript and C# script files. Tooling directories (addons/test/docs) are excluded by default (`include_tooling=true` or a tooling `search_path` opts in). Supports limit/offset pagination. |
-| `read_script` | core | Read complete GDScript/C# source and its SHA-256 `content_hash`. |
+| `read_script` | core | Read complete GDScript/C# source and its SHA-256 `content_hash`. Large files: optional `offset_lines`/`max_lines` line-window paging — `content_hash` still covers the whole file, so the modify_script optimistic lock works from any page. Non-script extensions are rejected with a `read_project_file` hint. |
 | `create_script` | core | Create a GDScript or C# file; return immediate GDScript diagnostics separately from file-write success. |
 | `modify_script` | core | Replace a script, valid line or unique `old_text` block; optionally guard against stale content, reject unsaved target buffers when supported, and return saved-source diagnostics. |
 | `get_current_script` | core | Get the currently edited script in the Godot editor. |
@@ -36,7 +36,7 @@ Read, create, modify, validate and search project scripts. The category supports
 | `validate_script` | advanced | Validate a script file for syntax errors. Returns structured compile errors with line numbers. |
 | `verify_scripts` | advanced | Batch-verify the compilation status of project scripts, returning per-script structured errors and warnings with line numbers. With no script_paths it scans the whole project for .gd scripts (skipping res://addons/ and res://test/ by default to avoid false positives from the plugin itself and the test suite), capped by max_scripts. Use after editing code as a verification step, complementing validate_script (single script) and execute_editor_script (full reload). |
 | `validate_shader` | advanced | Validate a Godot shader (.gdshader file or raw Shader code) without a GPU. Reports whether it parses plus shader_type render_modes and uniforms and structural issues (missing/invalid shader_type unbalanced braces/parentheses/brackets) with line numbers. Works on Godot 4.6+. |
-| `search_in_files` | advanced | Search for text in project files. Discovery skips generated domains (`.godot`/`.import`) and by default tooling directories (`include_tooling=true` or a tooling `search_path` includes them); `max_files` (default 2000) bounds zero-match scans. |
+| `search_in_files` | advanced | Search for text in project files. Discovery skips generated domains (`.godot`/`.import`) and by default tooling directories (`include_tooling=true` or a tooling `search_path` includes them); `max_files` (default 2000) bounds zero-match scans. Zero-match results carry `empty_reason` (`no_files_matched_extensions` vs `pattern_matched_nothing`) so an empty answer explains itself. |
 | `list_project_script_symbols` | advanced | Index script symbols across project GDScript and C# files. Returns class, extends, functions, signals, properties, and constants. |
 | `find_script_symbol_definition` | advanced | Find definition locations for a script symbol across GDScript and C# project files. |
 | `find_script_symbol_references` | advanced | Find textual project references to a script symbol across GDScript, C#, and scene files. |

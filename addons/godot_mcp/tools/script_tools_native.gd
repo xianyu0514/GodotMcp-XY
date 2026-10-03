@@ -1477,8 +1477,8 @@ func _rename_symbol_in_file(file_path: String, symbol_name: String, new_name: St
 
 func _register_read_script(server_core: RefCounted) -> void:
 	var tool_name: String = "read_script"
-	var description: String = "Read complete GDScript (.gd) or C# (.cs) source and its content_hash. Pass this hash as expected_content_hash to modify_script to reject stale writes."
-	
+	var description: String = "Read complete GDScript (.gd) or C# (.cs) source and its content_hash. Pass this hash as expected_content_hash to modify_script to reject stale writes. Large files: pass offset_lines/max_lines to window the read (content_hash always covers the WHOLE file so the optimistic lock still works); .json/.tscn/.tres/.cfg/.md/.csv belong to read_project_file."
+
 	# inputSchema
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1486,19 +1486,33 @@ func _register_read_script(server_core: RefCounted) -> void:
 			"script_path": {
 				"type": "string",
 				"description": "Path to the script file (e.g. 'res://scripts/player.gd')"
+			},
+			"offset_lines": {
+				"type": "integer",
+				"description": "Zero-based first line to return. Default 0 (whole file).",
+				"default": 0
+			},
+			"max_lines": {
+				"type": "integer",
+				"description": "Maximum lines per page. Default 0 = whole file. Content is cut on line boundaries; content_hash remains the hash of the whole file.",
+				"default": 0
 			}
 		},
 		"required": ["script_path"]
 	}
-	
+
 	# outputSchema
 	var output_schema: Dictionary = {
 		"type": "object",
 		"properties": {
 			"script_path": {"type": "string"},
 			"content": {"type": "string"},
-			"content_hash": {"type": "string", "description": "SHA-256 of the returned UTF-8 text, including line endings."},
-			"line_count": {"type": "integer"}
+			"content_hash": {"type": "string", "description": "SHA-256 of the WHOLE-file UTF-8 text, including line endings. Unchanged by offset_lines/max_lines so it still anchors modify_script's optimistic lock."},
+			"line_count": {"type": "integer", "description": "Total line count of the whole file."},
+			"offset_lines": {"type": "integer"},
+			"returned_line_count": {"type": "integer"},
+			"has_more": {"type": "boolean"},
+			"next_offset_lines": {"type": "integer"}
 		}
 	}
 	
@@ -1519,37 +1533,75 @@ func _register_read_script(server_core: RefCounted) -> void:
 func _tool_read_script(params: Dictionary) -> Dictionary:
 	# 参数提取
 	var script_path: String = params.get("script_path", "")
-	
+	var offset_lines: int = int(params.get("offset_lines", 0))
+	var max_lines: int = int(params.get("max_lines", 0))
+
 	if script_path.is_empty():
 		return {"error": "Missing required parameter: script_path"}
-	
+	if offset_lines < 0 or max_lines < 0:
+		return {"error": "offset_lines and max_lines must be non-negative integers"}
+
+	# 2026-10-03 台账 P1-2：数据驱动项目大量 .json/.tscn/.cfg，调用方拿着
+	# read_script 读 JSON 只会撞类型墙。一次往返自纠：指名正确工具。
+	var lower_path: String = script_path.to_lower()
+	if not (lower_path.ends_with(".gd") or lower_path.ends_with(".cs")):
+		return {
+			"error": "read_script reads .gd/.cs only, but '%s' does not look like a script file." % script_path,
+			"error_code": "not_a_script",
+			"next_step": "For .json/.tscn/.tres/.cfg/.md/.csv and other text project files, call read_project_file {\"file_path\": \"%s\"} instead (same offset_lines/max_lines paging)." % script_path
+		}
+
 	# 使用PathValidator验证路径安全性
 	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
-	
+
 	# 使用清理后的路径
 	script_path = validation["sanitized"]
-	
+
 	# 验证文件是否存在
-	
+
 	var file: FileAccess = FileAccess.open(script_path, FileAccess.READ)
-	
+
 	if not file:
 		return {"error": "Failed to open file: " + script_path}
-	
+
 	# 读取内容
 	var content: String = file.get_as_text()
 	file.close()
 
-	var line_count: int = content.split("\n").size()
-	
-	return {
+	# content_hash 始终锚定"整个文件"——它是 modify_script 乐观锁的锚点；
+	# 分页只裁剪返回的 content，不影响锁语义。
+	var whole_hash: String = content.sha256_text()
+	var lines: PackedStringArray = content.split("\n")
+	var total_lines: int = lines.size()
+	var result: Dictionary = {
 		"script_path": script_path,
-		"content": content,
-		"content_hash": content.sha256_text(),
-		"line_count": line_count
+		"content_hash": whole_hash,
+		"line_count": total_lines,
+		"offset_lines": offset_lines
 	}
+	if max_lines <= 0 and offset_lines <= 0:
+		result["content"] = content
+		result["returned_line_count"] = total_lines
+		result["has_more"] = false
+		return result
+
+	if offset_lines >= total_lines:
+		result["content"] = ""
+		result["returned_line_count"] = 0
+		result["has_more"] = false
+		return result
+
+	var end_line: int = total_lines if max_lines <= 0 else mini(total_lines, offset_lines + max_lines)
+	# split("\n") 丢了分隔符；窗口重组用 \n 还原（CRLF 的 \r 留在行内容里，字节不丢）。
+	var page: PackedStringArray = lines.slice(offset_lines, end_line)
+	result["content"] = "\n".join(page)
+	result["returned_line_count"] = page.size()
+	result["has_more"] = end_line < total_lines
+	if result["has_more"]:
+		result["next_offset_lines"] = end_line
+	return result
 
 # ============================================================================
 # batch_read_scripts - 批量读取脚本
@@ -2051,15 +2103,25 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 		return {"error": "Missing required parameter: script_path"}
 	if new_content.is_empty() and not has_old_text:
 		return {"error": "Missing required parameter: content"}
+
+	# 2026-10-03 台账 P1-2（write 侧）：modify_script 只管 .gd/.cs；数据文件
+	# (.json/.tscn/.cfg...) 的写入走 apply_change_set 变更单（可预览/可恢复）。
+	var write_lower_path: String = script_path.to_lower()
+	if not (write_lower_path.ends_with(".gd") or write_lower_path.ends_with(".cs")):
+		return {
+			"error": "modify_script edits .gd/.cs only, but '%s' does not look like a script file." % script_path,
+			"error_code": "not_a_script",
+			"next_step": "For .json/.tscn/.tres/.cfg and other text project files, call apply_change_set with an operations entry {\"path\": \"%s\", ...} — it previews, applies and journals cross-file changes with content-hash guards." % script_path
+		}
 	
 	# 使用PathValidator验证路径安全性
 	var validation: Dictionary = PathValidator.validate_file_path(script_path, [".gd", ".cs"])
 	if not validation["valid"]:
 		return {"error": "Invalid path: " + validation["error"]}
-	
+
 	# 使用清理后的路径
 	script_path = validation["sanitized"]
-	
+
 	# 验证文件是否存在
 	if not FileAccess.file_exists(script_path):
 		return {"error": "File not found: " + script_path}
@@ -2084,16 +2146,37 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 			"recovery_hint": "Read the script again, preserve newer changes, and reapply the intended edit with the new content_hash."}
 
 	var final_content: String = new_content
+	var line_endings_normalized: bool = false
 	if has_old_text:
 		var old_text: String = params["old_text"]
 		var match_at: int = existing_content.find(old_text)
+		var effective_old: String = old_text
+		var effective_new: String = new_content
 		if match_at < 0:
+			# 2026-10-03 台账 P1-3（S10）：Windows 工程默认 CRLF，调用方按
+			# LF 构造 old_text 是常态摩擦。原样匹配失败时按文件的主导行尾
+			# 风格转换 old_text/new_text 再匹配一次，替换文本跟随同一风格。
+			var file_uses_crlf: bool = existing_content.contains("\r\n")
+			var old_uses_crlf: bool = old_text.contains("\r\n")
+			if file_uses_crlf and not old_uses_crlf:
+				effective_old = old_text.replace("\n", "\r\n")
+				effective_new = new_content.replace("\n", "\r\n")
+			elif not file_uses_crlf and old_uses_crlf:
+				effective_old = old_text.replace("\r\n", "\n")
+				effective_new = new_content.replace("\r\n", "\n")
+			if not effective_old == old_text:
+				match_at = existing_content.find(effective_old)
+				line_endings_normalized = match_at >= 0
+		if match_at < 0:
+			var file_style: String = "CRLF" if existing_content.contains("\r\n") else "LF"
+			var old_style: String = "CRLF" if old_text.contains("\r\n") else "LF"
 			return {"error": "old_text was not found; no changes were written.", "error_code": "text_not_found",
-				"recovery_hint": "Read the current script and use exact text, including whitespace and line endings."}
-		if existing_content.find(old_text, match_at + 1) >= 0:
+				"file_line_endings": file_style, "old_text_line_endings": old_style,
+				"recovery_hint": "Read the current script and use exact text, including whitespace and line endings. This file uses %s line endings while old_text uses %s — after fixing line endings, also check for whitespace drift." % [file_style, old_style]}
+		if existing_content.find(effective_old, match_at + 1) >= 0:
 			return {"error": "old_text matches more than once; no changes were written.", "error_code": "ambiguous_text",
 				"recovery_hint": "Include more surrounding text so old_text identifies exactly one block."}
-		final_content = existing_content.substr(0, match_at) + new_content + existing_content.substr(match_at + old_text.length())
+		final_content = existing_content.substr(0, match_at) + effective_new + existing_content.substr(match_at + effective_old.length())
 	elif line_number > 0:
 		var existing_lines: PackedStringArray = existing_content.split("\n")
 		if line_number > existing_lines.size():
@@ -2127,6 +2210,10 @@ func _tool_modify_script(params: Dictionary) -> Dictionary:
 		"buffers_synced": EditorToolsNative.sync_script_buffer_after_write(
 			editor_interface, script_path).get("status", "")
 	}
+	if line_endings_normalized:
+		# 行尾兜底生效必须显式回执：调用方写入的字节与 old_text/new_text
+		# 的字面行尾不同（跟随了文件风格）。
+		result["line_endings_normalized"] = true
 	var validation_enabled: bool = bool(params.get("validate", true))
 	result.merge(SCRIPT_WRITE_DIAGNOSTICS.check(script_path, validation_enabled))
 	if script_path.ends_with(".gd") and validation_enabled:
@@ -3204,7 +3291,9 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		state["files_searched"] = int(state["files_searched"]) + 1
 		_search_file(file_path, pattern, use_regex, case_sensitive, regex, state)
 
-	return {
+	# 2026-10-03 台账 S12（假信号家族）：空结果必须自解释——"没匹配到"与
+	# "根本没扫到文件"在调用方眼里必须是两种结论。
+	var payload: Dictionary = {
 		"pattern": pattern,
 		"results": state["results"],
 		"total_matches": state["total_matches"],
@@ -3212,6 +3301,12 @@ func _tool_search_in_files(params: Dictionary) -> Dictionary:
 		"files_available": files.size(),
 		"resolved_search_path": search_path
 	}
+	if int(state["total_matches"]) == 0:
+		if files.is_empty():
+			payload["empty_reason"] = "no_files_matched_extensions"
+		else:
+			payload["empty_reason"] = "pattern_matched_nothing"
+	return payload
 
 func _search_recursive(
 	dir_path: String, pattern: String, extensions: Array,

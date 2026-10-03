@@ -902,14 +902,27 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 			resolved_path = str((report as Dictionary).get("search_path", primary_path))
 			break
 
-	return {
+	# 2026-10-03 台账 S1：framework 计数让"自研 runner 项目"在发现层就显形。
+	var framework_counts: Dictionary = {}
+	for entry_value in tests:
+		var framework_name: String = String((entry_value as Dictionary).get("framework", ""))
+		framework_counts[framework_name] = int(framework_counts.get(framework_name, 0)) + 1
+	var result: Dictionary = {
 		"status": "ready",
 		"count": tests.size(),
 		"search_path": resolved_path,
 		"search_paths": candidate_reports,
 		"helpers_skipped": _tests_helpers_skipped,
+		"framework_counts": framework_counts,
 		"tests": tests
 	}
+	if int(framework_counts.get("custom", 0)) > 0:
+		result["gate_note"] = (
+			"%d discovered .gd files do not extend GutTest (framework=custom). "
+			+ "run_project_tests cannot execute them via GUT and will report them as "
+			+ "skipped with a zero-execution gate warning — treat that as no evidence, "
+			+ "not as a green gate.") % int(framework_counts.get("custom", 0))
+	return result
 
 
 # ============================================================================
@@ -1409,13 +1422,18 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 					failed_count += 1
 			else:
 				skipped_count += 1
-				results.append({"status": "skipped", "test_path": tp, "framework": fw, "reason": "Not in GUT batch output"})
+				var skip_reason: String = "Not in GUT batch output"
+				if fw == "custom":
+					# 2026-10-03 台账 P0-1：custom runner 被 GUT 静默忽略，
+					# 跳过原因必须指明"不可跑"，不能让调用方以为 GUT 跑过。
+					skip_reason = "Not a GutTest subclass; GUT cannot execute it (framework=custom)"
+				results.append({"status": "skipped", "test_path": tp, "framework": fw, "reason": skip_reason})
 		var agg: String = "passed"
 		if failed_count > 0:
 			agg = "failed"
 		elif passed_count == 0 and skipped_count > 0:
 			agg = "skipped"
-		return {
+		return _append_zero_execution_gate_warning({
 			"status": agg,
 			"search_path": str(list_result.get("search_path", "")),
 			"framework": str(params.get("framework", "")).strip_edges().to_lower(),
@@ -1424,7 +1442,7 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 			"failed_count": failed_count,
 			"skipped_count": skipped_count,
 			"results": results
-		}
+		})
 
 	var index: int = 0
 	for entry in discovered_tests:
@@ -1478,7 +1496,7 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 	elif passed_count == 0 and skipped_count > 0:
 		aggregate_status = "skipped"
 
-	return {
+	return _append_zero_execution_gate_warning({
 		"status": aggregate_status,
 		"search_path": list_result.get("search_path", ""),
 		"framework": str(params.get("framework", "")).strip_edges().to_lower(),
@@ -1487,7 +1505,35 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 		"failed_count": failed_count,
 		"skipped_count": skipped_count,
 		"results": results
-	}
+	})
+
+## 2026-10-03 台账 S1（假绿家族防护）：一次批次若一个测试都没真正执行，
+## passed=0 / failed=0 / exit_code=0 不构成任何门禁证据——顶层必须显式打
+## gate_warning，让"零执行"与"全绿"在返回体上不可混淆。
+static func _append_zero_execution_gate_warning(result: Dictionary) -> Dictionary:
+	var total: int = int(result.get("total_count", 0))
+	var passed: int = int(result.get("passed_count", 0))
+	var failed: int = int(result.get("failed_count", 0))
+	if total <= 0 or passed > 0 or failed > 0:
+		return result
+	var custom_count: int = 0
+	for entry_value in result.get("results", []):
+		if entry_value is Dictionary and String(entry_value.get("framework", "")) == "custom":
+			custom_count += 1
+	if custom_count > 0:
+		result["gate_verdict"] = "no_evidence_custom_runner"
+		result["gate_warning"] = (
+			"ZERO tests executed: %d of %d discovered files are not GutTest subclasses "
+			+ "(framework=custom) and GUT silently skips them. passed=0/failed=0 here is "
+			+ "NOT a green gate. Run the project's own runner directly (e.g. godot --headless "
+			+ "--path . --script res://tests/run_tests.gd, adjusting to the actual runner "
+			+ "path), or port the tests to extend GutTest.") % [custom_count, total]
+	else:
+		result["gate_verdict"] = "no_evidence"
+		result["gate_warning"] = (
+			"ZERO tests executed (all %d skipped). passed=0/failed=0 is NOT a green "
+			+ "gate — inspect the per-test skip reasons before drawing conclusions.") % total
+	return result
 
 func _validate_test_path(path: String, expect_directory: bool) -> Dictionary:
 	if path.is_empty():
@@ -1555,10 +1601,18 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 					framework = "native"
 					kind = "smoke"
 					runnable = true
-				else:
+				elif _file_extends_gut_test(child_abs_path):
 					framework = "gut"
 					kind = "unit"
 					runnable = gut_available
+				else:
+					# 2026-10-03 台账 P0-1：非 GutTest 子类曾被一律标为 gut ->
+					# GUT 静默忽略 -> exit 0 -> 假绿风险。自研 harness（如
+					# RefCounted + run_all）必须显式标记为 custom，run 层
+					# 才能给出"零执行"门禁警告而不是误导性的退出码。
+					framework = "custom"
+					kind = "unit"
+					runnable = false
 			_:
 				continue
 		if not framework_filter.is_empty() and framework != framework_filter:
@@ -1691,6 +1745,29 @@ func _is_native_smoke_test(test_path: String) -> bool:
 	var head: String = file.get_buffer(mini(length, 256)).get_string_from_utf8()
 	file.close()
 	return head.contains("# mcp-native-smoke-test")
+
+## Whether a .gd file actually extends the GUT harness. GDScript has single
+## inheritance and the extends clause is conventionally near the top, so the
+## first extends line decides. 2026-10-03 ledger P0-1: GUT silently skips any
+## non-GutTest script and exits 0 — mislabeling custom runners as "gut" is the
+## root cause of the false-green family.
+static func _file_extends_gut_test(absolute_path: String) -> bool:
+	if not FileAccess.file_exists(absolute_path):
+		return false
+	var file: FileAccess = FileAccess.open(absolute_path, FileAccess.READ)
+	if file == null:
+		return false
+	var length: int = file.get_length()
+	var head: String = file.get_buffer(mini(length, 2048)).get_string_from_utf8()
+	file.close()
+	for line_value in head.split("\n", true, 60):
+		var line: String = String(line_value).strip_edges()
+		if not line.begins_with("extends"):
+			continue
+		var base: String = line.substr(7).strip_edges().trim_suffix(":")
+		# `extends "res://addons/gut/test.gd"`（GUT 经典写法）或 `extends GutTest`（9.x class_name）。
+		return base.contains("gut/test.gd") or base == "GutTest"
+	return false
 
 static func _native_smoke_test_source() -> String:
 	return """# mcp-native-smoke-test
@@ -1976,15 +2053,15 @@ func _tool_inspect_csharp_project_support(params: Dictionary) -> Dictionary:
 
 func _register_get_project_structure(server_core: RefCounted) -> void:
 	var tool_name: String = "get_project_structure"
-	var description: String = "Get the project directory structure with file counts by extension. Returns directories and file type statistics."
+	var description: String = "Get the project directory structure with file counts by extension. Returns directories and file type statistics. Default depth 5; when truncated_by_depth=true the counts exclude unexplored subdirectories (unexplored_directory_count) — raise max_depth before concluding what assets the project has."
 
 	var input_schema: Dictionary = {
 		"type": "object",
 		"properties": {
 			"max_depth": {
 				"type": "integer",
-				"description": "Maximum directory depth to traverse. Default is 3.",
-				"default": 3
+				"description": "Maximum directory depth to traverse. Default 5. Small values silently exclude deep asset directories; the response flags this via truncated_by_depth.",
+				"default": 5
 			}
 		}
 	}
@@ -1995,7 +2072,10 @@ func _register_get_project_structure(server_core: RefCounted) -> void:
 			"directories": {"type": "array", "items": {"type": "string"}},
 			"file_counts": {"type": "object"},
 			"total_files": {"type": "integer"},
-			"total_directories": {"type": "integer"}
+			"total_directories": {"type": "integer"},
+			"max_depth": {"type": "integer"},
+			"truncated_by_depth": {"type": "boolean"},
+			"unexplored_directory_count": {"type": "integer"}
 		}
 	}
 
@@ -2012,24 +2092,40 @@ func _register_get_project_structure(server_core: RefCounted) -> void:
 						  "supplementary", "Project-Advanced")
 
 func _tool_get_project_structure(params: Dictionary) -> Dictionary:
-	var max_depth: int = params.get("max_depth", 3)
+	# 2026-10-03 台账 P0-2：默认 3 层会把深层资产目录整个截掉（实测一个项目
+	# 4352 个 .ogg 全部隐身），默认值提到 5；即便调用方显式传小值，返回顶层
+	# 也带 truncated_by_depth / unexplored_directory_count，"截断画像"不再
+	# 伪装成"完整画像"。
+	var max_depth: int = params.get("max_depth", 5)
 	var directories: Array = []
 	var file_counts: Dictionary = {}
+	var scan_stats: Dictionary = {"unexplored_directories": 0}
 
-	_scan_directory("res://", directories, file_counts, 0, max_depth)
+	_scan_directory("res://", directories, file_counts, 0, max_depth, scan_stats)
 
 	var total_files: int = 0
 	for ext in file_counts:
 		total_files += file_counts[ext]
 
-	return {
+	var unexplored: int = int(scan_stats["unexplored_directories"])
+	var result: Dictionary = {
 		"directories": directories,
 		"file_counts": file_counts,
 		"total_files": total_files,
-		"total_directories": directories.size()
+		"total_directories": directories.size(),
+		"max_depth": max_depth,
+		"truncated_by_depth": unexplored > 0
 	}
+	if unexplored > 0:
+		result["unexplored_directory_count"] = unexplored
+		result["depth_note"] = (
+			"%d subdirectories below depth %d were NOT scanned; file_counts above "
+			+ "exclude everything inside them. Increase max_depth to include deeper "
+			+ "assets before drawing conclusions about what the project contains.") % [unexplored, max_depth]
+	return result
 
-func _scan_directory(path: String, directories: Array, file_counts: Dictionary, current_depth: int, max_depth: int) -> void:
+func _scan_directory(path: String, directories: Array, file_counts: Dictionary,
+		current_depth: int, max_depth: int, scan_stats: Dictionary) -> void:
 	if current_depth > max_depth:
 		return
 
@@ -2045,7 +2141,11 @@ func _scan_directory(path: String, directories: Array, file_counts: Dictionary, 
 		var full_path: String = path + file_name
 		if dir.current_is_dir():
 			if not file_name.begins_with("."):
-				_scan_directory(full_path + "/", directories, file_counts, current_depth + 1, max_depth)
+				if current_depth + 1 > max_depth:
+					# 这层子目录被深度截断：如实计数，不静默吞掉。
+					scan_stats["unexplored_directories"] = int(scan_stats["unexplored_directories"]) + 1
+				else:
+					_scan_directory(full_path + "/", directories, file_counts, current_depth + 1, max_depth, scan_stats)
 		else:
 			var ext: String = file_name.get_extension().to_lower()
 			if not ext.is_empty() and ext != "import" and ext != "uid":

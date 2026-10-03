@@ -318,3 +318,29 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   `list_project_tests` 现已自动探测 `res://test`/`res://tests`/
   `res://.mcp_runtime_tests` 三个根并合并发现——遇到"无测试"结论先看响应里的
   `search_paths` 口径，不要直接信。
+
+## 假信号家族的插件侧防线（2026-10-03 English Rift 台账沉淀）
+
+外部实测台账（三线团队逐轮记录）确认了"最危险的缺陷不是报错，而是看起来
+正常但结论错误"。插件侧已落四道防线，调用方依赖这些字段而不是自己猜：
+
+- **零执行 ≠ 全绿**：`run_project_tests` 对一个测试都没真正执行的批次返回
+  `gate_verdict=no_evidence`（全部是自研 runner 时为 `no_evidence_custom_runner`）
+  加显式 `gate_warning`。非 GutTest 子类的 `.gd` 文件在发现层就标
+  `framework=custom`（GUT 对它们静默忽略且 exit 0——这正是假绿的机制）。
+- **截断画像 ≠ 完整画像**：`get_project_structure` 默认深度 5，被深度截断时
+  返回 `truncated_by_depth=true` 与 `unexplored_directory_count`。实测教训：
+  深层资产目录（4352 个 .ogg）曾被 depth=3 整个隐身，差点导致"删除多余缓存"
+  的误判。
+- **空结果必须自解释**：`search_in_files` 零命中返回 `empty_reason`
+  （`no_files_matched_extensions` vs `pattern_matched_nothing`）；新代码里的
+  空列表/零命中返回也应携带同类区分。
+- **跨类型调用一次自纠**：`read_script`/`modify_script` 收到非 .gd/.cs 路径
+  时返回 `error_code=not_a_script` + `next_step` 指名 `read_project_file` /
+  `apply_change_set`——数据驱动项目的 .json/.tscn/.cfg 不该撞类型墙。
+- **行尾摩擦的兜底**：Windows 工程 CRLF 是常态，`modify_script` 的 old_text
+  原样匹配失败时按文件主导行尾风格转换后重试（成功返回
+  `line_endings_normalized=true`），彻底失败时报
+  `file_line_endings`/`old_text_line_endings` 诊断。
+- **大文件读取**：`read_script` 支持 `offset_lines`/`max_lines` 行窗口，
+  `content_hash` 始终锚定整个文件——分页读取照样能当 modify_script 的乐观锁。
