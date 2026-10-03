@@ -344,3 +344,55 @@ HitFeedback: `flash_color / flash_seconds / particle_amount / camera_shake_pixel
   `file_line_endings`/`old_text_line_endings` 诊断。
 - **大文件读取**：`read_script` 支持 `offset_lines`/`max_lines` 行窗口，
   `content_hash` 始终锚定整个文件——分页读取照样能当 modify_script 的乐观锁。
+
+---
+
+## 插件启动性能的实测口径（2026-10-03 启动注册优化沉淀）
+
+- **GDScript 编译是启动注册的绝对大头**：21 个工具模块同步 load 共 ~1.7s，
+  其中 99% 是 `load()` 的 GDScript 编译（ScriptToolsNative 456ms——首次触发其
+  preload 依赖链编译、GameWorkflowTools 233ms），注册逻辑本身仅 ~13ms。
+  同进程内二次 load 是免费的（编译结果缓存在 ResourceLoader），但编辑器每次
+  冷启动都要全量重编——不要拿"热载免费"推断冷启动也快。
+- **分帧注册的正确姿势**：`MCPToolRegistrationRunner` 每模块让出一帧，启动
+  关键路径只付首个模块（~100ms）。依赖注册完成的步骤（custom 工具挂载、
+  资源/prompts、状态恢复、面板列表、自动启动）必须在 `_on_all_tools_registered`
+  续跑；注册完成前 `_start_native_server` 会排队（`_pending_start`），否则
+  客户端会拿到残缺的 tools/list。
+- **EditorPlugin 是虚类**：GUT CLI 进程里 `EditorPlugin.new()` 直接报
+  "Class 'EditorPlugin' can only be instantiated by editor"。插件脚本的行为
+  测试只有两条路——把逻辑抽成 RefCounted 支持文件（依赖注入，如本 runner），
+  或沿用源码级断言（`source_code.contains`）。
+- **GUT 把引擎 ERROR 记为测试失败**：测试里触发"加载不存在的脚本"会因
+  `ERROR: Cannot open file` 挂掉；生产代码对可选路径先 `FileAccess.file_exists`
+  再 load，既少错误日志噪声又保测试可跑。
+- **大结果路径单次编码**：`_format_tool_result_with_size` 同一趟返回格式化
+  结果与 UTF-8 字节数（spill 检查与缓存记账共用一次 to_utf8_buffer 编码）。
+  400 节点结果的 `JSON.stringify` 本身 ~1ms/千节点，是剩余大头——减少序列化
+  次数优先于微优化编码。
+
+---
+
+## 浪费往返的两道新防线（2026-10-03 第二批）
+
+- **长任务的"静默 ≠ 失败"**：一批工具（全项目扫描、reimport、导出冒烟、
+  workflow 推进等 18 个，见 server core 的 `LONG_RUNNING_TOOL_HINTS`）在大项目
+  上 routinely 超过客户端默认 30s 超时。实测台账记录过"30s 判超时 → 重复发起
+  → 任务 53s 才完成"的浪费。这批工具的成功响应现在自带 `long_running` 块
+  （预期秒数 + "超时后任务可能已在服务端完成，先轮询/重试同参"）——第一次
+  调用后就学会等，而不是重发。调用方侧对长任务设长超时；`tools/list` 描述里
+  的高频五个也已写明。
+- **错误自带下一步**：全插件 ~1200 个裸 `{"error": ...}` 返回由分发层的短语
+  模式表统一补 `next_step`（"Node not found" → 先 get_scene_tree；"No scene
+  is currently open" → open_scene；"Debugger bridge is not available" →
+  run_project + install_runtime_probe；"Editor interface not available" →
+  说明 headless 限制……）。handler 自带的 `next_step`（如 not_a_script）
+  优先，模式表永不覆盖。
+- **巨型文件拆分的启动收益口径**：script_tools_native.gd（3.6k 行）按域拆成
+  symbol/write/verify 三模块 + shared 纯函数层后，编译分帧粒度从"456ms 单帧"
+  细化为三帧各 ~150ms。**关键约束：preload 是编译期依赖**——子桶之间互相
+  preload 会把编译成本重新合并进一帧（实测踩过：write preload verify 把
+  两帧合成一帧）。拆分必须让依赖单向（shared ← 各桶），真需要跨桶的少数
+  大函数走运行时 load（如 create_script 的 shader 预检 lazy load verify）。
+  兼容壳（ScriptToolsNative 实例转发）只为既有测试与 change_set_tools 的
+  引用保留，不在 TOOL_SCRIPT_PATHS 注册路径上。
