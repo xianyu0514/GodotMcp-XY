@@ -19,6 +19,10 @@ var paths: Dictionary = {}
 var register_module: Callable = Callable()
 var should_abort: Callable = Callable()
 var frame_wait: Callable = Callable()
+## true 时不让出帧、一次性同步注册完（--mcp-server 无头服务器模式：
+## 可服务性优先，端口必须在集成测试的等待窗口内就绪；编辑器交互模式
+## 保持默认 false 的分帧编译）。on_complete 仍会在注册完成后回调。
+var synchronous: bool = false
 
 ## 每个模块一帧（默认实现；frame_wait 注入时被替换）。
 var _default_frame_wait: Callable = Callable()
@@ -48,7 +52,9 @@ func run(on_complete: Callable = Callable()) -> bool:
 				instance = script.new()
 		if register_module.is_valid():
 			register_module.call(str(module_name), instance)
-		if frame_wait.is_valid():
+		if synchronous:
+			pass
+		elif frame_wait.is_valid():
 			await frame_wait.call()
 		else:
 			await _default_frame_wait.call()

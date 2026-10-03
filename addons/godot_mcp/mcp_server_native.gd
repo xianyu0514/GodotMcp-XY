@@ -250,10 +250,11 @@ static func _read_server_running_state() -> bool:
 ## 侧只负责模块注册、abort 判定与完成标志，时序由 runner 驱动。on_complete
 ## 在全部注册完成后于主线程回调（custom 工具挂载、资源/prompts 注册、状态
 ## 恢复、面板列表、自动启动——见 _on_all_tools_registered）。
-func _register_all_tools_async(on_complete: Callable = Callable()) -> void:
+func _register_all_tools_async(on_complete: Callable = Callable(), synchronous: bool = false) -> void:
 	var runner: RefCounted = TOOL_REGISTRATION_RUNNER_SCRIPT.new()
 	runner.paths = TOOL_SCRIPT_PATHS
 	runner.register_module = _register_deferred_tool_module
+	runner.synchronous = synchronous
 	runner.should_abort = func() -> bool:
 		return _is_exiting or _native_server == null
 	var completed: bool = await runner.run(on_complete)
@@ -392,9 +393,16 @@ func _enter_tree() -> void:
 	_native_server.log_message.connect(_on_log_message)
 	_connect_cache_change_signals()
 	
-	# 注册所有工具（分帧编译）：custom 工具挂载、资源/prompts 注册、工具状态
-	# 恢复、面板列表填充与服务器自动启动都推迟到 _on_all_tools_registered 续跑。
-	_register_all_tools()
+	# 注册所有工具：编辑器交互模式分帧编译（启动不再冻结）；--mcp-server
+	# 无头服务器模式同步注册——集成测试与无头客户端在端口等待窗口内就期望
+	# 9080 可连，服务器启动若推迟到分帧完成之后会全部超时（2026-10-03 CI
+	# 实测：Integration fast set 全量 "Timed out waiting for MCP server on
+	# port 9080"）。custom 工具挂载、资源/prompts 注册、工具状态恢复、面板
+	# 列表填充与服务器自动启动都推迟到 _on_all_tools_registered 续跑。
+	if "--mcp-server" in OS.get_cmdline_user_args():
+		_register_all_tools(true)
+	else:
+		_register_all_tools()
 
 	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
 	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot
@@ -797,7 +805,7 @@ func _get_resources_count() -> int:
 # 私有方法 - 工具注册（根据mcp-builder优化）
 # ============================================================================
 
-func _register_all_tools() -> void:
+func _register_all_tools(synchronous: bool = false) -> void:
 	_log_info("Registering all MCP tools (frame-deferred compilation)...")
 
 	if not _native_server:
@@ -805,9 +813,10 @@ func _register_all_tools() -> void:
 		return
 
 	# 分帧协程：首个模块在本帧同步注册，其余模块每帧一个（见
-	# _register_all_tools_async 的实测依据）。完成后经 _on_all_tools_registered
+	# _register_all_tools_async 的实测依据）。synchronous=true 时一次性
+	# 注册完（--mcp-server 模式）。完成后经 _on_all_tools_registered
 	# 续跑 custom 工具/资源/prompts/状态恢复/自动启动。
-	_register_all_tools_async(_on_all_tools_registered)
+	_register_all_tools_async(_on_all_tools_registered, synchronous)
 
 func _register_tool_module(module_name: String, instance: RefCounted) -> void:
 	if not instance:

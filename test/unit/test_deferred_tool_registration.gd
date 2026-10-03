@@ -90,3 +90,30 @@ func test_plugin_wires_deferred_registration_and_start_queue() -> void:
 		"Plugin must await the runner and gate the completion flag on it")
 	assert_true(source_code.contains("_maybe_auto_start_server()"),
 		"Completion callback must run the auto-start decision")
+
+
+func test_synchronous_registration_completes_without_frames() -> void:
+	# --mcp-server 无头服务器模式：可服务性优先，注册同步跑完、回调同步触发
+	# （集成测试在端口等待窗口内就期望 9080 可连；分帧会把启动推迟到全部
+	# 模块编译后，实测整批 "Timed out waiting for MCP server on port 9080"）。
+	var plugin: EditorPlugin = _make_plugin()
+	autofree(plugin)
+	var callback_fired: Array = [false]
+	var done: Callable = func() -> void:
+		callback_fired[0] = true
+	# 同步调用（无 await 挂起点）：返回时必须已完成。
+	plugin._register_all_tools_async(done, true)
+	assert_eq(plugin._native_server.get_tools_count(), TOTAL_TOOLS,
+		"Synchronous registration must complete before returning")
+	assert_true(plugin._tools_registration_complete, "Completion flag set synchronously")
+	assert_true(callback_fired[0], "Completion callback fired synchronously")
+
+
+func test_server_mode_wires_synchronous_registration() -> void:
+	# 源码契约：--mcp-server 参数走同步注册，编辑器交互模式保持分帧。
+	var plugin_source: GDScript = PLUGIN_SCRIPT
+	var source_code: String = plugin_source.source_code
+	assert_true(source_code.contains('if "--mcp-server" in OS.get_cmdline_user_args():'),
+		"Server mode must take the synchronous registration branch")
+	assert_true(source_code.contains("_register_all_tools(true)"),
+		"Server mode must pass synchronous=true")
