@@ -71,7 +71,10 @@ addons/godot_mcp/
 │   └── mcp_runtime_probe.gd    # Autoload 单例，用于运行时检查（动画、音频、着色器、瓦片地图、输入）
 ├── tools/                      # 工具实现（每个分类一个文件）
 │   ├── node_tools_native.gd    # 26 个工具 — 创建/删除/更新/复制/移动/重命名节点、信号、分组、锚点预设、批量操作、场景审计、内联子资源设置/读取
-│   ├── script_tools_native.gd  # 17 个工具 — 读取/写入/创建/附加/分析/验证脚本、批量编译校验、校验着色器、符号索引、搜索
+│   ├── script_tools_shared.gd  # 支持文件（非工具）— 跨域共享纯函数辅助（路径/符号归一化、掩码定位等，全 static 无桶依赖）
+│   ├── script_symbol_tools.gd  # 7 个工具 — list_project_scripts/script_symbols、find_symbol_definition/references、read/batch_read_scripts、search_in_files
+│   ├── script_write_tools.gd   # 5 个工具 — create/modify/rename_script_symbol/attach_script/open_script_at_line
+│   ├── script_verify_tools.gd  # 5 个工具 — validate/verify_scripts、analyze_script、get_current_script、validate_shader
 │   ├── scene_tools_native.gd   # 14 个工具 — 创建/保存/打开/关闭场景、结构查看、列表、实例化预制场景、节点分支另存为场景、TileMapLayer 单元格设置/读取
 │   ├── editor_tools_native.gd  # 27 个工具 — 运行/停止、状态、截图、信号、导出、选择、查看器、缓冲区同步、导入状态、撤销/重做、smoke_test_export 导出冒烟、check_plugin_update 更新检查（产物校验 + 可选启动并断言退出码）
 │   ├── debug_tools_native.gd   # 6 个工具（主类，保留共享辅助）— 日志（get_editor_logs/clear_output）、脚本执行（execute_script/execute_editor_script）、性能指标；跨域共享静态辅助（_get_debugger_bridge/运行时探针请求机制）

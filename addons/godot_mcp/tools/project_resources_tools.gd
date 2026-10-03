@@ -841,7 +841,7 @@ func _tool_read_resource_properties(params: Dictionary) -> Dictionary:
 
 func _register_reimport_resources(server_core: RefCounted) -> void:
 	var tool_name: String = "reimport_resources"
-	var description: String = "Reimport existing project resources using Godot's EditorFileSystem import pipeline."
+	var description: String = "Reimport existing project resources using Godot's EditorFileSystem import pipeline. May take minutes for large asset sets — set a longer client timeout instead of re-issuing on silence."
 
 	var input_schema: Dictionary = {
 		"type": "object",
@@ -1707,7 +1707,7 @@ func _tool_detect_broken_scripts(params: Dictionary) -> Dictionary:
 
 func _register_audit_project_health(server_core: RefCounted) -> void:
 	var tool_name: String = "audit_project_health"
-	var description: String = "Run a lightweight project health audit covering broken scripts and missing resource dependencies."
+	var description: String = "Run a lightweight project health audit covering broken scripts and missing resource dependencies. May exceed a default 30s client timeout on large projects — set a longer timeout instead of re-issuing on silence."
 
 	var input_schema: Dictionary = {
 		"type": "object",
