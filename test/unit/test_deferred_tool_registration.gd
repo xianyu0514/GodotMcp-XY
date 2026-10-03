@@ -80,7 +80,7 @@ func test_plugin_wires_deferred_registration_and_start_queue() -> void:
 	# 插件接线源码契约（EditorPlugin 不可实例化，与既有源码断言风格一致）。
 	var plugin_source: GDScript = PLUGIN_SCRIPT
 	var source_code: String = plugin_source.source_code
-	assert_true(source_code.contains("_register_all_tools_async(_on_all_tools_registered)"),
+	assert_true(source_code.contains("_register_all_tools_async(_on_all_tools_registered, synchronous)"),
 		"_register_all_tools should start the deferred coroutine with the completion callback")
 	assert_true(source_code.contains("if not _tools_registration_complete:"),
 		"_start_native_server must queue while registration is incomplete")
@@ -96,16 +96,18 @@ func test_synchronous_registration_completes_without_frames() -> void:
 	# --mcp-server 无头服务器模式：可服务性优先，注册同步跑完、回调同步触发
 	# （集成测试在端口等待窗口内就期望 9080 可连；分帧会把启动推迟到全部
 	# 模块编译后，实测整批 "Timed out waiting for MCP server on port 9080"）。
-	var plugin: EditorPlugin = _make_plugin()
-	autofree(plugin)
+	var registered: Array = []
 	var callback_fired: Array = [false]
-	var done: Callable = func() -> void:
-		callback_fired[0] = true
-	# 同步调用（无 await 挂起点）：返回时必须已完成。
-	plugin._register_all_tools_async(done, true)
-	assert_eq(plugin._native_server.get_tools_count(), TOTAL_TOOLS,
-		"Synchronous registration must complete before returning")
-	assert_true(plugin._tools_registration_complete, "Completion flag set synchronously")
+	var runner: RefCounted = RUNNER_SCRIPT.new()
+	runner.paths = {"alpha": MODULE_A, "beta": MODULE_B}
+	runner.register_module = func(module_name: String, instance: Variant) -> void:
+		assert_ne(instance, null, "Fixture module must instantiate")
+		registered.append(module_name)
+	runner.synchronous = true
+	var completed: bool = await runner.run(func() -> void:
+		callback_fired[0] = true)
+	assert_true(completed, "Synchronous run completes")
+	assert_eq(registered, ["alpha", "beta"], "All modules registered in one pass")
 	assert_true(callback_fired[0], "Completion callback fired synchronously")
 
 
