@@ -10,7 +10,7 @@ extends RefCounted
 # 唯一真相，mcp_tool_classifier.gd 的 _build_classifications() 改为从
 # MCPToolsManifest.TOOLS 生成。
 #
-# 当前表包含 238 个工具：28 core + 204 supplementary + 6 meta。完整游戏
+# 当前表包含 239 个工具：28 core + 205 supplementary + 6 meta。完整游戏
 # 闭环只增加两个薄编排 meta 入口，232 个非 meta 原子能力保持不变。
 #
 # 注意：
@@ -264,6 +264,7 @@ const TOOLS: Dictionary = {
 	"set_tile_terrain": {"category": "supplementary", "group": "Project-Advanced"},
 	"set_tilemap_layer_cells": {"category": "supplementary", "group": "Scene-Advanced"},
 	"simulate_runtime_input_action": {"category": "supplementary", "group": "Debug-Advanced"},
+	"get_control_at_point": {"category": "supplementary", "group": "Debug-Advanced"},
 	"simulate_runtime_input_event": {"category": "supplementary", "group": "Debug-Advanced"},
 	"slice_sprite_sheet": {"category": "supplementary", "group": "Project-Advanced"},
 	"smoke_test_export": {"category": "supplementary", "group": "Editor-Advanced"},

@@ -10,7 +10,7 @@ Existing-script edits support unique text replacements and optional content-hash
 
 - `plugin.cfg` and `mcp_server_native.gd` — the editor plugin entry point.
 - `native_mcp/` — JSON-RPC/MCP core, HTTP/SSE and stdio transports, auth, settings, tunnel support and tool-state management.
-- `tools/` — the 261 registered MCP tools.
+- `tools/` — the 262 registered MCP tools.
 - `runtime/mcp_runtime_probe.gd` — optional autoload used to inspect and drive a running game.
 - `ui/` — the MCP dock panel, tool manager and detail views.
 - `translations/` — panel text and tool descriptions.
@@ -36,7 +36,7 @@ The Tool Manager offers task-focused 2D, 3D, UI, asset/animation, debug/test and
 
 ## Tool model
 
-The addon registers 261 tools:
+The addon registers 262 tools:
 
 - 28 core tools enabled by default.
 - 226 advanced tools registered but disabled until enabled from the panel or `enable_tools`.

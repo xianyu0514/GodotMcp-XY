@@ -53,6 +53,7 @@ func register_tools(server_core: RefCounted) -> void:
 	_register_update_runtime_node_property(server_core)
 	_register_call_runtime_node_method(server_core)
 	_register_evaluate_runtime_expression(server_core)
+	_register_get_control_at_point(server_core)
 	_register_simulate_runtime_input_event(server_core)
 	_register_simulate_runtime_input_action(server_core)
 	_register_list_runtime_input_actions(server_core)
@@ -647,13 +648,18 @@ func _tool_evaluate_runtime_expression(params: Dictionary) -> Dictionary:
 func _register_simulate_runtime_input_event(server_core: RefCounted) -> void:
 	server_core.register_tool(
 		"simulate_runtime_input_event",
-		"Inject a structured InputEvent into the running game through Input.parse_input_event().",
+		"Inject a structured InputEvent into the running game through Input.parse_input_event(). Mouse events report hit_control (deepest Control at the point, or null) so a click that lands on nothing is reported, never silent. coordinate_space=screen converts window coordinates via the viewport final transform (content scale).",
 		{
 			"type": "object",
 			"properties": {
 				"event": {
 					"type": "object",
-					"description": "Structured input event payload. Supported types: action, key, mouse_button, mouse_motion."
+					"description": "Structured input event payload. Supported types: action, key, mouse_button, mouse_motion. Mouse events accept coordinate_space."
+				},
+				"coordinate_space": {
+					"type": "string",
+					"enum": ["viewport", "screen"],
+					"description": "Mouse event coordinate space. viewport (default) = InputEventMouse.position space; screen = window coordinates converted via the viewport final transform (content scale)."
 				},
 				"session_id": {"type": "integer"},
 				"timeout_ms": {"type": "integer", "default": 4000}
@@ -665,6 +671,43 @@ func _register_simulate_runtime_input_event(server_core: RefCounted) -> void:
 		{"readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true},
 		"supplementary", "Debug-Advanced"
 	)
+
+func _register_get_control_at_point(server_core: RefCounted) -> void:
+	server_core.register_tool(
+		"get_control_at_point",
+		"Query which Control sits at a viewport/screen point in the running game (2026-10-04 ledger N-7: compute coordinates BEFORE injecting clicks so a miss is reported, never silent). Returns control_path/class/text/disabled/script_path, or hit_control:null when nothing is hit.",
+		{
+			"type": "object",
+			"properties": {
+				"position": {
+					"type": "object",
+					"description": "Point as {x, y} in viewport coordinates (default) or window/screen coordinates when coordinate_space=screen.",
+					"properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+					"required": ["x", "y"]
+				},
+				"coordinate_space": {"type": "string", "enum": ["viewport", "screen"], "description": "Default viewport."},
+				"session_id": {"type": "integer"},
+				"timeout_ms": {"type": "integer", "default": 4000}
+			},
+			"required": ["position"]
+		},
+		Callable(self, "_tool_get_control_at_point"),
+		{
+			"type": "object",
+			"properties": {
+				"hit_control": {"type": ["object", "null"], "description": "The deepest visible Control whose global rect contains the point; null when nothing is hit."},
+			}
+		},
+		{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": true},
+		"supplementary", "Debug-Advanced"
+	)
+
+func _tool_get_control_at_point(params: Dictionary) -> Dictionary:
+	var payload: Dictionary = {
+		"position": params.get("position", {}),
+		"coordinate_space": String(params.get("coordinate_space", "viewport")),
+	}
+	return await DebugToolsNative._request_runtime_probe_poll("pick_control_at_point", [payload], ["mcp:control_at_point"], params, {})
 
 func _tool_simulate_runtime_input_event(params: Dictionary) -> Dictionary:
 	var event_payload: Variant = params.get("event", null)

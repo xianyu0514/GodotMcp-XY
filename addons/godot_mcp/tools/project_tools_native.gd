@@ -296,7 +296,10 @@ func _tool_get_project_info(params: Dictionary) -> Dictionary:
 	
 	var project_path: String = ProjectSettings.globalize_path("res://")
 	var godot_version: Dictionary = Engine.get_version_info()
-	var version_str: String = "%d.%d.%s" % [godot_version.get("major", 0), godot_version.get("minor", 0), godot_version.get("status", "")]
+	# 2026-10-04 台账 N-4：4.7 与 4.7.2 两个引擎并存时 "4.7.stable" 无法区分
+	# 引擎——版本串必须带 patch 号（与 executable 路径可互证）。
+	var version_str: String = "%d.%d.%d.%s" % [godot_version.get("major", 0),
+		godot_version.get("minor", 0), godot_version.get("patch", 0), godot_version.get("status", "")]
 	
 	# N4（2026-09-30 体检 §14.4）：回显引擎可执行文件绝对路径——项目自带的
 	# 引擎版本与 MCP 插件运行的版本可能不同，两条通道的结论不可互证时
@@ -968,6 +971,7 @@ func _tool_prepare_project_test_environment(params: Dictionary) -> Dictionary:
 	var environment: Array = []
 	var overall: String = "unconfigured"
 	var total_count: int = 0
+	var custom_count: int = 0
 	var first_existing: String = ""
 	for candidate in candidates:
 		var absolute: String = ProjectSettings.globalize_path(candidate)
@@ -978,6 +982,10 @@ func _tool_prepare_project_test_environment(params: Dictionary) -> Dictionary:
 			_collect_project_tests_recursive(candidate, absolute, "", true, discovered)
 			count = discovered.size()
 			total_count += count
+			for entry_value in discovered:
+				if (entry_value is Dictionary
+						and String(entry_value.get("framework", "")) == "custom"):
+					custom_count += 1
 			if first_existing.is_empty():
 				first_existing = candidate
 		var state: String = "unconfigured"
@@ -999,8 +1007,14 @@ func _tool_prepare_project_test_environment(params: Dictionary) -> Dictionary:
 	elif overall == "empty":
 		reason = "no_tests_discovered"
 		recommended = "create_project_smoke_test"
+	elif custom_count > 0:
+		# 2026-10-04 台账 N-1 尾巴：ready 状态下若混有非 GutTest 的自定义
+		# 测试，调用方必须知道 GUT 跑不了它们——推荐动作指向自定义运行器
+		# （run_project_tests 的 framework="script"，见同日 N-2 修复）。
+		reason = "custom_runner_tests_present"
+		recommended = "use_custom_runner_for_framework_script_tests"
 
-	return {
+	var result: Dictionary = {
 		"status": overall,
 		"recoverable": overall in ["unconfigured", "empty"],
 		"reason": reason,
@@ -1009,6 +1023,13 @@ func _tool_prepare_project_test_environment(params: Dictionary) -> Dictionary:
 		"count": total_count,
 		"environment": environment
 	}
+	if custom_count > 0:
+		result["custom_test_count"] = custom_count
+		result["gate_note"] = (
+			"%d discovered .gd files do not extend GutTest (framework=custom); "
+			+ "run_project_tests cannot execute them via GUT — use framework=\"script\" "
+			+ "with the project's own runner, or port the tests to GutTest.") % custom_count
+	return result
 
 
 # ============================================================================
@@ -1249,7 +1270,26 @@ func _execute_project_test_blocking(test_path: String) -> Dictionary:
 		"gd":
 			if _is_native_smoke_test(sanitized_path):
 				return _run_native_project_test(sanitized_path)
-			return _run_gut_project_test(sanitized_path)
+			if _file_extends_scene_tree(sanitized_path):
+				# 2026-10-04 台账 N-2：项目自带的自定义 runner（extends
+				# SceneTree + 自带断言与退出码，如 res://tests/run_tests.gd）
+				# 是很多项目的真闸门——headless --script 子进程可以安全地跑
+				# 它（脚本内的 quit() 只退出子进程，绝不触碰编辑器进程；
+				# 误用进程内 execute_script 跑它才会杀编辑器）。
+				return _run_script_project_test(sanitized_path, absolute_test_path)
+			if _file_extends_gut_test(sanitized_path):
+				return _run_gut_project_test(sanitized_path)
+			# 2026-10-04 台账 N-1 执行层尾巴：非 GutTest 也非 SceneTree 的
+			# 脚本过去被送进 GUT 白跑（exit 0 + 零用例）——现在显式拒绝并
+			# 指路，调用方一次往返就知道该走哪条道。
+			return {
+				"status": "skipped",
+				"framework": "custom",
+				"test_path": sanitized_path,
+				"reason": "not_guttest_nor_scenetree",
+				"honest_note": "This script extends neither GutTest nor SceneTree, so neither the GUT harness nor a headless --script run can execute it. Port it to GutTest or give it a SceneTree entry with quit(exit_code).",
+				"skipped_count": 1
+			}
 		_:
 			return {"error": "Unsupported project test type: " + extension}
 
@@ -1417,6 +1457,18 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 				if ms == "passed":
 					passed_count += 1
 				elif ms == "skipped":
+					skipped_count += 1
+				else:
+					failed_count += 1
+			elif fw == "script" and bool(ed.get("runnable", false)):
+				# 2026-10-04 台账 N-2：SceneTree 自定义 runner 走 headless
+				# --script 子进程（逐个执行，不在 GUT 单进程批里）。
+				var script_result: Dictionary = _execute_project_test_blocking(tp)
+				results.append(script_result)
+				var ss: String = str(script_result.get("status", ""))
+				if ss == "passed":
+					passed_count += 1
+				elif ss == "skipped":
 					skipped_count += 1
 				else:
 					failed_count += 1
@@ -1601,6 +1653,13 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 					framework = "native"
 					kind = "smoke"
 					runnable = true
+				elif _file_extends_scene_tree(child_abs_path):
+					# 2026-10-04 台账 N-2：项目自带 runner（extends SceneTree，
+					# 自带断言与退出码）可以由 headless --script 子进程安全
+					# 执行——显式标为 script 框架供 run_project_tests 使用。
+					framework = "script"
+					kind = "custom_runner"
+					runnable = true
 				elif _file_extends_gut_test(child_abs_path):
 					framework = "gut"
 					kind = "unit"
@@ -1626,6 +1685,52 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 			"name": entry_name
 		})
 	dir.list_dir_end()
+
+## 2026-10-04 台账 N-2：headless --script 子进程执行项目自带 runner。
+## 子进程里的 quit() 只退出子进程；编辑器进程与此完全隔离。
+## 引擎可执行文件优先取同目录的 *_console.exe（Windows GUI 版抓不到
+## stdout，console 版是官方成对发行物），找不到则回退当前进程的 exe
+## （exit code 仍可用，输出可能为空——返回体里如实标注）。
+func _find_godot_console_executable() -> Dictionary:
+	var exe: String = OS.get_executable_path()
+	if OS.get_name() != "Windows":
+		return {"path": exe, "console": true}
+	var candidate: String = exe.get_base_dir().path_join(
+		exe.get_file().replace(".exe", "_console.exe"))
+	if exe.ends_with("_console.exe"):
+		return {"path": exe, "console": true}
+	if FileAccess.file_exists(candidate):
+		return {"path": candidate, "console": true}
+	return {"path": exe, "console": false}
+
+func _run_script_project_test(test_path: String, absolute_test_path: String) -> Dictionary:
+	var engine_info: Dictionary = _find_godot_console_executable()
+	var engine_exe: String = String(engine_info["path"])
+	var logs: Array = []
+	var started_at_ms: int = Time.get_ticks_msec()
+	var exit_code: int = OS.execute(engine_exe,
+		["--headless", "--path", ProjectSettings.globalize_path("res://"),
+			"--script", absolute_test_path], logs, true)
+	var duration_ms: int = Time.get_ticks_msec() - started_at_ms
+	var output: Array = []
+	for line in logs:
+		output.append(_sanitize_cli_output(str(line)))
+	var result: Dictionary = {
+		"status": "passed" if exit_code == OK else "failed",
+		"framework": "script",
+		"kind": "custom_runner",
+		"test_path": test_path,
+		"exit_code": exit_code,
+		"duration_ms": duration_ms,
+		"command": [engine_exe, "--headless", "--script", absolute_test_path],
+		"output": output
+	}
+	if not bool(engine_info["console"]):
+		result["output_note"] = (
+			"Engine executable is the GUI build (no console companion found): "
+			+ "exit code is authoritative but captured output may be empty. "
+			+ "Place the *_console.exe build next to it for full output capture.")
+	return result
 
 func _run_python_project_test(test_path: String, absolute_test_path: String) -> Dictionary:
 	var logs: Array = []
@@ -1745,6 +1850,26 @@ func _is_native_smoke_test(test_path: String) -> bool:
 	var head: String = file.get_buffer(mini(length, 256)).get_string_from_utf8()
 	file.close()
 	return head.contains("# mcp-native-smoke-test")
+
+## Whether a .gd file extends SceneTree — the runnable custom-runner shape
+## (self-contained assertions + quit(exit_code), safe in a headless subprocess).
+static func _file_extends_scene_tree(absolute_path: String) -> bool:
+	if not FileAccess.file_exists(absolute_path):
+		return false
+	var file: FileAccess = FileAccess.open(absolute_path, FileAccess.READ)
+	if file == null:
+		return false
+	var length: int = file.get_length()
+	var head: String = file.get_buffer(mini(length, 2048)).get_string_from_utf8()
+	file.close()
+	for line_value in head.split("
+", true, 60):
+		var line: String = String(line_value).strip_edges()
+		if not line.begins_with("extends"):
+			continue
+		var base: String = line.substr(7).strip_edges().trim_suffix(":")
+		return base == "SceneTree" or base == "MainLoop"
+	return false
 
 ## Whether a .gd file actually extends the GUT harness. GDScript has single
 ## inheritance and the extends clause is conventionally near the top, so the
