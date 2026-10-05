@@ -62,3 +62,4 @@ slice_b/.godot/
 slice_b/build/
 slice_b/audio/*.wav
 slice_b/audio/*.import
+test/integration/logs/
