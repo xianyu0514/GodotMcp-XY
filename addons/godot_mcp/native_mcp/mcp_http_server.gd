@@ -75,6 +75,9 @@ var _auth_manager: McpAuthManager = null
 ## 会话管理
 var _sessions: Dictionary = {}  # session_id -> session_data
 
+## 服务器本次启动时刻（GET /health 的 uptime 来源；stop→start 会刷新）。
+var _started_at_msec: int = 0
+
 ## POST 请求按 peer 协商的响应格式（"json" 或 "sse"），主线程 send_response 据此选择。
 ## 与 _sse_connections 相同的既有跨线程访问模式（服务器线程写、主线程读）。
 var _post_response_formats: Dictionary = {}  # peer -> "json" | "sse"
@@ -148,6 +151,7 @@ func start() -> bool:
 		return false
 	
 	_active = true
+	_started_at_msec = Time.get_ticks_msec()
 	_thread = Thread.new()
 	_thread.start(_http_server_loop)
 	
@@ -508,6 +512,22 @@ func _handle_http_request(peer: StreamPeerTCP, available_bytes: int = -1) -> voi
 	# 解析 HTTP 请求
 	var parsed: Dictionary = _parse_http_request(request)
 	
+	# /health 明文探测（在认证之前）：客户端 0 工具时的第一个诊断动作必须
+	# 无需凭据即可完成；端点只暴露服务器自身状态，不含任何项目内容。
+	# Origin 校验仍然生效（浏览器跨域默认拒绝，防 DNS 重绑定）。
+	if String(parsed["method"]) == "GET" and String(parsed["path"]) == "/health":
+		var health_uptime: float = 0.0
+		if _started_at_msec > 0:
+			health_uptime = float(Time.get_ticks_msec() - _started_at_msec) / 1000.0
+		_send_http_response(peer, {
+			"status": "ok" if _active else "stopping",
+			"transport": "http",
+			"port": _port,
+			"active_connections": _connections.size(),
+			"uptime_seconds": snapped(health_uptime, 0.1),
+		})
+		return
+
 	# 检查认证（如果启用了认证）
 	if _auth_manager and not _auth_manager.validate_request(parsed["headers"]):
 		_send_http_error(peer, 401, "Unauthorized. Please provide a valid Bearer token in the Authorization header.")

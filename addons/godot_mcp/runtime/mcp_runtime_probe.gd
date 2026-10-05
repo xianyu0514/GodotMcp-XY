@@ -97,6 +97,8 @@ func _capture_mcp_message(message: String, data: Array) -> bool:
 			return _handle_evaluate_expression(data)
 		"simulate_input_event":
 			return _handle_simulate_input_event(data)
+		"pick_control_at_point":
+			return _handle_pick_control_at_point(data)
 		"simulate_input_action":
 			return _handle_simulate_input_action(data)
 		"list_input_actions":
@@ -676,12 +678,82 @@ func _handle_simulate_input_event(data: Array) -> bool:
 		EngineDebugger.send_message("mcp:error", [{"message": "simulate_input_event requires an event dictionary"}])
 		return true
 	var payload: Dictionary = data[0]
+	# 2026-10-04 台账 N-7（假点击）：可选 coordinate_space="screen" 时把屏幕
+	# 坐标按 viewport final transform（含 content scale）换算成 viewport 坐标；
+	# 默认 "viewport" 保持既有行为不变。
+	if String(payload.get("coordinate_space", "viewport")) == "screen":
+		var raw_pos: Vector2 = _dict_to_vector2(payload.get("position", {}))
+		if raw_pos != Vector2.ZERO or payload.has("position"):
+			var vp: Viewport = get_viewport()
+			if vp:
+				payload["position"] = vp.get_final_transform().affine_inverse() * raw_pos
 	var event: InputEvent = _build_input_event(payload)
 	if not event:
 		EngineDebugger.send_message("mcp:error", [{"message": "Unsupported or invalid input event payload", "payload": payload}])
 		return true
 	Input.parse_input_event(event)
-	EngineDebugger.send_message("mcp:input_event_simulated", [_serialize_input_event(event)])
+	var serialized: Dictionary = _serialize_input_event(event)
+	# 假点击防线核心：鼠标事件注入后回报命中的 Control——"点了但界面没反应"
+	# 由工具自己说出来，而不是让调用方猜（2026-10-04 台账 N-7）。
+	if event is InputEventMouseButton or event is InputEventMouseMotion:
+		var hit: Dictionary = _find_control_at_point(get_viewport(),
+			get_tree().root, (event as InputEventMouse).position)
+		if not hit.is_empty():
+			serialized["hit_control"] = hit
+		else:
+			serialized["hit_control"] = null
+	EngineDebugger.send_message("mcp:input_event_simulated", [serialized])
+	return true
+
+## 遍历场景 Control 树，返回包含 viewport_pos 的最深 Control（渲染序最后者
+## 优先）。pos 用 viewport 坐标（与 InputEventMouse.position 同坐标系）。
+func _find_control_at_point(vp: Viewport, tree_root: Node, pos: Vector2) -> Dictionary:
+	if vp == null or tree_root == null:
+		return {}
+	# 遍历整个 root viewport 子树（current_scene、CanvasLayer、测试挂载的
+	# 节点全部覆盖）——命中的最深可见 Control 按"渲染序最后者优先"取。
+	var scene_root: Node = tree_root
+	var best: Control = null
+	var best_depth: int = -1
+	var stack: Array = [[scene_root, 0]]
+	while not stack.is_empty():
+		var frame: Array = stack.pop_back()
+		var node: Node = frame[0]
+		var depth: int = frame[1]
+		var ctrl := node as Control
+		if ctrl and ctrl.visible and ctrl.get_global_rect().has_point(pos):
+			if depth >= best_depth:
+				best = ctrl
+				best_depth = depth
+		for child in node.get_children():
+			stack.append([child, depth + 1])
+	if best == null:
+		return {}
+	var result: Dictionary = {
+		"control_path": str(best.get_path()),
+		"control_class": best.get_class(),
+		"control_text": best.get("text") if "text" in best else "",
+		"disabled": bool(best.get("disabled")) if "disabled" in best else false,
+	}
+	var attached: Script = best.get_script()
+	if attached:
+		result["script_path"] = attached.resource_path
+	return result
+
+## 2026-10-04 台账 N-7 建议三：get_control_at_point 的前置查询——注入前
+## 先把坐标算对。payload: {position:{x,y}, coordinate_space?:"viewport"|"screen"}
+func _handle_pick_control_at_point(data: Array) -> bool:
+	if data.is_empty() or not data[0] is Dictionary:
+		EngineDebugger.send_message("mcp:error", [{"message": "pick_control_at_point requires a position dictionary"}])
+		return true
+	var payload: Dictionary = data[0]
+	var pos: Vector2 = _dict_to_vector2(payload.get("position", {}))
+	if String(payload.get("coordinate_space", "viewport")) == "screen":
+		var vp: Viewport = get_viewport()
+		if vp:
+			pos = vp.get_final_transform().affine_inverse() * pos
+	EngineDebugger.send_message("mcp:control_at_point",
+		[_find_control_at_point(get_viewport(), get_tree().root, pos)])
 	return true
 
 func _handle_list_input_actions(data: Array) -> bool:

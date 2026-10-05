@@ -23,7 +23,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `debug_print` | core | Print debug messages to the editor console. |
 | `clear_output` | core | Clear the editor output panel. |
 
-### Debug-Advanced (77 advanced)
+### Debug-Advanced (78 advanced)
 
 | Tool | Tier | Description |
 | --- | --- | --- |
@@ -78,6 +78,7 @@ Debug edit-time logs and debugger sessions, then inspect and control a running g
 | `create_runtime_node` | advanced | Create a node in the running game. |
 | `delete_runtime_node` | advanced | Delete a node in the running game. |
 | `simulate_runtime_input_event` | advanced | Simulate an input event in the running game. |
+| `get_control_at_point` | advanced | Query which Control sits at a viewport/screen point (name/class/text/disabled/script). Inject clicks with hit-target reporting — a miss is reported, never silent (ledger N-7). |
 | `simulate_runtime_input_action` | advanced | Simulate an input action in the running game; delivery is confirmed by reading back `runtime_pressed` (resends on lost acks, fails loudly with evidence instead of silently faking completion). |
 | `list_runtime_input_actions` | advanced | List input actions available in the running game. |
 | `upsert_runtime_input_action` | advanced | Create or update an input action in the running game. |
