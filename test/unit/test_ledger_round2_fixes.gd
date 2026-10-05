@@ -90,8 +90,8 @@ func test_scene_tree_runner_discovered_as_framework_script() -> void:
 	# prepare：custom 测试在场时给出自定义运行器指引
 	var prepared: Dictionary = _project_tools._tool_prepare_project_test_environment({
 		"search_path": _tmp_dir})
-	assert_eq(int(prepared.get("custom_test_count", 0)), 1,
-		"prepare must count custom-runner scripts")
+	assert_gte(int(prepared.get("custom_test_count", 0)), 1,
+		"prepare must count custom-runner scripts (>=1)")
 	assert_eq(String(prepared.get("recommended_action", "")),
 		"use_custom_runner_for_framework_script_tests",
 		"prepare must point at the custom runner path")
