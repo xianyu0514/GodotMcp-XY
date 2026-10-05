@@ -200,7 +200,9 @@ jobs:
         run: python test/integration/run_integration.py --timeout 420
 
       - name: Upload artifacts on failure
-        if: failure()
+        # cancelled() 也要上传：45 分钟上限取消恰恰是最需要日志的形态
+        # （2026-10-03/04 三轮 Integration 挂死均无现场可归因）。
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: integration-failure-logs
@@ -243,7 +245,9 @@ jobs:
         run: python test/integration/run_integration.py --filter goal --slow --timeout 900
 
       - name: Upload artifacts on failure
-        if: failure()
+        # cancelled() 也要上传：45 分钟上限取消恰恰是最需要日志的形态
+        # （2026-10-03/04 三轮 Integration 挂死均无现场可归因）。
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: integration-slow-failure-logs
