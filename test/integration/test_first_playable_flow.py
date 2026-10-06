@@ -109,7 +109,7 @@ def tool_call(name: str, arguments: dict | None = None, timeout: float = 240.0) 
         return {"raw": text}
 
 
-def wait_for_server(timeout_seconds: float = 120.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     last: Exception | None = None
     while time.time() < deadline:

@@ -3286,4 +3286,3 @@ func _tool_read_project_file(params: Dictionary) -> Dictionary:
 	if truncated:
 		result["next_offset"] = end_line
 	return result
-

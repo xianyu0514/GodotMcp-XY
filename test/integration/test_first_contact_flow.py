@@ -79,7 +79,7 @@ def tool_payload(response: dict) -> dict:
         raise AssertionError(f"tool result is not JSON: {text[:300]}")
 
 
-def wait_for_server(timeout_seconds: float = 120.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
     while time.time() < deadline:

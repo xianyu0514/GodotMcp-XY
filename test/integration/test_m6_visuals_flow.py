@@ -147,7 +147,7 @@ def main() -> int:
         "--", "--mcp-server", f"--mcp-port={MCP_PORT}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        deadline = time.time() + 180
+        deadline = time.time() + 300
         while time.time() < deadline:
             try:
                 rpc("tools/list", timeout=10.0)

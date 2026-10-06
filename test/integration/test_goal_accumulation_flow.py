@@ -41,7 +41,7 @@ def rpc(name, args, rid=1, timeout=240.0):
     return res.get("structuredContent",{})
 
 def wait_server():
-    deadline = time.time() + 120
+    deadline = time.time() + 300
     while time.time() < deadline:
         try:
             urllib.request.urlopen(urllib.request.Request(

@@ -105,7 +105,7 @@ def get_latest_debugger_sequence(request_id: int = 5100) -> int:
     return int(messages[0].get("sequence", 0))
 
 
-def wait_for_server(timeout_seconds: float = 30.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:

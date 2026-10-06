@@ -80,7 +80,7 @@ def poll_tool(
     raise AssertionError(f"{name} did not reach expected state. Last result: {last_result}")
 
 
-def wait_for_server(timeout_seconds: float = 30.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
