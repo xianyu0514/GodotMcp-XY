@@ -804,7 +804,7 @@ func _register_list_project_tests(server_core: RefCounted) -> void:
 			"type": "object",
 			"properties": {
 				"search_path": {"type": "string", "description": "Optional res:// path under res://test/, res://tests/ or a temporary directory to limit discovery. Omit for auto-detection."},
-				"framework": {"type": "string", "description": "Optional framework filter: python or gut."}
+				"framework": {"type": "string", "description": "Optional framework filter: python, gut, or script (project-owned SceneTree runners executed via headless --script)."}
 			}
 		},
 		Callable(self, "_tool_list_project_tests"),
@@ -887,7 +887,7 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 				"hint": "None of the checked test directories exist. Pass search_path explicitly only if your tests live elsewhere under res://test/, res://tests/ or a .tmp_ directory.",
 				"tests": []
 			}
-		return {
+		var empty_result: Dictionary = {
 			"status": "empty",
 			"count": 0,
 			"search_path": primary_path,
@@ -897,6 +897,17 @@ func _tool_list_project_tests(params: Dictionary) -> Dictionary:
 			"recommended_action": "create_project_smoke_test",
 			"tests": []
 		}
+		# 2026-10-07 台账 N-8 兜底：发现为 0 但存在 SceneTree 入口脚本时，
+		# 指名可直接用 run_project_test 执行的 runner，避免"项目没有测试"误判。
+		var suspected: String = _find_suspected_scene_tree_runner(
+			[primary_path], candidate_reports)
+		if not suspected.is_empty():
+			empty_result["suspected_runner"] = suspected
+			empty_result["next_step"] = (
+				"Detected a probable self-contained runner: " + suspected
+				+ ". Execute it directly with run_project_test {\"test_path\": \""
+				+ suspected + "\"} (framework=script).")
+		return empty_result
 
 	# search_path 保持单值契约（首个发现到测试的目录），search_paths 给出全部参与合并的目录。
 	var resolved_path: String = primary_path
@@ -1301,7 +1312,7 @@ func _register_run_project_tests(server_core: RefCounted) -> void:
 			"type": "object",
 			"properties": {
 				"search_path": {"type": "string", "description": "Optional res:// path to limit discovery. Omit to auto-detect res://test, res://tests or res://.mcp_runtime_tests."},
-				"framework": {"type": "string", "description": "Optional framework filter: python or gut."},
+				"framework": {"type": "string", "description": "Optional framework filter: python, gut, or script (project-owned SceneTree runners executed via headless --script)."},
 				"only_runnable": {"type": "boolean", "description": "Whether to skip discovered tests that are not currently runnable. Default is true."}
 			}
 		},
@@ -1403,7 +1414,7 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 	var only_runnable: bool = bool(params.get("only_runnable", true))
 	var discovered_tests: Array = list_result.get("tests", [])
 	if discovered_tests.is_empty():
-		return {
+		var empty_result: Dictionary = {
 			"status": "skipped",
 			"search_path": list_result.get("search_path", ""),
 			"framework": str(params.get("framework", "")).strip_edges().to_lower(),
@@ -1416,6 +1427,12 @@ func _execute_project_tests_blocking(job_id: String, params: Dictionary) -> Dict
 			"skipped_count": 0,
 			"results": []
 		}
+		# 2026-10-07 台账 N-8 兜底透传：list 层探测到的疑似 runner 一并带回，
+		# 调用方一次往返就知道该用 run_project_test 直跑。
+		for hint_key in ["suspected_runner", "next_step"]:
+			if list_result.has(hint_key):
+				empty_result[hint_key] = list_result[hint_key]
+		return empty_result
 	var results: Array = []
 	var passed_count: int = 0
 	var failed_count: int = 0
@@ -1618,6 +1635,38 @@ static func _is_test_helper_file(entry_name: String) -> bool:
 	var lowered: String = entry_name.to_lower()
 	return lowered.begins_with("_") or lowered == "run_tests.gd" 		or lowered.ends_with("_spy.gd") or lowered.ends_with("_probe.gd") 		or lowered.ends_with("_helper.gd")
 
+## 2026-10-07 台账 N-8 兜底：no_tests_discovered 时探测"疑似自带 runner"
+## （extends SceneTree 的 .gd，如 res://tests/run_tests.gd）。上限 40 个
+## 文件防止大目录慢扫；返回 res:// 路径或空串。
+static func _find_suspected_scene_tree_runner(search_paths: Array,
+		candidate_reports: Array) -> String:
+	var scanned := 0
+	for path_value in search_paths:
+		var absolute: String = ProjectSettings.globalize_path(String(path_value))
+		if not DirAccess.dir_exists_absolute(absolute):
+			continue
+		var dir: DirAccess = DirAccess.open(absolute)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		while scanned < 40:
+			var entry_name: String = dir.get_next()
+			if entry_name.is_empty():
+				break
+			if entry_name == "." or entry_name == "..":
+				continue
+			var child: String = String(path_value).path_join(entry_name)
+			if dir.current_is_dir():
+				continue
+			if entry_name.get_extension().to_lower() != "gd":
+				continue
+			scanned += 1
+			if _file_extends_scene_tree(absolute.path_join(entry_name)):
+				dir.list_dir_end()
+				return child
+		dir.list_dir_end()
+	return ""
+
 func _collect_project_tests_recursive(search_path: String, absolute_root: String, framework_filter: String, gut_available: bool, tests: Array) -> void:
 	var dir: DirAccess = DirAccess.open(absolute_root)
 	if dir == null:
@@ -1638,8 +1687,14 @@ func _collect_project_tests_recursive(search_path: String, absolute_root: String
 		# N2（2026-09-30 体检 §14.2）：测试脚手架（runner/probe/spy/下划线前缀）
 		# 不是测试用例——计入 helpers_skipped 供调用方知悉，不进 tests 清单。
 		if _is_test_helper_file(entry_name):
-			_tests_helpers_skipped += 1
-			continue
+			# 2026-10-07 台账 N-8：脚手架名单精确包含 "run_tests.gd"，与项目
+			# 自带 runner 重名时会把真闸门当脚手架吞掉（批处理发现为 0）。
+			# SceneTree 可执行形态优先识别为 script 框架——真 runner 不是
+			# 脚手架；其余命中仍按脚手架跳过。
+			if not (extension == "gd"
+					and _file_extends_scene_tree(child_abs_path)):
+				_tests_helpers_skipped += 1
+				continue
 		var framework: String = ""
 		var kind: String = ""
 		var runnable: bool = false
