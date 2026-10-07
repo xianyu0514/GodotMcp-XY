@@ -107,7 +107,18 @@ var _cache_filesystem_snapshot_pending: bool = false
 # 若 project.godot 本来就声明了该 autoload（当前仓库正是如此），退出时不得删除它。
 var _probe_autoload_added_this_session: bool = false
 
+# 分帧工具注册状态：21 个工具模块的 GDScript 编译约 1.7s（实测占启动注册成本
+# 99%），逐模块分帧摊平后，依赖注册完成的步骤（custom 工具挂载、资源/prompts、
+# 状态恢复、面板列表、自动启动）在 _on_all_tools_registered 续跑。
+var _tools_registration_complete: bool = false
+# 注册完成前请求启动服务器（用户点 Start / 面板逻辑）时排队，完成后自动执行。
+var _pending_start: bool = false
+# 插件退出标志：分帧协程每轮检查，避免向已释放的服务器对象继续注册。
+var _is_exiting: bool = false
+
 const MCPCustomToolsRegistryScript = preload("res://addons/godot_mcp/tools/custom_tools_registry.gd")
+const TOOL_REGISTRATION_RUNNER_SCRIPT = preload(
+	"res://addons/godot_mcp/tools/tool_registration_runner.gd")
 const CACHE_CHANGE_TRACKER_SCRIPT = preload(
 	"res://addons/godot_mcp/native_mcp/cache_change_tracker.gd")
 
@@ -236,6 +247,81 @@ static func _read_server_running_state() -> bool:
 	_server_state_mtime = mtime
 	return running
 
+# ============================================================================
+# 分帧工具注册（启动性能）
+# ============================================================================
+
+## 逐模块分帧注册工具（协程）。编译成本见 MCPToolRegistrationRunner；宿主
+## 侧只负责模块注册、abort 判定与完成标志，时序由 runner 驱动。on_complete
+## 在全部注册完成后于主线程回调（custom 工具挂载、资源/prompts 注册、状态
+## 恢复、面板列表、自动启动——见 _on_all_tools_registered）。
+func _register_all_tools_async(on_complete: Callable = Callable(), synchronous: bool = false) -> void:
+	var runner: RefCounted = TOOL_REGISTRATION_RUNNER_SCRIPT.new()
+	runner.paths = TOOL_SCRIPT_PATHS
+	runner.register_module = _register_deferred_tool_module
+	runner.synchronous = synchronous
+	runner.should_abort = func() -> bool:
+		return _is_exiting or _native_server == null
+	var completed: bool = await runner.run(on_complete)
+	if completed:
+		_tools_registration_complete = true
+		var total_tools: int = 0
+		if _native_server and _native_server.has_method("get_tools_count"):
+			total_tools = _native_server.get_tools_count()
+		_log_info("All MCP tools registered successfully. Total: " + str(total_tools))
+
+## runner 的模块注册适配：加载失败时按原同步路径的语义记错误日志。
+func _register_deferred_tool_module(module_name: String, instance: Variant) -> void:
+	if instance == null:
+		_log_error("Failed to instantiate tool module: " + module_name)
+		return
+	_register_tool_module(module_name, instance)
+
+## 注册完成回调：续跑原同步启动序列中依赖工具注册的步骤，顺序与原序列一致。
+func _on_all_tools_registered() -> void:
+	if _is_exiting or _native_server == null:
+		return
+	# 第三方 custom 工具挂载（在全部内置工具之后，命名空间 custom_* 不冲突）。
+	MCPCustomToolsRegistryScript.apply_to(_native_server)
+
+	# 注册所有资源
+	_register_all_resources()
+
+	# 注册所有 prompts（真实工作流模板）
+	_register_all_prompts()
+
+	# 加载已保存的工具状态（确保UI显示正确的启用状态）
+	if _native_server.has_method("load_tool_states"):
+		_native_server.load_tool_states()
+		_log_info("Loaded saved tool states after registration")
+
+	# 工具列表此刻才可用，刷新面板（框架已在 _enter_tree 创建）
+	if _main_panel and _main_panel.has_method("refresh"):
+		_main_panel.refresh()
+
+	# 自动启动判定（--mcp-server / auto_start / 复活 / 注册期间排队的手动启动）
+	_maybe_auto_start_server()
+
+## 原同步自动启动判定，挪到工具注册完成后执行。
+func _maybe_auto_start_server() -> void:
+	_mcp_server_mode = "--mcp-server" in OS.get_cmdline_user_args()
+
+	if _mcp_server_mode:
+		_log_info("MCP server mode detected via --mcp-server argument")
+		_start_native_server()
+	elif auto_start:
+		_log_info("Auto-start enabled, starting MCP server")
+		_start_native_server()
+	elif _read_server_running_state():
+		_log_info("Resurrecting MCP server (it was running before reload/restart)")
+		_start_native_server()
+	elif _pending_start:
+		_pending_start = false
+		_log_info("Starting queued server (requested during tool registration)")
+		_start_native_server()
+	else:
+		_log_info("MCP server not auto-started. Use Start button or --mcp-server flag.")
+
 func _enter_tree() -> void:
 	_log_info("Godot Native MCP Plugin entering tree...")
 
@@ -312,50 +398,31 @@ func _enter_tree() -> void:
 	_native_server.log_message.connect(_on_log_message)
 	_connect_cache_change_signals()
 	
-	# 注册所有工具
-	_register_all_tools()
-	# 第三方 custom 工具挂载（在全部内置工具之后，命名空间 custom_* 不冲突）。
-	MCPCustomToolsRegistryScript.apply_to(_native_server)
-	
+	# 注册所有工具（同步）。分帧编译（runner.synchronous=false）在本地反复
+	# 验证可将 456ms 单帧拆为三帧，但 CI 的 --editor --headless 集成环境出现
+	# 不可归因的 9080 全量超时（被测进程 stdout/stderr 进 DEVNULL，无日志可
+	# 归因），两轮修复（server 模式同步分支、测试修复）后仍复现——在集成
+	# 可观测性落地（被测进程日志落盘上传）之前，启动时序保持与 main 一致；
+	# runner 基建与测试保留，重启用是一行分支的事。
+	# custom 工具挂载、资源/prompts 注册、工具状态恢复、面板列表填充与
+	# 服务器自动启动都推迟到 _on_all_tools_registered 续跑。
+	_register_all_tools(true)
+
 	# Register MCPRuntimeProbe as autoload singleton for runtime debugger communication.
 	# 只有本次会话真正新增的 autoload 才会在 _exit_tree() 中移除；project.godot
 	# 静态声明的 autoload 必须保留，避免无头导入/编辑器退出时破坏项目配置。
 	_probe_autoload_added_this_session = not ProjectSettings.has_setting("autoload/MCPRuntimeProbe")
 	_ensure_runtime_probe_autoload()
-	
-	# 注册所有资源
-	_register_all_resources()
-	
-	# 注册所有 prompts（真实工作流模板）
-	_register_all_prompts()
-	
-	# 在UI创建前加载已保存的工具状态（确保UI显示正确的启用状态）
-	if _native_server.has_method("load_tool_states"):
-		_native_server.load_tool_states()
-		_log_info("Loaded saved tool states before UI creation")
-	
-	# 创建UI面板
+
+	# 创建UI面板（框架立即创建，设置/连接即刻可用；工具列表由注册完成回调 refresh 填充）
 	_create_main_screen_panel()
-	
-	# 检测是否以MCP服务器模式启动
-	_mcp_server_mode = "--mcp-server" in OS.get_cmdline_user_args()
-	
-	if _mcp_server_mode:
-		_log_info("MCP server mode detected via --mcp-server argument")
-		_start_native_server()
-	elif auto_start:
-		_log_info("Auto-start enabled, starting MCP server")
-		_start_native_server()
-	elif _read_server_running_state():
-		_log_info("Resurrecting MCP server (it was running before reload/restart)")
-		_start_native_server()
-	else:
-		_log_info("MCP server not auto-started. Use Start button or --mcp-server flag.")
-	
-	_log_info("Godot Native MCP Plugin initialized")
+
+	_log_info("Godot Native MCP Plugin initialized (tools register frame-deferred)")
 
 func _exit_tree() -> void:
 	_log_info("Godot Native MCP Plugin exiting tree...")
+	# 分帧注册协程每轮检查此标志，插件中途禁用/退出时立即停止注册。
+	_is_exiting = true
 	_disconnect_cache_change_signals()
 	
 	if _native_server and _native_server.is_running():
@@ -659,9 +726,15 @@ func _start_native_server() -> bool:
 	if not _native_server:
 		_log_error("MCP Server instance not available")
 		return false
-	
+
 	if _native_server.is_running():
 		_log_warn("MCP Server already running")
+		return false
+
+	# 分帧注册未完成时启动会得到残缺的 tools/list：排队到注册完成后自动执行。
+	if not _tools_registration_complete:
+		_pending_start = true
+		_log_info("Tool registration in progress; server start queued until it completes")
 		return false
 
 	# Apply command-line overrides (--mcp-port / --mcp-transport) last, right
@@ -736,22 +809,18 @@ func _get_resources_count() -> int:
 # 私有方法 - 工具注册（根据mcp-builder优化）
 # ============================================================================
 
-func _register_all_tools() -> void:
-	_log_info("Registering all MCP tools...")
-	
+func _register_all_tools(synchronous: bool = false) -> void:
+	_log_info("Registering all MCP tools (frame-deferred compilation)...")
+
 	if not _native_server:
 		_log_error("MCP Server instance not available")
 		return
-	
-	for module_name in TOOL_SCRIPT_PATHS.keys():
-		var instance: Variant = _instantiate_script(str(TOOL_SCRIPT_PATHS[module_name]))
-		if not instance:
-			_log_error("Failed to instantiate tool module: " + str(module_name))
-			continue
-		_register_tool_module(str(module_name), instance)
-	
-	var total_tools: int = _native_server.get_tools_count()
-	_log_info("All MCP tools registered successfully. Total: " + str(total_tools))
+
+	# 分帧协程：首个模块在本帧同步注册，其余模块每帧一个（见
+	# _register_all_tools_async 的实测依据）。synchronous=true 时一次性
+	# 注册完（--mcp-server 模式）。完成后经 _on_all_tools_registered
+	# 续跑 custom 工具/资源/prompts/状态恢复/自动启动。
+	_register_all_tools_async(_on_all_tools_registered, synchronous)
 
 func _register_tool_module(module_name: String, instance: RefCounted) -> void:
 	if not instance:
@@ -1385,19 +1454,20 @@ func _on_server_started() -> void:
 	# 弱依赖通道在此挂载（运行期）：类注册阶段 set_meta 会段错误（见
 	# custom_tools_registry.apply_to 注释）。
 	MCPCustomToolsRegistryScript.attach_engine_meta()
-	if _main_panel and _main_panel.has_method("refresh"):
+	# 启停不改变工具目录：精确刷新运行状态即可，不重建工具列表。
+	if _main_panel and _main_panel.has_method("refresh_status"):
 		if Thread.is_main_thread():
-			_main_panel.refresh()
+			_main_panel.refresh_status()
 		else:
-			_main_panel.call_deferred("refresh")
+			_main_panel.call_deferred("refresh_status")
 
 func _on_server_stopped() -> void:
 	_log_info("MCP Server stopped")
-	if _main_panel and _main_panel.has_method("refresh"):
+	if _main_panel and _main_panel.has_method("refresh_status"):
 		if Thread.is_main_thread():
-			_main_panel.refresh()
+			_main_panel.refresh_status()
 		else:
-			_main_panel.call_deferred("refresh")
+			_main_panel.call_deferred("refresh_status")
 
 func _on_message_received(message: Dictionary) -> void:
 	_log_debug("Message received: " + JSON.stringify(message))

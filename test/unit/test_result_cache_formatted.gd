@@ -80,3 +80,55 @@ func test_legacy_raw_cache_entry_falls_back_to_formatting() -> void:
 	var text: String = str(response.get("result", {}).get("content", [{}])[0].get("text", ""))
 	assert_eq(text, JSON.stringify(legacy_value), "Legacy entry should be formatted on demand")
 	assert_false(_core._result_cache[cache_key].has("formatted"), "Fallback formatting should not mutate the legacy cache entry")
+
+
+func test_format_tool_result_with_size_matches_format_and_bytes() -> void:
+	# 单次编码优化契约：with_size 变体返回的 payload 与 _format_tool_result
+	# 完全一致，且 size_bytes == 原始结果 JSON 的 UTF-8 字节数（spill 检查与
+	# 缓存记账共用同一次 to_utf8_buffer，不再做第二次编码）。
+	var tool: MCPTypes.MCPTool = MCPTypes.MCPTool.new()
+	tool.name = "bench_tool"
+	tool.description = "bench"
+	var payload: Dictionary = {"nodes": [{"name": "法阵", "index": 1}, {"name": "N2", "index": 2}]}
+	var with_size: Dictionary = _core._format_tool_result_with_size(payload, tool)
+	var legacy: Dictionary = _core._format_tool_result(payload, tool)
+	assert_eq(with_size["result"], legacy,
+		"with_size payload must be identical to the legacy format path")
+	var expected_bytes: int = JSON.stringify(payload).to_utf8_buffer().size()
+	assert_eq(int(with_size["size_bytes"]), expected_bytes,
+		"size_bytes must be the raw result JSON byte count")
+
+	# 非 ASCII（中文）确保按字节而非字符计数。
+	var unicode_payload: Dictionary = {"text": "法阵节点".repeat(100)}
+	var unicode_result: Dictionary = _core._format_tool_result_with_size(unicode_payload, tool)
+	var unicode_expected: int = JSON.stringify(unicode_payload).to_utf8_buffer().size()
+	assert_eq(int(unicode_result["size_bytes"]), unicode_expected,
+		"Multibyte content must count UTF-8 bytes, not characters")
+
+
+func test_format_tool_result_with_size_reports_spilled_original_size() -> void:
+	# 超过内联上限时走 spill：size_bytes 仍必须是"原始完整载荷"的字节数
+	# （与 resource_link.size 一致），而不是截断预览的大小。
+	var tool: MCPTypes.MCPTool = MCPTypes.MCPTool.new()
+	tool.name = "bench_spill_tool"
+	tool.description = "bench"
+	var payload: Dictionary = {"blob": "x".repeat(60000)}
+	var with_size: Dictionary = _core._format_tool_result_with_size(payload, tool)
+	var expected_bytes: int = JSON.stringify(payload).to_utf8_buffer().size()
+	assert_gt(expected_bytes, _core.MAX_INLINE_RESULT_BYTES,
+		"Precondition: payload exceeds the inline limit")
+	assert_eq(int(with_size["size_bytes"]), expected_bytes,
+		"Spilled results must account the complete original payload size")
+	var content: Array = with_size["result"]["content"]
+	var link: Dictionary = {}
+	for block_value in content:
+		if block_value is Dictionary and String(block_value.get("type", "")) == "resource_link":
+			link = block_value
+			break
+	assert_eq(int(link.get("size", -1)), expected_bytes,
+		"resource_link.size must match the reported size_bytes")
+	# 清理 spill 落盘文件
+	var sha: String = _core._hash_bytes(JSON.stringify(payload).to_utf8_buffer())
+	var spill_path: String = _core.SPILL_OUTPUT_DIR + "/" + sha + ".json"
+	if FileAccess.file_exists(spill_path):
+		DirAccess.remove_absolute(spill_path)

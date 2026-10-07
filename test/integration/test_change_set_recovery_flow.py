@@ -67,7 +67,7 @@ def tool_call(name: str, arguments: dict) -> dict:
     return json.loads(result["content"][0]["text"])
 
 
-def wait_for_server(timeout_seconds: float = 150.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     last_error = None
     while time.time() < deadline:

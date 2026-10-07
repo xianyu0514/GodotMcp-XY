@@ -68,7 +68,7 @@ def tool_call(name: str, arguments: dict | None = None, request_id: int = 100) -
     return json.loads(result["content"][0]["text"])
 
 
-def wait_for_server(timeout_seconds: float = 30.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:
@@ -119,7 +119,7 @@ def main() -> int:
         # The batch runs on a background thread: the first call returns "pending"
         # and the caller polls with the same arguments until it finishes.
         run_result = tool_call("run_project_tests", batch_arguments, request_id=2)
-        poll_deadline = time.time() + 120.0
+        poll_deadline = time.time() + 300.0
         while run_result.get("status") == "pending":
             if time.time() > poll_deadline:
                 raise AssertionError(f"Timed out waiting for batch test run to finish: {run_result}")

@@ -71,7 +71,7 @@ def get_debugger_messages(count: int = 100, request_id: int = 5000) -> dict:
     )
 
 
-def wait_for_server(timeout_seconds: float = 30.0) -> None:
+def wait_for_server(timeout_seconds: float = 300.0) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:

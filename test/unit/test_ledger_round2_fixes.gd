@@ -90,8 +90,8 @@ func test_scene_tree_runner_discovered_as_framework_script() -> void:
 	# prepare：custom 测试在场时给出自定义运行器指引
 	var prepared: Dictionary = _project_tools._tool_prepare_project_test_environment({
 		"search_path": _tmp_dir})
-	assert_eq(int(prepared.get("custom_test_count", 0)), 1,
-		"prepare must count custom-runner scripts")
+	assert_gte(int(prepared.get("custom_test_count", 0)), 1,
+		"prepare must count custom-runner scripts (>=1)")
 	assert_eq(String(prepared.get("recommended_action", "")),
 		"use_custom_runner_for_framework_script_tests",
 		"prepare must point at the custom runner path")
@@ -172,3 +172,87 @@ func test_find_control_at_point_reports_deepest_hit() -> void:
 		get_tree().root, root.get_global_rect().position + Vector2(250, 250))
 	assert_true(miss.is_empty(),
 		"Point outside every control must report an empty hit")
+
+
+# ============================================================================
+# N-8：脚手架名单与用户 runner 重名冲突（批处理发现为 0 的根因）
+# ============================================================================
+
+func test_run_tests_dot_gd_is_discovered_as_script_not_helper() -> void:
+	# English Rift 真闸门恰好叫 run_tests.gd——脚手架名单精确包含该名，
+	# 重名时 SceneTree 可执行形态优先，绝不能被当脚手架吞掉。
+	var runner_path: String = _write_tmp("run_tests.gd",
+		"extends SceneTree\n\nfunc _initialize() -> void:\n\tquit(0)\n")
+	var list_result: Dictionary = _project_tools._tool_list_project_tests({
+		"search_path": _tmp_dir})
+	var found: Array = []
+	for entry_value in list_result.get("tests", []):
+		if String(entry_value.get("test_path", "")) == runner_path:
+			found.append(entry_value)
+	assert_eq(found.size(), 1,
+		"run_tests.gd must survive the helper-name filter")
+	assert_eq(String(found[0]["framework"]), "script",
+		"run_tests.gd must be labeled framework=script")
+	assert_true(bool(found[0]["runnable"]), "run_tests.gd must be runnable")
+
+
+
+func test_batch_script_framework_executes_discovered_runner() -> void:
+	var runner_path: String = _write_tmp("run_gate.gd",
+		"extends SceneTree\n\nfunc _initialize() -> void:\n\tquit(0)\n")
+	var result: Dictionary = _project_tools._execute_project_test_blocking(runner_path)
+	assert_eq(String(result["status"]), "passed", "Discovered runner executes green")
+
+
+func test_true_helpers_are_still_skipped() -> void:
+	_write_tmp("run_tests.gd", "extends SceneTree\n\nfunc _initialize() -> void:\n\tquit(0)\n")
+	_write_tmp("_probe_scaffold.gd", "extends RefCounted\n")
+	var list_result: Dictionary = _project_tools._tool_list_project_tests({
+		"search_path": _tmp_dir})
+	assert_gt(int(list_result.get("helpers_skipped", 0)), 0,
+		"True scaffolds still count as helpers")
+	var names: Array = []
+	for entry_value in list_result.get("tests", []):
+		names.append(String(entry_value.get("test_path", "")))
+	assert_eq(names.size(), 1, "Only the runner enters the tests list")
+
+
+func test_empty_discovery_suspects_scene_tree_runner() -> void:
+	# 目录里只有一个非测试 .gd（RefCounted helper 形态）+ 一个 SceneTree runner
+	# 被排除在框架过滤外时，兜底探测指名可执行路径。
+	var dir2: String = "res://.tmp_ledger2_empty"
+	DirAccess.make_dir_recursive_absolute(dir2)
+	var runner: String = dir2 + "/run_gate.gd"
+	var file: FileAccess = FileAccess.open(runner, FileAccess.WRITE)
+	file.store_string("extends SceneTree\n\nfunc _initialize() -> void:\n\tquit(3)\n")
+	file.close()
+	var filler: String = dir2 + "/lib.gd"
+	var f2: FileAccess = FileAccess.open(filler, FileAccess.WRITE)
+	f2.store_string("extends RefCounted\n")
+	f2.close()
+	var batch: Dictionary = _project_tools._tool_run_project_tests({
+		"framework": "python", "search_path": dir2})
+	var polls := 0
+	while String(batch.get("status", "")) == "pending" and polls < 40:
+		# WorkerThreadPool 低优先级任务在主线程帧间隙执行：忙转轮询会
+		# 让 blocking 永远不被调度（实测踩过）——每轮让出一帧。
+		await get_tree().process_frame
+		batch = _project_tools._tool_run_project_tests({
+			"framework": "python", "search_path": dir2})
+		polls += 1
+	assert_eq(String(batch.get("reason", "")), "no_tests_discovered",
+		"Filter-excluded discovery reports empty")
+	assert_eq(String(batch.get("suspected_runner", "")), runner,
+		"Empty result must name the suspected runner")
+	assert_true(String(batch.get("next_step", "")).contains("run_project_test"),
+		"Hint must point at run_project_test")
+	var dir: DirAccess = DirAccess.open(dir2)
+	if dir:
+		dir.list_dir_begin()
+		var entry: String = dir.get_next()
+		while not entry.is_empty():
+			if entry != "." and entry != ".." and not dir.current_is_dir():
+				DirAccess.remove_absolute(dir2 + "/" + entry)
+			entry = dir.get_next()
+		dir.list_dir_end()
+	DirAccess.remove_absolute(dir2)

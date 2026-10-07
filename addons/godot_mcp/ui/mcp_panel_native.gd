@@ -255,7 +255,10 @@ func _create_ui() -> void:
 	_tab_container.current_tab = 1
 
 	_update_ui_state()
-	_refresh_tools_list()
+	# core 未注入时列表必为空，重建只产出导航骨架：跳过避免无谓的控件
+	# 创建与销毁；真实构建由 set_server_core 统一执行。
+	if _server_core != null:
+		_refresh_tools_list()
 
 func _create_status_bar() -> Control:
 	var frame: PanelContainer = PanelContainer.new()
@@ -1514,13 +1517,51 @@ func _registered_tool_names() -> Array:
 func _apply_states(states: Dictionary) -> void:
 	if _server_core == null or not _server_core.has_method("set_tool_enabled"):
 		return
+	# [tool_name, actual_enabled] 列表：always-on meta 工具忽略 disable，实际
+	# 状态以 server core 为准（get_tool 可用时），避免控件与真实状态漂移。
+	var changed: Array = []
 	for tool_name in states:
 		_server_core.set_tool_enabled(tool_name, states[tool_name])
-	_refresh_tools_list()
+		var actual: bool = bool(states[tool_name])
+		if _server_core.has_method("get_tool"):
+			var tool = _server_core.get_tool(String(tool_name))
+			if tool != null:
+				actual = bool(tool.enabled)
+		changed.append([String(tool_name), actual])
+	# 就地同步控件勾选状态（set_enabled 经既有信号联动刷新组复选框与计数），
+	# 避免预设切换上百工具时全量重建 ~1300 个控件；存在无对应控件的工具时
+	# 回退全量刷新，保证 UI 与状态一致。
+	if not _sync_tool_items_state(changed):
+		_refresh_tools_list()
 	_update_nav_counts()
 	_update_tools_count()
 	_update_detail_count()
 	_debounce_save()
+
+## 就地更新受影响工具项的勾选状态。返回 false 表示至少一个工具找不到对应
+## 控件（列表尚未构建/结构变化），调用方应回退 _refresh_tools_list 全量重建。
+func _sync_tool_items_state(changed: Array) -> bool:
+	if changed.is_empty():
+		return true
+	if _group_widgets.is_empty():
+		return false
+	for entry_value in changed:
+		var entry: Array = entry_value
+		var tool_name: String = String(entry[0])
+		var enabled: bool = bool(entry[1])
+		var found: bool = false
+		for group_name in _group_widgets:
+			var group_widget = _group_widgets[group_name]
+			for item in group_widget.get_tool_items():
+				if item is MCPToolItem and item.get_tool_name() == tool_name:
+					item.set_enabled(enabled)
+					found = true
+					break
+			if found:
+				break
+		if not found:
+			return false
+	return true
 
 func _on_apply_preset_pressed() -> void:
 	if _preset_manager == null or _preset_option == null:
@@ -2558,7 +2599,10 @@ func _refresh_translations() -> void:
 		_scope_chips["__supplementary__"].set_label(_tr("ui.scope_extended"))
 	_update_ui_state()
 	_update_connection_info()
-	_refresh_tools_list()
+	# 语言切换（core 已注入）时重建列表以刷新翻译后的工具描述；core 未注入
+	# 时列表必为空，跳过无谓的重建。顺带重译连接信息。
+	if _server_core != null:
+		_refresh_tools_list()
 
 func _update_connection_info() -> void:
 	if not _connection_info_label:
@@ -2723,3 +2767,14 @@ func refresh() -> void:
 	else:
 		call_deferred("_update_ui_state")
 		call_deferred("_refresh_tools_list")
+
+## 运行状态刷新：服务器启停不改变工具目录，只更新状态点/按钮/连接信息，
+## 避免每次启停全量重建 ~1300 个工具项控件。工具目录真正变化（注册完成）
+## 的路径仍走 refresh()。
+func refresh_status() -> void:
+	if Thread.is_main_thread():
+		_update_ui_state()
+		_update_connection_info()
+	else:
+		call_deferred("_update_ui_state")
+		call_deferred("_update_connection_info")

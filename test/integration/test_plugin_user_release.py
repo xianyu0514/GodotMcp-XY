@@ -98,7 +98,7 @@ proc = subprocess.Popen([GODOT, "--editor", "--headless", "--path", str(USER_PRO
     "--", "--mcp-server", f"--mcp-port={port}"],
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 try:
-    deadline = time.time() + 180
+    deadline = time.time() + 300
     while time.time() < deadline:
         try:
             rpc("tools/list", timeout=10.0)

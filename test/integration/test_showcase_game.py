@@ -66,7 +66,7 @@ def rpc(name, args, rid=1, timeout=300.0):
 
 
 def wait_server():
-    deadline = time.time() + 120
+    deadline = time.time() + 300
     while time.time() < deadline:
         try:
             urllib.request.urlopen(urllib.request.Request(

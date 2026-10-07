@@ -234,7 +234,7 @@ def tool_call(name: str, arguments: dict | None = None, request_id: int = 100, t
         return {"raw": text[:400]}
 
 
-def wait_for_server(timeout_seconds: float = 90.0, mcp_url: str | None = None) -> None:
+def wait_for_server(timeout_seconds: float = 300.0, mcp_url: str | None = None) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         try:

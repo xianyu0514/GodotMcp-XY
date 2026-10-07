@@ -734,7 +734,7 @@ func _register_modify_script(server_core: RefCounted) -> void:
 			},
 			"old_text": {
 				"type": "string",
-				"description": "Optional exact nonempty text to replace with content. Must occur exactly once, including whitespace and line endings. Use a larger block when ambiguous."
+				"description": "Optional exact nonempty text to replace with content. Must occur exactly once. Line endings auto-normalize to the file style (miss diagnostics report both sides). Use a larger block when ambiguous."
 			},
 			"expected_content_hash": {
 				"type": "string",
